@@ -1,7 +1,7 @@
 import { PanelBottomIcon, PanelRightIcon, SquareMenuIcon } from "~/components/solar";
 import { Maximize as Maximize2, Minimize as Minimize2 } from "~/components/solar/nodes";
 import { MorphIcon } from "~/components/MorphIcon";
-import { memo, type ReactElement, type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -57,6 +57,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
     <Toggle
       className="relative shrink-0 [-webkit-app-region:no-drag]"
       pressed={threadPanelOpen}
+      onPressedChange={threadPanelPresentation === "popover" ? undefined : onToggleThreadPanel}
       aria-label="Toggle thread details panel"
       variant="ghost"
       size="sm"
@@ -64,12 +65,15 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       <SquareMenuIcon className="size-4" />
     </Toggle>
   );
-  const threadPanelTooltip = (trigger: ReactElement) => (
+  const threadPanelControl = (
     <Tooltip>
-      <TooltipTrigger
-        render={trigger}
-        {...(threadPanelPresentation === "popover" ? {} : { onClick: onToggleThreadPanel })}
-      />
+      <TooltipTrigger render={<span className="flex shrink-0" />}>
+        {threadPanelPresentation === "popover" ? (
+          <PopoverTrigger handle={threadPanelPopoverHandle} render={threadPanelToggle} />
+        ) : (
+          threadPanelToggle
+        )}
+      </TooltipTrigger>
       <TooltipPopup side="bottom">
         Toggle thread details
         {threadPanelShortcutLabel ? ` (${threadPanelShortcutLabel})` : ""}
@@ -82,13 +86,7 @@ export const PanelLayoutControls = memo(function PanelLayoutControls({
       className="flex h-full shrink-0 items-center gap-1 [-webkit-app-region:no-drag]"
       data-panel-layout-controls
     >
-      {showThreadPanelControl
-        ? threadPanelPresentation === "popover"
-          ? threadPanelTooltip(
-              <PopoverTrigger handle={threadPanelPopoverHandle} render={threadPanelToggle} />,
-            )
-          : threadPanelTooltip(threadPanelToggle)
-        : null}
+      {showThreadPanelControl ? threadPanelControl : null}
       {showTerminalControl ? (
         <Tooltip>
           <TooltipTrigger render={<span className="flex shrink-0" />}>

@@ -11,6 +11,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelWake from "./ChannelWake.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 
 const decodeOutbound = Schema.decodeUnknownSync(ChannelOutboundMessage);
@@ -44,6 +45,7 @@ const layerHangingSend = (started: Deferred.Deferred<void>) =>
         send: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
       }),
     ),
+    Layer.provide(ChannelWake.layer),
     Layer.provideMerge(ChannelLedger.layer),
     Layer.provideMerge(SqlitePersistence.layerMemory),
   );

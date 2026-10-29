@@ -1,4 +1,5 @@
 import { repairSchedule } from "../retryJitter.ts";
+import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
@@ -24,7 +25,7 @@ import {
   ThreadId,
   type ProviderThreadId,
 } from "@goat/contracts";
-import { driverOf, sessionRunScope } from "./goatBotSessionCredential.ts";
+import * as Credential from "./goatBotSessionCredential.ts";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -397,12 +398,12 @@ export const layerWithOptions = (
       /** Absent only in test assemblies; without it every turn counts as unleased. */
       const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
       const revokeProxyChannel = yield* proxyChannelRevoker(mcpSessions);
-      /** Absent only in test assemblies, which then run without goatclaw limits. */
       const permissionProfiles = yield* Effect.serviceOption(PermissionProfiles.PermissionProfiles);
-      // An enabled policy fails closed: a thread whose limit cannot be read gets no native subagents.
       const withNativeSubagentLimit = (threadId: ThreadId, config: McpProviderSessionConfig) =>
         Effect.gen(function* () {
           const { nativeSubagentLimit: _previous, ...rest } = config;
+          if (Credential.sessionNativeSubagentLimit(threadId) === 0)
+            return { ...rest, nativeSubagentLimit: 0 };
           if (Option.isNone(permissionProfiles)) return rest;
           const limit = yield* permissionProfiles.value.nativeSubagentLimit(threadId).pipe(
             Effect.catchCause((cause) =>
@@ -713,8 +714,8 @@ export const layerWithOptions = (
                 if (deviceToolsAvailable) capabilities.add("device");
                 if (grant !== "none") capabilities.add("memory");
                 const computerUseOrigin = yield* computerUseOriginOf(threadId, preparedInput.runId);
-                const driver = yield* driverOf(registry.get(providerInstanceId));
-                const scope = sessionRunScope(threadId, driver, preparedInput.runId);
+                const driver = yield* Credential.driverOf(registry.get(providerInstanceId));
+                const scope = Credential.sessionRunScope(threadId, driver, preparedInput.runId);
                 const computerUse = yield* ComputerUse.computerUseAttachment(cuaDriver, {
                   threadId,
                   driver,
@@ -1055,12 +1056,8 @@ export const layerWithOptions = (
             ["runtimeRequests", "nodes", "turnItems"],
             { turnItemTypes: ["approval_request", "user_input_request"] },
           );
-          const releasedRequests = projection.runtimeRequests.filter(
-            (request) =>
-              request.status === "pending" &&
-              request.responseCapability.type === "live" &&
-              request.responseCapability.providerSessionId === providerSessionId &&
-              DateTime.isLessThanOrEqualTo(request.createdAt, input.releasedAt),
+          const releasedRequests = projection.runtimeRequests.filter((request) =>
+            isReleasedRuntimeRequest(request, providerSessionId, input.releasedAt, input.reason),
           );
 
           for (const request of releasedRequests) {

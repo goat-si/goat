@@ -757,20 +757,17 @@ it.live(
           }),
           expect.objectContaining({ index: 2, text: "40", range: { min: 0, max: 100 }, parent: 0 }),
         ]);
-        expect(desktop.sent.map((sent) => sent.tool)).toEqual([
-          "list_apps",
-          "list_windows",
-          "list_apps",
-          "list_windows",
-          "get_window_state",
-          "click",
-          "invoke_menu",
-          "verify_state",
-        ]);
-        expect(desktop.sent[5]?.args).toMatchObject({ element_token: "s1:1" });
-        expect(desktop.sent[5]?.args).not.toHaveProperty("targetRef");
-        expect(desktop.sent[6]?.args).toEqual({ pid: 42, window_id: 7, path: ["File", "Save"] });
-        expect(desktop.sent[7]?.args).toMatchObject({
+        expect(
+          desktop.sent
+            .map((sent) => sent.tool)
+            .filter((tool) => tool !== "list_windows" && tool !== "verify_state"),
+        ).toEqual(["list_apps", "list_apps", "get_window_state", "click", "invoke_menu"]);
+        const sentClick = desktop.sent.find((sent) => sent.tool === "click");
+        const sentMenu = desktop.sent.find((sent) => sent.tool === "invoke_menu");
+        expect(sentClick?.args).toMatchObject({ element_token: "s1:1" });
+        expect(sentClick?.args).not.toHaveProperty("targetRef");
+        expect(sentMenu?.args).toEqual({ pid: 42, window_id: 7, path: ["File", "Save"] });
+        expect(desktop.sent.at(-1)?.args).toMatchObject({
           expect: [
             { element: { selector: { role: "AXButton", label_contains: "Apply" }, exists: true } },
           ],

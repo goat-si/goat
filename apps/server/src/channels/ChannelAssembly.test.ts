@@ -332,6 +332,7 @@ describe("R7 path over the assembled layer (fake Slack SDK)", () => {
       yield* runtime.settle([slackInputId!]);
       yield* runtime.runPass;
       yield* runtime.runPass;
+      yield* runtime.settle([slackInputId!]);
 
       // Slack got its first answer in its own thread while GOAT's reception was still held.
       const slackFirst = harness.sdk.posted.slice(linkNotices);

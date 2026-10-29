@@ -272,3 +272,224 @@ it.effect(
       expect(budgets).toEqual([1000, 1000]);
     }),
 );
+
+type ReuseScenario =
+  | "reuse"
+  | "omitted"
+  | "omittedViewport"
+  | "older"
+  | "document"
+  | "viewport"
+  | "missingViewport"
+  | "navigate"
+  | "observe"
+  | "clearBasis"
+  | "clearDocument";
+
+const runReuseScenario = (scenario: ReuseScenario) =>
+  Effect.gen(function* () {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("tab"),
+      title: "Calculator",
+      url: "https://example.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    let url = tab.url;
+    let documentGeneration: number | undefined = 1;
+    let viewport = scenario === "older" ? undefined : { width: 100, height: 80 };
+    let capture = { width: 120, height: 90 };
+    let snapshots = 0;
+    let domValue = 0;
+    const clicks: unknown[] = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "click") {
+          clicks.push(request.input);
+          domValue += 1;
+        }
+        if (request.operation === "snapshot") snapshots += 1;
+        if (request.operation === "navigate") {
+          url = "https://example.test/next";
+          return Effect.succeed({ url } as A);
+        }
+        return Effect.succeed(
+          (request.operation === "status"
+            ? {
+                tabId: tab.tabId,
+                url,
+                documentGeneration,
+                ...(viewport ? { viewport } : {}),
+                control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+              }
+            : request.operation === "snapshot"
+              ? {
+                  url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree: `- text: ${domValue}\n- button Seven [ref=e1]`,
+                  treeComplete: true,
+                  refGeneration: "1",
+                  screenshot: {
+                    mimeType: "image/png",
+                    data: "AQID",
+                    width: capture.width,
+                    height: capture.height,
+                    region: {
+                      kind:
+                        (request.input as { fullPage?: boolean }).fullPage === true
+                          ? "document"
+                          : "viewport",
+                      x: 0,
+                      y: 0,
+                      ...capture,
+                    },
+                    scale: 1,
+                  },
+                }
+              : request.operation === "click"
+                ? { effect: "confirmed", evidence: ["dom-value"] }
+                : {}) as A,
+        );
+      },
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+    const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+    yield* host.dispatch(call("claim_tab", 2, {}, ref), context);
+    const observed = yield* host.dispatch(call("observe", 3, { screenshot: true }, ref), {
+      ...context,
+      limits: {
+        ...context.limits,
+        ...(scenario === "omitted" || scenario === "omittedViewport" ? { imageBytes: 2 } : {}),
+      },
+    });
+    if (scenario === "omitted" || scenario === "omittedViewport") {
+      expect(observed.imageMetadata).toBeUndefined();
+      expect((observed.value as ScreenObservation).image).toMatchObject({ omitted: true });
+    }
+    const image = observed.imageMetadata ?? (observed.value as ScreenObservation).image!;
+    const at = (x: number, y: number, metadata = image) => ({
+      observationId: metadata.observationId,
+      regionId: metadata.regionId,
+      x,
+      y,
+    });
+    if (viewport) viewport = { ...capture };
+    yield* host.dispatch(call("click", 4, { point: at(10, 10) }, ref), context);
+    if (scenario === "document") documentGeneration = 2;
+    if (scenario === "viewport") viewport = { width: 100, height: 80 };
+    if (scenario === "omittedViewport") viewport = { width: 100, height: 80 };
+    if (scenario === "missingViewport") viewport = undefined;
+    if (scenario === "navigate")
+      yield* host.dispatch(
+        call("navigate_tab", 5, { url: "https://example.test/next" }, ref),
+        context,
+      );
+    if (scenario === "observe") {
+      documentGeneration = 2;
+      viewport = { width: 140, height: 100 };
+      capture = { width: 140, height: 100 };
+      const replaced = yield* host.dispatch(call("observe", 5, { screenshot: true }, ref), context);
+      const nextImage = replaced.imageMetadata ?? (replaced.value as ScreenObservation).image!;
+      const oldPoint = yield* host
+        .dispatch(call("click", 6, { point: at(20, 20) }, ref), context)
+        .pipe(Effect.result);
+      const newPoint = yield* host
+        .dispatch(call("click", 7, { point: at(20, 20, nextImage) }, ref), context)
+        .pipe(Effect.result);
+      return { second: oldPoint, newPoint, clicks, snapshots, domValue };
+    }
+    if (scenario === "clearBasis" || scenario === "clearDocument") {
+      documentGeneration = scenario === "clearBasis" ? 2 : undefined;
+      viewport = undefined;
+      const replaced = yield* host.dispatch(
+        call(
+          "observe",
+          5,
+          { screenshot: true, ...(scenario === "clearBasis" ? { fullPage: true } : {}) },
+          ref,
+        ),
+        context,
+      );
+      const nextImage = replaced.imageMetadata ?? (replaced.value as ScreenObservation).image!;
+      const oldPoint = yield* host
+        .dispatch(call("click", 6, { point: at(20, 20) }, ref), context)
+        .pipe(Effect.result);
+      const newPoint = yield* host
+        .dispatch(call("click", 7, { point: at(20, 20, nextImage) }, ref), context)
+        .pipe(Effect.result);
+      return { second: oldPoint, newPoint, clicks, snapshots, domValue };
+    }
+    const second = yield* host
+      .dispatch(call("click", 6, { point: at(20, 20) }, ref), context)
+      .pipe(Effect.result);
+    return { second, newPoint: second, clicks, snapshots, domValue };
+  });
+
+it.effect(
+  "viewport screenshot points survive clicks only while their captured basis stays current",
+  () =>
+    Effect.gen(function* () {
+      for (const scenario of ["reuse", "omitted", "older"] as const) {
+        const result = yield* runReuseScenario(scenario);
+        expect(result.second._tag).toBe("Success");
+        expect(result.clicks).toEqual([
+          { x: 10, y: 10 },
+          { x: 20, y: 20 },
+        ]);
+        expect(result.snapshots).toBe(1);
+        expect(result.domValue).toBe(2);
+      }
+      for (const scenario of [
+        "document",
+        "viewport",
+        "omittedViewport",
+        "missingViewport",
+        "navigate",
+      ] as const) {
+        const result = yield* runReuseScenario(scenario);
+        expect(result.second._tag === "Failure" && result.second.failure).toMatchObject({
+          code: "stale_reference",
+          effectStarted: false,
+        });
+        expect(result.clicks).toHaveLength(1);
+        expect(result.snapshots).toBe(1);
+      }
+      const replaced = yield* runReuseScenario("observe");
+      expect(replaced.second._tag === "Failure" && replaced.second.failure).toMatchObject({
+        code: "stale_reference",
+        effectStarted: false,
+      });
+      expect(replaced.newPoint._tag).toBe("Success");
+      expect(replaced.clicks).toHaveLength(2);
+      expect(replaced.snapshots).toBe(2);
+      const clearedBasis = yield* runReuseScenario("clearBasis");
+      expect(clearedBasis.second._tag === "Failure" && clearedBasis.second.failure).toMatchObject({
+        code: "stale_reference",
+        effectStarted: false,
+      });
+      expect(
+        clearedBasis.newPoint._tag === "Failure" && clearedBasis.newPoint.failure,
+      ).toMatchObject({
+        code: "unsupported",
+        effectStarted: false,
+      });
+      expect(clearedBasis.clicks).toHaveLength(1);
+      const clearedDocument = yield* runReuseScenario("clearDocument");
+      expect(
+        clearedDocument.second._tag === "Failure" && clearedDocument.second.failure,
+      ).toMatchObject({
+        code: "stale_reference",
+        effectStarted: false,
+      });
+      expect(clearedDocument.newPoint._tag).toBe("Success");
+      expect(clearedDocument.clicks).toHaveLength(2);
+    }),
+);

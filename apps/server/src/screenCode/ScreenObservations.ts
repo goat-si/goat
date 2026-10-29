@@ -248,11 +248,14 @@ class ObservationIndex {
       bounds.height <= 0
     )
       return false;
+    const scale = bounds.scale ?? 1;
+    const pixelWidth = bounds.pixelWidth ?? bounds.width * scale;
+    const pixelHeight = bounds.pixelHeight ?? bounds.height * scale;
     entry.regions.set(regionId, {
       ...bounds,
-      pixelWidth: bounds.pixelWidth ?? bounds.width,
-      pixelHeight: bounds.pixelHeight ?? bounds.height,
-      scale: bounds.scale ?? 1,
+      pixelWidth,
+      pixelHeight,
+      scale,
     });
     return true;
   }
@@ -274,8 +277,8 @@ class ObservationIndex {
         return undefined;
       return {
         targetId,
-        x: bounds.x + ref.x / bounds.scale,
-        y: bounds.y + ref.y / bounds.scale,
+        x: bounds.x + (ref.x * bounds.width) / bounds.pixelWidth,
+        y: bounds.y + (ref.y * bounds.height) / bounds.pixelHeight,
         ...(bounds.kind === "document" ? { kind: "document" as const } : {}),
       };
     }
@@ -535,6 +538,7 @@ export class ScreenObservations {
         .toString("utf8");
     const fullText = numbered(new Set(numbers.keys()));
     let text = cut(fullText);
+    let title = draft.title === undefined ? undefined : draft.title.slice(0, 1024);
     let truncated =
       draft.truncated ||
       queryTruncated ||
@@ -571,7 +575,7 @@ export class ScreenObservations {
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
       complete: draft.complete && !truncated,
       loading: draft.loading,
-      ...(draft.title === undefined ? {} : { title: draft.title }),
+      ...(title === undefined ? {} : { title }),
       ...(draft.url === undefined ? {} : { url: draft.url }),
       truncated,
       indexedText: text,
@@ -580,6 +584,14 @@ export class ScreenObservations {
     const budget = Math.min(input.limits.treeBytes, 128 * 1024);
     // An app read over budget gives up redundant annotations, then elements in the order
     // desktopCutOrder plans (chrome outlasts table body, visible outlasts off-window).
+    if (
+      draft.targetRef.kind === "app" &&
+      Buffer.byteLength(JSON.stringify(build())) > budget &&
+      title !== undefined
+    ) {
+      title = undefined;
+      truncated = true;
+    }
     if (draft.targetRef.kind === "app" && Buffer.byteLength(JSON.stringify(build())) > budget) {
       const plain = renderedText.replace(/ actions=\[[^\]]*\]/g, "").replace(/ \[\]/g, "");
       text = cut(plain);
@@ -654,6 +666,10 @@ export class ScreenObservations {
       text = cut(numbered(new Set(tokens.values())));
     while (Buffer.byteLength(JSON.stringify(build())) > budget && text.length > 0) {
       text = text.slice(0, Math.max(0, text.length - 256));
+      truncated = true;
+    }
+    if (Buffer.byteLength(JSON.stringify(build())) > budget && title !== undefined) {
+      title = undefined;
       truncated = true;
     }
     if (Buffer.byteLength(JSON.stringify(build())) > budget)

@@ -71,7 +71,7 @@ const actionErrorContext = {
 };
 
 it.effect(
-  "a screenshot point aims one click only, typing never takes a point, and only an unmet wait is an answer",
+  "a screenshot point can be reused, typing never takes a point, and only an unmet wait is an answer",
   () =>
     Effect.gen(function* () {
       const tab = {
@@ -128,6 +128,21 @@ it.effect(
       const observed = yield* host.dispatch(call("observe", 3, { screenshot: true }, ref), context);
       const image = observed.imageMetadata!;
       const point = { observationId: image.observationId, regionId: image.regionId, x: 20, y: 20 };
+      for (const [index, [x, y]] of [
+        [-1, 20],
+        [100, 20],
+        [20, -1],
+        [20, 80],
+      ].entries()) {
+        const outside = yield* host
+          .dispatch(call("click", 40 + index, { point: { ...point, x: x!, y: y! } }, ref), context)
+          .pipe(Effect.result);
+        expect(outside._tag === "Failure" && outside.failure).toMatchObject({
+          code: "stale_reference",
+          effectStarted: false,
+        });
+      }
+      expect(operations.filter((operation) => operation === "click")).toHaveLength(0);
       const typed = yield* host
         .dispatch(call("type_text", 4, { point, text: "HELLO" }, ref), context)
         .pipe(Effect.result);
@@ -138,15 +153,11 @@ it.effect(
       expect((yield* host.dispatch(call("click", 5, { point }, ref), context)).category).toBe(
         "unverifiable",
       );
-      // The click may have changed the page under that pixel, so the same point is refused.
-      const again = yield* host
-        .dispatch(call("click", 6, { point }, ref), context)
-        .pipe(Effect.result);
-      expect(again._tag === "Failure" && again.failure).toMatchObject({
-        code: "stale_reference",
-        effectStarted: false,
-      });
-      expect(operations.filter((operation) => operation === "click")).toHaveLength(1);
+      // DOM value changes alone do not consume the screenshot's coordinate basis.
+      expect((yield* host.dispatch(call("click", 6, { point }, ref), context)).category).toBe(
+        "unverifiable",
+      );
+      expect(operations.filter((operation) => operation === "click")).toHaveLength(2);
       expect(operations).not.toContain("type");
 
       waitFailure = new PreviewAutomationTimeoutError({

@@ -89,6 +89,8 @@ describe("thread workflows", () => {
         {
           id: "message-first",
           text: "First",
+          createdBy: "agent",
+          senderThreadId: "sender",
           attachments: [
             {
               type: "image",
@@ -128,6 +130,9 @@ describe("thread workflows", () => {
       ["first", "First"],
       ["later", "Later"],
     ]);
+    expect(state.queuedRuns[0]).toMatchObject({
+      message: { createdBy: "agent", senderThreadId: "sender" },
+    });
     expect(state.queuedRuns.map(({ attachments }) => attachments.map(({ id }) => id))).toEqual([
       ["attachment-first"],
       [],

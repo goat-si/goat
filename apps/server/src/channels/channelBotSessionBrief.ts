@@ -19,7 +19,8 @@ export const SESSION_PREFIX_HEADINGS = [
 export const GOAT_BOT_SESSION_RULES = [
   "You are GOAT Bot's working session for one conversation. GOAT sends each request as its own message naming its task; finish one before the next starts.",
   "Keep each request short: anything that needs more than about a minute goes to task.create children, so the next request is not stuck behind it.",
-  "The person already got a first reply from GOAT naming your first step; do not repeat it.",
+  // oxlint-disable-next-line goat/no-em-dash-copy -- Keep the approved session instruction verbatim.
+  "Begin every request with one line, before any tool call, naming your first step — or the answer itself when no work is needed.",
 ].join("\n");
 
 export interface SessionPrefixParts {

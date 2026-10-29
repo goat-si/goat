@@ -52,6 +52,8 @@ import * as ProviderSwitchService from "./ProviderSwitchService.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
+import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
+import * as SessionReceiptGate from "./goat/SessionReceiptGate.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ResourceCleanupService from "./ResourceCleanupService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
@@ -162,7 +164,12 @@ const layerProviderAuthServiceProvided = ProviderAuthService.layer.pipe(
   Layer.provide(Layer.merge(ProjectionStore.layer, layerProviderSessionManagerProvided)),
 );
 
+export const layerSessionReceiptHold = SessionReceiptHold.layer.pipe(
+  Layer.provide(layerProviderEventIngestorProvided),
+  Layer.provide(SessionReceiptGate.layer),
+);
 const layerRunExecutionServiceProvided = RunExecutionService.layer.pipe(
+  Layer.provide(layerSessionReceiptHold),
   Layer.provide(
     Layer.mergeAll(
       McpAppModelContext.layer,

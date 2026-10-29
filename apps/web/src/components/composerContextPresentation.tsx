@@ -1,7 +1,8 @@
-import { useAtomValue } from "@effect/atom-react";
-import { isThreadContextReadable } from "@goat/shared/composerContextReferences";
-import { environmentCatalog } from "~/connection/catalog";
-import { resolveThreadContextRoute, routeThreadContextRecord } from "~/lib/threadContextRoute";
+import {
+  isThreadContextReadable,
+  type VerifiedThreadHosts,
+} from "@goat/shared/composerContextReferences";
+import { routeThreadContextRecord } from "~/lib/threadContextRoute";
 import { useEnvironmentConnectionPhase } from "~/state/presentation";
 import ChatMarkdown from "./ChatMarkdown";
 import { isSvgAttachment } from "@goat/shared/image";
@@ -75,6 +76,7 @@ export type ComposerDraftContextRecord =
 
 export interface ComposerContextActions {
   environmentId: EnvironmentId | null;
+  verifiedHosts?: VerifiedThreadHosts | undefined;
   cwd?: string | undefined;
   expandImage: (imageId: string) => void;
   expandVideo: (fileId: string) => void;
@@ -82,6 +84,8 @@ export interface ComposerContextActions {
   openMention: (path: string) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
 }
+
+const EMPTY_VERIFIED_HOSTS: VerifiedThreadHosts = new Map();
 
 export const ComposerContextActionsContext = createContext<ComposerContextActions>({
   environmentId: null,
@@ -350,24 +354,20 @@ function ComposerPreviewAnnotationDetails({
 }
 
 function ComposerThreadContextChip(props: { record: ThreadContextRecord }) {
-  const { environmentId } = use(ComposerContextActionsContext);
-  const catalog = useAtomValue(environmentCatalog.catalogValueAtom);
+  const { environmentId, verifiedHosts } = use(ComposerContextActionsContext);
   const phase = useEnvironmentConnectionPhase(props.record.environmentId);
   const agentEnvironmentId = environmentId ?? props.record.environmentId;
-  const route = resolveThreadContextRoute({
-    agentEnvironmentId,
-    threadEnvironmentId: props.record.environmentId,
-    entries: catalog.entries,
-    isDesktopRenderer: window.desktopBridge !== undefined,
-  });
-  const record = routeThreadContextRecord(
-    props.record,
-    route.kind === "unreachable" ? { kind: "local" } : route,
-  );
+  const preferredHost = verifiedHosts?.get(props.record.environmentId);
+  const record =
+    props.record.environmentId === agentEnvironmentId
+      ? routeThreadContextRecord(props.record, { kind: "local" })
+      : !props.record.host && preferredHost
+        ? routeThreadContextRecord(props.record, { kind: "ssh", host: preferredHost })
+        : props.record;
   const readable = isThreadContextReadable({
     record,
     environmentId: agentEnvironmentId,
-    hostRoutingEnvironmentId: agentEnvironmentId,
+    verifiedHosts: verifiedHosts ?? EMPTY_VERIFIED_HOSTS,
   });
   const state = !readable
     ? "invalid"

@@ -14,9 +14,9 @@ The canonical bot thread holds messages and task chips written by the internal
 `channel.timeline.record` command, all runless. A `message.dispatch` to the bot from a client is
 turned into channel input in [`ThreadMessageIntake`](../../apps/server/src/orchestration-v2/ThreadMessageIntake.ts),
 and the orchestrator refuses any other `message.dispatch` to it (MCP sends, schedules), so no path
-starts a provider turn there. Replies come from a one-shot, tool-free text generation per input
-(`generateChannelReception`; Codex and Claude only), not from a session that could queue behind
-work. Chip notifications carry `ledgerTask`; only the ledger writes them.
+starts a provider turn there. Reception uses one-shot, tool-free text generation. Eligible idle conversations instead take
+their first reply from a separate read-only GOAT Bot session; the canonical bot thread still
+never runs a provider. Chip notifications carry `ledgerTask`; only the ledger writes them.
 
 ## What the bot remembers and reads
 
@@ -49,7 +49,12 @@ two generations. Reads change nothing, so a reception retried after a crash read
   Agents over MCP see only their own conversation. A Slack or iMessage link acts as the GOAT
   principal who made the link code, so it sees what that principal sees, judged with the link as
   it stands when reception reads: a link removed or narrowed after the message arrived leaves
-  only that conversation's work. Read results and journal
+  only that conversation's work. A Slack connection open to its whole workspace admits people
+  without a link as their own `unlinked:<connection>:<user>` principal with only
+  `orchestration:operate` and the connection's unlinked ceiling; every later check rebuilds that
+  identity from the connection's current settings
+  ([`channelCurrentIdentity.ts`](../../apps/server/src/channels/channelCurrentIdentity.ts)), so
+  switching to linked accounts only stops work that has not started. Read results and journal
   lines are labelled as records for the model, but the filtering above is what keeps them private.
 
 ## The bot's own turns
@@ -98,12 +103,20 @@ thread itself would put each new message behind the running turn.
   tasks gets its own session and only its follow-ups reuse it; inside one such task, a delayed call
   from an earlier run cannot be told from a later run's. No provider reports its own turn on MCP
   calls, so there is no per-call turn path.
-- **First reply.** Reception still writes it, for every provider: answering from the session would
-  need the provider to hold its native tools until that reply is delivered, and none can yet. A
-  request enters its session only once its receipt delivery has settled; a delivery state the
-  runtime cannot read keeps it waiting. A first reply is committed within 60 seconds of
-  acceptance even when every reception slot or the ordinary pass is stuck: an independent runtime
-  fiber takes over an overdue input, commits the fixed failure reply and delivers receipts.
+- **First reply.** An idle per-run session receives ordinary input when the conversation has no
+  open work, including undelivered results, and the requester passes current admission. Claiming
+  the input and creating its turn task are atomic. Durable reception-id prefixes distinguish
+  the session claim from acknowledgment-only takeover at 20 seconds, so restart cannot route
+  either through ordinary reception. The first sealed root assistant line commits its receipt
+  and source together. An acknowledgment hang gets the session fixed line at 55 seconds, while
+  the task continues. Independent deadline and receipt-send fibers prevent model calls or hung
+  transports from delaying another input. Each attempt gets min(4 seconds, remaining time);
+  at acceptance plus 60 seconds the row is terminal and late attempt results cannot reopen it.
+  Delivery settlement includes terminal ambiguous, which releases dependent actions without
+  claiming the person heard them. Missing rows and failed reads hold them. Outbox dependents
+  resolve their origin through the task when they carry no input id; the receipt itself is exempt.
+  This lets the session read before the receipt, while writes and person-reaching artifacts
+  remain held by the shared settlement definition. Other inputs retain reception routing.
 - **Model.** A turn runs on `goatBotModelSelection` from the home server's settings. Null follows
   the bot workspace's new-thread default, then the text generation model; a chosen model this
   machine no longer offers falls back with a warning, because the person asked a question, not
@@ -126,7 +139,9 @@ thread itself would put each new message behind the running turn.
   ADR-0020.
 - **Answer.** The turn's final report is the bot's reply, delivered as written; it is not
   reworded by reception the way coding results are, because the turn already wrote it for the
-  person on the chosen model.
+  person on the chosen model. The receipt source table prevents duplicate direct answers: only
+  a session receipt prefix from the same turn item is stripped. Fallback receipts and separate
+  final items keep the full answer; an empty remainder sends no synthetic completion message.
 - **Follow-ups.** A `follow_up` naming running work in its conversation joins that work, if the
   sender, as their link stands now, may answer for its requester; a new `run_turn` is its own task.
   Reception records a `task.followup.received` event in the same commit as its reply, with a

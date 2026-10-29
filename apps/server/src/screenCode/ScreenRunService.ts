@@ -201,6 +201,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     ScreenCursorRoute & { readonly runId: string; readonly turnId: string; readonly cellId: string }
   >();
   const deliveries = new Map<string, Promise<void>>();
+  const routeDeliveries = new Map<string, Promise<void>>();
   const record = (value: unknown): Record<string, unknown> | undefined =>
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -209,12 +210,21 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     const targetId = event.identity.targetId;
     const route = routes.get(targetId);
     if (route === undefined || publisher === undefined) return;
-    const previous = deliveries.get(targetId) ?? Promise.resolve();
+    const window =
+      event.op === "show" && route.kind === "app"
+        ? options.desktopHost?.windowForTarget?.(targetId)
+        : undefined;
+    const enriched = window === undefined || event.op !== "show" ? event : { ...event, ...window };
+    const key =
+      route.kind === "tab" && route.tabId !== undefined
+        ? `tab:${route.threadId}\u0000${route.tabId}`
+        : `app:${route.threadId}`;
+    const previous = routeDeliveries.get(key) ?? Promise.resolve();
     const next = previous
       .then(() =>
         Effect.runPromiseWith(callbackContext)(
           publisher
-            .publish(event, route)
+            .publish(enriched, route)
             .pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("screen cursor publish failed", { cause }),
@@ -222,11 +232,19 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             ),
         ),
       )
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (routeDeliveries.get(key) === next) routeDeliveries.delete(key);
+      });
+    routeDeliveries.set(key, next);
     deliveries.set(targetId, next);
   };
   const cursorPhases =
     options.cursorPhases ?? (publisher !== undefined ? new CursorPhases(publish) : undefined);
+  if (cursorPhases)
+    options.desktopHost?.setCursorGeneration?.((ref, callKey) =>
+      cursorPhases.generationOf(ref, callKey),
+    );
   const runCallback = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) =>
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
@@ -246,6 +264,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             Effect.sync(() => {
               if (
                 call.method !== "bind_app" &&
+                call.method !== "launch_app" &&
                 call.method !== "select_tab" &&
                 call.method !== "open_tab"
               )
@@ -450,7 +469,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        bridge.cutCellNow(runId, turnId, cellId, change.kind);
+        bridge.cutCellNow(runId, turnId, cellId, change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
       for (const [targetId, route] of routes) {
@@ -529,77 +548,111 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const contextReset = running.consumeLost(input.threadId) && input.resetValues !== true;
       const startedAt = yield* Clock.currentTimeMillis;
       let failed: ScreenCellFailure | undefined;
+      const cellContext = {
+        runId: input.runId,
+        turnId: input.turnId,
+        cellId,
+        threadId: input.threadId,
+        environmentId: input.environmentId,
+        invocation: input.invocation,
+        limits: cellLimits,
+        ...(input.bindingHints ? { bindingHints: input.bindingHints } : {}),
+      };
+      const collectCellWindows = (skipEndRead: boolean) => {
+        const finish = options.desktopHost?.finishCell;
+        return finish
+          ? finish(cellContext, {
+              skipEndRead,
+              cellDeadlineMillis: startedAt + cellLimits.cellWallMs,
+            })
+          : Effect.succeed({});
+      };
       return yield* running
         .runCell(
           {
             runId: input.runId,
             turnId: input.turnId,
-            context: {
-              runId: input.runId,
-              turnId: input.turnId,
-              cellId,
-              threadId: input.threadId,
-              environmentId: input.environmentId,
-              invocation: input.invocation,
-              limits: cellLimits,
-              ...(input.bindingHints ? { bindingHints: input.bindingHints } : {}),
-            },
+            context: cellContext,
           },
           input.source,
           input.resetValues === true || contextReset,
         )
         .pipe(
-          Effect.mapError((cause) => {
-            failed = {
-              code: cause.endedBy ?? cause.code,
-              receipts: cause.journal ?? cause.receipts ?? [],
-            };
-            return {
-              ...fail(cause.code),
-              cellId,
-              ...cellErrorSafety(
-                { effectStarted: cause.effectStarted === true },
-                cause.receipts ?? [],
+          Effect.catch((cause) =>
+            Effect.flatMap(
+              collectCellWindows(
+                (cause.endedBy ?? cause.code) === "wall_limit" ||
+                  (cause.endedBy ?? cause.code) === "stopped",
               ),
-              ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
-              ...(cause.code === "wall_limit"
-                ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
-                : cause.code === "live_children_limit"
-                  ? { limit: { name: "activeChildren", maximum: cellLimits.activeChildren } }
-                  : cause.code === "output_limit"
-                    ? { limit: { name: "returnBytes", maximum: cellLimits.returnBytes } }
-                    : {}),
-            };
-          }),
-          Effect.flatMap((result) => {
-            const notices = cleanupJournal.get(id) ?? [];
-            cleanupJournal.delete(id);
-            const journal = [
-              ...result.journal,
-              ...notices.map((entry, index) => ({
-                ...entry,
-                sequence: result.journal.length + index + 1,
-              })),
-            ].slice(-64);
-            const classified = cellResultSafety(result);
-            if (classified.error && isScreenRunErrorSchema(classified.error)) {
-              const receipts = journal.map((entry) => entry.receipt);
-              failed = { code: classified.error.code, receipts };
-              return Effect.fail({ ...classified.error, cellId, receipts: receipts.slice(-16) });
-            }
-            return Effect.sync(() => {
-              const api = apiFor(input.invocation, result.availability, input.resetValues === true);
-              return {
-                ...classified,
-                journal,
-                ...(contextReset
-                  ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }
-                  : {}),
-                ...(api === undefined ? {} : { api }),
-                contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
-              };
-            });
-          }),
+              (cellWindows) => {
+                failed = {
+                  code: cause.endedBy ?? cause.code,
+                  receipts: cause.journal ?? cause.receipts ?? [],
+                };
+                return Effect.fail({
+                  ...fail(cause.code),
+                  cellId,
+                  ...cellErrorSafety(
+                    { effectStarted: cause.effectStarted === true },
+                    cause.receipts ?? [],
+                  ),
+                  ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
+                  ...(cause.code === "wall_limit"
+                    ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
+                    : cause.code === "live_children_limit"
+                      ? { limit: { name: "activeChildren", maximum: cellLimits.activeChildren } }
+                      : cause.code === "output_limit"
+                        ? { limit: { name: "returnBytes", maximum: cellLimits.returnBytes } }
+                        : {}),
+                  ...cellWindows,
+                });
+              },
+            ),
+          ),
+          Effect.flatMap((result) =>
+            Effect.flatMap(
+              collectCellWindows(result.status === "deadline" || result.status === "stopped"),
+              (cellWindows) => {
+                const notices = cleanupJournal.get(id) ?? [];
+                cleanupJournal.delete(id);
+                const journal = [
+                  ...result.journal,
+                  ...notices.map((entry, index) => ({
+                    ...entry,
+                    sequence: result.journal.length + index + 1,
+                  })),
+                ].slice(-64);
+                const classified = cellResultSafety(result);
+                if (classified.error && isScreenRunErrorSchema(classified.error)) {
+                  const receipts = journal.map((entry) => entry.receipt);
+                  failed = { code: classified.error.code, receipts };
+                  return Effect.fail({
+                    ...classified.error,
+                    cellId,
+                    receipts: receipts.slice(-16),
+                    ...cellWindows,
+                  });
+                }
+                return Effect.sync(() => {
+                  const api = apiFor(
+                    input.invocation,
+                    result.availability,
+                    input.resetValues === true,
+                  );
+                  return {
+                    ...classified,
+                    journal,
+                    ...(contextReset
+                      ? { truncated: ["context_reset", ...result.truncated].slice(0, 64) }
+                      : {}),
+                    ...(api === undefined ? {} : { api }),
+                    contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
+                    ...cellWindows,
+                  };
+                });
+              },
+            ),
+          ),
           // Before the provider sees the result, so its row can say what the cell did.
           Effect.onExit((exit) =>
             Effect.map(Clock.currentTimeMillis, (now) =>

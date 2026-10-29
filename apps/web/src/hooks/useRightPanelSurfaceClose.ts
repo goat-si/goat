@@ -88,8 +88,10 @@ export function useRightPanelSurfaceClose(input: {
       (left, right) => Number(left.id === activeId) - Number(right.id === activeId),
     );
     for (const surface of ordered) {
-      releaseSurfaceResources(threadRef, surface);
+      // Releasing a browser drops its session, which prunes the tab; close it first so it stays
+      // a user close.
       store.closeSurface(threadRef, surface.id);
+      releaseSurfaceResources(threadRef, surface);
     }
     const nextActiveSurface = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,

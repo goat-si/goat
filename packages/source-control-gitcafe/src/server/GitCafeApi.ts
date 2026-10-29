@@ -13,6 +13,7 @@ import * as GitCafeCredentials from "./GitCafeCredentials.ts";
 import * as GitCafeHosts from "./gitCafeHosts.ts";
 
 const NO_REDIRECT: RequestInit = { redirect: "manual" };
+const MAX_REDIRECTS = 3;
 const TIMEOUT = Duration.seconds(30);
 
 export const GitCafeApiFailure = Schema.Literals([
@@ -85,6 +86,26 @@ const credentialFailure = (
       ? "unauthenticated"
       : "failed";
 
+const redirectTarget = (
+  method: string,
+  origin: string,
+  from: string,
+  status: number,
+  location: string | undefined,
+) => {
+  if (![301, 302, 303, 307, 308].includes(status) || location === undefined) return null;
+  if (method !== "GET" && status !== 307 && status !== 308) return null;
+  const target = URL.parse(location, from);
+  return target !== null &&
+    target.origin === origin &&
+    target.username === "" &&
+    target.password === "" &&
+    target.pathname.startsWith("/api/") &&
+    !/%2f|%5c/iu.test(target.pathname)
+    ? target.href
+    : null;
+};
+
 /** @public */
 export const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
@@ -122,30 +143,49 @@ export const make = Effect.gen(function* () {
           fail({ status: null, reason: credentialFailure(cause), detail: cause.message, cause }),
         ),
       );
-    const base = HttpClientRequest.make(input.method ?? "GET")(
-      `https://${host}/api${input.path}`,
-    ).pipe(
-      HttpClientRequest.bearerToken(Redacted.value(credential.token)),
-      HttpClientRequest.setHeaders({ accept: "application/json", "user-agent": "goat" }),
-    );
-    const { status, text } = yield* Effect.gen(function* () {
-      const response = yield* httpClient
-        .execute(
-          input.body === undefined ? base : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body)),
-        )
-        .pipe(
-          // Client spans expose query strings containing branch names.
-          Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-          // GitCafe does not redirect; reject 3xx to protect bearer credentials.
-          Effect.provideService(FetchHttpClient.RequestInit, NO_REDIRECT),
+    const origin = `https://${host}`;
+    const method = input.method ?? "GET";
+    const send = Effect.fn("GitCafeApi.send")(
+      function* (url: string) {
+        const base = HttpClientRequest.make(method)(url).pipe(
+          HttpClientRequest.bearerToken(Redacted.value(credential.token)),
+          HttpClientRequest.setHeaders({ accept: "application/json", "user-agent": "goat" }),
         );
-      return { status: response.status, text: yield* response.text };
-    }).pipe(
-      Effect.timeout(TIMEOUT),
-      Effect.mapError((cause) =>
-        fail({ status: null, reason: "failed", detail: "Could not reach GitCafe.", cause }),
-      ),
+        const response = yield* httpClient
+          .execute(
+            input.body === undefined
+              ? base
+              : base.pipe(HttpClientRequest.bodyJsonUnsafe(input.body)),
+          )
+          .pipe(
+            // Client spans expose query strings containing branch names.
+            Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+            // Redirects are validated before the token is sent again.
+            Effect.provideService(FetchHttpClient.RequestInit, NO_REDIRECT),
+          );
+        return {
+          status: response.status,
+          location: response.headers.location,
+          text: yield* response.text,
+        };
+      },
+      (effect) =>
+        effect.pipe(
+          Effect.timeout(TIMEOUT),
+          Effect.mapError((cause) =>
+            fail({ status: null, reason: "failed", detail: "Could not reach GitCafe.", cause }),
+          ),
+        ),
     );
+    let url = `${origin}/api${input.path}`;
+    let response = yield* send(url);
+    for (let hop = 0; hop < MAX_REDIRECTS; hop++) {
+      const next = redirectTarget(method, origin, url, response.status, response.location);
+      if (next === null) break;
+      url = next;
+      response = yield* send(url);
+    }
+    const { status, text } = response;
     yield* Effect.annotateCurrentSpan({ "http.response.status_code": status });
     if (status >= 200 && status < 300) return text;
     // The source may hold a newer token than the one that was refused.

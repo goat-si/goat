@@ -6,7 +6,7 @@ import {
 import { pendingSubagentRequestsByThread } from "@goat/client-runtime/state/threads";
 import type { AnyRouter } from "@tanstack/react-router";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@goat/contracts";
-import { isSideChatThread } from "@goat/contracts";
+import { isGoatBotSessionThreadId, isSideChatThread } from "@goat/contracts";
 import type { ClientSettings } from "@goat/contracts/settings";
 import * as Option from "effect/Option";
 import type { AtomRegistry } from "effect/reactivity";
@@ -177,8 +177,13 @@ export function startThreadNotifications(
     const subagentRequests = pendingSubagentRequestsByThread(threads);
     const changed: Array<[NotificationState | undefined, NotificationState]> = [];
     for (const rawThread of threads) {
-      // Subagents report through their parent; a side chat answers in its open panel.
-      if (rawThread.lineage.relationshipToParent === "subagent" || isSideChatThread(rawThread))
+      // Subagents report through their parent; a side chat answers in its open panel; a GOAT
+      // Bot session replies through the bot, after its receipt.
+      if (
+        rawThread.lineage.relationshipToParent === "subagent" ||
+        isSideChatThread(rawThread) ||
+        isGoatBotSessionThreadId(rawThread.id)
+      )
         continue;
       const prior = previous.get(rawThread.id);
       const subagentRequest = subagentRequests.get(rawThread.id) ?? null;

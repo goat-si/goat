@@ -3,6 +3,9 @@ import * as Effect from "effect/Effect";
 
 import { goatBotSessionSharingFor } from "../channels/channelIds.ts";
 
+export const sessionNativeSubagentLimit = (threadId: ThreadId) =>
+  isGoatBotSessionThreadId(threadId) ? 0 : undefined;
+
 /** The adapter's driver, or undefined when the instance is not registered. */
 export const driverOf = <D, E, R>(adapter: Effect.Effect<{ readonly driver: D }, E, R>) =>
   adapter.pipe(

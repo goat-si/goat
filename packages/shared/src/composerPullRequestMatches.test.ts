@@ -5,6 +5,7 @@ import type { ThreadPullRequestLink } from "@goat/contracts";
 import {
   composerPullRequestsFromLinks,
   filterComposerPullRequestMatches,
+  withLinkedComposerPullRequestsFirst,
 } from "./composerPullRequestMatches.ts";
 
 const entry = (number: number, updatedAt: string) => ({
@@ -77,5 +78,28 @@ describe("linked pull requests", () => {
       limit: 10,
     });
     expect(result).toEqual([entry(4, "2026-01-03")]);
+  });
+
+  it("prioritizes linked pull requests matching text before and after search", () => {
+    const linked = composerPullRequestsFromLinks(
+      [
+        link("owner/repo", 7, {
+          snapshot: { ...link("owner/repo", 7).snapshot!, title: "Fix login" },
+        }),
+        link("owner/repo", 8),
+      ],
+      "p1",
+    );
+    expect(
+      withLinkedComposerPullRequestsFirst({ matches: [], linked, query: "fix", limit: 10 }),
+    ).toEqual([linked[0]]);
+    expect(
+      withLinkedComposerPullRequestsFirst({
+        matches: [entry(9, "2026-01-05"), entry(8, "2026-01-03")],
+        linked,
+        query: "fix",
+        limit: 10,
+      }),
+    ).toEqual([linked[0], entry(8, "2026-01-03"), entry(9, "2026-01-05")]);
   });
 });

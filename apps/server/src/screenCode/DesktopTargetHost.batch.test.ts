@@ -1,10 +1,13 @@
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
 import { ComputerUsePrimitiveRequest } from "@goat/contracts";
+import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -166,3 +169,116 @@ it.live("a refused group sends nothing and, like any refusal, leaves the cell fr
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live(
+  "T61a/T61b/T61c: concurrent desktop point clicks queue in one batch group and run one at a time, while out-of-bounds points fail batch preflight before any click is sent",
+  () => {
+    const framedWindow = {
+      pid: 42,
+      window_id: 7,
+      snapshot_id: "s0000000a",
+      elements_complete: false,
+      tree_format: "both",
+      tree_markdown: ['- [0] AXWindow "Editor"', '  - [1] AXButton "Apply" [actions=[press]]'].join(
+        "\n",
+      ),
+      elements: [
+        {
+          element_index: 0,
+          element_token: "s0000000a:0",
+          role: "AXWindow",
+          label: "Editor",
+          frame: { x: 100, y: 200, w: 674, h: 408 },
+        },
+        {
+          element_index: 1,
+          element_token: "s0000000a:1",
+          role: "AXButton",
+          label: "Apply",
+          parent_index: 0,
+          frame: { x: 140, y: 260, w: 80, h: 30 },
+          actions: ["AXPress"],
+        },
+      ],
+      window_bounds: { x: 100, y: 200, width: 674, height: 408 },
+      screenshot_width: 1348,
+      screenshot_height: 816,
+      screenshot_scale: 2,
+      image: {
+        mimeType: "image/png" as const,
+        bytes: Buffer.from("png").toString("base64"),
+        width: 1348,
+        height: 816,
+      },
+    };
+    return Effect.gen(function* () {
+      const { host, sent } = fixture({ get_window_state: framedWindow });
+      yield* Effect.gen(function* () {
+        // T61a: 6 concurrent {window:[x,y]} clicks and 6 concurrent [x,y] pixel clicks all succeed in order.
+        const sixWin = yield* runCell(
+          `${BIND} const pts = [[502,157],[502,157],[436,211],[634,319],[502,211],[634,373]];
+          const clicks = pts.map((p) => app.click({ window: p })); ${SETTLED}`,
+        );
+        expect(sixWin.value).toEqual(Array.from({ length: 6 }, () => "confirmed"));
+        expect(sent.filter((s) => s.tool === "click")).toHaveLength(6);
+
+        const sixPx = yield* runCell(
+          `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+          await app.screenshot();
+          const pxs = [[100,100],[200,100],[300,100],[400,100],[500,100],[600,100]];
+          const clicks = pxs.map((p) => app.click(p)); ${SETTLED}`,
+        );
+        expect(sixPx.value).toEqual(Array.from({ length: 6 }, () => "confirmed"));
+        expect(sent.filter((s) => s.tool === "click")).toHaveLength(12);
+
+        // T61c: out-of-bounds 2nd window point or pixel point in Promise.all aborts preflight before step 0 is sent.
+        const beforeOob = sent.filter((s) => s.tool === "click").length;
+        const oobBatch = yield* runCell(
+          `${BIND} await app.screenshot();
+          const winSettled = (await Promise.allSettled([app.click({ window: [10, 10] }), app.click({ window: [900, 900] })])).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code + ':' + r.reason.nothingSent);
+          const pxSettled = (await Promise.allSettled([app.click([10, 10]), app.click([5000, 5000])])).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code + ':' + r.reason.nothingSent);
+          return { winSettled, pxSettled };`,
+        );
+        expect(oobBatch.value).toEqual({
+          winSettled: ["not_run:true", "invalid_argument:true"],
+          pxSettled: ["not_run:true", "invalid_argument:true"],
+        });
+        expect(sent.filter((s) => s.tool === "click")).toHaveLength(beforeOob);
+        yield* finish;
+      }).pipe(Effect.provide(cellService(host)));
+
+      // T61b: Deferred blocking the 1st {window:[10,10]} click proves the 2nd click does not reach the driver until the 1st completes.
+      const firstClickReached = yield* Deferred.make<void>();
+      const releaseFirstClick = yield* Deferred.make<void>();
+      let clickCalls = 0;
+      const base = fixture({ get_window_state: framedWindow });
+      const gatedHost = createDesktopTargetHost({
+        primitiveChannel: {
+          request: (req: { tool: string }) =>
+            req.tool === "click" && ++clickCalls === 1
+              ? Deferred.succeed(firstClickReached, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseFirstClick)),
+                  Effect.andThen(base.channel.request(req as never)),
+                )
+              : base.channel.request(req as never),
+        } as never,
+        leases: base.leases,
+        platform: "darwin",
+      });
+      yield* Effect.gen(function* () {
+        const fiber = yield* runCell(
+          `${BIND} const clicks = [app.click({ window: [10, 10] }), app.click({ window: [20, 20] })]; ${SETTLED}`,
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(firstClickReached);
+        // While the 1st click is blocked on releaseFirstClick, the 2nd click has NOT been sent to the driver.
+        expect(clickCalls).toBe(1);
+        expect(base.sent.filter((s) => s.tool === "click")).toHaveLength(0);
+        yield* Deferred.succeed(releaseFirstClick, undefined);
+        const done = yield* Fiber.join(fiber);
+        expect(done.value).toEqual(["confirmed", "confirmed"]);
+        expect(base.sent.filter((s) => s.tool === "click")).toHaveLength(2);
+        yield* finish;
+      }).pipe(Effect.provide(cellService(gatedHost)));
+    });
+  },
+);

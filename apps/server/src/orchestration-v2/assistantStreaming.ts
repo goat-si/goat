@@ -1,5 +1,6 @@
 import type { ResponseStreamingMode } from "@goat/contracts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import { hasAssistantTextBoundary } from "./Adapters/AssistantTextBoundary.ts";
 
 // List fences can open at any indentation; closers may be at most three spaces deeper.
 const MARKDOWN_FENCE_PATTERN = /^( *)(`{3,}|~{3,})/;
@@ -68,8 +69,13 @@ export function splitBufferedAssistantText(text: string): { ready: string; rest:
   return { ready: text.slice(0, boundary), rest: text.slice(boundary) };
 }
 
-export function makeAssistantStreamingFilter(mode: ResponseStreamingMode) {
+export function makeAssistantStreamingFilter(
+  mode: ResponseStreamingMode,
+  options?: { readonly receiptLine: boolean },
+) {
   const delivered = new Map<string, { text: string; at: number }>();
+  let receiptItem: string | null = null;
+  let receiptText: string | null = null;
   return (
     event: ProviderAdapter.ProviderAdapterV2Event,
     now: number,
@@ -89,14 +95,32 @@ export function makeAssistantStreamingFilter(mode: ResponseStreamingMode) {
           : null;
     if (!message) return event;
     const key = `${event.type}:${message.id}`;
+    const assistant =
+      event.type === "message.updated" ||
+      (event.type === "turn_item.updated" && event.turnItem.type === "assistant_message");
+    const root =
+      message.runId !== null &&
+      (event.type !== "turn_item.updated" || event.turnItem.parentItemId === null);
+    if (options?.receiptLine && assistant && root && receiptText === null) {
+      const newline = message.text.indexOf("\n");
+      if (newline !== -1 || !message.streaming || hasAssistantTextBoundary(event)) {
+        const line = newline === -1 ? message.text : message.text.slice(0, newline + 1);
+        if (line.trim().length > 0) {
+          receiptItem = String(message.id);
+          receiptText = line;
+        }
+      }
+    }
     if (!message.streaming) {
       delivered.delete(key);
       return event;
     }
-    if (mode === "turn") return null;
+    const firstReceipt =
+      receiptItem === String(message.id) && receiptText !== null && !delivered.has(key);
+    if (mode === "turn" && !firstReceipt) return null;
     const previous = delivered.get(key);
-    if (previous && now - previous.at < 400) return null;
-    const { ready } = splitBufferedAssistantText(message.text);
+    if (!firstReceipt && previous && now - previous.at < 400) return null;
+    const ready = firstReceipt ? receiptText : splitBufferedAssistantText(message.text).ready;
     if (!ready || ready === previous?.text) return null;
     delivered.set(key, { text: ready, at: now });
     if (event.type === "message.updated")

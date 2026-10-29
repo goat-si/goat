@@ -3,6 +3,19 @@ import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import type { DraftId } from "./composerDraftStore";
 import type { GlobalAgentRef } from "./globalAgentStore";
 
+export function selectGlobalAgentScratchEnvironment(
+  ref: GlobalAgentRef | null,
+  primary: EnvironmentId | null,
+  rootFor: (id: EnvironmentId | null) => string | null,
+  select: (id: EnvironmentId | null) => EnvironmentId | null,
+) {
+  return ref !== null
+    ? rootFor(ref.environmentId) !== null
+      ? ref.environmentId
+      : null
+    : select(primary);
+}
+
 export type GlobalAgentResolution =
   | { readonly kind: "wait" }
   | {

@@ -23,6 +23,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
+import type { ChannelIdentity } from "./ChannelLedger.ts";
 
 export class SlackChannelSettings extends Context.Service<
   SlackChannelSettings,
@@ -47,6 +48,15 @@ export class SlackChannelSettings extends Context.Service<
     readonly defaultTarget: (
       connectionId: string,
     ) => Effect.Effect<Option.Option<SlackChannelDefaultTarget>, SlackChannelSettingsError>;
+    /**
+     * Who an account without a link counts as on this connection right now, or none when the
+     * connection only takes linked accounts. Read again at each check, so narrowing access
+     * stops work that has not started yet.
+     */
+    readonly unlinkedIdentity: (
+      connectionId: string,
+      externalActorId: string,
+    ) => Effect.Effect<Option.Option<ChannelIdentity>>;
   }
 >()("goat/channels/SlackChannelSettings") {}
 
@@ -62,5 +72,6 @@ export const layerUnavailable = Layer.succeed(
     disconnect: () => Effect.fail(new SettingsError({ reason: "adapter_unavailable" })),
     streamStatus: () => Stream.fail(new SettingsError({ reason: "adapter_unavailable" })),
     defaultTarget: () => Effect.succeed(Option.none()),
+    unlinkedIdentity: () => Effect.succeed(Option.none()),
   }),
 );

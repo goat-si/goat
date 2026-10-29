@@ -19,6 +19,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
@@ -328,6 +329,7 @@ export function NewTaskFlowProvider(
             ? (projectsForEnvironment[0] ?? null)
             : null));
 
+  const verifiedThreadHosts = useThreadContextHosts(selectedProject?.environmentId ?? null);
   const projectDefaults = useNewTaskProjectDefaults(selectedProject);
   const selectedEnvironmentServerConfig = projectDefaults.serverConfig;
   const isScratchDraft = projectDefaults.isScratch;
@@ -827,6 +829,7 @@ export function NewTaskFlowProvider(
         text: draft.text,
         records: draft.context?.records ?? [],
         environmentId: selectedProject.environmentId,
+        verifiedHosts: verifiedThreadHosts,
       }).length > 0
     ) {
       return null;

@@ -7,7 +7,9 @@ import {
   AuthSettingsWriteScope,
   type EnvironmentId,
   type RuntimeMode,
+  type SlackChannelScope,
   type SlackChannelSettings as SlackConnection,
+  type SlackUserAccess,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/reactivity";
@@ -42,6 +44,16 @@ import {
 
 const NO_PROJECT = "__none__";
 
+const CHANNEL_SCOPE_LABELS: Record<SlackChannelScope, string> = {
+  all: "Every channel it's in",
+  listed: "These channels only",
+};
+
+const USER_ACCESS_LABELS: Record<SlackUserAccess, string> = {
+  workspace: "Everyone in the workspace",
+  linked: "Linked accounts only",
+};
+
 const failureMessage = (
   result: Parameters<typeof squashAtomCommandFailure>[0],
   fallback: string,
@@ -66,7 +78,12 @@ export function SlackChannelSettings() {
   return (
     <SettingsSection id="slack-channel" title="Slack">
       {availability === "ready" && environmentId !== null ? (
-        <SlackConnectionControls environmentId={environmentId} />
+        <SlackConnectionControls
+          environmentId={environmentId}
+          accessChoices={
+            selected?.serverConfig?.environment.capabilities.slackChannelAccess === true
+          }
+        />
       ) : (
         <SettingsUnavailableGroup message={slackSettingsUnavailableMessage(availability)}>
           <SettingsRow
@@ -79,7 +96,13 @@ export function SlackChannelSettings() {
   );
 }
 
-function SlackConnectionControls({ environmentId }: { environmentId: EnvironmentId }) {
+function SlackConnectionControls({
+  environmentId,
+  accessChoices,
+}: {
+  environmentId: EnvironmentId;
+  accessChoices: boolean;
+}) {
   const settingsQuery = useEnvironmentQuery(
     channelEnvironment.slackSettings({ environmentId, input: {} }),
   );
@@ -106,6 +129,7 @@ function SlackConnectionControls({ environmentId }: { environmentId: Environment
       <SlackConnectionForm
         environmentId={environmentId}
         connection={undefined}
+        accessChoices={accessChoices}
         onSaved={refreshSettings}
       />
     );
@@ -115,6 +139,7 @@ function SlackConnectionControls({ environmentId }: { environmentId: Environment
       <SlackConnectionForm
         environmentId={environmentId}
         connection={connection}
+        accessChoices={accessChoices}
         onSaved={refreshSettings}
       />
       <SlackIdentityLinks environmentId={environmentId} connectionId={connection.connectionId} />
@@ -125,6 +150,8 @@ function SlackConnectionControls({ environmentId }: { environmentId: Environment
 function SlackConnectionForm(props: {
   environmentId: EnvironmentId;
   connection: SlackConnection | undefined;
+  /** The server's slackChannelAccess capability. */
+  accessChoices: boolean;
   onSaved: () => void;
 }) {
   const { environmentId, connection } = props;
@@ -134,7 +161,8 @@ function SlackConnectionForm(props: {
   const projects = allProjects.filter((project) => project.environmentId === environmentId);
   // Untouched fields follow the latest saved settings; only the user's edits are kept locally.
   const [edits, setEdits] = useState<Partial<SlackSettingsDraft>>({});
-  const draft: SlackSettingsDraft = { ...slackSettingsDraft(connection), ...edits };
+  const { accessChoices } = props;
+  const draft: SlackSettingsDraft = { ...slackSettingsDraft(connection, accessChoices), ...edits };
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -144,7 +172,7 @@ function SlackConnectionForm(props: {
   };
 
   const save = async () => {
-    const built = slackConfigureInput(draft, connection);
+    const built = slackConfigureInput(draft, connection, accessChoices);
     if (built._tag === "invalid") {
       setFormError(built.message);
       return;
@@ -266,18 +294,102 @@ function SlackConnectionForm(props: {
       />
       <SettingsRow
         title="Channels"
-        description="Channel IDs where mentions start work, separated by commas. DMs always work."
+        description={
+          accessChoices
+            ? "Invite the bot to a channel before mentioning it there; it can't hear channels it isn't in. DMs always work."
+            : "Update GOAT on this machine to answer in every channel or without a link."
+        }
         control={
-          <Input
-            size="sm"
-            aria-label="Allowed Slack channel IDs"
-            placeholder="C0123456789"
-            value={draft.channels}
-            disabled={busy}
-            onChange={(event) => update({ channels: event.target.value })}
-          />
+          <Select
+            disabled={busy || !accessChoices}
+            value={draft.channelScope}
+            onValueChange={(value) => {
+              if (value !== null) update({ channelScope: value as SlackChannelScope });
+            }}
+          >
+            <SelectTrigger size="sm" aria-label="Slack channels the bot answers in">
+              <SelectValue>{CHANNEL_SCOPE_LABELS[draft.channelScope]}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              {(Object.keys(CHANNEL_SCOPE_LABELS) as SlackChannelScope[]).map((scope) => (
+                <SelectItem key={scope} value={scope}>
+                  {CHANNEL_SCOPE_LABELS[scope]}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
         }
       />
+      {draft.channelScope === "listed" ? (
+        <SettingsRow
+          title="Channel IDs"
+          description="Separated by commas. Find an ID under the channel's details."
+          control={
+            <Input
+              size="sm"
+              aria-label="Allowed Slack channel IDs"
+              placeholder="C0123456789"
+              value={draft.channels}
+              disabled={busy}
+              onChange={(event) => update({ channels: event.target.value })}
+            />
+          }
+        />
+      ) : null}
+      <SettingsRow
+        title="Who can use it"
+        description={
+          draft.userAccess === "workspace"
+            ? "People who haven't linked an account work at the level below."
+            : "Others get a reply explaining how to link."
+        }
+        control={
+          <Select
+            disabled={busy || !accessChoices}
+            value={draft.userAccess}
+            onValueChange={(value) => {
+              if (value !== null) update({ userAccess: value as SlackUserAccess });
+            }}
+          >
+            <SelectTrigger size="sm" aria-label="Who can use the Slack bot">
+              <SelectValue>{USER_ACCESS_LABELS[draft.userAccess]}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              {(Object.keys(USER_ACCESS_LABELS) as SlackUserAccess[]).map((access) => (
+                <SelectItem key={access} value={access}>
+                  {USER_ACCESS_LABELS[access]}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        }
+      />
+      {draft.userAccess === "workspace" ? (
+        <SettingsRow
+          title="Access without a link"
+          description="The most work started by someone without a linked account may do."
+          control={
+            <Select
+              disabled={busy}
+              value={draft.unlinkedRuntimeModeCeiling}
+              onValueChange={(value) => {
+                if (value !== null) update({ unlinkedRuntimeModeCeiling: value as RuntimeMode });
+              }}
+            >
+              <SelectTrigger size="sm" aria-label="Access for Slack users without a link">
+                <SelectValue>{RUNTIME_MODE_LABELS[draft.unlinkedRuntimeModeCeiling]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup>
+                {(Object.keys(RUNTIME_MODE_LABELS) as RuntimeMode[]).map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {RUNTIME_MODE_LABELS[mode]}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+      ) : null}
       <SettingsRow
         title="Default project"
         description="Where work from Slack runs when the request doesn't say."

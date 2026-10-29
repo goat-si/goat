@@ -18,7 +18,12 @@ import {
   unmarkUnverified,
 } from "./DesktopTreeText.ts";
 
-export type DesktopRow = ScreenObservationDraft["elements"][number];
+export type DesktopRow = ScreenObservationDraft["elements"][number] & {
+  /** True when the element had no label of its own and took text written under it. */
+  readonly lifted?: boolean;
+  /** Raw action names as the driver reported them, before custom-action trimming. */
+  readonly rawActions?: ReadonlyArray<string>;
+};
 export interface DesktopQuery {
   readonly role?: string;
   readonly name?: string;
@@ -85,12 +90,12 @@ export const desktopRows = (
     if (!token) return [];
     const index = natural(entry.element_index);
     const label = string(entry.label) ?? "";
-    const named =
-      index === undefined
-        ? label
-        : label === ""
-          ? (!repeated.has(index) && names.get(index)) || ""
-          : label;
+    const liftedName =
+      index !== undefined && label === "" && !repeated.has(index) ? names.get(index) : undefined;
+    const named = liftedName ?? label;
+    const rawActions = (Array.isArray(entry.actions) ? entry.actions : []).filter(
+      (action): action is string => typeof action === "string",
+    );
     // Only a structured id: tree text is written unescaped and can pose as metadata.
     const id = string(entry.identifier)?.slice(0, 400);
     return [
@@ -101,6 +106,8 @@ export const desktopRows = (
         ...(index === undefined ? {} : { index }),
         ...elementDetail(entry),
         ...(id === undefined ? {} : { id }),
+        ...(liftedName !== undefined && liftedName !== "" ? { lifted: true } : {}),
+        ...(rawActions.length > 0 ? { rawActions } : {}),
         driverToken: token,
       },
     ];
@@ -181,7 +188,7 @@ const pageRows = (pages: DesktopPages, after: number) =>
   );
 
 /** A page's draft: those rows under the lines above them, which stay as context. */
-export const pageDraft = (
+const pageDraft = (
   pages: DesktopPages,
   after: number,
   targetRef: ScreenTargetRef,
@@ -204,7 +211,7 @@ export const pageDraft = (
 };
 
 /** The window's bounds as a draft's viewport: elements outside them go first when over budget. */
-export const viewportOf = (
+const viewportOf = (
   bounds:
     | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
     | undefined,
@@ -283,3 +290,91 @@ const listedOf = (elements: ReadonlyArray<Record<string, unknown>>) =>
           },
         ];
   });
+
+export const observeScope = (
+  followedSheet: boolean,
+  fromSheetId: number,
+  windowId: number,
+  query: boolean,
+  interactive: boolean,
+): string | undefined => {
+  const base = followedSheet ? `sheet ${fromSheetId} of window ${windowId}` : undefined;
+  return query
+    ? `${base ?? "window"} query`
+    : interactive
+      ? `${base ?? "window"} interactive`
+      : base;
+};
+
+export const buildObservedDraft = (input: {
+  readonly targetRef: ScreenTargetRef;
+  readonly generation: number;
+  readonly state: Record<string, unknown>;
+  readonly filtered: boolean;
+  readonly limit: number;
+  readonly shown: ReadonlyArray<DesktopRow>;
+  readonly shownText: string;
+  readonly omitted: NonNullable<ScreenObservation["omitted"]>;
+  readonly nextBounds:
+    | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
+    | undefined;
+  readonly fallbackTitle: string | undefined;
+}): ScreenObservationDraft => {
+  const title = (
+    string(input.state.window_title) ??
+    string(input.state.title) ??
+    input.fallbackTitle
+  )?.slice(0, 1024);
+  return {
+    targetRef: input.targetRef,
+    targetGeneration: input.generation,
+    surfaceGeneration: input.generation,
+    ...(title === undefined ? {} : { title }),
+    indexedText: input.shownText,
+    complete: input.state.elements_complete === true && !input.filtered,
+    truncated: input.state.truncated === true || input.limit < READ_BOUNDS[0],
+    loading: false,
+    elements: input.shown,
+    ...(input.omitted.length === 0 ? {} : { omitted: input.omitted }),
+    ...viewportOf(input.nextBounds),
+  };
+};
+
+export const renderPageObservation = (
+  observations: import("./ScreenObservations.ts").ScreenObservations,
+  pages: DesktopPages | undefined,
+  boundId: string | undefined,
+  ref: ScreenTargetRef,
+  epoch: number,
+  windowBounds:
+    | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
+    | undefined,
+  args: Record<string, unknown>,
+  treeBytes: number,
+): {
+  readonly observation?: ScreenObservation;
+  readonly error?: import("@goat/contracts").ScreenRunError;
+} => {
+  const from = natural(args.after);
+  if (from === undefined)
+    return { error: fail("invalid_argument", "Pass after the number the omission names.") };
+  const base = string(args.baseObservationId);
+  if (!pages || pages.base !== boundId || (base !== undefined && base !== pages.base))
+    return {
+      error: fail("stale_reference", "A newer read ended that read's pages; observe again."),
+    };
+  try {
+    const observation = observations.renderObservation({
+      draft: { ...pageDraft(pages, from, ref, epoch), ...viewportOf(windowBounds) },
+      mode: "query",
+      scope: `after [${from}]`,
+      page: pages.base,
+      limits: { treeBytes },
+    });
+    for (const element of observation.elements) pages.given.add(element.index);
+    pages.ids.add(observation.observationId);
+    return { observation };
+  } catch (cause) {
+    return { error: renderFailure(cause) };
+  }
+};

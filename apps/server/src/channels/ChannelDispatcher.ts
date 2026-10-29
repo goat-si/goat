@@ -67,6 +67,7 @@ import {
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { workerInstruction } from "./channelWorkerBrief.ts";
@@ -335,10 +336,13 @@ const make = Effect.gen(function* () {
       if (task.originAddress.kind === "slack" || task.originAddress.kind === "imessage") {
         const actor = task.requester.externalActorId;
         if (actor === undefined) return "none" satisfies MemoryTaskGrantCeiling;
-        const linked = yield* ledger.findIdentity({
+        const linked = yield* currentChannelIdentity({
           connectionId: task.originAddress.connectionId,
           externalActorId: actor,
-        });
+        }).pipe(
+          Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+          Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+        );
         if (linked === undefined) return "none" satisfies MemoryTaskGrantCeiling;
         scopes = scopes.filter((scope) => linked.grantedScopes.includes(scope));
       }
@@ -480,6 +484,7 @@ const make = Effect.gen(function* () {
       if (
         (yield* requesterForDispatch(initial.task).pipe(
           Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+          Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         )) === undefined
       ) {
         yield* commitTransition(
@@ -523,6 +528,7 @@ const make = Effect.gen(function* () {
       const target = task.target!;
       const currentRequester = yield* requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
       if (currentRequester === undefined) {
         return yield* commitTransition(
@@ -659,6 +665,7 @@ const make = Effect.gen(function* () {
   ) {
     const requester = yield* requesterForDispatch(initial.task).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
     );
     if (requester === undefined) return;
     const stored = initial;
@@ -706,6 +713,7 @@ const make = Effect.gen(function* () {
         return;
       const who = yield* requesterForDispatch(current.task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
       if (who === undefined) {
         yield* commitTransition(
@@ -815,6 +823,7 @@ const make = Effect.gen(function* () {
       if (stored.task.status === "received") {
         const requester = yield* requesterForDispatch(stored.task).pipe(
           Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+          Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
         );
         if (requester === undefined) {
           yield* commitTransition(
@@ -836,6 +845,9 @@ const make = Effect.gen(function* () {
       }
       // A generation that may already run on another machine never starts anywhere else.
       if (stored.task.status === "received" || stored.task.status === "dispatching") {
+        // An automatic placement in flight owns the task until it claims or gives up; its own
+        // remote attempt must not read as an attempt elsewhere.
+        if (yield* FiberMap.has(placements, taskId)) return;
         const elsewhere = yield* remoteWorkers.attemptedElsewhere(stored);
         if (elsewhere !== undefined) {
           yield* commitTransition(

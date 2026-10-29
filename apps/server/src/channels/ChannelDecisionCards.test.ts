@@ -88,6 +88,7 @@ const linkImessage = Effect.gen(function* () {
 const slackClassifier = {
   teamId: "T1",
   botUserId: "U0BOT",
+  channelScope: "listed" as const,
   allowedChannelIds: new Set(["C1"]),
 };
 

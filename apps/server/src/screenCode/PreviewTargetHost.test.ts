@@ -932,3 +932,17 @@ it.effect("a turn with no tab yet reports tabs available when this server can op
     ]);
   }),
 );
+
+it.effect(
+  "rebinding the same tab increments its cursor generation while keeping both bindings usable",
+  () =>
+    Effect.gen(function* () {
+      const { bridge, rebind, ref, dispatch } = yield* browserFixture();
+      const second = yield* rebind();
+      expect(second.generation).toBeGreaterThan(ref.generation);
+      const firstObs = yield* dispatch("observe");
+      expect(firstObs?.outcome).toBe("ok");
+      const fresh = yield* bridge.handle(call("observe", 99, {}, second), context);
+      expect(fresh?.outcome).toBe("ok");
+    }),
+);

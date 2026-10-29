@@ -14,7 +14,7 @@ import {
   type SnapshotNode,
   tabBarRect,
 } from "./checks.ts";
-import { BUNDLE_ID, delay, type Device } from "./device.ts";
+import { BUNDLE_ID, delay, type Device, poolError } from "./device.ts";
 import { lagCheck } from "./video.ts";
 
 export interface StepResult {
@@ -86,7 +86,23 @@ export async function runJourney(
       );
   };
 
-  /** Screenshot and check the settled screen, and record it as a step. */
+  /**
+   * Records a step's snapshot checks at once, before any device I/O or video analysis can fail:
+   * a pool failure must not erase what the app showed, or the attempt reads as clean and its
+   * retry replaces the evidence. The returned function adds later results, such as the
+   * screenshot once it exists.
+   */
+  const record = (step: StepResult) => {
+    const index = steps.length;
+    let current = step;
+    steps.push(current);
+    return (change: Partial<StepResult>) => {
+      current = { ...current, ...change, checks: [...current.checks, ...(change.checks ?? [])] };
+      steps[index] = current;
+    };
+  };
+
+  /** Check the settled screen, record it as a step, and screenshot it. */
   const capture = async (
     name: string,
     snapshot: Snapshot,
@@ -94,15 +110,13 @@ export async function runJourney(
     extra: Partial<StepResult> = {},
   ) => {
     const screenshot = NodePath.join(directory, `${steps.length + 1}-${name}.png`);
-    await device.screenshot(screenshot);
-    const step = {
+    const amend = record({
       name,
       checks: [...layoutChecks(snapshot, BUNDLE_ID), ...expectations],
-      screenshot,
       ...extra,
-    };
-    steps.push(step);
-    return step;
+    });
+    await device.screenshot(screenshot);
+    amend({ screenshot });
   };
 
   // The app ignores the pairing link until its JS has loaded and shown the workspace. An
@@ -113,27 +127,48 @@ export async function runJourney(
     findLabel(snapshot, /^(Dismiss|OK|Close)$/) !== undefined
       ? findLabel(snapshot, /^Could not|failed|went wrong/i)
       : undefined;
-  for (let dialogs = 0; ; dialogs++) {
-    const launch = await device.waitFor(
-      (snapshot) => loaded(snapshot) || errorDialog(snapshot) !== undefined,
-      "the app to load",
-      180_000,
-    );
-    const dialog = errorDialog(launch);
-    if (!dialog || dialogs >= 3) break;
-    await capture("launch error", launch, [
-      check("no error dialog on launch", false, dialog.label ?? "error dialog"),
-    ]);
-    await device.agent(["press", `label="${findLabel(launch, /^(Dismiss|OK|Close)$/)!.label}"`]);
-    await delay(1_000);
-  }
+  let dialogs = 0;
+  /** Waits for `ready`, recording and dismissing up to three error dialogs on the way. */
+  const settle = async (
+    ready: (snapshot: Snapshot) => boolean,
+    label: string,
+    timeoutMs: number,
+  ) => {
+    for (;;) {
+      const snapshot = await device.waitFor(
+        (current) => ready(current) || errorDialog(current) !== undefined,
+        label,
+        timeoutMs,
+      );
+      const dialog = errorDialog(snapshot);
+      if (!dialog || dialogs >= 3) return snapshot;
+      dialogs++;
+      await capture("launch error", snapshot, [
+        check("no error dialog on launch", false, dialog.label ?? "error dialog"),
+      ]);
+      await device.agent([
+        "press",
+        `label="${findLabel(snapshot, /^(Dismiss|OK|Close)$/)!.label}"`,
+      ]);
+      await delay(1_000);
+    }
+  };
+  await settle(loaded, "the app to load", 180_000);
   let threads: Snapshot | null = null;
   for (let attempt = 1; attempt <= 2 && !threads; attempt++) {
     const pairing = new URLSearchParams({ pairingUrl: await pair(), autoConnect: "1" });
     await device.openUrl(`t3code-dev://connections/new?${pairing}`);
-    threads = await device
-      .waitFor((snapshot) => threadRow(snapshot) !== undefined, "the paired thread list", 60_000)
-      .catch(() => null);
+    threads = await settle(
+      (snapshot) => threadRow(snapshot) !== undefined,
+      "the paired thread list",
+      60_000,
+    )
+      .then((snapshot) => (threadRow(snapshot) ? snapshot : null))
+      .catch((error: unknown) => {
+        // Losing the device says nothing about pairing; the pose's retry handles the pool.
+        if (error instanceof Error && poolError(error.message)) throw error;
+        return null;
+      });
   }
   if (!threads) throw new Error("the app did not show the fixture threads after pairing");
   // Rotated only once the app is up: a rotation during launch is lost.
@@ -161,24 +196,9 @@ export async function runJourney(
     "the thread screen",
   );
   const threadShot = NodePath.join(directory, `${steps.length + 1}-thread.png`);
-  await device.screenshot(threadShot);
-  const openLag = bottomTabs
-    ? await lagCheck(
-        "no tabs over the entering thread (video)",
-        {
-          video: opening,
-          nav: topBand(threads),
-          chrome: bottomTabs,
-          viewportWidth: threads.viewport.width,
-        },
-        NodePath.join(directory, "open-thread-lag.png"),
-      )
-    : null;
-  steps.push({
+  const amendThread = record({
     name: "thread",
-    screenshot: threadShot,
     video: opening,
-    ...(openLag?.frame ? { lagFrame: openLag.frame } : {}),
     checks: [
       ...layoutChecks(thread, BUNDLE_ID),
       check(
@@ -196,9 +216,26 @@ export async function runJourney(
             ),
           ]
         : []),
-      ...(openLag ? [openLag.check] : []),
     ],
   });
+  await device.screenshot(threadShot);
+  amendThread({ screenshot: threadShot });
+  if (bottomTabs) {
+    const openLag = await lagCheck(
+      "no tabs over the entering thread (video)",
+      {
+        video: opening,
+        nav: topBand(threads),
+        chrome: bottomTabs,
+        viewportWidth: threads.viewport.width,
+      },
+      NodePath.join(directory, "open-thread-lag.png"),
+    );
+    amendThread({
+      checks: [openLag.check],
+      ...(openLag.frame ? { lagFrame: openLag.frame } : {}),
+    });
+  }
 
   await device.agent(["scroll", "up"]).catch(() => undefined);
   await delay(800);
@@ -238,30 +275,32 @@ export async function runJourney(
       "the thread list",
     );
     const listShot = NodePath.join(directory, `${steps.length + 1}-back.png`);
-    await device.screenshot(listShot);
-    const backLag = bottomTabs
-      ? await lagCheck(
-          "tabs return with the list (video)",
-          {
-            video: back,
-            nav: topBand(list),
-            chrome: bottomTabs,
-            viewportWidth: list.viewport.width,
-          },
-          NodePath.join(directory, "back-lag.png"),
-        )
-      : null;
-    steps.push({
+    const amendBack = record({
       name: "back",
-      screenshot: listShot,
       video: back,
-      ...(backLag?.frame ? { lagFrame: backLag.frame } : {}),
       checks: [
         ...layoutChecks(list, BUNDLE_ID),
         check("tab bar back", inside(tabBarRect(list), list), describeRect(tabBarRect(list))),
-        ...(backLag ? [backLag.check] : []),
       ],
     });
+    await device.screenshot(listShot);
+    amendBack({ screenshot: listShot });
+    if (bottomTabs) {
+      const backLag = await lagCheck(
+        "tabs return with the list (video)",
+        {
+          video: back,
+          nav: topBand(list),
+          chrome: bottomTabs,
+          viewportWidth: list.viewport.width,
+        },
+        NodePath.join(directory, "back-lag.png"),
+      );
+      amendBack({
+        checks: [backLag.check],
+        ...(backLag.frame ? { lagFrame: backLag.frame } : {}),
+      });
+    }
   }
 
   // The labelled tab is not always the hittable node; agent-device resolves the press.

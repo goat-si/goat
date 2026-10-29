@@ -40,4 +40,29 @@ describe("ScreenCursorPhases", () => {
     phases.hostCallSettled(ref, 1);
     expect(events).toEqual(["1:thinking", "2:thinking"]);
   });
+
+  it("settles only a cut cell's pending calls with endCell and bumps generation across A -> B -> A", () => {
+    const events: string[] = [];
+    const phases = new ScreenCursorPhases((event) =>
+      events.push(`${event.identity.targetId}:${event.identity.generation}:${event.phase}`),
+    );
+    const targetA = { ...ref, id: "a", generation: 1 };
+    const targetB = { ...ref, id: "b", generation: 2 };
+    phases.hostCallStarted(targetA, "c1\u00001");
+    phases.endCell(targetA, "c1");
+    phases.hostCallSettled(targetA, "c1\u00001");
+    phases.hostCallStarted(targetB, "c2\u00001");
+    phases.hostCallSettled(targetB, "c2\u00001");
+    phases.hostCallStarted(targetA, "c2\u00002");
+    expect(phases.generationOf(targetA, "c2\u00002")).toBe(3);
+    phases.hostCallSettled(targetA, "c2\u00002");
+    expect(events).toEqual([
+      "a:1:thinking",
+      "a:1:resting",
+      "b:2:thinking",
+      "b:2:resting",
+      "a:3:thinking",
+      "a:3:resting",
+    ]);
+  });
 });

@@ -131,6 +131,28 @@ export const effectiveRequester = (
   grantedScopes: owner.grantedScopes.filter((scope) => identity.grantedScopes.includes(scope)),
 });
 
+/**
+ * Someone the connection lets in without a link. They get their own principal, so they see only
+ * their own work and this conversation's, and only the right to start work: no memory, settings
+ * or reads across the owner's other conversations.
+ */
+export const unlinkedIdentity = (
+  owner: ChannelConnectionOwner,
+  input: {
+    readonly connectionId: string;
+    readonly externalActorId: string;
+    readonly runtimeModeCeiling: RuntimeMode;
+  },
+): ChannelLedger.ChannelIdentity => ({
+  ownerId: owner.ownerId,
+  principalId: "unlinked:" + input.connectionId + ":" + input.externalActorId,
+  displayName: "Slack " + input.externalActorId,
+  runtimeModeCeiling: lowerRuntimeMode(input.runtimeModeCeiling, owner.runtimeModeCeiling),
+  grantedScopes: owner.grantedScopes.filter((scope) => scope === "orchestration:operate"),
+});
+
+export const isUnlinkedPrincipal = (principalId: string) => principalId.startsWith("unlinked:");
+
 const replyAddressKey = (address: ChannelReplyAddress) => {
   switch (address.kind) {
     case "goat":
@@ -303,8 +325,17 @@ const make = Effect.gen(function* () {
       const identity = yield* ledger
         .findIdentity({ connectionId: input.connectionId, externalActorId })
         .pipe(Effect.mapError(ledgerFailure));
-      if (identity === undefined) return undefined;
-      return effectiveRequester(context, identity, { originKind: input.kind, externalActorId });
+      const admitted =
+        identity ??
+        (context.unlinkedRuntimeModeCeiling === undefined
+          ? undefined
+          : unlinkedIdentity(context, {
+              connectionId: input.connectionId,
+              externalActorId,
+              runtimeModeCeiling: context.unlinkedRuntimeModeCeiling,
+            }));
+      if (admitted === undefined) return undefined;
+      return effectiveRequester(context, admitted, { originKind: input.kind, externalActorId });
     });
 
   const recordBotInput = (input: ChannelIngestInput, result: ChannelIngestResult) =>

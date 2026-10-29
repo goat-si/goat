@@ -101,6 +101,7 @@ export type ClientRequestReservationReason = typeof ClientRequestReservationReas
 
 /** The literal of the domain failure an OrchestratorMcpFailure wraps. */
 export const OrchestratorMcpFailureReason = Schema.Union([
+  Schema.Literal("session_receipt_pending"),
   SshDispatchFailureReason,
   LinkedHostFailureReason,
   CloudMachineErrorReason,

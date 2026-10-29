@@ -71,6 +71,7 @@ export const SETTINGS_ACCESS = {
   sidebarAutoSettleOnMerge: agent,
   autoResumeLimitedThreads: agent,
   snoozeLimitedThreads: agent,
+  snoozePresets: agent,
   fleet: path("fallback_chain.set"),
   goatclaw: person("It is the permission policy that bounds agents."),
   hub: person("It links this machine with other machines."),

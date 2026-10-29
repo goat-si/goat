@@ -55,6 +55,7 @@ export class ClipboardReadError extends Schema.TaggedError<ClipboardReadError>()
 function writeTextWithExecCommand(
   value: string,
   extraFlavors?: Readonly<Record<string, string>>,
+  requireRich = false,
 ): boolean {
   if (typeof document === "undefined" || typeof document.execCommand !== "function") return false;
 
@@ -69,11 +70,13 @@ function writeTextWithExecCommand(
   textarea.style.fontSize = "16px";
 
   const previouslyFocused = document.activeElement;
+  let wroteFlavors = false;
   const copy = (event: ClipboardEvent) => {
     if (!extraFlavors || !event.clipboardData) return;
     event.clipboardData.setData("text/plain", value);
     for (const [type, data] of Object.entries(extraFlavors))
       event.clipboardData.setData(type, data);
+    wroteFlavors = true;
     event.preventDefault();
   };
   document.body.appendChild(textarea);
@@ -82,7 +85,7 @@ function writeTextWithExecCommand(
     textarea.focus({ preventScroll: true });
     textarea.select();
     textarea.setSelectionRange(0, value.length);
-    return document.execCommand("copy");
+    return document.execCommand("copy") && (!requireRich || wroteFlavors);
   } catch {
     return false;
   } finally {
@@ -99,6 +102,7 @@ export async function writeTextToClipboard(
   value: string,
   target = "text",
   extraFlavors?: Readonly<Record<string, string>>,
+  requireRich = false,
 ) {
   if (typeof window === "undefined") {
     throw new ClipboardApiUnavailableError({
@@ -124,7 +128,7 @@ export async function writeTextToClipboard(
     };
 
   if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-    if (writeTextWithExecCommand(value, extraFlavors)) return true;
+    if (writeTextWithExecCommand(value, extraFlavors, requireRich)) return true;
     throw new ClipboardApiUnavailableError({
       target,
     });
@@ -161,10 +165,11 @@ export async function writeTextToClipboard(
         }
       }
     }
+    if (requireRich) throw new Error("The clipboard cannot preserve thread context.");
     await navigator.clipboard.writeText(value);
     return true;
   } catch (cause) {
-    if (writeTextWithExecCommand(value, extraFlavors)) return true;
+    if (writeTextWithExecCommand(value, extraFlavors, requireRich)) return true;
     throw new ClipboardWriteError({
       target,
       cause,

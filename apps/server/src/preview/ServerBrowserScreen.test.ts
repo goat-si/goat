@@ -168,6 +168,14 @@ describe("the agent's position on a screen tab", () => {
         expect(seen).toEqual([
           expect.objectContaining({ _tag: "pointer", phase: "move", x: 140, y: 50, cursor }),
         ]);
+        // A delayed phase from an older binding generation is rejected so it cannot overwrite the cache.
+        const stale = {
+          identity: { ...cursor.identity, targetId: "older", generation: 0, sequence: 9 },
+          phase: "resting" as const,
+        };
+        expect(
+          yield* surface.service.cursorState({ threadId: "thread", tabId: "tab", cursor: stale }),
+        ).toBe(false);
       }),
   );
 });

@@ -88,11 +88,13 @@ it.effect.each([
         yield* prepare("run-a");
         const a = yield* sessions.read(threadId);
         expect(a).toBeDefined();
+        expect(a?.nativeSubagentLimit).toBe(session ? 0 : undefined);
         const tokenA = a!.authorizationHeader.replace(/^Bearer\s+/, "");
         expect((yield* registry.resolve(tokenA))?.thread.runId).toBe(perRun ? "run-a" : undefined);
         yield* prepare("run-b");
         const b = yield* sessions.read(threadId);
         expect(b).toBeDefined();
+        expect(b?.nativeSubagentLimit).toBe(session ? 0 : undefined);
         if (perRun) {
           expect(b!.providerSessionId).not.toBe(a!.providerSessionId);
           expect(yield* registry.resolve(tokenA)).toBeUndefined();
@@ -102,6 +104,7 @@ it.effect.each([
           ).toBe("run-b");
           yield* prepare("run-b");
           expect((yield* sessions.read(threadId))?.providerSessionId).toBe(b!.providerSessionId);
+          expect((yield* sessions.read(threadId))?.nativeSubagentLimit).toBe(0);
         } else expect(b!.providerSessionId).toBe(a!.providerSessionId);
       }),
     ).pipe(Effect.provide(testLayer(driver))),

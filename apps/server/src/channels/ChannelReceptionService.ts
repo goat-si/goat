@@ -67,10 +67,12 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
-import { lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
+import { isUnlinkedPrincipal, lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
+import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import {
@@ -176,6 +178,7 @@ export class ChannelReceptionService extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    readonly acknowledgeSession: (i: ChannelReceptionInput) => Effect.Effect<string | undefined>;
   }
 >()("goat/channels/ChannelReceptionService") {}
 
@@ -238,6 +241,15 @@ const boundTail = (
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
+  const identityNow = (input: {
+    readonly connectionId: string;
+    readonly externalActorId: string;
+  }) =>
+    currentChannelIdentity(input).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
   const home = yield* ChannelBotHome.ChannelBotHome;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -448,7 +460,7 @@ const make = Effect.gen(function* () {
         return viewer.grantedScopes;
       }
       if (viewer.externalActorId === undefined) return [];
-      const linked = yield* ledger.findIdentity({
+      const linked = yield* identityNow({
         connectionId,
         externalActorId: viewer.externalActorId,
       });
@@ -470,9 +482,9 @@ const make = Effect.gen(function* () {
       const linkedNow =
         !external ||
         (requester.externalActorId !== undefined &&
-          (yield* ledger
-            .findIdentity({ connectionId, externalActorId: requester.externalActorId })
-            .pipe(Effect.orElseSucceed(() => undefined)))?.principalId === requester.principalId);
+          (yield* identityNow({ connectionId, externalActorId: requester.externalActorId }).pipe(
+            Effect.orElseSucceed(() => undefined),
+          ))?.principalId === requester.principalId);
       return {
         ...requester,
         grantedScopes: requester.grantedScopes.filter((scope) => scopes.includes(scope)),
@@ -1090,11 +1102,17 @@ const make = Effect.gen(function* () {
         const linked =
           requester.externalActorId === undefined
             ? undefined
-            : yield* ledger.findIdentity({
+            : yield* identityNow({
                 connectionId: message.connectionId,
                 externalActorId: requester.externalActorId,
               });
-        if (linked === undefined) return undefined;
+        // A link removed or handed to someone else since intake is no longer this sender.
+        if (
+          linked === undefined ||
+          linked.ownerId !== requester.ownerId ||
+          linked.principalId !== requester.principalId
+        )
+          return undefined;
         return {
           ...requester,
           runtimeModeCeiling: lowerRuntimeMode(
@@ -1196,11 +1214,14 @@ const make = Effect.gen(function* () {
                   CHANNEL_RECEPTION_TAIL_LIMITS.messages,
                 );
                 const shells = yield* listThreads;
-                const recent = recentThreads(shells, targets, bot?.threadId);
                 const facts = yield* hostFacts(shells);
                 const notes = yield* readChannelBotNotes(fileSystem, botFiles);
                 // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
+                // Titles of the owner's threads are other work, so only someone who may read it sees them.
+                const recent = viewer.grantedScopes.includes("orchestration:read")
+                  ? recentThreads(shells, targets, bot?.threadId)
+                  : [];
                 const journal = journalFor(
                   yield* visibleTasks(viewer, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
@@ -1274,23 +1295,35 @@ const make = Effect.gen(function* () {
                   message.connectionId,
                   inputId,
                 );
+                // Reads take time too: results read under a link that narrowed meanwhile are dropped,
+                // and everything else in the answer is judged by who the person is now.
+                const current = yield* viewerNow(requester, message.connectionId);
+                const narrowedDuringReads =
+                  current.principalId !== reader.principalId ||
+                  reader.grantedScopes.some((scope) => !current.grantedScopes.includes(scope));
                 // The first pass wrote its queries from what it could see then. When the link
                 // narrowed since, a query may quote work the person can no longer see.
                 const narrowed =
-                  reader.principalId !== viewer.principalId ||
-                  viewer.grantedScopes.some((scope) => !reader.grantedScopes.includes(scope));
-                const readResults = narrowed
-                  ? results.map((result) => ({ ...result, query: "(withheld)" }))
-                  : results;
+                  current.principalId !== viewer.principalId ||
+                  viewer.grantedScopes.some((scope) => !current.grantedScopes.includes(scope));
+                const readResults = narrowedDuringReads
+                  ? []
+                  : narrowed
+                    ? results.map((result) => ({ ...result, query: "(withheld)" }))
+                    : results;
                 const journalNow = journalFor(
-                  yield* visibleTasks(reader, conversationId).pipe(
+                  yield* visibleTasks(current, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
-                const { journal: _journal, ...rest } = base;
+                const { journal: _journal, recentThreads: _recent, ...rest } = base;
+                const recentNow = current.grantedScopes.includes("orchestration:read")
+                  ? recentThreads(shells, targets, bot?.threadId)
+                  : [];
                 const second = yield* generateOutcome({
                   ...rest,
                   ...(journalNow === "" ? {} : { journal: journalNow }),
+                  ...(recentNow.length === 0 ? {} : { recentThreads: recentNow }),
                   readsAllowed: false,
                   readResults,
                 });
@@ -1331,6 +1364,11 @@ const make = Effect.gen(function* () {
       }
       const decision = outcome.result;
 
+      // Notes are the owner's standing rules for every conversation, so only a person linked now
+      // may change them; someone let in without a link, or whose access ended, may not.
+      const noteWriter = requester.originKind === "mcp" ? undefined : yield* judgedNow;
+      const mayChangeNotes =
+        noteWriter !== undefined && !isUnlinkedPrincipal(noteWriter.principalId);
       // Notes shape every later reply, so a note is kept only when a person asked for it in this
       // input: the quote the model returns must occur in the message itself, never in the tail.
       // This records the request; it does not prove intent, and it fails closed.
@@ -1339,11 +1377,13 @@ const make = Effect.gen(function* () {
           ? undefined
           : requester.originKind === "mcp"
             ? "not_a_person"
-            : decision.rememberQuote === undefined
-              ? "missing_quote"
-              : !quotedFromInput(decision.rememberQuote, message.text)
-                ? "quote_not_in_input"
-                : undefined;
+            : !mayChangeNotes
+              ? "not_linked"
+              : decision.rememberQuote === undefined
+                ? "missing_quote"
+                : !quotedFromInput(decision.rememberQuote, message.text)
+                  ? "quote_not_in_input"
+                  : undefined;
       if (decision.remember !== undefined && rememberRefusal !== undefined) {
         yield* Effect.logInfo("GOAT Bot note dropped", { inputId, reason: rememberRefusal });
       }
@@ -1397,6 +1437,7 @@ const make = Effect.gen(function* () {
           // only a follow_up naming a task joins that task's run.
           // Only a task the person asked, in this input, to change or forget a note may edit them.
           const notesChangeRequested =
+            mayChangeNotes &&
             action.notesChangeRequested !== undefined &&
             quotedFromInput(action.notesChangeRequested, message.text)
               ? action.notesChangeRequested
@@ -1800,7 +1841,11 @@ const make = Effect.gen(function* () {
       yield* wake.wake;
     });
 
-  return ChannelReceptionService.of({ receive, narrate });
+  const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(
+    (input: ChannelReceptionInput) =>
+      Effect.map(generate(input), (r) => Option.getOrUndefined(r)?.replyText.trim() || undefined),
+  );
+  return ChannelReceptionService.of({ receive, narrate, acknowledgeSession });
 });
 
 export const layer = Layer.effect(ChannelReceptionService, make);

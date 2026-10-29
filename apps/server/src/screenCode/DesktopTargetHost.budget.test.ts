@@ -482,3 +482,98 @@ it.effect("a sort header inside the table outlasts the table's cells", () =>
     expect(observation.elements.some((element) => element.role === "AXCell")).toBe(false);
   }),
 );
+
+it.effect(
+  "T64: multi-cell Activity Monitor rows whose AXTextField cells carry actions are compacted onto the row rather than dropping the row in step 2, preserving toolbar controls",
+  () =>
+    Effect.gen(function* () {
+      const nodes: Node[] = [
+        { index: 0, role: "AXWindow", depth: 0, label: "Activity Monitor", actions: ["AXRaise"] },
+        { index: 1, role: "AXScrollArea", depth: 1, parent: 0 },
+        { index: 2, role: "AXOutline", depth: 2, parent: 1 },
+      ];
+      let next = 3;
+      for (let row = 0; row < 450; row++) {
+        const rowIndex = next++;
+        const y = 60 + row * 20;
+        nodes.push({
+          index: rowIndex,
+          role: "AXRow",
+          depth: 3,
+          parent: 2,
+          frame: { x: 0, y, w: 800, h: 20 },
+        });
+        for (const [col, val] of [
+          `process-${row}`,
+          `${row % 100}.5`,
+          `${row}:01.33`,
+          "12",
+        ].entries()) {
+          nodes.push({
+            index: next++,
+            role: "AXTextField",
+            depth: 4,
+            parent: rowIndex,
+            text: val,
+            actions: ["AXConfirm"],
+            frame: { x: col * 200, y, w: 200, h: 20 },
+          });
+        }
+      }
+      const toolbar = next++;
+      nodes.push({ index: toolbar, role: "AXToolbar", depth: 1, parent: 0 });
+      for (const label of ["CPU", "Memory", "Energy", "Disk", "Network"])
+        nodes.push({
+          index: next++,
+          role: "AXRadioButton",
+          depth: 2,
+          parent: toolbar,
+          label,
+          actions: ["AXPress"],
+        });
+      nodes.push({
+        index: next++,
+        role: "AXTextField",
+        depth: 2,
+        parent: toolbar,
+        label: "Search",
+      });
+      nodes.push({
+        index: next++,
+        role: "AXButton",
+        depth: 2,
+        parent: toolbar,
+        label: "% CPU",
+        actions: ["AXPress"],
+      });
+      const line = (node: Node) =>
+        `${"  ".repeat(node.depth)}- [${node.index}] ${node.role}${node.label ? ` "${node.label}"` : ""}${node.text ? ` = "${node.text}"` : ""}${node.actions ? ` [actions=[${node.actions.map((each) => each.replace(/^AX/, "").toLowerCase()).join(",")}]]` : ""}`;
+      const state = {
+        pid: 42,
+        window_id: 7,
+        tree_markdown: nodes.map(line).join("\n"),
+        elements_complete: false,
+        elements: nodes.map((node) => ({
+          role: node.role,
+          depth: node.depth,
+          element_index: node.index,
+          element_token: `s1:${node.index}`,
+          ...(node.label === undefined ? {} : { label: node.label }),
+          ...(node.text === undefined ? {} : { label: node.text, value: node.text }),
+          ...(node.parent === undefined ? {} : { parent_index: node.parent }),
+          ...(node.actions === undefined ? {} : { actions: node.actions }),
+          ...(node.frame === undefined ? {} : { frame: node.frame }),
+        })),
+      };
+      const observation = yield* observe(state);
+      const names = observation.elements.map((e) => e.name);
+      for (const kept of ["CPU", "Memory", "Energy", "Disk", "Network", "Search", "% CPU"])
+        expect(names).toContain(kept);
+      expect(observation.truncated).toBe(true);
+      expect(observation.elements.some((e) => e.role === "AXRow")).toBe(true);
+      expect(
+        observation.elements.some((e) => e.role === "AXTextField" && e.name !== "Search"),
+      ).toBe(false);
+      expect(observation.indexedText).toContain("| process-0 | 0.5 | 0:01.33 | 12");
+    }),
+);

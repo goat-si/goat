@@ -1,3 +1,6 @@
+import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
+import { makeCodexAssistantText } from "./CodexAssistantText.ts";
+import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
 import * as HomeRoute from "../../provider/OpenCodexRoute.ts";
 import {
   codexHomeThreadOverrides,
@@ -68,7 +71,6 @@ import { codexToolOutput } from "./CodexToolOutput.ts";
 import type {
   ChatAttachment,
   OrchestrationV2AppThread,
-  OrchestrationV2ConversationMessage,
   OrchestrationV2ExecutionNode,
   ModelSelection,
   OrchestrationV2PlanArtifact,
@@ -1378,6 +1380,7 @@ export { codexNativeSubagentConfig };
 
 export function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
+  readonly threadId?: ThreadId;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
   /** From `initialize`; unknown omits the subagent keys older Codex rejects. */
@@ -1415,6 +1418,9 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...(isGoatBotSessionThreadId(input.threadId ?? mcpSession?.threadId ?? "")
+        ? { "features.default_mode_request_user_input": false }
+        : {}),
       ...codexThreadMcpEnvironment(mcpSession),
       ...codexNativeSubagentConfig(mcpSession?.nativeSubagentLimit, input.codexVersion).config,
       ...(mcpSession === undefined
@@ -2153,6 +2159,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           ),
         );
         /** Thread config plus the managed driver it carries. */
+        const sessionThreadId = input.threadId;
         const threadRuntimeParams = (input: {
           readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
           readonly modelSelection?: { readonly model: string } | undefined;
@@ -2180,6 +2187,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               params: mergeCodexHomeThreadParams(
                 launchSettings,
                 codexThreadRuntimeParams({
+                  threadId: input.mcpSession?.threadId ?? sessionThreadId,
                   mcpSession: yield* withoutConfiguredBrowser(
                     input.mcpSession,
                     input.runtimePolicy?.cwd,
@@ -3691,79 +3699,23 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           return inputItems;
         });
 
-        // Reasoning and assistant-text coalescers build these artifacts on every streamed update.
+        // These builders run on every coalesced text update.
         const buildAgentMessageArtifacts = Effect.fnUntraced(function* (
           context: ActiveCodexTurnContext,
           item: { readonly id: string; readonly text: string },
           completed: boolean,
         ) {
-          const updatedAt = yield* DateTime.now;
-          const completedAt = completed ? updatedAt : null;
-          const nodeId = idAllocator.derive.nodeFromProviderItem({
-            driver: CODEX_PROVIDER,
-            nativeItemId: item.id,
-          });
+          const now = yield* DateTime.now;
           const { ordinal, startedAt } = yield* resolveItemPosition(context, item.id);
-          const messageId = idAllocator.derive.messageFromProviderItem({
-            driver: CODEX_PROVIDER,
-            nativeItemId: item.id,
-          });
-          const turnItemId = idAllocator.derive.turnItemFromProviderItem({
-            driver: CODEX_PROVIDER,
-            nativeItemId: item.id,
-          });
-          const node: OrchestrationV2ExecutionNode = {
-            id: nodeId,
-            threadId: context.projectionThreadId,
-            runId: context.projectionRunId,
-            parentNodeId: context.itemParentNodeId,
-            rootNodeId: context.rootNodeId,
-            kind: "assistant_message",
-            status: completed ? "completed" : "running",
-            countsForRun: false,
-            providerThreadId: context.providerThread.id,
-            providerTurnId: context.providerTurnId,
-            nativeItemRef: codexNativeItemRef(item.id),
-            runtimeRequestId: null,
-            checkpointScopeId: null,
-            startedAt,
-            completedAt,
-          };
-          const message: OrchestrationV2ConversationMessage = {
-            createdBy: "agent",
-            creationSource: "provider",
-            id: messageId,
-            threadId: context.projectionThreadId,
-            runId: context.projectionRunId,
-            nodeId,
-            role: "assistant",
-            text: item.text,
-            attachments: [],
-            streaming: !completed,
-            createdAt: startedAt,
-            updatedAt,
-          };
-          const turnItem: OrchestrationV2TurnItem = {
-            id: turnItemId,
-            threadId: context.projectionThreadId,
-            runId: context.projectionRunId,
-            nodeId,
-            providerThreadId: context.providerThread.id,
-            providerTurnId: context.providerTurnId,
-            nativeItemRef: codexNativeItemRef(item.id),
-            parentItemId: null,
+          return buildCodexAssistantArtifacts(
+            idAllocator,
+            context,
+            item,
+            completed,
             ordinal,
-            status: completed ? "completed" : "running",
-            title: null,
             startedAt,
-            completedAt,
-            updatedAt,
-            type: "assistant_message",
-            messageId,
-            text: item.text,
-            streaming: !completed,
-          };
-          return { node, message, turnItem };
+            now,
+          );
         });
 
         // Coalesce token bursts to avoid a database write per token.
@@ -3857,7 +3809,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }
         });
 
-        const agentMessageDeltas = yield* makeProviderTextDeltaCoalescer({
+        const agentMessageDeltas = yield* makeCodexAssistantText({
           flushIntervalMs: CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS,
           emit:
             /* Provider events include streaming deltas; avoid a span for each update. */
@@ -3905,11 +3857,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   message: artifacts.message,
                 });
               }
-              yield* emitProviderEvent({
-                type: "turn_item.updated",
+              const event = {
+                type: "turn_item.updated" as const,
                 driver: CODEX_PROVIDER,
                 turnItem: artifacts.turnItem,
-              });
+              };
+              yield* emitProviderEvent(update.sealed ? sealAssistantTextEvent(event) : event);
               if (finalAnswerItem && update.completed) {
                 yield* Ref.update(lastFinalAnswerByTurn, (current) =>
                   new Map(current).set(update.turnId, { id: update.itemId, text: update.text }),
@@ -3991,6 +3944,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             { type: "commandExecution" }
           >,
         ) {
+          if (context.subagent === null)
+            yield* agentMessageDeltas.flushBeforeTool(context.nativeTurnId);
           const updatedAt = yield* DateTime.now;
           const status = codexItemStatus(item.status);
           const completedAt = status.completed ? updatedAt : null;
@@ -4061,6 +4016,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return null;
             }
 
+            if (context.subagent === null)
+              yield* agentMessageDeltas.flushBeforeTool(context.nativeTurnId);
             const updatedAt = yield* DateTime.now;
             const status = codexItemStatus(item.status);
             const completedAt = status.completed ? updatedAt : null;
@@ -4130,6 +4087,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly item: CodexWebSearchItem;
             readonly completed: boolean;
           }) {
+            if (input.context.subagent === null)
+              yield* agentMessageDeltas.flushBeforeTool(input.context.nativeTurnId);
             const updatedAt = yield* DateTime.now;
             const completedAt = input.completed ? updatedAt : null;
             const nodeId = idAllocator.derive.nodeFromProviderItem({
@@ -4187,6 +4146,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             context: ActiveCodexTurnContext,
             item: CodexDynamicToolItem | CodexImageGenerationItem,
           ) {
+            if (context.subagent === null)
+              yield* agentMessageDeltas.flushBeforeTool(context.nativeTurnId);
             const updatedAt = yield* DateTime.now;
             const status = codexItemStatus(
               item.type === "imageGeneration" ? "completed" : item.status,
@@ -4757,11 +4718,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("item/agentMessage/delta", (payload) =>
           Effect.gen(function* () {
-            const context = (yield* Ref.get(activeTurns)).get(payload.turnId);
+            const context = yield* awaitActiveTurn(payload.turnId);
             if (context !== undefined) {
               yield* completeProviderRetry(context, yield* DateTime.now);
+              yield* resolveItemPosition(context, payload.itemId);
             }
             yield* agentMessageDeltas.append({
+              root:
+                context !== undefined &&
+                context.subagent === null &&
+                context.projectionRunId !== null,
               turnId: payload.turnId,
               itemId: payload.itemId,
               delta: payload.delta,
@@ -4851,7 +4817,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("account/rateLimits/updated", (payload) =>
           Effect.gen(function* () {
-            yield* Ref.update(rateLimitSnapshot, (previous) =>
+            const previous = yield* Ref.getAndUpdate(rateLimitSnapshot, (previous) =>
               mergeCodexRateLimits(previous, payload.rateLimits),
             );
             const resetAt = codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot));
@@ -4871,7 +4837,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 turnItem: updated,
               });
             }
-            const update = codexRateLimitsToUpdate(payload.rateLimits);
+            const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
               yield* adapterOptions.onUsageLimits({ ...update, checkedAt });
@@ -5202,6 +5168,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (context === undefined) {
               return;
             }
+            if (
+              context.subagent === null &&
+              payload.item.type !== "agentMessage" &&
+              payload.item.type !== "reasoning" &&
+              payload.item.type !== "userMessage"
+            )
+              yield* agentMessageDeltas.flushBeforeTool(payload.turnId);
 
             if (payload.item.type !== "userMessage") context.hasOutput = true;
             if (payload.item.type === "contextCompaction") {
@@ -5361,6 +5334,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
             const { context, settled } = resolved;
+            if (
+              context.subagent === null &&
+              payload.item.type !== "agentMessage" &&
+              payload.item.type !== "reasoning" &&
+              payload.item.type !== "userMessage"
+            )
+              yield* agentMessageDeltas.flushBeforeTool(payload.turnId);
             if (payload.item.type !== "userMessage") context.hasOutput = true;
 
             if (payload.item.type === "reasoning") {
@@ -5457,6 +5437,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       threadId: context.projectionThreadId,
                       providerThreadId: context.providerThread.id,
                       driver: CODEX_PROVIDER,
+                      // Codex starts a new turn from this text, so nothing is buffered.
+                      delivery: "message_text",
                       detail: codexBackgroundCommandDetail(payload.item),
                       notification: {
                         ...backgroundWorkNotification([
@@ -6470,11 +6452,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const terminal = yield* makeRootTerminalEvent(input);
                 if (
                   input.context.subagent === null &&
-                  !input.context.hasOutput &&
-                  !(goalRuns.get(input.context.providerTurnId) ?? []).some(
-                    (turn) => turn.hasOutput,
-                  ) &&
                   terminal.status === "failed" &&
+                  (terminal.failure.code === "serverOverloaded" ||
+                    (!input.context.hasOutput &&
+                      !(goalRuns.get(input.context.providerTurnId) ?? []).some(
+                        (turn) => turn.hasOutput,
+                      ))) &&
+                  !(
+                    input.context.input.message.attachments.length === 0 &&
+                    input.context.input.message.text.trim().toLowerCase() === "/compact"
+                  ) &&
                   terminal.failure.retryable === true &&
                   terminal.failure.class !== "usage_limit" &&
                   retryDelayMs !== undefined

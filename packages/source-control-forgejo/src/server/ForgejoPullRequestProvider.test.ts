@@ -5,6 +5,105 @@ import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceC
 
 import * as ForgejoCli from "./ForgejoCli.ts";
 import * as ForgejoPullRequestProvider from "./ForgejoPullRequestProvider.ts";
+import { markRequiredForgejoChecks } from "./forgejoRequiredChecks.ts";
+
+it("keeps an oversized long-suffix required pattern pending without rescanning it", () => {
+  const pattern = `*${"a".repeat(1500)}b`;
+  const check = {
+    name: "a".repeat(1500),
+    status: "success" as const,
+    description: null,
+    url: null,
+  };
+  const result = markRequiredForgejoChecks([check], {
+    enable_status_check: true,
+    status_check_contexts: [pattern],
+  });
+  assert.deepStrictEqual(result, [
+    check,
+    {
+      name: pattern,
+      status: "pending",
+      description: "Required check pattern cannot be evaluated.",
+      url: null,
+    },
+  ]);
+});
+
+it("matches a long suffix within the work budget", () => {
+  const suffix = `${"a".repeat(200)}b`;
+  const checks = [`prefix${suffix}`, "a".repeat(200)].map((name) => ({
+    name,
+    status: "success" as const,
+    description: null,
+    url: null,
+  }));
+  const result = markRequiredForgejoChecks(checks, {
+    enable_status_check: true,
+    status_check_contexts: [`*${suffix}`],
+  });
+  assert.isTrue(result[0]?.required);
+  assert.isUndefined(result[1]?.required);
+  assert.lengthOf(result, 2);
+});
+
+it("bounds aggregate work across multiple patterns and checks", () => {
+  const contexts = Array.from({ length: 10 }, (_, i) => `*${"a".repeat(400)}${i}`);
+  const checks = Array.from({ length: 10 }, (_, i) => ({
+    name: `${"a".repeat(400)}${i}`,
+    status: "success" as const,
+    description: null,
+    url: null,
+  }));
+  const result = markRequiredForgejoChecks(checks, {
+    enable_status_check: true,
+    status_check_contexts: contexts,
+  });
+  assert.deepStrictEqual(result.slice(0, checks.length), checks);
+  assert.strictEqual(result.at(-1)?.description, "Required check pattern cannot be evaluated.");
+  assert.strictEqual(result.at(-1)?.status, "pending");
+});
+
+it("matches many-wildcard required patterns against long check names without backtracking", () => {
+  const checks = ["a".repeat(200), `${"a".repeat(199)}b`, "x?y\nz"].map((name) => ({
+    name,
+    status: "success" as const,
+    description: null,
+    url: null,
+  }));
+  const marked = markRequiredForgejoChecks(checks, {
+    enable_status_check: true,
+    status_check_contexts: [`${"*a".repeat(12)}b`, "x*?y?z"],
+  });
+  assert.deepStrictEqual(
+    marked.map((check) => [check.name.slice(-3), check.required]),
+    [
+      ["aaa", undefined],
+      ["aab", true],
+      ["y\nz", true],
+    ],
+  );
+});
+
+it("treats a required pattern's `*` as a wildcard even when the check name has one", () => {
+  const checks = ["*build", "ci/*lint"].map((name) => ({
+    name,
+    status: "success" as const,
+    description: null,
+    url: null,
+  }));
+  const marked = markRequiredForgejoChecks(checks, {
+    enable_status_check: true,
+    status_check_contexts: ["*build", "ci/*"],
+  });
+  assert.deepStrictEqual(
+    marked.map((check) => [check.name, check.required]),
+    [
+      ["*build", true],
+      ["ci/*lint", true],
+    ],
+  );
+});
 
 it.effect("reads file revisions from the pull request diff and refuses a truncated one", () =>
   Effect.gen(function* () {

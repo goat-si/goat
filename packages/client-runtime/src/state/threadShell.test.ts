@@ -54,6 +54,39 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
 }
 
 describe("v2 thread shell lists", () => {
+  it("keeps mounted thread environment ids stable across streaming and same-environment additions", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const snapshot = { ...v2ShellSnapshot, threads: [v2ThreadShell] };
+    registry.set(snapshotAtom(environmentId), snapshot);
+    let notifications = 0;
+    const dispose = registry.subscribe(
+      threads.threadEnvironmentIdsAtom,
+      () => {
+        notifications += 1;
+      },
+      { immediate: true },
+    );
+    const before = registry.get(threads.threadEnvironmentIdsAtom);
+    const initialNotifications = notifications;
+    expect([...before]).toEqual([environmentId]);
+    registry.set(snapshotAtom(environmentId), {
+      ...snapshot,
+      threads: [{ ...v2ThreadShell, title: "Streaming" }],
+    });
+    expect(registry.get(threads.threadEnvironmentIdsAtom)).toBe(before);
+    expect(notifications).toBe(initialNotifications);
+    registry.set(snapshotAtom(environmentId), {
+      ...snapshot,
+      threads: [v2ThreadShell, { ...v2ThreadShell, id: ThreadId.make("second") }],
+    });
+    expect(registry.get(threads.threadEnvironmentIdsAtom)).toBe(before);
+    expect(notifications).toBe(initialNotifications);
+    registry.set(snapshotAtom(environmentId), { ...snapshot, threads: [] });
+    expect([...registry.get(threads.threadEnvironmentIdsAtom)]).toEqual([]);
+    expect(notifications).toBe(initialNotifications + 1);
+    dispose();
+    registry.dispose();
+  });
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {
@@ -109,7 +142,7 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
-  it("counts a subagent question on its parent only while the subagent runs", () => {
+  it("keeps a live subagent question visible without flagging its parent", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const root = v2ThreadShell;
     const child = {
@@ -133,6 +166,10 @@ describe("v2 thread shell lists", () => {
     const dispose = registry.mount(inputs);
     registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
     expect(registry.get(inputs).map((thread) => thread.id)).toEqual([child.id]);
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBeNull();
     registry.set(snapshotAtom(environmentId), {
       ...v2ShellSnapshot,
       threads: [root, { ...child, status: "queued" as const }],

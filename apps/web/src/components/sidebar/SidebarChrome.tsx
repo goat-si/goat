@@ -119,7 +119,6 @@ export function SidebarBrandWidthProbe({
       <span className="flex items-center gap-1">
         <span className="size-8 sm:size-7" />
         <SidebarPriorityCountBadge priorityCount={priorityCount} />
-        <span className="size-8 sm:size-7" />
       </span>
     </div>
   );

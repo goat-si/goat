@@ -201,6 +201,7 @@ const formatPairOutput = (input: {
     renderTerminalQrCode(buildMobilePairingLink(input.pairingUrl)),
     "",
     `Pairing URL: ${input.pairingUrl}`,
+    `App link: ${buildMobilePairingLink(input.pairingUrl)}`,
     `Token: ${input.token}`,
     `Expires: ${DateTime.formatIso(input.expiresAt)}`,
     ...input.notes.flatMap((note) => ["", `Note: ${note}`]),

@@ -25,7 +25,11 @@ import {
 } from "@goat/client-runtime/operations/projects";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { connectionStatusText } from "@goat/client-runtime/connection";
-import { resolveThreadReferenceCopyTarget } from "@goat/client-runtime/thread-reference";
+import {
+  resolveThreadReferenceCopyTarget,
+  threadChipCopyTarget,
+} from "@goat/client-runtime/thread-reference";
+import { copyThreadReference, threadIdCopyAction } from "~/lib/copyThreadReference";
 import {
   canPreloadBrowsePath,
   createBrowseNavigationCoordinator,
@@ -99,7 +103,6 @@ import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstra
 import { useSshWorkspaceFetchBack } from "~/hooks/useSshWorkspaceFetchBack";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
-import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import {
   composerPromptLink,
   copyPromptLink,
@@ -588,24 +591,11 @@ function OpenCommandPaletteDialog(props: {
   const copyActiveThreadReference = async () => {
     const target = activeThreadReferenceCopyTarget;
     if (target === null) return;
-    try {
-      const didCopy = await writeTextToClipboard(target.value, target.clipboardTarget);
-      if (!didCopy) return;
-      toastManager.add({
-        type: "success",
-        title: target.successTitle,
-        description: target.value,
-      });
-    } catch (error) {
-      console.error(error);
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: target.failureTitle,
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    }
+    await copyThreadReference(
+      target.kind === "thread" && referenceThreadRef !== null
+        ? threadChipCopyTarget(referenceThreadRef, activeThread?.title ?? "Thread")
+        : target,
+    );
   };
   const threads = useThreadShells();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -767,9 +757,7 @@ function OpenCommandPaletteDialog(props: {
   const currentProjectEnvironmentId =
     activeThread?.environmentId ?? activeDraftThread?.environmentId ?? null;
   const currentProjectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
-  const scratchTargetEnvironmentId = scratchEnvironmentId(
-    currentProjectEnvironmentId ?? primaryEnvironmentId,
-  );
+  const scratchTargetEnvironmentId = scratchEnvironmentId(currentProjectEnvironmentId);
   const currentProjectCwd = currentProjectId
     ? (projectCwdById.get(currentProjectId) ?? null)
     : null;
@@ -1367,15 +1355,20 @@ function OpenCommandPaletteDialog(props: {
       searchTerms:
         activeThreadReferenceCopyTarget.kind === "pull-request"
           ? ["copy", "pull request", "link", "reference"]
-          : ["copy", "thread id", "reference"],
+          : ["copy", "thread", "reference"],
       title:
-        activeThreadReferenceCopyTarget.kind === "pull-request" ? "Copy PR link" : "Copy thread ID",
+        activeThreadReferenceCopyTarget.kind === "pull-request" ? "Copy PR link" : "Copy thread",
       description: activeThreadReferenceCopyTarget.value,
       icon: <LinkIcon className={ITEM_ICON_CLASS} />,
       shortcutCommand: "thread.copyReference",
       run: copyActiveThreadReference,
     });
   }
+
+  if (referenceThreadRef !== null)
+    actionItems.push(
+      threadIdCopyAction(referenceThreadRef.threadId, <LinkIcon className={ITEM_ICON_CLASS} />),
+    );
 
   if (routeThreadRef !== null) {
     actionItems.push({

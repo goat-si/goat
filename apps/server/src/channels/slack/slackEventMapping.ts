@@ -50,6 +50,10 @@ const SlackMessageEvent = Schema.Struct({
   blocks: Schema.optionalKey(Schema.Unknown),
   ts: Schema.optionalKey(Schema.String),
   thread_ts: Schema.optionalKey(Schema.String),
+  /** Workspaces the sender and message belong to; another one marks a Slack Connect sender. */
+  user_team: Schema.optionalKey(Schema.String),
+  team: Schema.optionalKey(Schema.String),
+  source_team: Schema.optionalKey(Schema.String),
 });
 
 const SlackRevocation = Schema.Union([
@@ -74,9 +78,16 @@ export interface SlackClassifierConfig {
   /** Workspace the bot token belongs to (`auth.test`). */
   readonly teamId: string;
   readonly botUserId: string;
-  /** Channels where mentions are accepted. Empty means none; DMs are always eligible. */
+  /**
+   * "all" accepts mentions in every channel Slack sends events for, which is every channel the
+   * bot is a member of; "listed" only those in `allowedChannelIds`. DMs are always eligible.
+   */
+  readonly channelScope: "all" | "listed";
   readonly allowedChannelIds: ReadonlySet<string>;
 }
+
+const channelAccepted = (config: SlackClassifierConfig, channelId: string) =>
+  config.channelScope === "all" || config.allowedChannelIds.has(channelId);
 
 export interface SlackClassifiedMessage {
   readonly teamId: string;
@@ -106,6 +117,7 @@ export type SlackIgnoredReason =
   | "subtype"
   | "hidden"
   | "missing_user"
+  | "external_user"
   | "channel_message"
   | "channel_not_allowed"
   | "empty";
@@ -239,6 +251,13 @@ export function classifySlackEvent(
   if (event.hidden === true) return ignored("hidden");
   const { user: userId, channel: channelId, ts, thread_ts: threadTs } = event;
   if (userId === undefined) return ignored("missing_user");
+  // Someone from another organization in a Slack Connect channel is not in this workspace.
+  if (
+    [event.user_team, event.team, event.source_team].some(
+      (team) => team !== undefined && team !== teamId,
+    )
+  )
+    return ignored("external_user");
   if (
     !isSlackId(userId) ||
     channelId === undefined ||
@@ -253,7 +272,7 @@ export function classifySlackEvent(
   const isDirectMessage = event.channel_type === "im";
   if (event.type === "message" && !isDirectMessage) return ignored("channel_message");
   const surface = isDirectMessage ? "dm" : "mention";
-  if (surface === "mention" && !config.allowedChannelIds.has(channelId)) {
+  if (surface === "mention" && !channelAccepted(config, channelId)) {
     return ignored("channel_not_allowed");
   }
 
@@ -313,7 +332,7 @@ export function slackActor(event: SlackClassifiedMessage): ChannelActorRef {
 const SlackBlockActions = Schema.Struct({
   type: Schema.Literal("block_actions"),
   team: Schema.Struct({ id: Schema.String }),
-  user: Schema.Struct({ id: Schema.String }),
+  user: Schema.Struct({ id: Schema.String, team_id: Schema.optionalKey(Schema.String) }),
   channel: Schema.Struct({ id: Schema.String }),
   message: Schema.optionalKey(
     Schema.Struct({
@@ -356,10 +375,12 @@ export function classifySlackInteraction(
   const userId = payload.user.id;
   if (!isSlackId(userId)) return ignored("missing_user");
   if (userId === config.botUserId) return ignored("own_bot");
+  if (payload.user.team_id !== undefined && payload.user.team_id !== teamId)
+    return ignored("external_user");
   const channelId = payload.channel.id;
   if (!isSlackId(channelId)) return ignored("malformed");
   const isDirectMessage = channelId.startsWith("D");
-  if (!isDirectMessage && !config.allowedChannelIds.has(channelId)) {
+  if (!isDirectMessage && !channelAccepted(config, channelId)) {
     return ignored("channel_not_allowed");
   }
   const action = payload.actions.find(

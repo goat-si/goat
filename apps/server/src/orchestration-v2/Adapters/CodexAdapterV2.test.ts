@@ -1,3 +1,4 @@
+import { codexReceiptTranscript, verifyCodexReceipt } from "./CodexReceipt.testkit.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as Queue from "effect/Queue";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
@@ -8,10 +9,6 @@ import * as M from "@goat/contracts";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 
 import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
-import {
-  makeProviderTextDeltaCoalescer,
-  type ProviderTextDeltaUpdate,
-} from "./ProviderTextDeltaCoalescer.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
@@ -255,36 +252,6 @@ describe("CodexAdapterV2 context usage", () => {
       updatedAt: "2026-08-29T00:00:00.000Z",
     });
   });
-});
-
-describe("CodexAdapterV2 assistant message streaming", () => {
-  it.effect("flushes buffered text synchronously before item and turn completion", () =>
-    Effect.gen(function* () {
-      const updates = yield* Ref.make<ReadonlyArray<ProviderTextDeltaUpdate>>([]);
-      const coalescer = yield* makeProviderTextDeltaCoalescer({
-        flushIntervalMs: 50,
-        emit: (update) => Ref.update(updates, (current) => [...current, update]),
-      });
-
-      yield* coalescer.append({ turnId: "turn-1", itemId: "message-1", delta: "item final" });
-      const completedText = yield* coalescer.complete({
-        turnId: "turn-1",
-        itemId: "message-1",
-      });
-      yield* coalescer.append({ turnId: "turn-1", itemId: "message-2", delta: "turn final" });
-      yield* coalescer.flushTurn("turn-1");
-
-      assert.equal(completedText, "item final");
-      assert.deepEqual(yield* Ref.get(updates), [
-        { turnId: "turn-1", itemId: "message-1", text: "item final", completed: true },
-        { turnId: "turn-1", itemId: "message-2", text: "turn final", completed: true },
-      ]);
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("50 millis");
-      yield* Effect.yieldNow;
-      assert.equal((yield* Ref.get(updates)).length, 2);
-    }),
-  );
 });
 
 describe("CodexAdapterV2 runtime policy", () => {
@@ -1118,6 +1085,19 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         firstTerminal: Deferred.await(firstTerminal),
       };
     });
+
+  it.effect.each(["newline", "tool"] as const)(
+    "publishes Codex receipt before %s completion",
+    (seal) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeCodexReplayHarness(
+            codexReceiptTranscript(seal, consumerBarrier),
+          );
+          yield* verifyCodexReceipt(harness, seal);
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
 
   it.effect("disables and reallows exact memory tools with each issued credential", () =>
     Effect.gen(function* () {
@@ -5345,8 +5325,51 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ),
     );
 
+    it.effect(
+      "continues persisted history with empty input after output and terminal capacity failure",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const decision = yield* Deferred.make<void>();
+            const harness = yield* makeCodexReplayHarness(
+              makeCodexReplayTranscript({
+                scenario: "capacity-after-output",
+                entries: [
+                  ...codexReplayPreamble({ nativeThreadId, nativeTurnId: "capacity-0", prompt }),
+                  notification("item/agentMessage/delta", {
+                    threadId: nativeThreadId,
+                    turnId: "capacity-0",
+                    itemId: "answer",
+                    delta: "Started work",
+                  }),
+                  ...failure("capacity-0", "serverOverloaded"),
+                  ...start(1),
+                  notification("turn/completed", {
+                    threadId: nativeThreadId,
+                    turn: makeCodexReplayTurn({ id: "capacity-1", status: "completed" }),
+                  }),
+                ],
+              }),
+              (event) =>
+                event.type === "turn.terminal" ||
+                (event.type === "turn_item.updated" &&
+                  event.turnItem.type === "error" &&
+                  event.turnItem.status === "running")
+                  ? Deferred.succeed(decision, undefined)
+                  : Effect.void,
+            );
+            yield* begin(harness);
+            yield* Deferred.await(decision);
+            assert.lengthOf(harness.terminalEvents(), 0);
+            yield* TestClock.adjust(30_000);
+            yield* harness.firstTerminal;
+            assert.equal(harness.terminalEvents()[0]?.status, "completed");
+            assert.lengthOf(harness.terminalEvents(), 1);
+          }).pipe(Effect.provide(layerAdapterTest)),
+        ),
+    );
+
     it.effect.each([
-      { code: "serverOverloaded", notify: true },
       { code: "internalServerError", notify: false },
       { code: { responseStreamDisconnected: { httpStatusCode: 502 } }, notify: true },
     ])("keeps failures after output retryable without replaying work", ({ code, notify }) =>

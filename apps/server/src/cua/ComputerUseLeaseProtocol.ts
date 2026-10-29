@@ -201,14 +201,15 @@ export const sendUnlessShared = Effect.fnUntraced(
     takesScreen: boolean,
     shared: () => boolean,
     current: () => boolean,
-    send: Effect.Effect<void>,
+    send: Effect.Effect<void> | ((now: number) => Effect.Effect<void>),
     permissionDeadline = Infinity,
   ) {
     if (!current()) return "stale" as const;
     if (takesScreen && shared()) return "shared" as const;
-    if ((yield* Clock.currentTimeMillis) >= permissionDeadline) return "expired" as const;
+    const now = yield* Clock.currentTimeMillis;
+    if (now >= permissionDeadline) return "expired" as const;
     if (!current()) return "stale" as const;
-    yield* send;
+    yield* typeof send === "function" ? send(now) : send;
     return "sent" as const;
   },
   Effect.provideService(Scheduler.PreventSchedulerYield, true),

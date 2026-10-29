@@ -25,6 +25,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { requireSessionReceipt } from "./ChannelSessionReceiptGate.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./OrchestratorMcpService.ts";
 import {
   assertFullAccess,
@@ -274,7 +275,10 @@ export const requireDeclaredCapability = (
         return yield* capabilityRefused("This credential permits only the Child setup tools.");
       return yield* requireLiveChildSetup(purpose.value);
     }
-    if (reads || (capability === "none" && hosts.length === 0)) return;
+    if (reads) return;
+    if (entry?.path !== "surface.call" && entry?.path !== "surface.eval")
+      yield* requireSessionReceipt();
+    if (capability === "none" && hosts.length === 0) return;
     const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
     if (Option.isNone(scope) || scope.value.thread === undefined) return;
     const effective = yield* permissions.resolve(scope.value).pipe(

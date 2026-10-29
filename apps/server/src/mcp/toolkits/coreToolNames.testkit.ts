@@ -83,6 +83,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_preview_read",
   "goat_preview_request_handoff",
   "goat_preview_scroll_collect",
+  "goat_preview_sign_in_state",
   "goat_project_clone",
   "goat_project_create",
   "goat_project_delete",

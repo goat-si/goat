@@ -37,6 +37,8 @@ const state = vi.hoisted(() => ({
   routeThread: null as string | null,
   routeListeners: new Set<() => void>(),
   sessionListeners: new Set<() => void>(),
+  nativeDesktop: false,
+  syncedThreadRefs: [] as Array<{ readonly environmentId: string; readonly threadId: string }>,
 }));
 
 vi.mock("../../../state/previewSessions", async () => {
@@ -82,6 +84,28 @@ vi.mock("../../../state/entities", () => ({
   // The preview runtime module reads these; outside the desktop app no tab is drawn natively.
   readEnvironmentSupportsServerBrowser: () => true,
   useEnvironmentSupportsServerBrowser: () => true,
+}));
+vi.mock("../../../browser/previewRuntime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../browser/previewRuntime")>();
+  return {
+    ...actual,
+    useRendersServerTabNatively: (
+      environmentId: EnvironmentId,
+      snapshot: { readonly runtime?: string; readonly serverRendered?: boolean } | null | undefined,
+    ) =>
+      state.nativeDesktop
+        ? environmentId === state.environmentId &&
+          snapshot?.runtime === "server" &&
+          snapshot.serverRendered !== true
+        : actual.useRendersServerTabNatively(environmentId, snapshot as never),
+  };
+});
+vi.mock("../usePreviewSession", () => ({
+  useDesktopCardPreviewSession: (
+    ref: { readonly environmentId: string; readonly threadId: string } | null,
+  ) => {
+    if (ref !== null) state.syncedThreadRefs.push(ref);
+  },
 }));
 // Pop out uses the browser's picture-in-picture, which a headless test page cannot open.
 vi.mock("../../../browser/serverPictureInPicture", () => ({
@@ -135,6 +159,11 @@ vi.mock("../../../browser/ServerBrowserSurface", async () => {
 });
 
 import { useThreadRouteTarget } from "../../../hooks/useThreadRouteTarget";
+import {
+  reconcilePreviewServerSessions,
+  resetPreviewStateForTests,
+} from "../../../previewStateStore";
+import { AppAtomRegistryProvider } from "../../../rpc/atomRegistry";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
@@ -206,6 +235,9 @@ function setup(
   state.surfaceControl = null;
   state.surfaceCalls = [];
   state.routeThread = routeThread;
+  state.nativeDesktop = false;
+  state.syncedThreadRefs = [];
+  resetPreviewStateForTests();
   usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
   window.sessionStorage.removeItem(HIDDEN_KEY);
   usePreviewSessionStack.setState({
@@ -437,4 +469,53 @@ it("keeps Enlarge and Shrink as one toggle in the picture's bottom-right corner,
     await expect.element(card).toHaveAttribute("data-size", "card");
     await expect.element(card.getByRole("button", { name: "Enlarge" })).toHaveFocus();
   }
+});
+
+it("streams an isolated server-rendered tab on the desktop once its background thread snapshot loads", async () => {
+  setup([browserTab()], "thread-1");
+  state.nativeDesktop = true;
+  await page.viewport(1400, 900);
+  using _pane = paneOf(1400);
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <Cards />
+    </AppAtomRegistryProvider>,
+  );
+  const card = screen.getByRole("article");
+  await expect.element(card).toBeVisible();
+  // Before the thread's preview list has loaded, the card asks to sync the thread and opens no stream yet.
+  expect(state.syncedThreadRefs).toContainEqual({
+    environmentId,
+    threadId: ThreadId.make("thread-1"),
+  });
+  expect(card.element().querySelector('[data-testid="session-frame"]')).toBeNull();
+  expect(card.element().querySelector("[data-browser-surface-slot]")).toBeNull();
+
+  // Once the background thread's preview list loads with serverRendered: true, the card streams it.
+  await act(() =>
+    reconcilePreviewServerSessions(
+      { environmentId, threadId: ThreadId.make("thread-1") },
+      {
+        sessions: [
+          {
+            threadId: "thread-1",
+            tabId: "tab-1",
+            runtime: "server",
+            serverRendered: true,
+            navStatus: { _tag: "Success", url: "http://localhost:8036/", title: "GOAT (Dev)" },
+            canGoBack: false,
+            canGoForward: false,
+            updatedAt: "2026-10-29T00:00:00.000Z",
+          },
+        ],
+        serverEpoch: "epoch-1",
+        revision: 1,
+      },
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(card.element().querySelector('[data-testid="session-frame"]')).not.toBeNull(),
+  );
+  expect(card.element().querySelector("[data-browser-surface-slot]")).toBeNull();
+  await expect.element(card.getByRole("button", { name: "Take over" })).toBeInTheDocument();
 });

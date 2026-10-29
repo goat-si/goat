@@ -8,6 +8,7 @@ import {
   active,
   call,
   CONTROL,
+  foregroundActive,
   harness,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
@@ -240,5 +241,381 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       assert.equal(sentListApps(h.log), 1);
       yield* Deferred.succeed(driverCutoffGate, undefined);
     }),
+  );
+
+  it.effect(
+    "a primitive queued behind provider calls tracks the active head call's cap, full grace, and lock recheck",
+    () =>
+      Effect.gen(function* () {
+        let lockGate = yield* Deferred.make<void>();
+        let holding = yield* Deferred.make<void>();
+        let holdLock = false;
+        const h = yield* harness({
+          afterApplied: () =>
+            holdLock
+              ? Deferred.succeed(holding, undefined).pipe(Effect.andThen(Deferred.await(lockGate)))
+              : Effect.void,
+        });
+        yield* h.push(foregroundActive());
+        const current = yield* h.driverStarted;
+        // (a) A 10 s provider run_steps batch (cap 60 s) followed by a 1.5 s auxiliary read is not cut off at 6.5 s.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:batch",
+            method: "tools/call",
+            params: {
+              name: "run_actions",
+              arguments: {
+                pid: 42,
+                window_id: 1,
+                steps: [
+                  { tool: "click", args: { pid: 42, window_id: 1, element_token: "s1:3" } },
+                  { get_window_state: { timeout_ms: 120_000 } },
+                  ...Array.from({ length: 62 }, () => ({
+                    zoom: { window_id: 1, x1: 0, y1: 0, x2: 10, y2: 10 },
+                  })),
+                ],
+              },
+            },
+          }),
+        );
+        const provBatch = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:aux1",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 0,
+          deadlineMillis: 1_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const aux1 = yield* h.nextToDriver;
+        // A driver-origin request (carrying method) with provBatch's id must not be mistaken for provBatch's reply.
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: provBatch.id, method: "ping" }));
+        assert.equal((yield* h.nextToProvider).method, "ping");
+        // Even at 200 s (60 s batch steps + trailing get_window_state + 62 trailing zoom steps), provBatch is not cut off at 143 s.
+        yield* TestClock.adjust("200 seconds");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: provBatch.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:batch");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: aux1.id, result: { content: [] } }));
+        assert.equal((yield* h.primitiveReply).status, "settled");
+
+        // Reusing the same provider request ID ("prov:batch") for a get_window_state with string timeout_ms: "10000"
+        // (macOS driver bound = 2000 + 2 * 10000 + 5000 + 7000 = 34000 ms) must not inherit the old reply marker and must not be cut off at 13 s.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:batch",
+            method: "tools/call",
+            params: {
+              name: "get_window_state",
+              arguments: { pid: 42, window_id: 1, timeout_ms: "10000" },
+            },
+          }),
+        );
+        const reusedRead = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxReused",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 10,
+          deadlineMillis: 201_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxReused = yield* h.nextToDriver;
+        yield* TestClock.adjust("15 seconds");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: reusedRead.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:batch");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxReused.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+
+        // Default-delay type_text (omitted delay_ms -> 30 ms + 24 ms physical synthesis = 54 ms/char + 20 s overhead)
+        // typing 1,000 uppercase characters (~54 s) is not cut off at 45 s.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:defaultRead",
+            method: "tools/call",
+            params: {
+              name: "type_text",
+              arguments: { pid: 42, window_id: 1, text: "A".repeat(1_000) },
+            },
+          }),
+        );
+        const defaultRead = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxDefaultRead",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 11,
+          deadlineMillis: 216_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxDefaultRead = yield* h.nextToDriver;
+        yield* TestClock.adjust("55 seconds");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: defaultRead.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:defaultRead");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxDefaultRead.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+
+        // verify_state(timeout_ms: 0) gets the 11 s sample bound (2 s list_windows + 9 s walk);
+        // a first watcher's reply keeps the second's overdue fence up, and a second watcher's
+        // reply under the lifecycle lock stops replacement even while the head is unanswered.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:verifyDefault",
+            method: "tools/call",
+            params: {
+              name: "verify_state",
+              arguments: {
+                pid: 42,
+                window_id: 1,
+                timeout_ms: 0,
+                expect: [{ element: { selector: { role: "AXButton" } } }],
+              },
+            },
+          }),
+        );
+        const verifyDefault = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxConcurrent1",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 12,
+          deadlineMillis: 271_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxConcurrent1 = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxConcurrent2",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 13,
+          deadlineMillis: 271_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxConcurrent2 = yield* h.nextToDriver;
+        // At +8.4 s (1.5 s list_windows + 6.9 s walk), the child is still alive (not cut off at 8 s).
+        yield* TestClock.adjust("8400 millis");
+        assert.isFalse(yield* h.isKilled);
+        // At +2.8 s (11.2 s total, 200 ms into verifyDefault's 1 s grace after its 11 s bound), auxConcurrent1 answers first.
+        yield* TestClock.adjust("2800 millis");
+        assert.isFalse(yield* h.isKilled);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxConcurrent1.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+        // auxConcurrent2 is still in grace, so the overdue fence stays up: a new provider call sent now is held, not dispatched yet.
+        const sentAppsBefore = sentListApps(h.log);
+        yield* h.send(call(99, "list_apps"));
+        yield* Effect.yieldNow;
+        assert.equal(sentListApps(h.log), sentAppsBefore);
+        // Hold the lifecycle lock before auxConcurrent2's grace expires, let grace expire so auxConcurrent2's replace waits on the lock,
+        // then reply to auxConcurrent2 while verifyDefault is STILL unanswered.
+        holdLock = true;
+        yield* h.push(foregroundActive());
+        yield* Deferred.await(holding);
+        yield* TestClock.adjust("900 millis");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxConcurrent2.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+        holdLock = false;
+        yield* Deferred.succeed(lockGate, undefined);
+        // Child was not replaced even though verifyDefault was still unanswered when the lock released!
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        // The held call 99 was released once auxConcurrent2 settled and now reaches the driver.
+        const held99 = yield* h.nextToDriver;
+        assert.equal(held99.id, 99);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 99, result: { content: [] } }));
+        assert.equal((yield* h.nextToProvider).id, 99);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: verifyDefault.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:verifyDefault");
+
+        // (a2) A 90 s provider run_script (timeout_ms: 120_000, cap 121.5 s) followed by a 1.5 s auxiliary read is not cut off at 61 s;
+        // an unrelated reply during grace does not end grace early; and a head reply while replacement waits for the lifecycle lock
+        // keeps the child and gives the queued read its own 1.5 s budget.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:script",
+            method: "tools/call",
+            params: { name: "run_script", arguments: { script: "1", timeout_ms: "120000" } },
+          }),
+        );
+        const provScript = yield* h.nextToDriver;
+        yield* TestClock.adjust("50 seconds");
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxScript",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 1,
+          deadlineMillis: 335_600,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxScript = yield* h.nextToDriver;
+        yield* TestClock.adjust("40 seconds");
+        assert.isFalse(yield* h.isKilled);
+        // 100 ms into prov:script's 1 s grace (after its 121.5 s cap), an unrelated reply arrives; it must not end grace early.
+        yield* TestClock.adjust("31600 millis");
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: "unrelated:late", result: {} }));
+        yield* TestClock.adjust("800 millis");
+        assert.isFalse(yield* h.isKilled);
+        // Hold the lifecycle lock before grace expires, let grace expire so replace(head.key) waits on the lock, then reply to prov:script.
+        lockGate = yield* Deferred.make<void>();
+        holding = yield* Deferred.make<void>();
+        holdLock = true;
+        yield* h.push(foregroundActive());
+        yield* Deferred.await(holding);
+        yield* TestClock.adjust("200 millis");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: provScript.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:script");
+        // Even if the provider immediately reuses id "prov:script" while replace(head.key, head.call) is still waiting on the lock,
+        // the replacement check is bound to the old head.call object
+        // and must not kill the child for the newly sent call.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:script",
+            method: "tools/call",
+            params: { name: "list_apps", arguments: {} },
+          }),
+        );
+        const reusedUnderLock = yield* h.nextToDriver;
+        holdLock = false;
+        yield* Deferred.succeed(lockGate, undefined);
+        // Child was not replaced, and auxScript now gets its own 1.5 s budget.
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: reusedUnderLock.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:script");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxScript.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+
+        // (a3) A short run_script (timeout_ms: 5000, cap 6.5 s) that wedges the child is replaced after 6.5 s + 1 s grace (7.5 s), not 120 s.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:shortScript",
+            method: "tools/call",
+            params: {
+              name: "run_script",
+              arguments: { script: "while(true){}", timeout_ms: 5_000 },
+            },
+          }),
+        );
+        yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxShortScript",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 2,
+          deadlineMillis: 409_200,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        yield* h.nextToDriver;
+        yield* TestClock.adjust("6 seconds");
+        assert.isFalse(yield* h.isKilled);
+        yield* TestClock.adjust("1600 millis");
+        assert.isTrue(yield* h.isKilled);
+        assert.equal(h.drivers.length, 2);
+        const second = yield* h.driverStarted;
+
+        // (b) Three provider scroll calls (each 10 s cap) are queued and the first is wedged, followed by a 1.5 s auxiliary read
+        // arriving 8 s after prov:s1 was sent: the child is replaced 3 s later (2 s remaining cap + 1 s grace), not after 10 s or 30 s.
+        for (const id of ["prov:s1", "prov:s2", "prov:s3"]) {
+          yield* h.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              method: "tools/call",
+              params: { name: "scroll", arguments: {} },
+            }),
+          );
+          yield* h.nextToDriver;
+        }
+        yield* TestClock.adjust("8 seconds");
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:aux2",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: second.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 3,
+          deadlineMillis: 424_800,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        yield* h.nextToDriver;
+        yield* TestClock.adjust("1500 millis");
+        assert.equal(h.drivers.length, 2);
+        yield* TestClock.adjust("1600 millis");
+        assert.equal(h.drivers.length, 3);
+      }),
   );
 });
