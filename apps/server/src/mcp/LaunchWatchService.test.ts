@@ -810,8 +810,8 @@ describe("LaunchWatchService", () => {
       ).toBe(true);
       expect(world.hostCalls[0]?.ceiling).toBe("full-access");
       expect(world.hostCalls.at(-1)?.ceiling).toBe("approval-required");
-      // The transcript tail starts a fixed window before its end and follows its pages.
-      expect(readArgs.map((args) => args.afterPosition)).toEqual([undefined, 59, 79]);
+      // The report reads the transcript tail from a fixed window before its end, then follows its pages.
+      expect(readArgs.slice(0, 3).map((args) => args.afterPosition)).toEqual([undefined, 59, 79]);
     }),
   );
 
