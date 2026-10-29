@@ -193,6 +193,33 @@ export const applyDesktopPointerArgs = (
     return { ok: true, needs: "points" };
   }
 
+  const hasTopLevelPointArgs =
+    hasAnyCoordKey ||
+    args.coordinate_space !== undefined ||
+    args.window_basis !== undefined ||
+    args.regionId !== undefined;
+  if (
+    (args.scrollCenter === true &&
+      (hasTopLevelPointArgs || args.fromEnd !== undefined || args.toEnd !== undefined)) ||
+    ((args.fromEnd !== undefined || args.toEnd !== undefined) && hasTopLevelPointArgs)
+  ) {
+    delete forwarded.x;
+    delete forwarded.y;
+    delete forwarded.from_x;
+    delete forwarded.from_y;
+    delete forwarded.to_x;
+    delete forwarded.to_y;
+    delete forwarded.coordinate_space;
+    delete forwarded.window_basis;
+    return {
+      ok: false,
+      error: fail(
+        "invalid_argument",
+        "Pass either scrollCenter, drag endpoints, or point coordinates, not a combination.",
+      ),
+    };
+  }
+
   if (method === "drag" && (args.fromEnd !== undefined || args.toEnd !== undefined)) {
     if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
     const fromObj = object(args.fromEnd);

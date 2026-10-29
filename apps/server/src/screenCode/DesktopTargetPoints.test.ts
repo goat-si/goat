@@ -707,6 +707,8 @@ it.effect(
         call("click", { x: "20", y: "16" }, macRef),
         call("click", { elementRef: macApply, x: "20", y: "16" }, macRef),
         call("scroll", { elementRef: macApply, x: "10", y: "10", direction: "down" }, macRef),
+        call("scroll", { scrollCenter: true, x: "20", y: "16", direction: "down" }, macRef),
+        call("scroll", { scrollCenter: true, x: 20, y: 16, direction: "down" }, macRef),
       ]) {
         const refused = yield* macFix.host.invoke(badMacCall, context).pipe(Effect.flip);
         expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
