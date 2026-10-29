@@ -34,7 +34,11 @@ import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { type CallerLimits, loadCaller } from "./threadAccess.ts";
-import { reconcilePathForReadTool, settleForReconcile } from "./ToolAdmissionSettlement.ts";
+import {
+  CORRELATED_IDS,
+  reconcilePathForReadTool,
+  settleForReconcile,
+} from "./ToolAdmissionSettlement.ts";
 import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
 import { refusalResult } from "./toolRefusals.ts";
 
@@ -321,10 +325,22 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
     const envelope = result === undefined ? undefined : fromToolResult(result, { effect: "write" });
     const outcome = envelope?.status === "error" ? envelope.error.code : (envelope?.status ?? null);
     yield* sql`UPDATE mcp_request_reservations SET state = ${settlement},
-      result_json = ${resultJson}, failure_json = ${failureJson}, outcome_code = ${outcome},
+      result_json = ${resultJson}, failure_json = ${failureJson},
+      outcome_code = COALESCE(${outcome}, outcome_code),
       completed_at = ${DateTime.formatIso(yield* DateTime.now)}
       WHERE receipt_id = ${receiptId} AND state = 'running'`;
   });
+  const correlate = (receiptId: string, correlationId: string) =>
+    Effect.sync(() => {
+      CORRELATED_IDS.set(receiptId, correlationId);
+    }).pipe(
+      Effect.andThen(
+        sql`UPDATE mcp_request_reservations SET outcome_code = ${correlationId}
+          WHERE receipt_id = ${receiptId} AND state = 'running' AND outcome_code IS NULL`,
+      ),
+      Effect.asVoid,
+      Effect.ignoreCause,
+    );
   /** The outcome could not be recorded: from now on the key reads unknown, in this process too. */
   const abandon = (receiptId: string) =>
     Effect.sync(() => ABANDONED_RECEIPTS.add(receiptId)).pipe(
@@ -334,14 +350,17 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       ),
       Effect.ignoreCause,
     );
-  return { reserve, settle, abandon };
+  return { reserve, settle, correlate, abandon };
 };
 
 /** A call outside a keyed reservation must not inherit an enclosing call's admission. */
 const unkeyed = <A, E, R>(run: Effect.Effect<A, E, R>) =>
   run.pipe(
     Effect.provideService(McpToolAccess.KeyedAdmission, { admit: () => Effect.void }),
-    Effect.provideService(LifecycleAdmissionReceipt, { held: Effect.void }),
+    Effect.provideService(LifecycleAdmissionReceipt, {
+      held: Effect.as(Effect.void, undefined),
+      correlate: () => Effect.void,
+    }),
   );
 
 /** The caller's grant for one call, and whether it still covers one recorded earlier. */
@@ -463,22 +482,35 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       );
       const principal = scope === undefined ? undefined : principalOf(scope);
       if (scope === undefined || principal === undefined) return;
-      const limits: CallerLimits =
+      const gateSettled = yield* ChannelSessionReceiptGate.requireSessionReceipt().pipe(
+        (check) =>
+          Option.isSome(receipts)
+            ? Effect.provideService(
+                check,
+                ChannelSessionReceiptGate.ChannelSessionReceiptGate,
+                receipts.value,
+              )
+            : check,
+        Effect.timeoutOption(0),
+      );
+      if (Option.isNone(gateSettled)) return;
+      const limits: CallerLimits | undefined =
         scope.thread === undefined
           ? {
               runtimeMode: McpInvocationContext.clientRuntimeModeCeiling(scope.client),
               interactionMode: "default",
             }
           : Option.isSome(threads)
-            ? ((yield* threads.value.getThreadShell(scope.thread.threadId).pipe(
+            ? yield* threads.value.getThreadShell(scope.thread.threadId).pipe(
                 Effect.map((shell) =>
                   shell === null || shell.deletedAt !== null
                     ? undefined
                     : { runtimeMode: shell.runtimeMode, interactionMode: shell.interactionMode },
                 ),
                 Effect.orElseSucceed(() => undefined),
-              )) ?? { runtimeMode: "full-access", interactionMode: "default" })
-            : { runtimeMode: "full-access", interactionMode: "default" };
+              )
+            : undefined;
+      if (limits === undefined) return;
       yield* settleForReconcile(database.value, bootId, ABANDONED_RECEIPTS, {
         environmentId: scope.environmentId,
         principal,
@@ -645,7 +677,15 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       return yield* Effect.raceFirst(
         handle(args).pipe(
           Effect.provideService(McpToolAccess.KeyedAdmission, { admit }),
-          Effect.provideService(LifecycleAdmissionReceipt, { held: Ref.get(held) }),
+          Effect.provideService(LifecycleAdmissionReceipt, {
+            held: Ref.get(held),
+            correlate: (correlationId) =>
+              Effect.flatMap(Ref.get(held), (receiptId) =>
+                receiptId === undefined || Option.isNone(store)
+                  ? Effect.void
+                  : store.value.correlate(receiptId, correlationId),
+              ),
+          }),
           Effect.provideService(McpToolAccess.CallFailureCapture, {
             record: (error) =>
               Effect.andThen(Ref.set(failure, declaredFailureLiteral(error)), forward(error)),
@@ -838,10 +878,30 @@ export type EvalAdmission = Effect.Success<ReturnType<typeof makeEvalAdmission>>
 /** Lifecycle reconciliation reads the same principal/environment reservation, never reserving it. */
 export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
+  const receipts = yield* Effect.serviceOption(ChannelSessionReceiptGate.ChannelSessionReceiptGate);
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
   const { grantOf, stillGranted } = makeGrants(permissions, settings);
   return Effect.fn("ToolAdmission.readReceipt")(function* (path: string, clientRequestId: string) {
+    const gateSettled = yield* ChannelSessionReceiptGate.requireSessionReceipt().pipe(
+      (check) =>
+        Option.isSome(receipts)
+          ? Effect.provideService(
+              check,
+              ChannelSessionReceiptGate.ChannelSessionReceiptGate,
+              receipts.value,
+            )
+          : check,
+      Effect.timeoutOption(0),
+    );
+    if (Option.isNone(gateSettled))
+      return yield* new OrchestratorMcpFailure({
+        code: "provider_unavailable",
+        reason: "session_receipt_pending",
+        message:
+          "The session receipt has not settled or this run no longer owns its task. No action was reserved or started; retry after the receipt settles.",
+        mayHaveStarted: false,
+      });
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const principal = principalOf(scope);
     if (Option.isNone(database) || principal === undefined) return { state: "unknown" as const };

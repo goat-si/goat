@@ -4,6 +4,7 @@ import {
   GoatclawRole,
   OrchestratorMcpFailure,
   ProviderInstanceId,
+  type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
@@ -21,7 +22,9 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
+import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -34,6 +37,10 @@ class SettlementProbe extends Context.Service<
   {
     readonly runs: Ref.Ref<number>;
     readonly lastCommandId: Ref.Ref<string | null>;
+    readonly shellPresent: Ref.Ref<boolean>;
+    readonly runtimeMode: Ref.Ref<RuntimeMode>;
+    readonly customCorrelationId: Ref.Ref<string | null>;
+    readonly gateAllowed: Ref.Ref<boolean>;
   }
 >()("goat/mcp/ToolAdmissionSettlement.test/SettlementProbe") {}
 
@@ -89,6 +96,13 @@ const runWrite = McpToolAccess.writesWithCapability(() =>
     const probe = yield* SettlementProbe;
     const commandId = yield* newCommandId();
     yield* Ref.set(probe.lastCommandId, commandId);
+    const customCorrelation = yield* Ref.get(probe.customCorrelationId);
+    if (customCorrelation !== null) {
+      const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
+      if (receipt._tag === "Some") {
+        yield* receipt.value.correlate(customCorrelation);
+      }
+    }
     const run = yield* Ref.updateAndGet(probe.runs, (n) => n + 1);
     return { run, commandId };
   }),
@@ -120,6 +134,53 @@ const scope: McpInvocationContext.McpInvocationScope = {
   issuedAt: 0,
 };
 
+const probeLayer = Layer.effect(
+  SettlementProbe,
+  Effect.all({
+    runs: Ref.make(0),
+    lastCommandId: Ref.make<string | null>(null),
+    shellPresent: Ref.make(true),
+    runtimeMode: Ref.make<RuntimeMode>("full-access"),
+    customCorrelationId: Ref.make<string | null>(null),
+    gateAllowed: Ref.make(true),
+  }),
+);
+
+const threadsLayer = Layer.unwrap(
+  Effect.map(SettlementProbe, (probe) =>
+    Layer.mock(ThreadManagement.ThreadManagementService)({
+      getThreadShell: (threadId) =>
+        Effect.gen(function* () {
+          if (!(yield* Ref.get(probe.shellPresent))) return null;
+          const runtimeMode = yield* Ref.get(probe.runtimeMode);
+          return liveThreadShell(threadId, { runtimeMode, interactionMode: "default" });
+        }),
+    }),
+  ),
+);
+
+const gateLayer = Layer.unwrap(
+  Effect.map(SettlementProbe, (probe) =>
+    Layer.succeed(
+      ChannelSessionReceiptGate.ChannelSessionReceiptGate,
+      ChannelSessionReceiptGate.ChannelSessionReceiptGate.of({
+        require: () =>
+          Effect.flatMap(Ref.get(probe.gateAllowed), (allowed) =>
+            allowed
+              ? Effect.void
+              : Effect.fail(
+                  new OrchestratorMcpFailure({
+                    code: "provider_unavailable",
+                    reason: "session_receipt_pending",
+                    message: "Session receipt pending.",
+                  }),
+                ),
+          ),
+      }),
+    ),
+  ),
+);
+
 const served = Layer.mergeAll(
   McpHttpServer.toolkitRegistration(
     SettlementToolkit,
@@ -127,15 +188,9 @@ const served = Layer.mergeAll(
   ),
   McpHttpServer.catalogRegistrations.agentSurface,
 ).pipe(
-  Layer.provideMerge(
-    Layer.effect(
-      SettlementProbe,
-      Effect.all({
-        runs: Ref.make(0),
-        lastCommandId: Ref.make<string | null>(null),
-      }),
-    ),
-  ),
+  Layer.provideMerge(threadsLayer),
+  Layer.provideMerge(gateLayer),
+  Layer.provideMerge(probeLayer),
   Layer.provideMerge(
     Layer.mock(ServerSecretStore.ServerSecretStore)({
       getOrCreateRandom: () => Effect.succeed(new Uint8Array(32).fill(1)),
@@ -143,14 +198,6 @@ const served = Layer.mergeAll(
   ),
   Layer.provideMerge(Profiles.layer),
   Layer.provideMerge(McpServer.McpServer.layer),
-  Layer.provideMerge(
-    Layer.mock(ThreadManagement.ThreadManagementService)({
-      getThreadShell: (threadId) =>
-        Effect.succeed(
-          liveThreadShell(threadId, { runtimeMode: "full-access", interactionMode: "default" }),
-        ),
-    }),
-  ),
   Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(
@@ -180,14 +227,18 @@ const seed = SqlClient.SqlClient.pipe(
 );
 
 const decodeJson = Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
-const callTool = (name: string, args: Record<string, unknown> = {}) =>
+const callTool = (
+  name: string,
+  args: Record<string, unknown> = {},
+  as: McpInvocationContext.McpInvocationScope = scope,
+) =>
   McpServer.McpServer.pipe(
     Effect.flatMap((server) => server.callTool({ name, arguments: args })),
     Effect.flatMap(({ content }) =>
       decodeJson(content.map((part) => (part.type === "text" ? part.text : "")).join("")),
     ),
     Effect.provideService(McpSchema.McpServerClient, mcpClient),
-    Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+    Effect.provideService(McpInvocationContext.McpInvocationContext, as),
   );
 
 const runs = Effect.flatMap(SettlementProbe, (probe) => Ref.get(probe.runs));
@@ -398,5 +449,77 @@ it.effect(
           clientRequestId: "ssh-role-1",
         }),
       ).toMatchObject({ run: 4 });
+
+      // A channel-owned SSH launch that records a custom correlationId releases when that id is fenced.
+      const probe = yield* SettlementProbe;
+      yield* Ref.set(probe.customCorrelationId, "rr-channel-child-1");
+      yield* sql`CREATE TRIGGER block_chan_ssh_settle BEFORE UPDATE ON mcp_request_reservations
+        BEGIN SELECT RAISE(ABORT, 'refused'); END`;
+      yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-1" });
+      yield* sql`DROP TRIGGER block_chan_ssh_settle`;
+      yield* Ref.set(probe.customCorrelationId, null);
+      yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, last_error, created_at, updated_at, memory_grant_ceiling)
+        VALUES ('rr-channel-child-1', 'thread', ${caller}, 'box', 'key', 'wake', 'cancelled',
+          'The launch never reached box; it is fenced there, so it cannot start late.',
+          '2026-10-23T00:00:00.000Z', '2026-10-23T00:00:00.000Z', 'none')`;
+      expect(yield* callTool(threadList.name, { host: "box" })).toEqual({ ok: true });
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-1" }),
+      ).toMatchObject({ run: 6 });
+    }).pipe(Effect.provide(served)),
+);
+
+it.effect(
+  "skips reconciliation settlement when the caller thread is unavailable, narrowed, or blocked by the channel session receipt gate",
+  () =>
+    Effect.gen(function* () {
+      const botThread = ThreadId.make("goat-bot-session:conv-1");
+      const botScope: McpInvocationContext.McpInvocationScope = {
+        ...scope,
+        requestNamespace: `provider:${botThread}`,
+        thread: {
+          threadId: botThread,
+          providerSessionId: `provider:${botThread}`,
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+      };
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${botThread}, 'project', 'Bot', 'codex', 'full-access', 'default', '2026-10-23', '2026-10-23', '{}')`;
+
+      yield* sql`CREATE TRIGGER block_gate_settle BEFORE UPDATE ON mcp_request_reservations
+        BEGIN SELECT RAISE(ABORT, 'refused'); END`;
+      yield* callTool(projectDelete.name, { projectId: "p1", clientRequestId: "gate-1" }, botScope);
+      yield* sql`DROP TRIGGER block_gate_settle`;
+
+      const probe = yield* SettlementProbe;
+      const stillReserved = sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM mcp_request_reservations WHERE client_request_id = 'gate-1'`.pipe(
+        Effect.map((rows) => rows[0]?.count ?? 0),
+      );
+
+      // 1. Channel session receipt gate refuses -> reconcile read does not release the reservation.
+      yield* Ref.set(probe.gateAllowed, false);
+      expect(yield* callTool(projectList.name, {}, botScope)).toEqual({ ok: true });
+      expect(yield* stillReserved).toBe(1);
+      yield* Ref.set(probe.gateAllowed, true);
+
+      // 2. Thread shell lookup returns null -> reconcile read does not fall back to full-access.
+      yield* Ref.set(probe.shellPresent, false);
+      expect(yield* callTool(projectList.name, {}, botScope)).toEqual({ ok: true });
+      expect(yield* stillReserved).toBe(1);
+      yield* Ref.set(probe.shellPresent, true);
+
+      // 3. Caller runtime mode narrowed -> reconcile read does not settle.
+      yield* Ref.set(probe.runtimeMode, "approval-required");
+      expect(yield* callTool(projectList.name, {}, botScope)).toEqual({ ok: true });
+      expect(yield* stillReserved).toBe(1);
+      yield* Ref.set(probe.runtimeMode, "full-access");
+
+      // 4. Once gate and grant are restored, reconcile read releases the pre-dispatch reservation.
+      expect(yield* callTool(projectList.name, {}, botScope)).toEqual({ ok: true });
+      expect(yield* stillReserved).toBe(0);
     }).pipe(Effect.provide(served)),
 );

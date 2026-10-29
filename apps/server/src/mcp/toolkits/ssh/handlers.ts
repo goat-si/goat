@@ -566,6 +566,15 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                           : Effect.void,
                       ),
                     );
+                    const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
+                    const receiptId =
+                      receipt._tag === "Some" ? yield* receipt.value.held : undefined;
+                    const correlationId =
+                      admissionCorrelationId(admission) ??
+                      (receiptId === undefined ? undefined : `rr-${receiptId}`);
+                    if (correlationId !== undefined && receipt._tag === "Some") {
+                      yield* receipt.value.correlate(correlationId);
+                    }
                     const value = yield* coordinator.launch(
                       {
                         kind: "thread",
@@ -573,14 +582,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                         delivery: input.reportDelivery ?? "wake",
                         // A channel-owned launch carries its record's correlation id, so a retry's
                         // INSERT collides on the row instead of starting a second remote thread.
-                        correlationId:
-                          admissionCorrelationId(admission) ??
-                          (yield* Effect.serviceOption(LifecycleAdmissionReceipt).pipe(
-                            Effect.flatMap((receipt) =>
-                              receipt._tag === "Some" ? receipt.value.held : Effect.void,
-                            ),
-                            Effect.map((id) => (id === undefined ? undefined : `rr-${id}`)),
-                          )),
+                        correlationId,
                         launch: guardedLaunch,
                       },
                       authorize.pipe(Effect.asVoid),

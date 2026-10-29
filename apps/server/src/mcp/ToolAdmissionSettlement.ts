@@ -10,6 +10,8 @@ import { McpSchema } from "effect/ai";
 import { refusalResult } from "./toolRefusals.ts";
 
 const KEY_LIFETIME_HOURS = 24;
+/** Correlation ids recorded in this process before settlement, keyed by receipt_id. */
+export const CORRELATED_IDS = new Map<string, string>();
 
 type Literal = { readonly _tag: string; readonly code?: string };
 type UnsettledRow = {
@@ -17,6 +19,7 @@ type UnsettledRow = {
   readonly client_request_id: string;
   readonly receipt_id: string;
   readonly grant_json: string;
+  readonly outcome_code: string | null;
 };
 type CommandReceiptRow = {
   readonly command_id: string;
@@ -62,7 +65,7 @@ const readByToolName: ReadonlyMap<string, string> = new Map(
       AgentSurfaceEntry & { readonly path: string }
     >
   )
-    .filter((entry) => entry.effect === "read")
+    .filter((entry) => entry.effect === "read" && reconcileTargetPaths.has(entry.path))
     .map((entry) => [entry.name, entry.path] as const),
 );
 
@@ -191,7 +194,8 @@ const settleUnsettledRow = Effect.fn("ToolAdmissionSettlement.settleRow")(functi
   }
 
   if (row.path === "ssh.thread_launch") {
-    const correlationId = `rr-${row.receipt_id}`;
+    const correlationId =
+      CORRELATED_IDS.get(row.receipt_id) ?? row.outcome_code ?? `rr-${row.receipt_id}`;
     const [dispatch] = yield* sql<{
       readonly state: string;
       readonly remote_thread_id: string | null;
@@ -240,7 +244,7 @@ export const settleForReconcile = Effect.fn("ToolAdmissionSettlement.settleForRe
         readonly state: "running" | "completed" | "unknown";
         readonly boot_id: string;
       }
-    >`SELECT path, client_request_id, receipt_id, grant_json, state, boot_id
+    >`SELECT path, client_request_id, receipt_id, grant_json, outcome_code, state, boot_id
       FROM mcp_request_reservations
       WHERE environment_id = ${input.environmentId} AND principal = ${input.principal}
         AND path IN ${sql.in(paths)}
