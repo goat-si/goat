@@ -303,6 +303,24 @@ export const ScreenEffectReceipt = Schema.Struct({
 });
 export type ScreenEffectReceipt = typeof ScreenEffectReceipt.Type;
 
+export const ScreenWindowSummary = Schema.Struct({
+  window_id: natural,
+  title: text(80),
+  width: Schema.optionalKey(finite),
+  height: Schema.optionalKey(finite),
+  sheetOf: Schema.optionalKey(natural),
+});
+export type ScreenWindowSummary = typeof ScreenWindowSummary.Type;
+
+const cellWindowFields = {
+  /** Windows listed as newly opened for the apps this cell sent input to; never a completeness claim. */
+  windowsOpened: Schema.optionalKey(
+    Schema.Array(ScreenWindowSummary).check(Schema.isMaxLength(16)),
+  ),
+  windowsOpenedTruncated: Schema.optionalKey(Schema.Boolean),
+  windowsOpenedUnverified: Schema.optionalKey(Schema.Boolean),
+};
+
 export const ScreenRunError = Schema.Struct({
   safety: Schema.optionalKey(ActionOutcomeSafety),
   code: Schema.Literals([
@@ -352,6 +370,7 @@ export const ScreenRunError = Schema.Struct({
   message: Schema.optionalKey(text(200)),
   /** What the driver said of the call, such as its effect and code, for the call's receipt. */
   evidence: Schema.optionalKey(Schema.Array(text(200)).check(Schema.isMaxLength(16))),
+  ...cellWindowFields,
 });
 export type ScreenRunError = typeof ScreenRunError.Type;
 
@@ -425,6 +444,7 @@ export const ScreenRunResult = Schema.Struct({
   api: Schema.optionalKey(text(8192)),
   /** SCREEN_TARGET_CONTRACT_VERSION, on every result, so a stale copy of the API is noticed. */
   contractVersion: Schema.optionalKey(text(40)),
+  ...cellWindowFields,
 }).check(
   Schema.makeFilter(
     (value) =>

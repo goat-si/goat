@@ -119,10 +119,12 @@ const __legacy = (arg) =>
 const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
 const __inputs = new Set(['click', 'right_click', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
-const __target = (binding, note, owner) => {
-  const ref = binding.targetRef ?? binding;
+const __target = (binding, note, owner, extraProps = {}) => {
+  let ref = binding.targetRef ?? binding;
+  let currentWindowId = extraProps.windowId;
+  let currentNote = note;
   const tab = ref.kind === 'tab';
-  const seen = { observation: undefined, image: undefined };
+  const seen = { observation: undefined, image: undefined, replaced: false };
   // Older call forms reach the host directly; tab input ends the tab screenshot, app points stay usable.
   const call = (method, arg = {}) => {
     if (tab && __inputs.has(method)) seen.image = undefined;
@@ -190,6 +192,8 @@ const __target = (binding, note, owner) => {
     return found[0];
   };
   const shot = () => {
+    if (!seen.image && seen.replaced)
+      throw new ScreenError('stale_reference', 'The window this screenshot showed was replaced; take a new screenshot.', true);
     if (!seen.image)
       throw new ScreenError(
         'invalid_argument',
@@ -232,8 +236,17 @@ const __target = (binding, note, owner) => {
     return implicitRead;
   };
   const remember = (observation) => {
+    if (observation && observation.targetRef && observation.targetRef.id === ref.id && observation.targetRef.generation > ref.generation) {
+      ref = observation.targetRef;
+      if (seen.image) { seen.image = undefined; seen.replaced = true; }
+      const sheetMatch = typeof observation.scope === 'string' ? /^sheet \d+ of window (\d+)/.exec(observation.scope) : null;
+      if (sheetMatch) {
+        currentWindowId = Number(sheetMatch[1]);
+        currentNote = (note ? note + '; ' : '') + 'sheet of window ' + sheetMatch[1];
+      }
+    }
     if (observation && Array.isArray(observation.elements)) seen.observation = observation;
-    if (observation && observation.image) seen.image = observation.image;
+    if (observation && observation.image) { seen.image = observation.image; seen.replaced = false; }
     return observation;
   };
   const observe = async (arg = {}) => {
@@ -256,7 +269,7 @@ const __target = (binding, note, owner) => {
     }
     catch (raw) { throw __error(raw); }
     if (!tab && arg.screenshot) {
-      try { seen.image = (await __reply('screenshot', [{ targetRef: ref }])).v; }
+      try { seen.image = (await __reply('screenshot', [{ targetRef: ref }])).v; seen.replaced = false; }
       catch (raw) { throw __error(raw); }
     }
     const { indexedText, ...rest } = observation;
@@ -310,6 +323,7 @@ const __target = (binding, note, owner) => {
           ...aim(target),
           ...(!tab && options.count !== undefined ? { count: options.count } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
+          ...(!tab && options.action !== undefined ? { action: options.action } : {}),
         });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
@@ -398,7 +412,7 @@ const __target = (binding, note, owner) => {
     pressKey: (arg = {}) => call('press_key', arg),
     typeText: (arg = {}) => call('type_text', arg),
   };
-  return Object.freeze(tab ? {
+  const surface = tab ? {
     ...common,
     status: () => call('tab_status'),
     read: (arg = {}) => call('read_page', arg),
@@ -414,18 +428,26 @@ const __target = (binding, note, owner) => {
     select: (arg = {}) => call('select', arg),
   } : {
     ...common,
+    ...extraProps,
     menu: (path, options = {}) => act('menu', 'invoke_menu', { path, ...(options && options.send === true ? { send: true } : {}) }),
     launch: () => act('launch', 'launch_app', {}),
     getWindowState: () => call('get_window_state'),
     verifyState: (arg = {}) => call('verify_state', arg),
-    screenshot: async (arg = {}) => { const image = await call('screenshot', arg); seen.image = image; return image; },
+    screenshot: async (arg = {}) => { const image = await call('screenshot', arg); seen.image = image; seen.replaced = false; return image; },
     bringToFront: () => call('bring_to_front'),
     endForeground: () => call('end_foreground'),
+  };
+  Object.defineProperties(surface, {
+    generation: { get: () => ref.generation, enumerable: true },
+    targetRef: { get: () => ref, enumerable: true },
+    note: { get: () => currentNote, enumerable: true },
+    ...(!tab ? { windowId: { get: () => currentWindowId, enumerable: true } } : {}),
   });
+  return Object.freeze(surface);
 };
 const __tab = (bound) => __target(bound, __note('site', String((bound.tab && bound.tab.url) ?? '')), bound.tab ? bound.tab.owner : undefined);
 const __appTarget = (bound, key, launched, windowId) =>
-  Object.freeze({ ...__target(bound, __note('app', String(key ?? ''))), launched, windowId });
+  __target(bound, __note('app', String(key ?? '')), undefined, { launched, windowId });
 // list_windows with a pid answers every layer; menu bar items and slivers are not windows to bind.
 // It also keeps windows an app closed but still holds, which look like minimized ones: off screen.
 const __own = (listed, pid) => (listed && listed.windows ? listed.windows : []).filter((item) =>

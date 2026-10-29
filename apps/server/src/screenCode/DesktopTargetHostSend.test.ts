@@ -149,7 +149,10 @@ it.live(
           return true;`,
       });
       expect(allowed).toMatchObject({ status: "completed", value: true });
-      const actions = sent.slice(-4);
+      const actions = sent.filter(
+        (entry) =>
+          !["list_apps", "list_windows", "get_window_state", "verify_state"].includes(entry.tool),
+      );
       expect(actions.map((entry) => entry.tool)).toEqual([
         "click",
         "press_key",

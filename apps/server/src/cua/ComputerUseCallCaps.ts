@@ -9,14 +9,20 @@ const CAP_MS: Readonly<Record<string, number>> = {
   list_windows: 2_000,
   list_menu_bar_extras: 2_000,
   click: 3_000,
+  double_click: 3_000,
   right_click: 3_000,
   press_key: 3_000,
+  hotkey: 3_000,
   set_value: 3_000,
   bring_to_front: 3_000,
   drag: 3_000,
   invoke_menu: 5_000,
+  get_desktop_state: 7_000,
+  zoom: 7_000,
   scroll: 10_000,
   launch_app: 15_000,
+  run_steps: 60_000,
+  run_actions: 60_000,
 };
 const DEFAULT_CAP_MS = 4_000;
 
@@ -28,13 +34,53 @@ export const MIN_CALL_MS = 250;
 const record = (args: unknown): Readonly<Record<string, unknown>> =>
   typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
 
+/** Parses a non-negative integer argument, including trimmed integer strings the driver coerces. */
+export const driverIntegerArg = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\+?\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed)) return parsed;
+    }
+  }
+  return undefined;
+};
+
+/** Parses a boolean argument, including trimmed "true"/"false" strings the driver coerces. */
+export const driverBoolArg = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const lower = value.trim().toLowerCase();
+    if (lower === "true") return true;
+    if (lower === "false") return false;
+  }
+  return undefined;
+};
+
 export const driverCallCapMs = (tool: string, args: unknown): number => {
   const given = record(args);
-  if (tool === "get_window_state") return given.include_screenshot === true ? 7_000 : 4_000;
-  if (tool === "verify_state")
-    return (typeof given.timeout_ms === "number" ? Math.max(0, given.timeout_ms) : 0) + 2_000;
-  if (tool === "type_text")
-    return 4_000 + 40 * (typeof given.text === "string" ? [...given.text].length : 0);
+  if (tool === "get_window_state")
+    return driverBoolArg(given.include_screenshot) === true ? 7_000 : 4_000;
+  if (tool === "run_script") {
+    const raw = driverIntegerArg(given.timeout_ms);
+    const ms = raw !== undefined && raw >= 100 && raw <= 120_000 ? raw : 30_000;
+    return ms + 1_500;
+  }
+  if (tool === "verify_state") {
+    const raw = driverIntegerArg(given.timeout_ms);
+    return (raw ?? 0) + 2_000;
+  }
+  if (tool === "drag") {
+    const raw = driverIntegerArg(given.duration_ms);
+    const dur = raw !== undefined ? Math.min(10_000, raw) : 500;
+    return Math.max(3_000, dur + 2_500);
+  }
+  if (tool === "type_text" || tool === "type_text_chars") {
+    const rawDelay = driverIntegerArg(given.delay_ms);
+    const perChar = rawDelay !== undefined ? Math.min(200, Math.max(8, rawDelay)) + 24 : 40;
+    return 4_000 + perChar * (typeof given.text === "string" ? [...given.text].length : 0);
+  }
   return CAP_MS[tool] ?? DEFAULT_CAP_MS;
 };
 

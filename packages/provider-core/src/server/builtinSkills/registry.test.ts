@@ -199,6 +199,18 @@ describe("computer use skill text", () => {
     }
   });
 
+  it("advertises desktop action, hidden window wait, and windowsOpened in the cell API and skill", () => {
+    expect(SCREEN_TARGET_API).toContain('action?: "press" | "show_menu"');
+    expect(SCREEN_TARGET_API).toContain('window: "exists" | "gone" | "hidden"');
+    expect(SCREEN_TARGET_API).toContain("windowsOpened");
+    expect(SCREEN_TARGET_API).toContain("confirmed: the effect is proven.");
+    expect(SCREEN_TARGET_API).toContain('{ role: "AXStaticText", value: "702" }');
+    expect(screenCodeSkillFiles()["SKILL.md"]).toContain("windowsOpened");
+    expect(screenCodeSkillFiles()["SKILL.md"]).toContain('{role: "AXStaticText", value: "702"}');
+    expect(screenCodeSkillFiles()["SKILL.md"]).toContain("{send: true}");
+    expect(screenCodeSkillFiles()["SKILL.md"]).toContain("cmd+v");
+  });
+
   it("keeps the resident screen guide within 300 bytes", () => {
     expect(
       new TextEncoder().encode(builtInSkillSections(["screen-code"]).join("\n\n")).byteLength,
