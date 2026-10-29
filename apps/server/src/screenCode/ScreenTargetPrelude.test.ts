@@ -239,7 +239,11 @@ it.live(
         await app.press('Enter', 'Apply', { send: true });
         return true;`,
       });
-      expect(result).toMatchObject({ status: "completed", value: true });
+      expect(result).toMatchObject({
+        status: "completed",
+        value: true,
+        contractVersion: "screen-target/2",
+      });
       expect(sent.map((entry) => entry.tool)).toEqual([
         "list_apps",
         "list_windows",

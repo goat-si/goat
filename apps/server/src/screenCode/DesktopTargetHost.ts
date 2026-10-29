@@ -27,10 +27,17 @@ import type {
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
 import { observationReplyBudget } from "./ScreenHostBridge.ts";
+import { dispatchInTurn } from "./ScreenBatchGroups.ts";
 import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
-import { admitDesktopInput, inspectTreeElements, type GuardElement } from "./DesktopInputGuards.ts";
+import {
+  admitDesktopInput,
+  BATCH_FAILED_CATEGORIES,
+  inspectTreeElements,
+  preflightDesktopBatch,
+  type GuardElement,
+} from "./DesktopInputGuards.ts";
 import {
   aimOf,
   boundsOf,
@@ -479,7 +486,6 @@ export const createDesktopTargetHost = (deps: {
         delete bound.snapshotId;
         delete bound.pages;
         delete bound.elementsByToken;
-        delete bound.lastClickedTableCell;
       };
       let limit: number = READ_BOUNDS[0];
       let reply = yield* read(limit);
@@ -561,7 +567,6 @@ export const createDesktopTargetHost = (deps: {
         // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
         bound.elementsByToken = inspectTreeElements(elements, rows);
-        delete bound.lastClickedTableCell;
         if (bound.windowBounds === undefined) delete bound.framesBasis;
         else bound.framesBasis = bound.windowBounds;
       }
@@ -900,11 +905,51 @@ export const createDesktopTargetHost = (deps: {
               )
             ? observe(call, context)
             : invoke(call, context);
+  const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
+    "DesktopTargetHost.dispatchBatch",
+  )(function* (calls, context, markDispatched) {
+    const refused = preflightDesktopBatch(calls, (call) => {
+      const bound = resolve(call, context);
+      if (!bound) return { ok: false, error: fail("stale_reference") };
+      const args = callArgs(call.args);
+      const element = object(args.elementRef);
+      const elementToken = element ? tokenOf(element, bound) : undefined;
+      if (element && !elementToken) return { ok: false, error: fail("stale_reference") };
+      const guardElement =
+        elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
+      const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
+      const windowBounds = bound.framesBasis ?? bound.windowBounds;
+      return {
+        ok: true,
+        args,
+        appId: bound.appId,
+        ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+        ...(elementToken === undefined ? {} : { elementToken }),
+        ...(guardElement === undefined ? {} : { element: guardElement }),
+        ...(placed === undefined ? {} : { placed }),
+        ...(windowBounds === undefined ? {} : { windowBounds }),
+        ...(bound.lastClickedTableCell === undefined
+          ? {}
+          : { lastClickedTableCell: bound.lastClickedTableCell }),
+      };
+    });
+    if (refused !== undefined) return refused;
+    return yield* dispatchInTurn(
+      calls,
+      (each, index) =>
+        Effect.suspend(() => {
+          markDispatched(index);
+          return dispatch(each, context);
+        }),
+      BATCH_FAILED_CATEGORIES,
+    );
+  });
   return {
     discover,
     bindApp,
     observe,
     invoke,
+    dispatchBatch,
     invalidateTarget: (targetId) => {
       observations.evictTarget(targetId);
       targets.delete(targetId);

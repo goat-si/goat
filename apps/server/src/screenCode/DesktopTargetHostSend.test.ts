@@ -121,18 +121,18 @@ it.live(
             catch (e) { results.push(e.nothingSent); }
           }
           const batch = await Promise.allSettled([app.type('draft', 1), app.click(2)]);
-          return { results, batch: batch.map((b) => b.status === 'fulfilled' ? b.value.verdict : b.reason.nothingSent) };`,
+          return { results, batch: batch.map((b) => b.status === 'fulfilled' ? b.value.verdict : b.reason.code + ':' + b.reason.nothingSent) };`,
       });
       expect(refused.value).toEqual({
         results: [true, true, true, true],
-        batch: ["confirmed", true],
+        batch: ["not_run:true", "permission_denied:true"],
       });
-      // Only the draft type in the batch reached the driver; all 5 unapproved sends were blocked.
+      // A batch holding any guarded step sends none of its steps to the driver.
       expect(
         sent
           .map((entry) => entry.tool)
           .filter((tool) => !["list_apps", "list_windows", "get_window_state"].includes(tool)),
-      ).toEqual(["type_text"]);
+      ).toEqual([]);
 
       const allowed = yield* service.runCell({
         runId: "r",

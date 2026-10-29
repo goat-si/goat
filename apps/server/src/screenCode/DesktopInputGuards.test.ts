@@ -552,3 +552,244 @@ it.effect(
       expect(broken.detail).toBeUndefined();
     }),
 );
+
+it.effect(
+  "an unlabeled composer whose typed value contains search hints is still treated as a composer, while a field with a title or placeholder search hint is a non-composer",
+  () =>
+    Effect.gen(function* () {
+      const valueState = {
+        pid: 77,
+        window_id: 81407,
+        snapshot_id: "s0000000v",
+        elements_complete: false,
+        tree_format: "both",
+        tree_markdown:
+          '[0] AXWindow "김병준"\n  [1] AXTextArea "search for this"\n  [2] AXTextField "검색"\n  [3] AXTextArea "찾기 결과"\n  [4] AXTextField "메시지 검색"',
+        elements: [
+          {
+            element_index: 0,
+            element_token: "s0000000v:0",
+            role: "AXWindow",
+            label: "김병준",
+            frame: { x: 0, y: 0, w: 500, h: 700 },
+          },
+          {
+            element_index: 1,
+            element_token: "s0000000v:1",
+            role: "AXTextArea",
+            label: "search for this",
+            value: "search for this",
+            parent_index: 0,
+            frame: { x: 10, y: 620, w: 400, h: 60 },
+          },
+          {
+            element_index: 2,
+            element_token: "s0000000v:2",
+            role: "AXTextField",
+            label: "검색",
+            value: "검색",
+            parent_index: 0,
+            frame: { x: 10, y: 580, w: 400, h: 30 },
+          },
+          {
+            element_index: 3,
+            element_token: "s0000000v:3",
+            role: "AXTextArea",
+            label: "찾기 결과",
+            value: "찾기 결과",
+            parent_index: 0,
+            frame: { x: 10, y: 540, w: 400, h: 30 },
+          },
+          {
+            element_index: 4,
+            element_token: "s0000000v:4",
+            role: "AXTextField",
+            label: "메시지 검색",
+            value: "typed query",
+            parent_index: 0,
+            frame: { x: 10, y: 40, w: 200, h: 28 },
+          },
+        ],
+      };
+      const { host, sent } = fixture({
+        list_apps: kakaoApps,
+        list_windows: kakaoWindows,
+        get_window_state: valueState,
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "com.kakao.KakaoTalkMac", window_id: 81407 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
+      const before = sent.length;
+      for (const idx of [1, 2, 3] as const) {
+        const targetRef = byIndex(observed.value, idx);
+        const refused = yield* host
+          .invoke(call("press_key", { key: "Enter", elementRef: targetRef }, ref), context)
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "permission_denied", effectStarted: false });
+        expect(refused.nextStep).toContain("{ send: true }");
+      }
+      expect(sent.slice(before)).toEqual([]);
+      // Element [4] has label "메시지 검색" distinct from its value "typed query", so it is a genuine search field.
+      const genuineSearch = byIndex(observed.value, 4);
+      const allowed = yield* host.invoke(
+        call("press_key", { key: "Enter", elementRef: genuineSearch }, ref),
+        context,
+      );
+      expect(allowed.category).toBe("confirmed");
+    }),
+);
+
+it.effect("Space and Enter on a Send or unnamed button in KakaoTalk require { send: true }", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_apps: kakaoApps,
+      list_windows: kakaoWindows,
+      get_window_state: kakaoState,
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "com.kakao.KakaoTalkMac", window_id: 81407 }),
+      context,
+    );
+    const ref = bound.value as ScreenTargetRef;
+    const observed = yield* host.observe(call("get_window_state", {}, ref), context);
+    const sendBtnRef = byIndex(observed.value, 4);
+    const unnamedBtnRef = byIndex(observed.value, 5);
+    const before = sent.length;
+    for (const btn of [sendBtnRef, unnamedBtnRef]) {
+      for (const key of ["space", " ", "Enter", "Return", "kp_enter"]) {
+        const refused = yield* host
+          .invoke(call("press_key", { key, elementRef: btn }, ref), context)
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "permission_denied", effectStarted: false });
+        expect(refused.nextStep).toContain("{ send: true }");
+      }
+    }
+    expect(sent.slice(before)).toEqual([]);
+    const allowed = yield* host.invoke(
+      call("press_key", { key: "space", elementRef: sendBtnRef, send: true }, ref),
+      context,
+    );
+    expect(allowed.category).toBe("confirmed");
+  }),
+);
+
+it.effect(
+  "clicking a table cell, observing or taking a screenshot, and then typing without a target is still refused until another input moves focus",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({
+        get_window_state: (args: Record<string, unknown>) =>
+          args.include_accessibility_tree === false
+            ? goat2WindowState(args, { snapshot_id: "s0000000f" })
+            : finderState,
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
+      const cellRef = byIndex(observed.value, 41);
+      const searchRef = byIndex(observed.value, 50);
+      yield* host.invoke(call("click", { elementRef: cellRef }, ref), context);
+      yield* host.observe(call("get_window_state", {}, ref), context);
+      yield* host.observe(call("screenshot", {}, ref), context);
+      const before = sent.length;
+      const refused = yield* host
+        .invoke(call("type_text", { text: "renamed" }, ref), context)
+        .pipe(Effect.flip);
+      expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(refused.nextStep).toContain("setValue(41, value)");
+      expect(sent.slice(before)).toEqual([]);
+      // Clicking the search field moves focus away from the table cell, so unaddressed typing is allowed.
+      const reobserved = yield* host.observe(call("get_window_state", {}, ref), context);
+      yield* host.invoke(
+        call("click", { elementRef: byIndex(reobserved.value, 50) }, ref),
+        context,
+      );
+      const typed = yield* host.invoke(call("type_text", { text: "ok" }, ref), context);
+      expect(typed.category).toBe("confirmed");
+      expect(searchRef).toBeDefined();
+    }),
+);
+
+it.effect(
+  "a visible menu item whose frame extends outside the window is allowed, while a zero-size menu item is refused",
+  () =>
+    Effect.gen(function* () {
+      const menuState = {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: "s0000000m",
+        elements_complete: false,
+        tree_format: "both",
+        tree_markdown:
+          '[0] AXWindow "Editor"\n  [1] AXMenuItem "Rename…"\n  [2] AXMenuItem "HiddenItem"',
+        elements: [
+          {
+            element_index: 0,
+            element_token: "s0000000m:0",
+            role: "AXWindow",
+            label: "Editor",
+            frame: { x: 100, y: 100, w: 400, h: 300 },
+          },
+          {
+            element_index: 1,
+            element_token: "s0000000m:1",
+            role: "AXMenuItem",
+            label: "Rename…",
+            parent_index: 0,
+            frame: { x: 480, y: 380, w: 160, h: 22 },
+          },
+          {
+            element_index: 2,
+            element_token: "s0000000m:2",
+            role: "AXMenuItem",
+            label: "HiddenItem",
+            parent_index: 0,
+            frame: { x: 520, y: 420, w: 0, h: 22 },
+          },
+        ],
+      };
+      const { host } = fixture({ get_window_state: menuState });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
+      const outOfWindowMenu = byIndex(observed.value, 1);
+      const zeroMenu = byIndex(observed.value, 2);
+      // Even when a context menu sits completely outside the window (x: 520, y: 420), positive size is allowed.
+      const menuState2 = {
+        ...menuState,
+        elements: [
+          menuState.elements[0],
+          { ...menuState.elements[1], frame: { x: 550, y: 450, w: 160, h: 22 } },
+          menuState.elements[2],
+        ],
+      };
+      const f2 = fixture({ get_window_state: menuState2 });
+      const b2 = yield* f2.host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const obs2 = yield* f2.host.observe(
+        call("get_window_state", {}, b2.value as ScreenTargetRef),
+        context,
+      );
+      const clicked = yield* f2.host.invoke(
+        call("click", { elementRef: byIndex(obs2.value, 1) }, b2.value as ScreenTargetRef),
+        context,
+      );
+      expect(clicked.category).toBe("confirmed");
+      expect(outOfWindowMenu).toBeDefined();
+      const refused = yield* host
+        .invoke(call("click", { elementRef: zeroMenu }, ref), context)
+        .pipe(Effect.flip);
+      expect(refused.code).toBe("invalid_argument");
+    }),
+);

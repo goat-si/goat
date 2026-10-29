@@ -3,7 +3,9 @@
  * table-cell typing refusal, send-on-Enter chat policy, recognized clipboard-paste refusal,
  * visible click bounds, and standard outcome sentences.
  */
-import type { ScreenRunError } from "@goat/contracts";
+import * as Exit from "effect/Exit";
+import type { ScreenHostCall, ScreenRunError } from "@goat/contracts";
+import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 import type { Placed, Rect } from "./DesktopFrames.ts";
 
@@ -12,11 +14,14 @@ export interface GuardElement {
   readonly role: string;
   readonly name: string;
   readonly rawLabel: string;
+  /** Label excluding any fallback to the element's current value (title/description only). */
+  readonly nonValueLabel: string;
   readonly description: string;
   readonly placeholder: string;
   readonly identifier: string;
   readonly editable: boolean;
   readonly tableCell: boolean;
+  readonly menuSurface: boolean;
 }
 
 const SEND_ON_ENTER: Readonly<Record<string, string>> = {
@@ -41,6 +46,14 @@ const PASTE_MENU_LABELS: ReadonlySet<string> = new Set([
 
 const TABLE_CELL_ROLES: ReadonlySet<string> = new Set(["textfield", "statictext", "cell"]);
 const TABLE_ANCESTOR_ROLES: ReadonlySet<string> = new Set(["row", "cell", "outline", "table"]);
+const MENU_ROLES: ReadonlySet<string> = new Set([
+  "menu",
+  "menuitem",
+  "menubar",
+  "menubarextra",
+  "menubaritem",
+  " statusitem",
+]);
 const SEARCH_HINTS = ["search", "검색", "찾기"];
 const SEND_HINTS = ["send", "보내기", "전송", "submit"];
 
@@ -203,6 +216,7 @@ const shiftedSymbolBase = (symbol: string): string | undefined => {
 
 const canonicalKeyName = (key: string): string => {
   if (key === "\r" || key === "\n") return "enter";
+  if (key === " ") return "space";
   const lower = key.trim().toLowerCase();
   if ([...lower].length < 2) return lower;
   const compact = lower.replaceAll(/[ _-]/g, "");
@@ -262,6 +276,7 @@ const resolveKeyPress = (
   }
   const rawKey = typeof args.key === "string" ? args.key : "";
   if (rawKey === "\r" || rawKey === "\n") return { key: "enter", modifiers };
+  if (rawKey === " ") return { key: "space", modifiers };
   const trimmed = rawKey.trim();
   let name = trimmed;
   if ([...trimmed].length > 1 && trimmed.includes("+") && !trimmed.endsWith("+")) {
@@ -336,19 +351,35 @@ export const inspectTreeElements = (
       if (cursor !== undefined && TABLE_ANCESTOR_ROLES.has(bareRole(string(cursor.role) ?? "")))
         inTable = true;
     }
+    let inMenu = MENU_ROLES.has(bare);
+    let menuCursor: Record<string, unknown> | undefined = entry;
+    for (let hop = 0; !inMenu && hop < 8 && menuCursor !== undefined; hop++) {
+      const parentIdx = natural(menuCursor.parent_index);
+      menuCursor = parentIdx === undefined ? undefined : byIndex.get(parentIdx);
+      if (menuCursor !== undefined && MENU_ROLES.has(bareRole(string(menuCursor.role) ?? "")))
+        inMenu = true;
+    }
     const row = rowByToken.get(token);
     const index = row?.index ?? natural(entry.element_index);
     const rawLabel = string(entry.label) ?? "";
+    const rawValue = typeof entry.value === "string" ? entry.value : undefined;
+    // cua-driver's element_entry falls back label = title ?? description ?? value ?? identifier;
+    // when label equals value and no separate title is given, rawLabel may be the field's value.
+    const explicitTitle = string(entry.title);
+    const nonValueLabel =
+      explicitTitle ?? (rawValue !== undefined && rawLabel === rawValue ? "" : rawLabel);
     map.set(token, {
       ...(index === undefined ? {} : { index }),
       role,
       name: row?.name ?? rawLabel,
       rawLabel,
+      nonValueLabel,
       description: string(entry.description) ?? string(entry.value_description) ?? "",
       placeholder: string(entry.placeholder) ?? "",
       identifier: string(entry.identifier) ?? "",
       editable,
       tableCell: TABLE_CELL_ROLES.has(bare) && !editable && inTable,
+      menuSurface: inMenu,
     });
   }
   return map;
@@ -376,9 +407,10 @@ const isNonComposer = (element: GuardElement | undefined): boolean => {
   const bare = bareRole(element.role);
   if (bare === "searchfield") return true;
   if (bare !== "textfield" && bare !== "textarea") return false;
+  // Never match against the element's current value or tree-text fallback, since a user or agent
+  // message inside an unlabeled composer can contain the word "search".
   const combined = [
-    element.name,
-    element.rawLabel,
+    element.nonValueLabel,
     element.description,
     element.placeholder,
     element.identifier,
@@ -422,13 +454,20 @@ const sendPolicy = (input: {
   const resolvedKey =
     method === "press_key" || method === "hotkey" ? resolveKeyPress(args) : undefined;
   const isEnter = resolvedKey?.key === "enter";
+  const isButtonActivationKey = isEnter || resolvedKey?.key === "space" || resolvedKey?.key === " ";
   if (elementToken === undefined && (method === "type_text" || isEnter))
     return "refuse_unaddressed";
+  if (isSendButton(element)) {
+    if (
+      method === "click" ||
+      method === "right_click" ||
+      ((method === "press_key" || method === "hotkey") && isButtonActivationKey)
+    )
+      return send ? "allow" : "refuse_send";
+  }
   if (method === "press_key" && elementToken !== undefined && isEnter && !isNonComposer(element))
     return send ? "allow" : "refuse_send";
   if (method === "type_text" && elementToken !== undefined && hasControlCharacter(args.text))
-    return send ? "allow" : "refuse_send";
-  if ((method === "click" || method === "right_click") && isSendButton(element))
     return send ? "allow" : "refuse_send";
   if (method === "invoke_menu" && isSendMenuPath(args.path)) return send ? "allow" : "refuse_send";
   return "allow";
@@ -437,10 +476,14 @@ const sendPolicy = (input: {
 const hasVisibleClickBounds = (
   placed: Placed | undefined,
   windowBounds: Rect | undefined,
+  element: GuardElement | undefined,
 ): boolean => {
   if (placed === undefined) return true;
   const { frame } = placed;
   if (frame.w <= 0 || frame.h <= 0) return false;
+  // Open menus and menu-bar items are rendered in their own screen-space popups and can extend
+  // outside the bound window's rectangle while remaining actionable through AX.
+  if (element?.menuSurface === true) return true;
   const win = placed.window ?? windowBounds;
   if (win === undefined || win.w <= 0 || win.h <= 0) return true;
   return (
@@ -484,7 +527,7 @@ export const admitDesktopInput = (input: {
   if (
     (method === "click" || method === "right_click") &&
     elementToken !== undefined &&
-    !hasVisibleClickBounds(placed, windowBounds)
+    !hasVisibleClickBounds(placed, windowBounds, element)
   ) {
     const label = element?.index ?? elementToken;
     return {
@@ -547,4 +590,71 @@ export const admitDesktopInput = (input: {
   if ((method === "click" || method === "right_click") && element?.tableCell === true)
     return { clickedTableCell: element.index ?? elementToken ?? 0 };
   return { clearClickedTableCell: true };
+};
+
+export const BATCH_FAILED_CATEGORIES: ReadonlySet<ScreenHostDispatchResult["category"]> = new Set([
+  "partial",
+  "suspected_noop",
+  "refused",
+]);
+
+const batchNotRun = (callId: number, haltedBy: number): ScreenRunError => ({
+  ...fail(
+    "not_run",
+    `Call ${haltedBy} in this cell failed, so this call did not run. Observe in a new cell before acting again.`,
+  ),
+  callId,
+});
+
+/**
+ * Preflights every member of a desktop batch before any member is sent to the driver; returns
+ * per-member failure exits when any member is refused, or undefined when all members may run.
+ */
+export const preflightDesktopBatch = (
+  calls: ReadonlyArray<ScreenHostCall>,
+  inspect: (call: ScreenHostCall) =>
+    | {
+        readonly ok: true;
+        readonly args: Record<string, unknown>;
+        readonly appId: string;
+        readonly bundleId?: string;
+        readonly elementToken?: string;
+        readonly element?: GuardElement;
+        readonly placed?: Placed;
+        readonly windowBounds?: Rect;
+        readonly lastClickedTableCell?: number | string;
+      }
+    | { readonly ok: false; readonly error: ScreenRunError },
+): ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>> | undefined => {
+  let simulatedTableCell: number | string | undefined;
+  let initialized = false;
+  const abortAt = (index: number, error: ScreenRunError) => {
+    const haltedBy = calls[index]?.callId ?? 0;
+    return calls.map((member, i) =>
+      Exit.fail(i === index ? error : batchNotRun(member.callId, haltedBy)),
+    );
+  };
+  for (const [index, call] of calls.entries()) {
+    const checked = inspect(call);
+    if (!checked.ok) return abortAt(index, checked.error);
+    if (!initialized) {
+      simulatedTableCell = checked.lastClickedTableCell;
+      initialized = true;
+    }
+    const admission = admitDesktopInput({
+      method: call.method,
+      args: checked.args,
+      appId: checked.appId,
+      ...(checked.bundleId === undefined ? {} : { bundleId: checked.bundleId }),
+      ...(checked.elementToken === undefined ? {} : { elementToken: checked.elementToken }),
+      ...(checked.element === undefined ? {} : { element: checked.element }),
+      ...(checked.placed === undefined ? {} : { placed: checked.placed }),
+      ...(checked.windowBounds === undefined ? {} : { windowBounds: checked.windowBounds }),
+      ...(simulatedTableCell === undefined ? {} : { lastClickedTableCell: simulatedTableCell }),
+    });
+    if (admission.refused !== undefined) return abortAt(index, admission.refused);
+    if (admission.clickedTableCell !== undefined) simulatedTableCell = admission.clickedTableCell;
+    else if (admission.clearClickedTableCell) simulatedTableCell = undefined;
+  }
+  return undefined;
 };
