@@ -1,7 +1,5 @@
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
-import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { EnvironmentId } from "@goat/contracts";
-import { parseThreadLinkHref, resolveThreadLinkRef } from "@goat/shared/threadLinks";
 import { View } from "react-native";
 
 import { SymbolView } from "../../components/ui/AppSymbol";
@@ -12,6 +10,7 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells } from "../../state/threads";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { goatBotMarkdownLinkTarget } from "./goatBotMarkdownLinks";
 
 /**
  * Bot text that holds Markdown, rendered by the chat's native renderer in the bubble's type and
@@ -29,16 +28,19 @@ export function GoatBotMarkdown(props: {
   const danger = useUniwindTheme()["--color-danger-foreground"];
   const color = props.failed ? danger : props.textColor;
   const openLink = (href: string) => {
-    const threadId = parseThreadLinkHref(href);
-    if (threadId !== null && props.environmentId !== null) {
-      const source = scopeThreadRef(props.environmentId, threadId);
-      const target =
-        resolveThreadLinkRef(source, appAtomRegistry.get(environmentThreadShells.threadRefsAtom)) ??
-        source;
-      props.onSelectThread({ environmentId: target.environmentId, id: target.threadId });
-      return;
+    const target = goatBotMarkdownLinkTarget(
+      href,
+      props.environmentId,
+      appAtomRegistry.get(environmentThreadShells.threadRefsAtom),
+    );
+    if (target?.kind === "thread") {
+      props.onSelectThread({
+        environmentId: target.thread.environmentId,
+        id: target.thread.threadId,
+      });
+    } else if (target?.kind === "external") {
+      void tryOpenExternalUrl(target.href, "markdown-link");
     }
-    void tryOpenExternalUrl(href, "markdown-link");
   };
   const markdown = (
     <SelectableMarkdownText
