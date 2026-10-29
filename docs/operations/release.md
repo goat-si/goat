@@ -517,6 +517,10 @@ provisioned yet, so bundles are held to their hashes only. To turn signing on:
 
 To rotate the key, ship the new public key beside the old one for a release before signing with it.
 
+The check also refuses a bundle that its group or other users can write, or that sits under such a
+folder. Install it fresh into a folder only the server's user or root can write: changing the
+permissions of an exposed bundle does not revoke a write handle someone already holds.
+
 ## 4) Ongoing release checklist
 
 1. Pick the latest nightly and verify it: run the smoke test above against its artifacts and
