@@ -121,7 +121,7 @@ async function setup() {
       layout === "wide"
         ? '[aria-label="Workspace"]'
         : layout === "panel"
-          ? '[aria-label="Run context"]'
+          ? '[aria-label^="Run context"]'
           : '[data-composer-shortcut*="composer.workspace"]',
     )!;
   }
