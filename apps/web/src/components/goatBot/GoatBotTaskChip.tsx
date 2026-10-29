@@ -4,6 +4,7 @@ import type {
   GoatBotTaskCard,
 } from "@goat/client-runtime/goatBot";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
@@ -70,7 +71,11 @@ export function GoatBotTaskChip({
           <div className="goat-task-title font-semibold break-words">{card.title}</div>
           {card.summary ? (
             // A new summary measures afresh and starts collapsed.
-            <GoatBotTaskSummary key={card.summary} summary={card.summary} />
+            <GoatBotTaskSummary
+              key={card.summary}
+              summary={card.summary}
+              environmentId={card.target.kind === "thread" ? card.target.environmentId : null}
+            />
           ) : null}
           {card.sourceLabel ? (
             <div className="truncate text-xs text-goat-bubble-in-foreground/65">
@@ -119,8 +124,14 @@ export function GoatBotTaskChip({
 }
 
 /** The card is the task's result, so a long summary opens in place instead of staying cut off. */
-function GoatBotTaskSummary({ summary }: { readonly summary: string }) {
-  const ref = useRef<HTMLParagraphElement>(null);
+function GoatBotTaskSummary({
+  summary,
+  environmentId,
+}: {
+  readonly summary: string;
+  readonly environmentId: EnvironmentId | null;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [clamped, setClamped] = useState(false);
   useLayoutEffect(() => {
@@ -129,15 +140,15 @@ function GoatBotTaskSummary({ summary }: { readonly summary: string }) {
   }, [expanded]);
   return (
     <div>
-      <p
+      <div
         ref={ref}
         className={cn(
           "goat-task-summary break-words whitespace-pre-wrap text-goat-bubble-in-foreground/80",
           !expanded && "line-clamp-4",
         )}
       >
-        <GoatBotLinkedText text={summary} />
-      </p>
+        <GoatBotLinkedText text={summary} environmentId={environmentId} />
+      </div>
       {clamped || expanded ? (
         <button
           type="button"

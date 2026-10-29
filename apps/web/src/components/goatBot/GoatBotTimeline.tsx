@@ -6,6 +6,7 @@ import {
   type GoatBotActivity,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
+import type { EnvironmentId } from "@goat/contracts";
 import { BellIcon, CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
 import {
   createContext,
@@ -37,11 +38,14 @@ export const GoatBotActivityContext = createContext<GoatBotActivity | null>(null
 
 export function GoatBotTimeline({
   rows,
+  environmentId = null,
   replyingSince = null,
   onRetry,
   onPick,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
+  /** The environment whose history these rows show; links in bot text resolve there. */
+  readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
   readonly onRetry: (clientKey: string) => void;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
@@ -262,7 +266,7 @@ export function GoatBotTimeline({
                             <MessageCircleQuestionIcon className="mt-1 size-3.5 shrink-0 text-warning-foreground" />
                           ) : null}
                           <div className="min-w-0">
-                            <GoatBotLinkedText text={row.text} />
+                            <GoatBotLinkedText text={row.text} environmentId={environmentId} />
                             {row.memory ? (
                               <MemorySettingsEntry
                                 environmentId={row.memory.environmentId}

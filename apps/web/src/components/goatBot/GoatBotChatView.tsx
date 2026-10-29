@@ -1,4 +1,5 @@
 import type { GoatBotRow } from "@goat/client-runtime/goatBot";
+import type { EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState, type ReactNode } from "react";
 
@@ -52,6 +53,8 @@ export interface GoatBotChatViewProps {
   readonly onUnarchive?: (() => void) | undefined;
   /** Only offer navigation when this connection confirmed a different bot chat. */
   readonly canOpenCurrentBot?: boolean | undefined;
+  /** The environment whose bot history is shown, which can differ from a new home during a move. */
+  readonly environmentId?: EnvironmentId | null | undefined;
 }
 
 /** GOAT Bot as a messenger: bubbles and work cards, never tool calls. */
@@ -68,6 +71,7 @@ export function GoatBotChatView({
   legacyAgentRoute,
   removal = null,
   canOpenCurrentBot = false,
+  environmentId = null,
   onUnarchive,
   onCheckAgain,
 }: GoatBotChatViewProps) {
@@ -155,6 +159,7 @@ export function GoatBotChatView({
         // History stays readable while the bot is unavailable; only sending stops.
         <GoatBotTimeline
           rows={rows}
+          environmentId={environmentId}
           replyingSince={removed ? null : replyingSince}
           onRetry={onRetryInput}
           onPick={canSend ? onSend : undefined}

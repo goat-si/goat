@@ -1,7 +1,12 @@
 import { MemoryReportLink } from "../settings/SettingsMemoryRouteScreen";
 import { LegendList } from "@legendapp/list/react-native";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
-import { goatBotReceiptLabel, type GoatBotRow } from "@goat/client-runtime/goatBot";
+import {
+  goatBotReceiptLabel,
+  hasGoatBotMarkdown,
+  type GoatBotRow,
+} from "@goat/client-runtime/goatBot";
+import type { EnvironmentId } from "@goat/contracts";
 import { memo, useCallback, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
 import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
@@ -15,6 +20,7 @@ import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotBubble } from "./GoatBotBubble";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
+import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
@@ -96,7 +102,12 @@ function GoatBotTaskCard(props: {
             </Text>
           ) : null}
           {card.summary ? (
-            <GoatBotTaskSummary summary={card.summary} textColor={textColor} />
+            <GoatBotTaskSummary
+              summary={card.summary}
+              textColor={textColor}
+              environmentId={card.target.kind === "thread" ? card.target.environmentId : null}
+              onSelectThread={props.onSelectThread}
+            />
           ) : null}
           {card.pullRequests.length > 0 ? (
             <Text className="text-xs" style={{ color: textColor, opacity: 0.7 }}>
@@ -119,7 +130,12 @@ function GoatBotTaskCard(props: {
 }
 
 /** The card is the task's result, so a long summary opens in place instead of staying cut off. */
-function GoatBotTaskSummary(props: { readonly summary: string; readonly textColor: string }) {
+function GoatBotTaskSummary(props: {
+  readonly summary: string;
+  readonly textColor: string;
+  readonly environmentId: EnvironmentId | null;
+  readonly onSelectThread: (thread: ThreadSelection) => void;
+}) {
   const bodyText = useScaledTextRole("body");
   const [expanded, setExpanded] = useState(false);
   // Counted from the text: line metrics under numberOfLines differ between iOS and Android.
@@ -127,12 +143,22 @@ function GoatBotTaskSummary(props: { readonly summary: string; readonly textColo
     props.summary.length > SUMMARY_CHARS || props.summary.split("\n").length > SUMMARY_LINES;
   return (
     <View className="gap-0.5">
-      <Text
-        numberOfLines={expanded ? undefined : SUMMARY_LINES}
-        style={{ color: props.textColor, ...bodyText }}
-      >
-        <GoatBotLinkedText text={props.summary} />
-      </Text>
+      {(expanded || !long) && hasGoatBotMarkdown(props.summary) ? (
+        <GoatBotMarkdown
+          text={props.summary}
+          textColor={props.textColor}
+          environmentId={props.environmentId}
+          onSelectThread={props.onSelectThread}
+        />
+      ) : (
+        // A collapsed long summary stays a bounded plain preview; the native renderer cannot clamp.
+        <Text
+          numberOfLines={expanded ? undefined : SUMMARY_LINES}
+          style={{ color: props.textColor, ...bodyText }}
+        >
+          <GoatBotLinkedText text={props.summary} />
+        </Text>
+      )}
       {long ? (
         <Pressable
           accessibilityRole="button"
@@ -155,6 +181,8 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onSend: (answer: string) => boolean;
   readonly onRetry: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
+  /** The environment whose bot history is shown; thread links in bot text open there. */
+  readonly environmentId?: EnvironmentId | null;
 }) {
   const { row } = props;
   const { themeAppearance } = useAppearancePreferences();
@@ -228,14 +256,24 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                 {row.replyTo}
               </Text>
             ) : null}
-            <Text
-              selectable
-              className={row.tone === "failure" ? "text-danger-foreground" : undefined}
-              style={row.tone === "failure" ? bodyText : { color: textColor, ...bodyText }}
-              accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
-            >
-              <GoatBotLinkedText text={row.text} />
-            </Text>
+            {hasGoatBotMarkdown(row.text) ? (
+              <GoatBotMarkdown
+                text={row.text}
+                textColor={textColor}
+                failed={row.tone === "failure"}
+                environmentId={props.environmentId ?? null}
+                onSelectThread={props.onSelectThread}
+              />
+            ) : (
+              <Text
+                selectable
+                className={row.tone === "failure" ? "text-danger-foreground" : undefined}
+                style={row.tone === "failure" ? bodyText : { color: textColor, ...bodyText }}
+                accessibilityLabel={row.tone === "failure" ? `Failed: ${row.text}` : undefined}
+              >
+                <GoatBotLinkedText text={row.text} />
+              </Text>
+            )}
           </View>
         )}
       </GoatBotBubble>
@@ -314,9 +352,16 @@ export function GoatBotScreen(props: {
         onSend={session.onSend}
         onRetry={session.onRetryInput}
         onSelectThread={onSelectThread}
+        environmentId={session.historyEnvironmentId}
       />
     ),
-    [session.canSend, session.onSend, session.onRetryInput, onSelectThread],
+    [
+      session.canSend,
+      session.onSend,
+      session.onRetryInput,
+      onSelectThread,
+      session.historyEnvironmentId,
+    ],
   );
   const send = () => {
     if (session.onSend(text)) {

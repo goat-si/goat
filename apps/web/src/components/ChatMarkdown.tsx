@@ -24,17 +24,10 @@ import {
   encodeComposerContextClipboardHtml,
 } from "@goat/shared/composerContextClipboard";
 import {
-  FileSpreadsheetIcon,
-  FileTextIcon,
-  GlobeIcon,
-  ImageIcon,
   InfoIcon,
   LightbulbIcon,
-  MailIcon,
-  MessageSquareIcon,
   MessageSquareWarningIcon,
   OctagonAlertIcon,
-  PresentationIcon,
   SparklesIcon,
   TriangleAlertIcon,
 } from "~/components/solar";
@@ -55,7 +48,6 @@ import {
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
-  type CodexArtifactTemplateKind,
 } from "@goat/shared/codexArtifactTemplates";
 import {
   classifyMarkdownImageSource,
@@ -210,7 +202,7 @@ import {
   nodeToPlainText,
 } from "./chat/MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./chat/markdownActionFailure";
-import type { IconComponent } from "~/components/solar";
+import { ARTIFACT_TEMPLATE_ICON_BY_KIND } from "./chat/artifactTemplateIcons";
 
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
 
@@ -239,6 +231,8 @@ interface ChatMarkdownProps {
       `cwd`'s; without it a private repository's uploads load unauthenticated and 404. */
   sourceControlMedia?: boolean | undefined;
   headingLevelOffset?: number | undefined;
+  /** Off for text with no workspace behind it, so file links never open or reveal a host path. */
+  fileActions?: boolean | undefined;
 }
 
 export interface ChatMarkdownContextReference {
@@ -249,19 +243,6 @@ export interface ChatMarkdownContextReference {
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-
-const ARTIFACT_TEMPLATE_ICON_BY_KIND = {
-  document: FileTextIcon,
-  presentation: PresentationIcon,
-  spreadsheet: FileSpreadsheetIcon,
-  site: GlobeIcon,
-  "google-docs": FileTextIcon,
-  "google-slides": PresentationIcon,
-  "google-sheets": FileSpreadsheetIcon,
-  image: ImageIcon,
-  email: MailIcon,
-  slack: MessageSquareIcon,
-} satisfies Record<CodexArtifactTemplateKind, IconComponent>;
 
 function CodexArtifactTemplateCard(props: {
   readonly template: CodexArtifactTemplate;
@@ -447,6 +428,7 @@ function useChatMarkdownState({
   renderContextReference,
   headingLevelOffset = 0,
   sourceControlMedia = false,
+  fileActions = true,
 }: ChatMarkdownProps) {
   const resolvedTheme = useRenderedAppearance();
   const markdownRef = useRef<HTMLElement>(null);
@@ -501,6 +483,7 @@ function useChatMarkdownState({
   const canOperatePreview = useEnvironmentScope(environmentId, AuthPreviewOperateScope);
   const remoteOpen = useRemoteOpenResolution(environmentId);
   const canUseShellActions =
+    fileActions &&
     canOperateHost &&
     canUseMarkdownFileShellActions(environmentId, remoteOpen.state.mode, remoteOpen.isResolved);
   const openMarkdownMedia = (
