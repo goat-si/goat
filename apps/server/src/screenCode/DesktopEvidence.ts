@@ -43,7 +43,12 @@ const isUniqueNativeLabel = (row: DesktopRow, allRows: ReadonlyArray<DesktopRow>
   let matches = 0;
   for (const other of allRows) {
     if (other.lifted === true) continue;
-    if (normRole(other.role) === r && other.name.toLowerCase().includes(needle)) matches++;
+    if (normRole(other.role) !== r) continue;
+    const matchesSelector =
+      other.name.toLowerCase().includes(needle) ||
+      (other.text?.toLowerCase().includes(needle) ?? false) ||
+      (other.id?.toLowerCase().includes(needle) ?? false);
+    if (matchesSelector) matches++;
   }
   return matches === 1;
 };
@@ -96,6 +101,8 @@ const toVerifyExpectations = (watched: ReadonlyArray<WatchedElement>) =>
   }));
 
 interface ObservedProj {
+  readonly label?: string;
+  readonly elementIndex?: number;
   readonly value?: string;
   readonly selected?: boolean;
 }
@@ -115,6 +122,8 @@ const parseVerifyObservations = (
       if (!parsed || typeof parsed.matches === "number" || typeof parsed.error === "string")
         return undefined;
       return {
+        ...(typeof parsed.label === "string" ? { label: parsed.label } : {}),
+        ...(typeof parsed.element_index === "number" ? { elementIndex: parsed.element_index } : {}),
         ...(typeof parsed.value === "string" ? { value: parsed.value } : {}),
         ...(typeof parsed.selected === "boolean" ? { selected: parsed.selected } : {}),
       };
@@ -134,6 +143,13 @@ const diffWatchedEvidence = (
     const pre = before[idx];
     const post = after[idx];
     if (!pre || !post) return;
+    if (pre.label !== w.label || post.label !== w.label) return;
+    if (
+      pre.elementIndex !== undefined &&
+      post.elementIndex !== undefined &&
+      pre.elementIndex !== post.elementIndex
+    )
+      return;
     const prefix =
       w.kind === "acted"
         ? "observed:element_state:"

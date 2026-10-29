@@ -248,6 +248,59 @@ it.effect(
       expect(
         (clickedLifted.evidence ?? []).some((e) => e.startsWith("observed:element_state")),
       ).toBe(false);
+
+      let mCalls = 0;
+      const { host: mismatchHost } = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          tree_markdown: ['- [0] AXWindow "Doc"', '  - [1] AXTextField "Search" = "old"'].join(
+            "\n",
+          ),
+          elements_complete: false,
+          elements: [
+            { role: "AXWindow", element_index: 0, element_token: "s1:0", label: "Doc" },
+            {
+              role: "AXTextField",
+              element_index: 1,
+              element_token: "s1:1",
+              label: "Search",
+              value: "old",
+            },
+          ],
+        },
+        verify_state: () => {
+          mCalls++;
+          return {
+            status: "satisfied",
+            predicates: [
+              verifyOutcome(
+                0,
+                mCalls === 1
+                  ? { role: "AXTextField", label: "Search", value: "old", element_index: 1 }
+                  : { role: "AXTextField", label: "Other", value: "Search 2", element_index: 2 },
+              ),
+            ],
+          };
+        },
+        click: { effect: "unverifiable" },
+      });
+      const mBound = yield* mismatchHost.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const mRef = mBound.value as ScreenTargetRef;
+      const mObs = (yield* mismatchHost.observe(call("get_window_state", {}, mRef), context))
+        .value as ScreenObservation;
+      const search = mObs.elements.find((e) => e.index === 1);
+      if (!search) throw new Error("Missing search field");
+      const clickedSearch = yield* mismatchHost.invoke(
+        evCall("click", { elementRef: search.ref }, mRef),
+        context,
+      );
+      expect(
+        (clickedSearch.evidence ?? []).some((e) => e.startsWith("observed:element_state")),
+      ).toBe(false);
     }),
 );
 
