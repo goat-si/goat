@@ -3,7 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { generateThirdPartyLicenseManifest } from "./third-party-licenses.js";
 
 const tempDirectories: string[] = [];
@@ -160,15 +160,12 @@ describe("third-party license generation", () => {
     });
   });
 
-  it("renders generated notices from the ignored SPDX cache", async () => {
+  it("renders generated notices from the committed SPDX templates", async () => {
     const fixture = await createFixture();
-    await writeJson(
-      NodePath.join(fixture.root, ".generated/third-party-licenses/spdx/v3.28.0/MIT.json"),
-      {
-        licenseId: "MIT",
-        licenseText: "MIT License\n\nCopyright (c) <year> <copyright holders>\n\nPermission text",
-      },
-    );
+    await writeJson(NodePath.join(fixture.root, "third-party-licenses/spdx/v3.28.0/MIT.json"), {
+      licenseId: "MIT",
+      licenseText: "MIT License\n\nCopyright (c) <year> <copyright holders>\n\nPermission text",
+    });
     await writeJson(fixture.configFile, {
       customNotices: [
         {
@@ -195,6 +192,32 @@ describe("third-party license generation", () => {
     expect(manifest.entries.find((entry) => entry.name === "generated-asset")?.noticeText).toBe(
       "Adapted for T3 Code.\n\nMIT License\n\nCopyright (c) 2026 Example Author\n\nPermission text",
     );
+  });
+
+  it("fails on a missing SPDX template without fetching it during a build", async () => {
+    const fixture = await createFixture();
+    await writeJson(fixture.configFile, {
+      customNotices: [
+        {
+          name: "generated-asset",
+          license: "MIT",
+          generatedNotices: [{ licenseId: "MIT" }],
+          bundles: ["web"],
+        },
+      ],
+      packageOverrides: [],
+    });
+    using fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("GitHub's CDN timed out"));
+
+    await expect(
+      generateThirdPartyLicenseManifest({
+        configFile: fixture.configFile,
+        packageManifests: [{ bundle: "web", path: fixture.appManifest }],
+      }),
+    ).rejects.toThrow("vp run licenses:sync");
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("finds packages whose exports hide both their manifest and entry point", async () => {
@@ -363,10 +386,7 @@ describe("third-party license generation", () => {
     await NodeFSP.rm(NodePath.join(fixture.dependencyRoot, "LICENSE"));
     for (const licenseId of ["Apache-2.0", "BSD-3-Clause"]) {
       await writeJson(
-        NodePath.join(
-          fixture.root,
-          `.generated/third-party-licenses/spdx/v3.28.0/${licenseId}.json`,
-        ),
+        NodePath.join(fixture.root, `third-party-licenses/spdx/v3.28.0/${licenseId}.json`),
         { licenseId, licenseText: `${licenseId} terms` },
       );
     }
