@@ -238,19 +238,32 @@ const make = Effect.gen(function* () {
     return false;
   });
 
-  /** The newest run any session already holds for this task generation, found by its intents. */
+  /**
+   * The newest run any session already holds for this task generation, found by its intents;
+   * "unknown" when a session that may hold one cannot be read now.
+   */
   const sentRun = Effect.fn("ChannelBotSession.sentRun")(function* (task: ChannelTask) {
     const sessions = yield* sql<{ readonly thread_id: ThreadId }>`
       SELECT DISTINCT thread_id FROM channel_bot_session_runs
       WHERE task_id = ${task.taskId} AND task_generation = ${task.generation}
     `;
+    let unreadable = false;
     for (const { thread_id: threadId } of sessions) {
-      const records = yield* readRecords(threads, threadId).pipe(Effect.option);
+      const records = yield* readRecords(threads, threadId).pipe(
+        Effect.asSome,
+        Effect.catch((cause) =>
+          Effect.succeed(isThreadMissing(cause) ? Option.none() : ("unknown" as const)),
+        ),
+      );
+      if (records === "unknown") {
+        unreadable = true;
+        continue;
+      }
       if (Option.isNone(records)) continue;
       const run = (yield* sessionTaskRuns(sql, threadId, records.value, task)).at(-1);
       if (run !== undefined) return { threadId, runId: run.id };
     }
-    return undefined;
+    return unreadable ? ("unknown" as const) : undefined;
   });
 
   /** The six-part prefix for a new session, frozen into its row; the journal is what the requester may see now. */
@@ -478,7 +491,13 @@ const make = Effect.gen(function* () {
     // whichever session its requester maps to now: started work runs on, and a new send would
     // run it twice.
     const sent = yield* sentRun(initial.task);
+    if (sent === "unknown") return "deferred" as const;
     if (sent !== undefined) {
+      // A launch interrupted before it marked its session live counts as live once its run exists.
+      yield* sql`
+        UPDATE channel_bot_sessions SET state = 'active', version = version + 1
+        WHERE thread_id = ${sent.threadId} AND state = 'starting'
+      `;
       yield* bindWorker(initial, sent.threadId, sent.runId, owner);
       return "served" as const;
     }

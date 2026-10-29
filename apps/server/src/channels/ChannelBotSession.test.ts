@@ -1,215 +1,39 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ChannelReceptionInput, ChannelTask, ChannelTaskId, RunId } from "@goat/contracts";
+import type { ChannelTask, RunId } from "@goat/contracts";
 import {
   isGoatBotSessionThreadId,
   MessageId,
   NodeId,
   ProjectId,
-  ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import { SESSION_PREFIX_HEADINGS } from "./channelBotSessionBrief.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
-import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
-import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
-import { commitTransition } from "./channelTaskWrites.ts";
+import { turnSteerIdsFor } from "./channelIds.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlClient from "effect/sql/SqlClient";
+import { botMessages, goatInput, owner, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
 import {
-  botMessages,
-  defaultScript,
-  environmentId,
-  goatInput,
-  makeHarness,
-  modelSelection,
-  owner,
-  projectId,
-  rpcContext,
-  setupBot,
-  slackContext,
-  slackInput,
-} from "./testkit/ChannelHarness.ts";
-
-const botModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" } as const;
-
-/** "look:" starts a GOAT Bot turn, "stop:<task>" stops one, "more:<task> text" follows one up. */
-const script = (input: ChannelReceptionInput) => {
-  const text = input.inputText ?? "";
-  if (input.mode === "input" && text.startsWith("look:"))
-    return Effect.succeed({
-      replyText: "Looking now.",
-      action: {
-        type: "run_turn" as const,
-        title: text.slice(5).trim(),
-        instruction: text.slice(5).trim(),
-      },
-    });
-  if (input.mode === "input" && text.startsWith("stop:"))
-    return Effect.succeed({
-      replyText: "Stopping.",
-      action: { type: "stop_work" as const, taskId: text.slice(5).trim() as ChannelTaskId },
-    });
-  if (input.mode === "input" && text.startsWith("answer:")) {
-    const [taskId, questionId, ...answer] = text.slice(7).split(" ");
-    return Effect.succeed({
-      replyText: "Passing that on.",
-      action: {
-        type: "answer_question" as const,
-        taskId: taskId as ChannelTaskId,
-        questionId: questionId as never,
-        answer: answer.join(" "),
-      },
-    });
-  }
-  if (input.mode === "input" && text.startsWith("more:"))
-    return Effect.succeed({
-      replyText: "Passing that on.",
-      action: { type: "follow_up" as const, taskId: text.slice(5).split(" ")[0] as ChannelTaskId },
-    });
-  return defaultScript(input);
-};
-
-const sessionHarness = () => {
-  const harness = makeHarness({
-    botWorkspace: true,
-    settingsLayer: ServerSettings.layerTest({
-      textGenerationModelSelection: modelSelection,
-      defaultRuntimeMode: "full-access",
-      goatBotModelSelection: botModel,
-    }).pipe(Layer.orDie),
-  });
-  harness.script.current = script;
-  return harness;
-};
-
-/** One message from the person, read and dispatched, with worker runs reconciled. */
-const ask = (text: string, key: string, context: typeof rpcContext = rpcContext) =>
-  Effect.gen(function* () {
-    const gateway = yield* ChannelGateway.ChannelGateway;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const reception = yield* ChannelReceptionService.ChannelReceptionService;
-    yield* runtime.drain;
-    const ingested = yield* gateway.ingest(goatInput(text, key), context);
-    yield* reception.receive(ingested.inputId, runtime.ownerToken);
-    yield* runtime.drain;
-    yield* reports.reconcile(runtime.ownerToken);
-    // A stop or follow-up creates no task; callers that started one read it.
-    return (yield* ledger.getTask(taskIdFor(ingested.inputId, 0)))?.task as ChannelTask;
-  });
-
-const settle = Effect.gen(function* () {
-  const runtime = yield* ChannelRuntime.ChannelRuntime;
-  const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-  yield* reports.reconcile(runtime.ownerToken);
-  yield* runtime.drain;
-});
-
-/** Links Slack user U2 as a teammate, who sees the owner's other work only with orchestration:read. */
-const linkTeammate = Effect.gen(function* () {
-  const identities = yield* ChannelIdentityService.ChannelIdentityService;
-  const gateway = yield* ChannelGateway.ChannelGateway;
-  const { code } = yield* identities.createLink(
-    {
-      connectionId: "slack-1",
-      runtimeModeCeiling: "auto-accept-edits",
-      grantedScopes: ["orchestration:read", "orchestration:operate"],
-    },
-    { ...owner, principalId: "teammate", displayName: "Teammate" },
-  );
-  yield* gateway.linkIdentity(
-    {
-      connectionId: "slack-1",
-      externalActorId: "U2",
-      code,
-      idempotencyKey: "link-U2",
-      replyAddress: slackInput("", "unused").replyAddress,
-    },
-    slackContext,
-  );
-});
-
-const narrowTeammate = Effect.flatMap(
-  SqlClient.SqlClient,
-  (sql) =>
-    sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`,
-);
-
-/** The teammate's message in one Slack thread, read but not yet dispatched. */
-const receiveFromTeammate = (text: string, key: string) =>
-  Effect.gen(function* () {
-    const gateway = yield* ChannelGateway.ChannelGateway;
-    const reception = yield* ChannelReceptionService.ChannelReceptionService;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    yield* runtime.drain;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const ingested = yield* gateway.ingest(
-      slackInput(text, key, "1760000000.000900", "U2"),
-      slackContext,
-    );
-    yield* reception.receive(ingested.inputId, runtime.ownerToken);
-    return (yield* ledger.getTask(taskIdFor(ingested.inputId, 0)))!.task;
-  });
-
-const dispatchNow = (task: ChannelTask) =>
-  Effect.gen(function* () {
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
-    yield* dispatcher.dispatch(task.taskId, runtime.ownerToken);
-    return yield* current(task.taskId);
-  });
-
-/** The teammate's message, claimed for a session turn whose launch has not run yet. */
-const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_write") =>
-  Effect.gen(function* () {
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const task = yield* receiveFromTeammate("look: claimed look", key);
-    yield* commitTransition(
-      ledger,
-      (yield* ledger.getTask(task.taskId))!,
-      {
-        type: "task.dispatch.claimed",
-        payload: {
-          generation: task.generation,
-          target: {
-            environmentId,
-            projectId,
-            modelSelection: botModel,
-            runtimeMode: "auto-accept-edits",
-            interactionMode: "default",
-            workspaceStrategy: { type: "root" },
-            ...(memoryGrantCeiling === undefined ? {} : { memoryGrantCeiling }),
-          },
-          leaseExpiresAt: "2026-10-12T00:00:00.000Z",
-        },
-      },
-      { owner: runtime.ownerToken },
-    );
-    return (yield* ledger.getTask(task.taskId))!;
-  });
-
-const current = (taskId: ChannelTaskId) =>
-  ChannelLedger.ChannelLedger.pipe(
-    Effect.flatMap((ledger) => ledger.getTask(taskId)),
-    Effect.map((stored) => stored!.task),
-  );
+  ask,
+  botModel,
+  current,
+  runsOf,
+  sessionHarness,
+  settle,
+} from "./ChannelBotSession.testkit.ts";
 
 const usage = (fields: Record<string, unknown>) => [
   {
@@ -221,10 +45,6 @@ const usage = (fields: Record<string, unknown>) => [
     },
   },
 ];
-
-/** The thread's run ids in order, and whether a send steered into them. */
-const runsOf = (harness: ReturnType<typeof sessionHarness>, threadId: ThreadId) =>
-  harness.world.runs.get(threadId) ?? [];
 
 /** A report as the session run with this server-issued run id would make it. */
 const reportFrom = (
@@ -257,114 +77,6 @@ const reportFrom = (
   );
 
 describe("GOAT Bot sessions", () => {
-  it.effect(
-    "builds a session's journal from the requester's current scopes, not the ones at intake",
-    () => {
-      const harness = sessionHarness();
-      return Effect.gen(function* () {
-        yield* setupBot;
-        yield* ask("look: payroll export", "j0");
-        yield* linkTeammate;
-        const task = yield* receiveFromTeammate("look: check the build", "j1");
-        assert.include(task.requester.grantedScopes, "orchestration:read");
-        yield* narrowTeammate;
-        const served = yield* dispatchNow(task);
-        const launch = harness.world.launches.find(
-          (candidate) => candidate.threadId === served.worker?.threadId,
-        );
-        assert.include(launch!.initialMessage!.text, "check the build");
-        assert.notInclude(launch!.initialMessage!.text, "payroll export");
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
-
-  it.effect("does not reuse a session whose prefix was built under wider scopes", () => {
-    const harness = sessionHarness();
-    return Effect.gen(function* () {
-      yield* setupBot;
-      yield* ask("look: payroll export", "w0");
-      yield* linkTeammate;
-      const wide = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "w1"));
-      const wideThread = wide.worker!.threadId;
-      const wideLaunch = harness.world.launches.find((launch) => launch.threadId === wideThread);
-      assert.include(wideLaunch!.initialMessage!.text, "payroll export");
-      harness.world.setStatus(wideThread, 1, "completed", "Done.");
-      yield* settle;
-      yield* narrowTeammate;
-      const narrow = yield* dispatchNow(yield* receiveFromTeammate("look: second look", "w2"));
-      assert.notStrictEqual(narrow.worker?.threadId, wideThread);
-      assert.isFalse(
-        harness.world.sends.some(
-          (send) => send.threadId === wideThread && JSON.stringify(send).includes("second look"),
-        ),
-      );
-      const narrowLaunch = harness.world.launches.find(
-        (launch) => launch.threadId === narrow.worker?.threadId,
-      );
-      assert.notInclude(narrowLaunch!.initialMessage!.text, "payroll export");
-    }).pipe(Effect.provide(harness.layer));
-  });
-
-  it.effect(
-    "refuses to start a session for a requester whose link was removed after the task was claimed",
-    () => {
-      const harness = sessionHarness();
-      return Effect.gen(function* () {
-        yield* setupBot;
-        yield* linkTeammate;
-        const stored = yield* claimedFromTeammate("u1");
-        const identities = yield* ChannelIdentityService.ChannelIdentityService;
-        yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U2" });
-        const session = yield* ChannelBotSession.ChannelBotSession;
-        const runtime = yield* ChannelRuntime.ChannelRuntime;
-        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "failed");
-        const after = yield* current(stored.task.taskId);
-        assert.strictEqual(after.status, "failed");
-        assert.lengthOf(harness.world.launches, 0);
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
-
-  it.effect(
-    "starts a session with no more memory than the requester's current scopes allow",
-    () => {
-      const harness = sessionHarness();
-      return Effect.gen(function* () {
-        yield* setupBot;
-        yield* linkTeammate;
-        // The claim recorded memory reads; the teammate's link grants none now.
-        const stored = yield* claimedFromTeammate("m1", "read");
-        const session = yield* ChannelBotSession.ChannelBotSession;
-        const runtime = yield* ChannelRuntime.ChannelRuntime;
-        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "served");
-        assert.lengthOf(harness.world.launches, 1);
-        assert.isUndefined(harness.world.launches[0]!.initialMessage?.memoryGrantCeiling);
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
-
-  it.effect(
-    "binds a task already sent into its session after a narrowing instead of sending it again",
-    () => {
-      const harness = sessionHarness();
-      return Effect.gen(function* () {
-        yield* setupBot;
-        yield* linkTeammate;
-        const served = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "b1"));
-        yield* narrowTeammate;
-        // A pass that sent the task but died before binding runs again under the narrowed link.
-        const ledger = yield* ChannelLedger.ChannelLedger;
-        const session = yield* ChannelBotSession.ChannelBotSession;
-        const runtime = yield* ChannelRuntime.ChannelRuntime;
-        const stored = (yield* ledger.getTask(served.taskId))!;
-        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "served");
-        assert.lengthOf(harness.world.launches, 1);
-        assert.lengthOf(harness.world.sends, 0);
-        assert.strictEqual((yield* current(served.taskId)).worker?.runId, served.worker?.runId);
-      }).pipe(Effect.provide(harness.layer));
-    },
-  );
-
   it.effect(
     "runs two requests in one conversation in the same session thread, each as its own run",
     () => {
