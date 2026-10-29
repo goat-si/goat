@@ -10,7 +10,7 @@ import { promptLinkAppPath } from "@goat/shared/promptLinks";
 import { resolveRemotePairingTarget } from "@goat/shared/remote";
 import { useRouter } from "@tanstack/react-router";
 import * as Effect from "effect/Effect";
-import { AtomRegistry } from "effect/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 import * as Stream from "effect/Stream";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -18,6 +18,7 @@ import { openFileInPreview, openUrlInPreview } from "../../browser/openFileInPre
 import { isPreviewAvailableFor } from "../../browser/previewRuntime";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { requestConfirmDialog } from "../../confirmDialog";
+import { environmentCatalog } from "../../connection/catalog";
 import { connectPairing } from "../../connection/onboarding";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { useScratchProject } from "../../hooks/useScratchProject";
@@ -34,6 +35,7 @@ import { allReachableShellsLiveAtom } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { isPairingLinkSpent, markPairingLinkSpent } from "./spentPairingLinks";
 
 /** A link handed over by the OS is a plain click: nothing about it asks for the browser. */
 const externalClick = {
@@ -43,10 +45,18 @@ const externalClick = {
   ctrlKey: false,
 };
 
+// With Local off the catalog holds only saved environments, loaded before it reports ready,
+// so a ready empty catalog has nothing left to discover.
+const projectDiscoverySettledAtom = Atom.make((get) => {
+  if (get(allReachableShellsLiveAtom)) return true;
+  const catalog = get(environmentCatalog.catalogValueAtom);
+  return catalog.isReady && catalog.entries.size === 0 && isLocalEnvironmentDisabled();
+}).pipe(Atom.withLabel("web-desktop-link-project-discovery-settled"));
+
 /** Resolves once every reachable environment has reported its projects or settled offline. */
 const projectsSettled = (): Promise<void> =>
   Effect.runPromise(
-    AtomRegistry.toStream(appAtomRegistry, allReachableShellsLiveAtom).pipe(
+    AtomRegistry.toStream(appAtomRegistry, projectDiscoverySettledAtom).pipe(
       Stream.filter((settled) => settled),
       Stream.runHead,
       Effect.asVoid,
@@ -93,7 +103,6 @@ export function DesktopWebLinkCoordinator() {
   const connectPairingEnvironment = useAtomCommand(connectPairing, { reportFailure: false });
   const httpBaseUrl = useEnvironmentHttpBaseUrl(primaryEnvironment?.environmentId ?? null);
   const queueRef = useRef(Promise.resolve());
-  const pairedUrlsRef = useRef(new Set<string>());
   const webLinks = window.desktopBridge?.webLinks;
   // A sync IPC read; the setting only changes across a relaunch.
   const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
@@ -121,7 +130,7 @@ export function DesktopWebLinkCoordinator() {
   // Any page can open a pairing link, so the user confirms the host before its one-time token is spent.
   const pairFromLink = async (pairingUrl: string) => {
     // A repeated click would only ask again and then fail on the spent token.
-    if (pairedUrlsRef.current.has(pairingUrl)) return;
+    if (isPairingLinkSpent(pairingUrl)) return;
     // The origin keeps the scheme visible, so a plain HTTP server is not mistaken for HTTPS.
     let origin: string;
     try {
@@ -137,7 +146,7 @@ export function DesktopWebLinkCoordinator() {
       if (!isAtomCommandInterrupted(result)) reportPairingFailure(squashAtomCommandFailure(result));
       return;
     }
-    pairedUrlsRef.current.add(pairingUrl);
+    markPairingLinkSpent(pairingUrl);
     toastManager.add({
       type: "success",
       title: "Device added",
@@ -214,7 +223,7 @@ export function DesktopWebLinkCoordinator() {
     // A connected server publishes its config before its project snapshot, so a PR link
     // delivered at launch would miss its project and fall through to the browser. Hold PR
     // links, and only those, until discovery settles; an ordinary link never waits for it.
-    // With Local off, discovery settles on the saved remote environments alone.
+    // With Local off, discovery settles on the saved environments, or at once when none are saved.
     const hold =
       openPullRequestsInApp && sourceControlClients.parseChangeRequestUrl(url) !== null
         ? projectsSettled()

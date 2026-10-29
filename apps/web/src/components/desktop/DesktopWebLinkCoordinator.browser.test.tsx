@@ -49,6 +49,20 @@ vi.mock(import("../../state/shell"), async (original) => {
   const { Atom } = await import("effect/reactivity");
   return { ...(await original()), allReachableShellsLiveAtom: Atom.make(false) };
 });
+vi.mock(import("../../connection/catalog"), async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  const actual = await original();
+  return {
+    ...actual,
+    environmentCatalog: {
+      ...actual.environmentCatalog,
+      // Kept alive so a value set before the coordinator subscribes is not dropped.
+      catalogValueAtom: Atom.make({ isReady: false, entries: new Map() }).pipe(
+        Atom.keepAlive,
+      ) as never,
+    },
+  };
+});
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
   readProjects: () => state.projects,
@@ -80,10 +94,16 @@ vi.mock(import("../../state/use-atom-command"), async (original) => {
 });
 
 import { AppAtomRegistryProvider, appAtomRegistry } from "../../rpc/atomRegistry";
+import { environmentCatalog } from "../../connection/catalog";
 import { allReachableShellsLiveAtom } from "../../state/shell";
 import { DesktopWebLinkCoordinator } from "./DesktopWebLinkCoordinator";
+import { resetSpentPairingLinksForTests } from "./spentPairingLinks";
 
 const discoverySettled = allReachableShellsLiveAtom as Atom.Writable<boolean>;
+const catalog = environmentCatalog.catalogValueAtom as unknown as Atom.Writable<{
+  isReady: boolean;
+  entries: Map<string, unknown>;
+}>;
 const environmentId = EnvironmentId.make("local");
 const projectId = ProjectId.make("effect");
 const project = {
@@ -125,6 +145,8 @@ function setup() {
   state.localEnvironmentDisabled = false;
   state.projects = [];
   appAtomRegistry.set(discoverySettled, false);
+  appAtomRegistry.set(catalog, { isReady: false, entries: new Map() });
+  resetSpentPairingLinksForTests();
 }
 
 /** Mounts the coordinator behind a desktop bridge that hands over `urls` once the renderer is ready. */
@@ -207,6 +229,26 @@ it("skips a repeat of a pairing link that already paired", async () => {
   ]);
 });
 
+it("does not ask again for a pairing link that paired before the coordinator remounted", async () => {
+  setup();
+  {
+    // /welcome and the app shell each mount their own coordinator.
+    await using _welcome = await mount(pairLink);
+    await vi.waitFor(() =>
+      expect(state.connectPairing).toHaveBeenCalledExactlyOnceWith({ pairingUrl }),
+    );
+  }
+  await using _shell = await mount(pairLink, legacyOtherPairLink);
+  await vi.waitFor(() =>
+    expect(state.connectPairing).toHaveBeenLastCalledWith({ pairingUrl: otherPairingUrl }),
+  );
+  expect(state.confirm).toHaveBeenCalledTimes(2);
+  expect(state.connectPairing.mock.calls).toEqual([
+    [{ pairingUrl }],
+    [{ pairingUrl: otherPairingUrl }],
+  ]);
+});
+
 it("pairs with Local environment disabled, where there is no primary environment to wait for", async () => {
   setup();
   state.localEnvironmentDisabled = true;
@@ -219,6 +261,7 @@ it("pairs with Local environment disabled, where there is no primary environment
 it("holds a PR link for a saved remote project that arrives late with Local environment disabled", async () => {
   setup();
   state.localEnvironmentDisabled = true;
+  appAtomRegistry.set(catalog, { isReady: true, entries: new Map([["remote", {}]]) });
   await using _coordinator = await mount(pullRequestUrl);
   expect(state.navigate).not.toHaveBeenCalled();
   expect(state.openScratchProject).not.toHaveBeenCalled();
@@ -233,4 +276,13 @@ it("holds a PR link for a saved remote project that arrives late with Local envi
   });
   expect(state.navigate).toHaveBeenCalledExactlyOnceWith(pullRequestView);
   expect(state.openScratchProject).not.toHaveBeenCalled();
+});
+
+it("falls back for a PR link when Local environment is disabled and no environment is saved", async () => {
+  setup();
+  state.localEnvironmentDisabled = true;
+  appAtomRegistry.set(catalog, { isReady: true, entries: new Map() });
+  await using _coordinator = await mount(pullRequestUrl);
+  await vi.waitFor(() => expect(state.openScratchProject).toHaveBeenCalledOnce());
+  expect(state.navigate).not.toHaveBeenCalled();
 });
