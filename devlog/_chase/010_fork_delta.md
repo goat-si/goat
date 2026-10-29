@@ -175,6 +175,11 @@ G13 `goat-copy`, G14 `launch-watch`.
 - 정책: 파일 미리보기의 PDF는 GOAT PDF.js 뷰어(페이지 이동, 확대, 검색)로 보인다. upstream이 브라우저 미리보기 PDF를 native `<embed>`로 보내는 변경(#21095)은 라우팅만 받고 `BrowserDocumentFrame`은 GOAT 뷰어를 유지한다. 어느 쪽으로 갈지는 #515에서 정한다.
   upstream 자체 뷰어(`apps/web/src/components/files/PdfViewer.tsx`, `pdfViewer.css`, `readBoundedDocument.ts`)는 GOAT에서 쓰지 않는다. 사이클 261028 B18(PR #1923)이 이 세 파일을 지운다. 그 PR이 랜딩한 뒤에는 upstream이 이 세 파일을 바꿔도 받지 않는다.
 
+### `peer-links` upstream 연결 환경 데이터 모델
+
+- 경로: upstream `apps/server/src/peer`, `packages/contracts/src/peerLink.ts`, `apps/server/src/persistence/Migrations/070_PeerLinks.ts`, `071_PeerLinkFence.ts`, `072_WaitingLinkRequestIndex.ts`
+- 정책: upstream의 peer link store, `environmentId` 라우팅, `delegated_task.remote.*` 이벤트 모델은 받지 않는다. GOAT fleet는 `LinkedHosts`, `HubNodes`, `SshRemoteDispatch`의 `host` 라우팅, `RemoteDelegatedTasks`가 정본이다. upstream 070-072는 GOAT 70-72와 충돌하므로 지금은 옮기지 않고, 이후 사이클이 upstream 마이그레이션 73 이상을 받을 때 재실행 안전 스키마로 예약한다. 모델 검색, reconnect/history, @ picker, Copy thread 같은 독립 개선은 GOAT 코드에 adapt한다.
+
 ### `remote-reports` 원격 보고와 원격 위임
 
 - 커밋: #5 #10 #6

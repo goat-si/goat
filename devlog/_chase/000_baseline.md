@@ -2,21 +2,21 @@
 
 > T3 축의 기준선이다. Cua Driver 축은 [20_cua_baseline](./20_cua_baseline.md).
 
-> 갱신: 2026-10-28 (사이클 261028 수동 선별 랜딩, #1982 → dev `5a9569eebf`. 내용 기준 reviewed-through `36d4d711b7`, merge-base는 `2c592a108`)
+> 갱신: 2026-10-29 (사이클 261029 수동 선별 랜딩, #2163 → dev `a4a06af2ac`. 내용 기준 reviewed-through `9826dbb990`, merge-base는 `2c592a108`)
 
 ## 현재 기준선
 
-| 항목                          | 값                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                                         |
-| GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                                      |
-| reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349)                      |
-| reviewed-through (내용 기준)  | `36d4d711b7` 2026-10-27 fix(server): bound hung delegated stop effects (#25675). 사이클 261028 랜딩, 다음 사이클의 시작점 |
-| 스캔한 GOAT dev               | `eb2a07db0` Merge pull request #1118 (사이클 261024b)                                                                     |
-| GOAT 고유 커밋                | 2073                                                                                                                      |
-| upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                                        |
-| trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                                               |
-| Node 고정                     | 루트 `engines.node` `26.12.1`, 서버 `^24.16.0 \|\| >=26.1.0` ([10.011](./_fin/10/10.011_t3_chase_node_pin.md), PR #1587)  |
+| 항목                          | 값                                                                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| upstream                      | `pingdotgg/t3code` `main` (remote `upstream`, `tagopt --no-tags`)                                                                               |
+| GOAT 통합 브랜치              | `goat-si/goat` `dev`                                                                                                                            |
+| reviewed-through (merge-base) | `2c592a108` 2026-10-24 fix(client-runtime): avoid duplicate handoff previews during startup (#24349)                                            |
+| reviewed-through (내용 기준)  | `9826dbb990` 2026-10-28 docs(agents): agents verify in a browser or simulator without asking (#26637). 사이클 261029 랜딩, 다음 사이클의 시작점 |
+| 스캔한 GOAT dev               | `a4a06af2ac` chore(chase): follow t3code main through 9826dbb990 (#2163)                                                                        |
+| GOAT 고유 커밋                | 2073                                                                                                                                            |
+| upstream 앞섬                 | 0 (2026-10-24 KST)                                                                                                                              |
+| trial merge 충돌              | 없음 ([10.013](./_fin/10/10.013_t3_chase_cycle_261024b.md))                                                                                     |
+| Node 고정                     | 루트 `engines.node` `26.12.1`, 서버 `^24.16.0 \|\| >=26.1.0` ([10.011](./_fin/10/10.011_t3_chase_node_pin.md), PR #1587)                        |
 
 `de49d637d`(2026-10-10)가 GOAT가 갈라진 fork point다. upstream 머지가 dev에 들어갈 때마다 merge-base가 그 머지의
 upstream parent로 전진하고, 그 값이 다음 reviewed-through가 된다. 이 표는 `devlog/_chase/scan.sh` 출력의 요약이며,
@@ -40,3 +40,4 @@ upstream은 하루에 약 50-100커밋씩 움직인다. 사이클이 길어질�
 | 261024b | 2026-10-24 | `d14ace823..2c592a108`                         | 7    | 7      | 머지, PR #1118 → dev `eb2a07db0`                                            | 10.013     |
 | 261026  | 2026-10-26 | `2c592a108..f0dd86f164`                        | 341  | 512    | 머지, PR #1767 squash → dev `c6b4131c76` (merge-base 전진 없음)             | 10.016     |
 | 261028  | 2026-10-28 | `f0dd86f164..36d4d711b7`                       | 147  | 수동   | 36 take, 62 adapt, 49 skip. 묶음 PR 27개 + 합친 PR #1982 → dev `5a9569eebf` | 10.017     |
+| 261029  | 2026-10-29 | `36d4d711b7..9826dbb990`                       | 169  | 수동   | 30 take, 50 adapt, 75 skip, 14 보류. 합친 PR #2163 → dev `a4a06af2ac`       | 10.018     |
