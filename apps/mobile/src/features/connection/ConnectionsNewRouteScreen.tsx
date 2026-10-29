@@ -83,9 +83,23 @@ export function ConnectionsNewRouteScreen({
   });
   // Fixed once the saved environments are known, so a hub paired elsewhere while this sheet is
   // open cannot turn "Connect hub" into "Change hub" and remove that hub on the next success.
-  const [openedIntent, setOpenedIntent] = useState<ConnectHubIntent | null>(null);
-  if (pairingReady && openedIntent === null) setOpenedIntent(resolvedIntent);
-  const intent = openedIntent ?? resolvedIntent;
+  const routeIdentity = JSON.stringify([
+    params.mode,
+    params.pairingUrl,
+    params.autoConnect,
+    params.routeFor,
+    params.intent,
+    params.replaceEnvironmentId,
+  ]);
+  const [openedIntent, setOpenedIntent] = useState<{
+    readonly routeIdentity: string;
+    readonly intent: ConnectHubIntent;
+  } | null>(null);
+  const routeIntent = openedIntent?.routeIdentity === routeIdentity ? openedIntent.intent : null;
+  if (pairingReady && routeIntent === null) {
+    setOpenedIntent({ routeIdentity, intent: resolvedIntent });
+  }
+  const intent = routeIntent ?? resolvedIntent;
   const copy = CONNECT_HUB_COPY[intent];
   const replaceEnvironmentId =
     params.replaceEnvironmentId ?? selectHubEnvironmentId(localEnvironments, savedHub.storedHubId);
