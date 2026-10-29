@@ -125,3 +125,44 @@ it.effect("typed text stays unverifiable, whatever the page answers about it", (
     ]);
   }),
 );
+
+it.effect(
+  "a tab click count of 2 or 3 reaches the browser as its click count; any other count sends nothing",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const ref = (yield* fixture.observe()).elements[0]!.ref;
+      const clicks = () => fixture.requests.filter((request) => request.operation === "click");
+      expect((yield* fixture.dispatch("click", { ref, count: 2 }))?.outcome).toBe("ok");
+      expect((yield* fixture.dispatch("right_click", { ref, count: 3 }))?.outcome).toBe("ok");
+      expect(clicks().map((request) => request.input)).toMatchObject([
+        { clickCount: 2 },
+        { clickCount: 3, button: "right" },
+      ]);
+      for (const count of [0, 4, 1.5, "2"]) {
+        const refused = yield* fixture.dispatch("click", { ref, count });
+        expect(refused?.error).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      }
+      expect(clicks()).toHaveLength(2);
+    }),
+);
+
+it.effect(
+  "a tab input's result carries its host time, also when the browser answered nothing",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const ref = (yield* fixture.observe()).elements[0]!.ref;
+      const timing = { ms: 0, phases: { driverMs: 0 } };
+      expect((yield* fixture.dispatch("click", { ref }))?.value).toEqual({
+        ok: true,
+        _timing: timing,
+      });
+      fixture.state.clickResult = undefined as never;
+      expect((yield* fixture.dispatch("press_key", { key: "Escape" }))?.value).toEqual({
+        _timing: timing,
+      });
+    }),
+);

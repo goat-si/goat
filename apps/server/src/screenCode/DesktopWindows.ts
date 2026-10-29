@@ -223,6 +223,16 @@ export const fitInputWindows = (
   return driverVal;
 };
 
+/** A tab input's answer with its host time when that still fits returnBytes; nothing answered is {}. */
+export const withInputTiming = (
+  value: unknown,
+  timing: InputTiming,
+  returnBytes: number,
+): unknown => {
+  if (value !== undefined && object(value) === undefined) return value;
+  return fitsInputBudget(object(value) ?? {}, undefined, returnBytes, timing) ?? value;
+};
+
 export const sheetParentId = (state: Record<string, unknown>): number | undefined => {
   const reason = typeof state.degraded_reason === "string" ? state.degraded_reason : "";
   if (state.degraded !== true && !reason.includes("window_is_sheet")) return undefined;

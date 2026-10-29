@@ -24,6 +24,7 @@ import {
   type ScreenHostDispatcher,
 } from "./ScreenHostBridge.ts";
 import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
+import { withInputTiming } from "./DesktopWindows.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
@@ -558,6 +559,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const operation = actions[call.method];
       if (!operation || call.method === "select_text")
         return yield* Effect.fail(fail("unsupported", "This tab operation is unavailable."));
+      const startedAt = yield* Clock.currentTimeMillis;
       // The caller's own tab, such as one goat_preview_open made, needs no separate claim.
       const ownedByCaller = current.control?.ownedByCaller === true;
       if (call.method !== "wait_for") {
@@ -684,9 +686,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             return yield* Effect.fail(
               fail("invalid_argument", "Use a current element or image point."),
             );
+          const count = arg.count;
+          if (
+            count !== undefined &&
+            !(Number.isInteger(count) && Number(count) >= 1 && Number(count) <= 3)
+          )
+            return yield* Effect.fail(fail("invalid_argument", "A tab click count is 1, 2 or 3."));
           input = {
             ...(locator ? { locator } : { x: point?.x, y: point?.y }),
             ...(call.method === "right_click" ? { button: "right" } : {}),
+            ...(count === undefined ? {} : { clickCount: count }),
           };
           break;
         }
@@ -837,6 +846,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       // A point, or a ref from an incomplete tree, carries its document so the browser's input
       // gate can refuse it.
       const pointDocument = point || documentBound ? bound.documentGeneration : undefined;
+      const sentAt = yield* Clock.currentTimeMillis;
       const result = yield* invoke(
         bound,
         context,
@@ -855,6 +865,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           }),
         ),
       );
+      const endedAt = yield* Clock.currentTimeMillis;
       // Navigation answers with the page it reached, as a click that navigated may.
       const reached =
         typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
@@ -887,7 +898,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const navigated = operation === "navigate" && typeof reached === "string";
       const confirmed = navigated || (seen?.effect === "confirmed" && Array.isArray(seen.evidence));
       return {
-        value: result,
+        value:
+          call.method === "close_tab"
+            ? result
+            : withInputTiming(
+                result,
+                { ms: endedAt - startedAt, phases: { driverMs: endedAt - sentAt } },
+                context.limits.returnBytes,
+              ),
         category: confirmed ? "confirmed" : "unverifiable",
         evidence: navigated
           ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]

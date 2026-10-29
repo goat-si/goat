@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/3";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/4";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -14,7 +14,9 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
-type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
+type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
+// ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
+// App observed lists only the acted element's own state change; read other elements with observe(). A key with no target and no modifiers carries no windows report.
 // confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
 // deciding whether to act again, and never resend it. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
@@ -37,7 +39,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>;
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3
   type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;

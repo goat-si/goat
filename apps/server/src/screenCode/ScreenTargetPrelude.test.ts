@@ -247,7 +247,7 @@ it.live(
       expect(result).toMatchObject({
         status: "completed",
         value: true,
-        contractVersion: "screen-target/3",
+        contractVersion: "screen-target/4",
       });
       const presses = sent.filter((entry) => entry.tool === "press_key");
       expect(presses).toHaveLength(2);
@@ -552,6 +552,45 @@ it.live(
           }).pipe(Layer.provide(NodeServices.layer)),
         ),
       );
+    });
+  },
+);
+
+it.live(
+  "a tab double click goes out once with count 2, a count outside 1 to 3 is refused unsent, and Done carries its time",
+  () => {
+    const clicks: Array<unknown> = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([formTab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "click") {
+          clicks.push(request.input);
+          return Effect.succeed({ ok: true } as A);
+        }
+        return Effect.succeed({
+          tabId: formTab.tabId,
+          url: formTab.url,
+          control: { owner: "unclaimed", generation: 0 },
+        } as A);
+      },
+    };
+    return Effect.gen(function* () {
+      const [result] = yield* runCells(broker, [
+        `const tab = await screen.tab({tabId: 'form'});
+      await tab.claim();
+      const done = await tab.click('#submit', { count: 2 });
+      let refused;
+      try { await tab.click('#submit', { count: 4 }); } catch (error) { refused = [error.code, error.nothingSent]; }
+      return { ms: typeof done.ms, driverMs: typeof done.phases?.driverMs, raw: done.result?._timing, refused };`,
+      ]);
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: {
+          status: "completed",
+          value: { ms: "number", driverMs: "number", refused: ["invalid_argument", true] },
+        },
+      });
+      expect(clicks).toMatchObject([{ clickCount: 2 }]);
     });
   },
 );
