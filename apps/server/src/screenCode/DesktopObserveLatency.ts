@@ -20,6 +20,11 @@ import { settleCaptureIfNeeded } from "./DesktopEvidence.ts";
 import { boundsOf, elementFrames, sameRect } from "./DesktopFrames.ts";
 import { inspectTreeElements } from "./DesktopInputGuards.ts";
 import {
+  beginObservedSheet,
+  commitObservedSheet,
+  resolveObservedSheet,
+} from "./DesktopInputPlan.ts";
+import {
   boundedReadDetail,
   buildObservedDraft,
   desktopQuery,
@@ -37,7 +42,7 @@ import {
 } from "./DesktopObserveRead.ts";
 import { buildScreenshotCapture, treeWindowBasis } from "./DesktopTargetPoints.ts";
 import { cleanActionText, isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
-import { checkWindowReplyState, sheetParentId } from "./DesktopWindows.ts";
+import { checkWindowReplyState } from "./DesktopWindows.ts";
 import {
   observationReplyBudget,
   type ScreenHostContext,
@@ -228,7 +233,7 @@ const parseDesktopTreeState = (input: {
           new Set(shown.flatMap((row) => (row.index === undefined ? [] : [row.index]))),
         )
       : treeText;
-  return { elements, rows, shown, shownText };
+  return { elements, markdown, rows, shown, shownText };
 };
 
 export interface DesktopObserveDeps {
@@ -239,6 +244,12 @@ export interface DesktopObserveDeps {
     needs: "nothing",
     tool: string,
     args: Record<string, unknown>,
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  /** The bound process's windows, read when a Go to Folder sheet may have opened or closed. */
+  readonly listWindows: (
+    bound: BoundWindow,
     call: ScreenHostCall,
     context: ScreenHostContext,
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
@@ -306,10 +317,11 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   const search = query && driverQuery(query);
   // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
   // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
+  let readWindow = bound.windowId;
   const read = Effect.fn("DesktopObserveLatency.read")(function* (
     limit: number,
     filter?: string,
-    windowId = bound.windowId,
+    windowId = readWindow,
   ) {
     const sentAt = yield* Clock.currentTimeMillis;
     const reply = yield* deps.boundRequest(
@@ -335,6 +347,9 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   };
   let limit: number = READ_BOUNDS[0];
   yield* settleCaptureIfNeeded(capture, bound, call.deadlineMillis);
+  const list = deps.listWindows(bound, call, context);
+  const begun = yield* beginObservedSheet(bound, capture, list, call.deadlineMillis);
+  readWindow = begun.readWindowId;
   let reply = yield* read(limit);
   const oversized = () =>
     object(driverValue(reply))?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE;
@@ -364,19 +379,21 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     if (checked.evictTarget) deps.targets.delete(bound.ref.id);
     return Effect.fail(checked.error);
   };
-  let state = yield* verifyReply(object(driverValue(reply)), bound.windowId);
+  const sheet = yield* resolveObservedSheet({
+    bound,
+    capture,
+    reply,
+    retire,
+    list,
+    filtered,
+    verify: verifyReply,
+    ...begun,
+    deadlineMillis: call.deadlineMillis,
+    read: (windowId) => read(limit, filtered ? search : undefined, windowId),
+  });
+  ({ reply } = sheet);
+  const { state, followedSheet, expectedWindowId } = sheet;
   const fromSheetId = bound.windowId;
-  const parentId = !capture ? sheetParentId(state) : undefined;
-  const followedSheet =
-    parentId !== undefined &&
-    parentId !== fromSheetId &&
-    (yield* Clock.currentTimeMillis) < call.deadlineMillis;
-  if (followedSheet && parentId !== undefined) {
-    retire();
-    reply = yield* read(limit, filtered ? search : undefined, parentId);
-    state = yield* verifyReply(object(driverValue(reply)), parentId);
-  }
-  const expectedWindowId = followedSheet && parentId !== undefined ? parentId : bound.windowId;
   const interactive = !capture && args.interactiveOnly === true;
   const nextBounds = followedSheet
     ? (boundsOf(state.window_bounds) ??
@@ -391,17 +408,20 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   if (kept === undefined) {
     const parseAt = yield* Clock.currentTimeMillis;
     const tree = parseDesktopTreeState({ state, filtered, query, interactive });
-    const omitted = query
-      ? queryOmission(state, tree.shown.length, filtered)
-      : limit < READ_BOUNDS[0]
-        ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
-        : [];
+    const omitted = [
+      ...(query
+        ? queryOmission(state, tree.shown.length, filtered)
+        : limit < READ_BOUNDS[0]
+          ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
+          : []),
+      ...sheet.extraOmitted,
+    ];
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
     bound.rows = tree.shown;
     bound.frames = elementFrames(tree.elements);
-    bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows);
+    bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows, tree.markdown);
     const basis = treeWindowBasis(bound.frames, nextBounds);
     if (basis === undefined) delete bound.framesBasis;
     else bound.framesBasis = basis;
@@ -446,19 +466,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     bound.observationId = observationId;
     if (!capture) {
       delete bound.needsSettleBeforeCapture;
-      if (followedSheet && parentId !== undefined) {
-        deps.setEpoch(nextEpoch);
-        Object.assign(bound, {
-          windowId: parentId,
-          epoch: nextEpoch,
-          ref: nextRef,
-          pointsStale: "restart" as const,
-        });
-        if (nextBounds === undefined) delete bound.windowBounds;
-        else bound.windowBounds = nextBounds;
-        bound.screenshots?.clear();
-        delete bound.latestScreenshot;
-      }
+      if (followedSheet) deps.setEpoch(nextEpoch);
+      commitObservedSheet(bound, sheet, nextRef, nextBounds);
       const snapshotId = string(state.snapshot_id);
       if (snapshotId !== undefined) bound.snapshotId = snapshotId;
       // A read its budget cut keeps the rest for observe({after}) until the next read.

@@ -57,6 +57,7 @@ import {
   type CellWindowsOutcome,
   matchBindWindow,
   parseWindowList,
+  type SheetTrigger,
   type WindowEntry,
   withHolders,
 } from "./DesktopWindows.ts";
@@ -115,6 +116,8 @@ export interface BoundWindow {
   elementsByToken?: ReadonlyMap<string, GuardElement>;
   /** Set when the previous input on this window clicked a table cell. */
   lastClickedTableCell?: number | string;
+  sheetTrigger?: SheetTrigger;
+  sheetOriginWindowId?: number;
   /** The window bounds held when those frames were read, until a screenshot shows them wrong. */
   framesBasis?: Rect;
   screenshots?: Map<string, ScreenshotBasis>;
@@ -418,6 +421,8 @@ export const createDesktopTargetHost = (deps: {
     observations,
     targets,
     boundRequest,
+    listWindows: (bound: BoundWindow, call: ScreenHostCall, context: ScreenHostContext) =>
+      request("list_windows", { pid: bound.pid }, call, context),
     epoch: () => epoch,
     setEpoch: (next: number) => void (epoch = next),
   };
@@ -467,13 +472,15 @@ export const createDesktopTargetHost = (deps: {
           acted,
           rows: bound.rows ?? [],
           runInput,
+          opensWindow: bound.sheetTrigger !== undefined,
           onSettled: () => {
             delete bound.needsSettleBeforeCapture;
           },
         });
       });
     if (call.method === "invoke_menu") {
-      const checkedMenu = validateMenuInput(callArgs(call.args), bound);
+      const tracker = trackerFor(context, bound.connectionGeneration);
+      const checkedMenu = validateMenuInput(callArgs(call.args), bound, tracker);
       if (checkedMenu.error || !checkedMenu.path)
         return yield* Effect.fail(checkedMenu.error ?? fail("invalid_argument"));
       const path = checkedMenu.path;
@@ -560,7 +567,8 @@ export const createDesktopTargetHost = (deps: {
         : yield* Effect.fail(fail("unavailable"));
     }
     const args = callArgs(call.args);
-    const prepared = prepareDesktopInput(call.method, args, bound, (el) => tokenOf(el, bound));
+    const tracker = trackerFor(context, bound.connectionGeneration);
+    const prepared = prepareDesktopInput(call.method, args, bound, tokenOf, tracker);
     if (prepared.error || !prepared.forwarded || !prepared.admission)
       return yield* Effect.fail(prepared.error ?? fail("invalid_argument"));
     const { forwarded, elementToken, actedRow, admission } = prepared;

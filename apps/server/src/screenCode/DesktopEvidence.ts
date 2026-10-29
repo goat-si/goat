@@ -27,6 +27,9 @@ import type { BoundWindow } from "./DesktopTargetHost.ts";
 
 /** How long a window's main run loop gets to show an input's effect before it is read. */
 const SETTLE_MS = 60;
+// A sheet such as Go to Folder can appear after the key's post returns; its input re-reads windows.
+const OPENING_POLL_MS = 100;
+const OPENING_POLLS = 4;
 
 /**
  * An input no longer waits for its effect to settle unless it reads the acted element back, so
@@ -236,6 +239,8 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     readonly rows: ReadonlyArray<DesktopRow>;
     readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
     readonly onSettled?: () => void;
+    /** The input should open a window, so its window read waits briefly for one to appear. */
+    readonly opensWindow?: boolean;
   }) {
     const { call, context, pid, windowId, tracker, tool, forwarded, acted, runInput } = deps;
     const read = (method: string, args: Record<string, unknown>, reserveAfterMs: number) =>
@@ -244,7 +249,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     const startedAt = yield* Clock.currentTimeMillis;
     // A simple key rarely opens or closes a window; the cell's end read still compares windows
     // against the cell's first baseline, so it reads one only when the cell has none yet.
-    if (isSimpleKey(tool, forwarded, acted)) {
+    if (deps.opensWindow !== true && isSimpleKey(tool, forwarded, acted)) {
       const seeds = !tracker.hasPid(pid);
       if (seeds)
         tracker.recordBefore(
@@ -289,8 +294,19 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       deps.onSettled?.();
     }
     const settledAt = yield* Clock.currentTimeMillis;
-    const postRaw = yield* read("list_windows", { pid }, 0);
-    const postWins = parseWindowList(postRaw, pid);
+    let postRaw = yield* read("list_windows", { pid }, 0);
+    let postWins = parseWindowList(postRaw, pid);
+    const preIds = new Set(preWins?.map((w) => w.window_id));
+    for (let polls = 0; deps.opensWindow === true && polls < OPENING_POLLS; polls++) {
+      // A window listed off screen first is not yet one a sheet read can follow.
+      if (!preWins || !postWins || postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen))
+        break;
+      const now = yield* Clock.currentTimeMillis;
+      if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
+      yield* Effect.sleep(OPENING_POLL_MS);
+      postRaw = yield* read("list_windows", { pid }, 0);
+      postWins = parseWindowList(postRaw, pid);
+    }
     tracker.recordAfter(pid, preWins, postWins);
     const postVerifyRaw =
       preVerifyRaw !== undefined ? yield* read("verify_state", verifyArgs, 0) : undefined;
