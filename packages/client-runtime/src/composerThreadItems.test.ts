@@ -1,9 +1,77 @@
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type HubNode } from "@goat/contracts";
 import { expect, it } from "vite-plus/test";
 
-import { matchComposerThreadItems, type ComposerThreadCandidate } from "./composerThreadItems.ts";
+import {
+  matchComposerThreadItems,
+  composerThreadHosts,
+  type ComposerThreadCandidate,
+} from "./composerThreadItems.ts";
 
 const environmentId = EnvironmentId.make("env-composer");
+
+it("admits only mounted online linked routes with unambiguous identity", () => {
+  const remote = EnvironmentId.make("remote");
+  const other = EnvironmentId.make("other");
+  const node = (
+    id: EnvironmentId | null,
+    name: string,
+    status: "online" | "offline" = "online",
+  ): HubNode =>
+    ({
+      nodeId: `linked:${name}`,
+      environmentId: id,
+      label: name,
+      kind: "linked",
+      status,
+      lastSeenAt: null,
+      addedBy: null,
+      routes: [
+        {
+          routeId: `linked:${name}`,
+          source: "linked-host",
+          status,
+          checkedAt: null,
+          lastSeenAt: null,
+          lastError: null,
+          target: {
+            kind: "linked",
+            name,
+            baseUrl: "https://example.test",
+            access: "read-only",
+            expiresAt: "2027-01-01T00:00:00.000Z",
+          },
+        },
+      ],
+    }) as HubNode;
+  const ssh = new Map([
+    [other, "collision"],
+    [remote, "same"],
+  ]);
+  const nodes = [
+    node(remote, "build"),
+    node(null, "unknown"),
+    node(other, "offline", "offline"),
+    node(remote, "collision"),
+    node(remote, "same"),
+  ];
+  expect([
+    ...composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh }),
+  ]).toEqual([[remote, "same"]]);
+  expect([
+    ...composerThreadHosts({
+      nodes: [node(remote, "build")],
+      mounted: new Set([remote]),
+      sshHosts: new Map(),
+    }),
+  ]).toEqual([[remote, "build"]]);
+  expect([
+    ...composerThreadHosts({
+      nodes: [node(remote, "build")],
+      mounted: new Set(),
+      sshHosts: new Map(),
+    }),
+  ]).toEqual([]);
+});
 
 function shell(
   id: string,

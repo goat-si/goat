@@ -180,6 +180,23 @@ describe("routeThreadContextRecord", () => {
 });
 
 describe("routeThreadContextRecords", () => {
+  it("routes linked thread chips only through an identity-verified host", () => {
+    const record = threadContextRecord(
+      { environmentId: cloudId, threadId: ThreadId.make("remote") },
+      "Remote",
+    );
+    const input = {
+      records: [record],
+      agentEnvironmentId: primaryId,
+      entries,
+      isDesktopRenderer: false,
+    };
+    expect(
+      routeThreadContextRecords({ ...input, verifiedHosts: new Map([[cloudId, "linked-box"]]) })
+        .routed[0]?.host,
+    ).toBe("linked-box");
+    expect(routeThreadContextRecords({ ...input, verifiedHosts: new Map() }).routed).toEqual([]);
+  });
   it("attaches the reachable part of a mixed drop and explains the refused part", () => {
     const { routed, refusal } = routeThreadContextRecords({
       records: [

@@ -51,6 +51,7 @@ import {
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
 
@@ -173,6 +174,7 @@ export function NewTaskDraftScreen(props: {
     reserveShare,
   } = useIncomingShare();
   const { projectScopes, selectedProject, selectedProjectKey } = flow;
+  const verifiedThreadHosts = useThreadContextHosts(selectedProject?.environmentId ?? null);
   useRememberThreadProject(
     servesRoute &&
       selectedProject &&
@@ -788,6 +790,7 @@ export function NewTaskDraftScreen(props: {
       text: draft.text,
       records: draft.context?.records ?? [],
       environmentId: selectedProject.environmentId,
+      verifiedHosts: verifiedThreadHosts,
     })[0];
     if (strandedThread) {
       const owner =

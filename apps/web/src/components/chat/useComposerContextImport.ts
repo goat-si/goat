@@ -56,6 +56,7 @@ import type { ThreadContextRecord } from "@goat/contracts";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { routeThreadContextRecords } from "~/lib/threadContextRoute";
+import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 import { countPreparingComposerImages } from "./preparingComposerImages";
 
 const isUnreachable = Schema.is(
@@ -107,6 +108,7 @@ export function useComposerContextImport(input: {
     pendingThreadImportsRef,
     addComposerFilesToDraft,
   } = input;
+  const verifiedHosts = useThreadContextHosts(environmentId);
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const addComposerDraftTerminalContexts = useComposerDraftStore(
@@ -278,6 +280,7 @@ export function useComposerContextImport(input: {
       agentEnvironmentId: environmentId,
       entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
       isDesktopRenderer: window.desktopBridge !== undefined,
+      verifiedHosts,
     });
     if (refusal) toastManager.add({ type: "error", ...refusal });
     return routed;

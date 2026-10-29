@@ -6,6 +6,8 @@ import type { ComposerTextPaste } from "../../native/GoatComposerEditor.types";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import { useAtomValue } from "@effect/atom-react";
@@ -91,13 +93,10 @@ import { useScaledTextRole, type ScaledTextRole } from "../settings/appearance/u
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
-import { Menu } from "../../components/ui/Menu";
 import type { ActiveTurnComposerAction } from "@goat/client-runtime/state/composer-dispatch";
 import type { FollowUpBehavior } from "../../lib/followUpBehavior";
-import {
-  resolveComposerSendPresentation,
-  type ComposerSendPresentation,
-} from "./composerSendPresentation";
+import { resolveComposerSendPresentation } from "./composerSendPresentation";
+import { FOLLOW_UP_ACTION_LABEL, SendActionButton } from "./SendActionButton";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
 import { ComposerPopoverAnchor } from "./ComposerPopoverAnchor";
 import { ComposerQueuedEditAttachments } from "./ComposerQueuedEdit";
@@ -320,61 +319,6 @@ const COMPOSER_ATTACHMENT_ENTERING =
 
 const AnimatedGlassSurface = Animated.createAnimatedComponent(GlassSurface);
 
-const FOLLOW_UP_ACTION_LABEL = {
-  queue: "Queue",
-  steer: "Steer now",
-  restart: "Restart turn",
-} as const;
-
-const FOLLOW_UP_ACTION_SUBTITLE = {
-  queue: "Run after the current turn",
-  steer: "Interrupt what the agent is doing",
-  restart: "Start the turn over with this message",
-} as const;
-
-function SendActionButton(props: {
-  readonly size?: "regular" | "large";
-  readonly accessibilityLabel: string;
-  readonly presentation: ComposerSendPresentation;
-  readonly disabled: boolean;
-  readonly onSend: (followUp?: ActiveTurnComposerAction) => void;
-}) {
-  const { presentation } = props;
-  const button = (
-    <ComposerActionButton
-      accessibilityLabel={props.accessibilityLabel}
-      size={props.size}
-      icon={presentation.icon}
-      variant="primary"
-      disabled={props.disabled}
-      onPress={() => props.onSend()}
-    />
-  );
-  if (!presentation.offersFollowUpChoice || presentation.action === null || props.disabled) {
-    return button;
-  }
-  const actions = [presentation.action, presentation.alternate].filter(
-    (action): action is ActiveTurnComposerAction => action !== null,
-  );
-  return (
-    <Menu
-      accessibilityLabel="Choose how to send this message"
-      shouldOpenOnLongPress
-      actions={actions.map((action) => ({
-        id: action,
-        title: FOLLOW_UP_ACTION_LABEL[action],
-        subtitle: FOLLOW_UP_ACTION_SUBTITLE[action],
-        state: action === presentation.action ? ("on" as const) : ("off" as const),
-      }))}
-      onPressAction={({ nativeEvent }) =>
-        props.onSend(nativeEvent.event as ActiveTurnComposerAction)
-      }
-    >
-      {button}
-    </Menu>
-  );
-}
-
 export function ComposerSurface(props: {
   readonly children: ReactNode;
   readonly style: ViewStyle;
@@ -535,6 +479,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     });
   };
   const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
+  const verifiedThreadHosts = useThreadContextHosts(props.environmentId);
   const usageLimitsOffered =
     selectedProviderStatus !== null &&
     hasProviderUsageLimits(
@@ -686,6 +631,21 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
     const draftAtSend = getComposerDraftSnapshot(composerDraftKey);
+    if (
+      threadContextsOutsideEnvironment({
+        text: draftAtSend.text,
+        records: draftAtSend.context?.records ?? [],
+        environmentId: props.environmentId,
+        verifiedHosts: verifiedThreadHosts,
+      }).length > 0
+    ) {
+      inFlightThreadIdsRef.current.delete(threadKey);
+      Dialog.alert(
+        "Thread route unavailable",
+        "Reconnect the environment and resolve any host name collision before sending.",
+      );
+      return;
+    }
     const stillSendable = () => {
       const draft = getComposerDraftSnapshot(composerDraftKey);
       return (

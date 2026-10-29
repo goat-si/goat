@@ -1,10 +1,54 @@
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@goat/contracts";
+import type { EnvironmentId, HubNode, ScopedThreadRef, ThreadId } from "@goat/contracts";
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@goat/shared/paletteSearch";
 
 import type { EnvironmentThreadShell } from "./state/models.ts";
 import { threadSearchSubject, type ThreadSearchShell } from "./state/threadSearch.ts";
 
 const COMPOSER_THREAD_RESULT_LIMIT = 5;
+
+export function composerThreadHosts(input: {
+  readonly nodes: ReadonlyArray<HubNode>;
+  readonly mounted: ReadonlySet<EnvironmentId>;
+  readonly sshHosts: ReadonlyMap<EnvironmentId, string>;
+}): Map<EnvironmentId, string> {
+  const names = new Map<string, Set<EnvironmentId | null>>();
+  const remember = (name: string, id: EnvironmentId | null) => {
+    const ids = names.get(name) ?? new Set<EnvironmentId | null>();
+    ids.add(id);
+    names.set(name, ids);
+  };
+  for (const [id, host] of input.sshHosts) remember(host, id);
+  for (const node of input.nodes)
+    for (const route of node.routes) {
+      if (route.target.kind === "linked") remember(route.target.name, node.environmentId);
+      if (route.target.kind === "ssh") remember(route.target.alias, node.environmentId);
+    }
+  const safe = (name: string, id: EnvironmentId) => {
+    const ids = names.get(name);
+    return ids?.size === 1 && ids.has(id);
+  };
+  const result = new Map<EnvironmentId, string>();
+  for (const [id, host] of input.sshHosts) {
+    const node = input.nodes.find((candidate) => candidate.environmentId === id);
+    if (input.mounted.has(id) && node?.status !== "offline" && safe(host, id)) result.set(id, host);
+  }
+  for (const node of input.nodes) {
+    const id = node.environmentId;
+    if (id === null || !input.mounted.has(id) || node.status === "offline" || result.has(id))
+      continue;
+    for (const route of node.routes) {
+      if (
+        route.target.kind === "linked" &&
+        route.status === "online" &&
+        safe(route.target.name, id)
+      ) {
+        result.set(id, route.target.name);
+        break;
+      }
+    }
+  }
+  return result;
+}
 
 export type ComposerThreadCandidate = ThreadSearchShell &
   Pick<EnvironmentThreadShell, "archivedAt" | "lineage">;

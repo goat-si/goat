@@ -1,7 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
-import type { ConnectionCatalogEntry } from "@goat/client-runtime/connection";
-import { environmentCatalog } from "~/connection/catalog";
-import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
+import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
@@ -61,35 +58,7 @@ const COMPOSER_PULL_REQUEST_RESULT_LIMIT = 12;
 const EMPTY_PULL_REQUEST_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> =
   [];
 
-const EMPTY_SSH_HOSTS: ReadonlyMap<EnvironmentId, string> = new Map();
 const EMPTY_COMPUTER_USE_APPS: ReadonlyArray<ComputerUseApp> = [];
-
-function threadContextSshHosts(
-  entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>,
-  agentEnvironmentId: EnvironmentId,
-  isDesktopRenderer: boolean,
-) {
-  const hosts = new Map<EnvironmentId, string>();
-  for (const threadEnvironmentId of entries.keys()) {
-    const route = resolveThreadContextRoute({
-      agentEnvironmentId,
-      threadEnvironmentId,
-      entries,
-      isDesktopRenderer,
-    });
-    if (route.kind === "ssh") hosts.set(threadEnvironmentId, route.host);
-  }
-  return hosts;
-}
-
-// Keep the source hook with the derivation so the compiler can cache it across composer renders.
-function useThreadContextSshHosts(environmentId: EnvironmentId, active: boolean) {
-  const entries = useAtomValue(environmentCatalog.catalogValueAtom).entries;
-  const isDesktopRenderer = window.desktopBridge !== undefined;
-  return active
-    ? threadContextSshHosts(entries, environmentId, isDesktopRenderer)
-    : EMPTY_SSH_HOSTS;
-}
 
 /** Builds the @, /, $ and # suggestion lists, running the searches each trigger needs. */
 export function useComposerMenuItems({
@@ -145,7 +114,7 @@ export function useComposerMenuItems({
     pullRequestTextQuery === debouncedPullRequestTextQuery ? pullRequestTextQuery : null;
   const isPathTrigger = composerTriggerKind === "path";
   const environmentThreadShells = useThreadShells(isPathTrigger);
-  const sshHostsByEnvironment = useThreadContextSshHosts(environmentId, isPathTrigger);
+  const sshHostsByEnvironment = useThreadContextHosts(environmentId, isPathTrigger);
   const activeShell = environmentThreadShells.find(
     (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
   );

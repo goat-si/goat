@@ -133,6 +133,43 @@ beforeEach(() => {
 });
 
 describe("mobile context clipboard imports", () => {
+  it("imports a linked thread only when its route identifies the source environment", async () => {
+    const result = await importComposerContextClipboard(
+      mixedClipboard,
+      0,
+      new AbortController().signal,
+      0,
+      EnvironmentId.make("destination"),
+      new Map([[foreignThread.environmentId, "linked-box"]]),
+    );
+    expect(result?.context.records).toContainEqual(
+      expect.objectContaining({
+        kind: "thread",
+        threadId: foreignThread.threadId,
+        host: "linked-box",
+      }),
+    );
+    const mismatch = { ...foreignThread, host: "different-host" };
+    const clipboard = {
+      text: formatComposerContextReference(mismatch),
+      html: "",
+      fragment: encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: mismatch.environmentId },
+        records: [mismatch],
+      })!,
+    };
+    const refused = await importComposerContextClipboard(
+      clipboard,
+      0,
+      new AbortController().signal,
+      0,
+      EnvironmentId.make("destination"),
+      new Map([[mismatch.environmentId, "linked-box"]]),
+    );
+    expect(refused?.context.records).toEqual([]);
+    expect(refused?.skippedThreads).toHaveLength(1);
+  });
   it("copies original bytes and rewrites file bindings using a signal without throwIfAborted", async () => {
     const signal = { aborted: false } as AbortSignal;
     const result = await importComposerContextClipboard(clipboard, 0, signal);

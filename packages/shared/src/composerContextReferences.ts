@@ -403,10 +403,15 @@ export function isThreadContextReadable(input: {
   record: ThreadContextRecord;
   environmentId: EnvironmentId;
   hostRoutingEnvironmentId?: EnvironmentId | undefined;
+  verifiedHosts?: ReadonlyMap<EnvironmentId, string> | undefined;
 }): boolean {
   return (
     input.record.environmentId === input.environmentId ||
-    (input.hostRoutingEnvironmentId === input.environmentId && Boolean(input.record.host?.trim()))
+    (input.verifiedHosts !== undefined
+      ? Boolean(input.record.host?.trim()) &&
+        input.verifiedHosts.get(input.record.environmentId) === input.record.host
+      : input.hostRoutingEnvironmentId === input.environmentId &&
+        Boolean(input.record.host?.trim()))
   );
 }
 
@@ -416,6 +421,7 @@ export function threadContextsOutsideEnvironment(input: {
   records: ReadonlyArray<ComposerContextRecord>;
   environmentId: EnvironmentId;
   hostRoutingEnvironmentId?: EnvironmentId | undefined;
+  verifiedHosts?: ReadonlyMap<EnvironmentId, string> | undefined;
 }): ThreadContextRecord[] {
   const referenced = new Set(
     collectComposerContextReferences(input.text).map((occurrence) => occurrence.contextId),
@@ -429,6 +435,7 @@ export function threadContextsOutsideEnvironment(input: {
         record,
         environmentId: input.environmentId,
         hostRoutingEnvironmentId: input.hostRoutingEnvironmentId,
+        verifiedHosts: input.verifiedHosts,
       }),
   );
 }
