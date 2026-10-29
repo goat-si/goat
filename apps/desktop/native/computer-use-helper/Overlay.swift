@@ -8,9 +8,16 @@ import QuartzCore
 
 /// GOAT's own cursor and window glow. The artwork is drawn here and copies no other product's.
 final class AgentOverlayView: NSView {
-  var windowRect = NSRect.zero
-  var acting = false
-  var showsBorder = true
+  // Redraw only on a change: a follow tick that finds nothing new must not repaint the border.
+  var windowRect = NSRect.zero {
+    didSet { if windowRect != oldValue { needsDisplay = true } }
+  }
+  var acting = false {
+    didSet { if acting != oldValue { needsDisplay = true } }
+  }
+  var showsBorder = true {
+    didSet { if showsBorder != oldValue { needsDisplay = true } }
+  }
 
   private let accent = NSColor(srgbRed: 0.27, green: 0.52, blue: 1.0, alpha: 1)
 
@@ -72,10 +79,11 @@ final class AgentOverlay {
     onFrame: { [weak self] frame in
       self?.place(animate: false, frame: frame)
     },
+    onSteady: { [weak self] in
+      self?.keepStacked()
+    },
     onBorder: { [weak self] visible in
-      guard let self else { return }
-      self.view.showsBorder = visible
-      self.view.needsDisplay = true
+      self?.view.showsBorder = visible
     })
   private var settledPoint: CGPoint?
   private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
@@ -157,9 +165,16 @@ final class AgentOverlay {
     let phase = command["phase"] as? String ?? "resting"
     currentPhase = phase
     view.acting = phase == "acting" || phase == "moving"
+    let previous = target?.windowId
     target = (CGWindowID(windowId), point)
     follow.show(windowId: CGWindowID(windowId), phase: phase == "resting" ? .resting : .active)
-    place(animate: phase == "moving" || phase == "acting")
+    if let frame = overlayWindowFrame(CGWindowID(windowId)) {
+      place(animate: phase == "moving" || phase == "acting", frame: frame)
+    } else if previous != CGWindowID(windowId) {
+      // Nothing of the new window shows; the old one's border must not stay. For the same
+      // window, one empty read is left to the follow controller's miss count.
+      panel.orderOut(nil)
+    }
     thinkLayer.removeAllAnimations()
     thinkLayer.isHidden = phase != "thinking" || reducedMotion || point == nil
     if !thinkLayer.isHidden {
@@ -191,7 +206,7 @@ final class AgentOverlay {
       panel.orderOut(nil)
       return
     }
-    place(animate: animate, frame: overlayWindowFrame(target.windowId))
+    if let frame = overlayWindowFrame(target.windowId) { place(animate: animate, frame: frame) }
   }
 
   private func place(animate: Bool, frame: NSRect?) {
@@ -199,8 +214,11 @@ final class AgentOverlay {
       panel.orderOut(nil)
       return
     }
-    panel.setFrame(frame.insetBy(dx: -margin, dy: -margin), display: false)
-    view.frame = NSRect(origin: .zero, size: panel.frame.size)
+    let panelFrame = frame.insetBy(dx: -margin, dy: -margin)
+    if panel.frame != panelFrame {
+      panel.setFrame(panelFrame, display: false)
+      view.frame = NSRect(origin: .zero, size: panel.frame.size)
+    }
     view.windowRect = NSRect(x: margin, y: margin, width: frame.width, height: frame.height)
     // fy counts down from the top of the screenshot; the view's y counts up from the bottom.
     let nextPoint = target.point.map {
@@ -261,15 +279,30 @@ final class AgentOverlay {
       thinkLayer.isHidden = true
       settledPoint = nil
     }
-    view.needsDisplay = true
+    keepStacked()
+  }
+
+  /// Orders the panel above the target only when it is not there already, so a steady window
+  /// costs one window list read per tick and no reordering.
+  private func keepStacked() {
+    guard let target else { return }
+    let windows = overlayListedWindows()
+    let ownPid = Int(getpid())
+    if panel.isVisible,
+      OverlayOrder.isStacked(
+        overlay: CGWindowID(panel.windowNumber), target: target.windowId, ownPid: ownPid,
+        windows: windows)
+    {
+      return
+    }
     // Ordered relative to another app's window number: the window server accepts any window
     // number here, whatever process owns it.
     panel.order(.above, relativeTo: Int(target.windowId))
     if OverlayOrder.raisesToFront(
       target: target.windowId,
       frontmostPid: NSWorkspace.shared.frontmostApplication.map { Int($0.processIdentifier) },
-      ownPid: Int(getpid()),
-      windows: overlayListedWindows())
+      ownPid: ownPid,
+      windows: windows)
     {
       panel.orderFrontRegardless()
     }
