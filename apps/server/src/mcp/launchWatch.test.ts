@@ -397,26 +397,23 @@ it("skips a found run's end when the thread went straight on, and a sender can s
   expect(addPendingRun(skipped, run2!, 40).pendingRuns).toEqual([run2]);
 });
 
-it("looks again at a run still under way whose start it cannot read yet, and skips one that ended so", () => {
+it("holds a run still under way whose start it cannot read yet, without stopping at it", () => {
   const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
   const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
-  // run-2 is queued before its message lands; the look stops there, run-3 included.
+  // run-2 is queued before its message lands; run-3, after it, is followed meanwhile.
   const queued = [
     watchedRun(run1!, 1),
     watchedRun(run2!, 2, { completedAt: null, trigger: undefined }),
     watchedRun(run3!, 3),
   ];
-  expect(discoverRuns(watch, queued, 5)).toBe(watch);
+  const held = discoverRuns(watch, queued, 5);
+  expect(held).toMatchObject({ pendingRuns: [run3], heldRuns: [run2], seen: { ordinal: 3 } });
+  expect(discoverRuns(held, queued, 6)).toBe(held);
+  // Once its start can be read it is followed too.
   const started = [watchedRun(run1!, 1), watchedRun(run2!, 2), watchedRun(run3!, 3)];
-  expect(discoverRuns(watch, started, 6)).toMatchObject({
-    pendingRuns: [run2, run3],
-    seen: { runId: run3, ordinal: 3 },
-  });
-  // Ended with no readable start, it is left out for good.
-  const unread = [watchedRun(run1!, 1), watchedRun(run2!, 2, { trigger: undefined })];
-  expect(discoverRuns(watch, unread, 7)).toMatchObject({
-    pendingRuns: [],
-    skippedRuns: [run2],
-    seen: { runId: run2, ordinal: 2 },
-  });
+  expect(discoverRuns(held, started, 7)).toMatchObject({ pendingRuns: [run3, run2], heldRuns: [] });
+  // Ended with no readable start, or gone from view, it is left out for good.
+  const unread = [watchedRun(run2!, 2, { trigger: undefined }), watchedRun(run3!, 3)];
+  expect(discoverRuns(held, unread, 8)).toMatchObject({ heldRuns: [], skippedRuns: [run2] });
+  expect(discoverRuns(held, [watchedRun(run3!, 3)], 8)).toMatchObject({ skippedRuns: [run2] });
 });

@@ -68,7 +68,8 @@ export interface World {
   runs: Array<Record<string, unknown>>;
   turnItems: Array<Record<string, unknown>>;
   providerThreads: Array<{ cloudTask?: { attach?: string; tracking: string } }>;
-  requests: Array<{ id: string; status: string; kind: string }>;
+  /** Runtime requests; each belongs to `runId`, by default the run a read asks about. */
+  requests: Array<{ id: string; status: string; kind: string; runId?: RunId }>;
   subagents: Array<{ origin: string; childThreadId: ThreadId }>;
   /** Failures for the next dispatches, used up in order. */
   readonly dispatchFailures: Array<"transient" | "refused">;
@@ -279,7 +280,14 @@ const layerFor = (world: World, baseDir: string) =>
                   userMessageId: `message:${String(run.id)}`,
                   ...run,
                 })),
-                turnItems: world.turnItems,
+                turnItems: [
+                  ...world.turnItems,
+                  ...world.requests.map((request) => ({
+                    type: request.kind === "user_input" ? "user_input_request" : "approval_request",
+                    requestId: request.id,
+                    runId: request.runId ?? filter?.turnItemRunIds?.[0] ?? run1,
+                  })),
+                ],
               } as never;
             }),
           dispatch: (command) => dispatchIn(world, command),

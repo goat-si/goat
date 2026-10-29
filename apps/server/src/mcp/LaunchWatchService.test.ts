@@ -262,9 +262,12 @@ describe("LaunchWatchService", () => {
                     runId: run1,
                     status: "waiting",
                     timedOut: result.timedOut,
+                    pendingRequestIds: world.requests
+                      .map((q) => q.id)
+                      .filter((id) => !(call.arguments.ignoreRequestIds as string[])?.includes(id)),
                   })),
                 )
-              : Effect.succeed({ requestIds: world.requests.map((q) => q.id) });
+              : Effect.succeed(remoteRead({ itemCount: 0 }));
         yield* withService(world, baseDir, (service) =>
           Effect.gen(function* () {
             yield* mode === "local" ? watchLocal(service, run1) : watchRemote(service, run1);
@@ -294,6 +297,8 @@ describe("LaunchWatchService", () => {
       }),
   );
 
+  const waiting = { threadId: target, runId: run1, status: "waiting", timedOut: false };
+
   it.effect("a strict legacy wait refusal retries once and stays incapable for this follower", () =>
     Effect.gen(function* () {
       const world = yield* makeWorld;
@@ -315,7 +320,9 @@ describe("LaunchWatchService", () => {
                 });
               if (waits === 3) yield* Deferred.await(nextTick);
               if (waits > 3) return yield* Effect.never;
-              return { threadId: target, runId: run1, status: "waiting", timedOut: true };
+              const asked =
+                waits === 1 ? { timedOut: false, pendingRequestIds: ["question-1"] } : {};
+              return { threadId: target, runId: run1, status: "waiting", timedOut: true, ...asked };
             });
       yield* withService(world, baseDir, (service) =>
         Effect.gen(function* () {
@@ -338,7 +345,7 @@ describe("LaunchWatchService", () => {
   );
 
   it.effect.each(["failure", "empty", "reported"] as const)(
-    "backs off after an early remote release with no new listed question ($0)",
+    "backs off after an early remote release with no new question (list $0)",
     (listing) =>
       Effect.gen(function* () {
         const world = yield* makeWorld;
@@ -355,7 +362,8 @@ describe("LaunchWatchService", () => {
                 yield* Deferred.succeed(restarted, undefined);
                 return yield* Effect.never;
               }
-              return { threadId: target, runId: run1, status: "waiting", timedOut: false };
+              const asked = listing === "reported" && waits === 1 ? ["question-1"] : [];
+              return { ...waiting, pendingRequestIds: asked };
             });
           return listing === "failure"
             ? Effect.fail(
@@ -392,54 +400,37 @@ describe("LaunchWatchService", () => {
       }),
   );
 
-  it.effect.each(["failure", "empty", "other"] as const)(
-    "merges early remote wait question ids with the list ($0)",
-    (listing) =>
-      Effect.gen(function* () {
-        const world = yield* makeWorld;
-        const baseDir = yield* tempDir;
-        const restarted = yield* Deferred.make<void>();
-        let waits = 0;
-        world.hostCall = (call) => {
-          if (call.tool === "goat_thread_wait")
-            return Effect.gen(function* () {
+  it.effect("reports a remote run's questions from its wait, never the thread-wide list", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const baseDir = yield* tempDir;
+      const restarted = yield* Deferred.make<void>();
+      let waits = 0;
+      world.hostCall = (call) =>
+        call.tool === "goat_thread_wait"
+          ? Effect.gen(function* () {
               if (++waits > 1) {
                 yield* Deferred.succeed(restarted, undefined);
                 return yield* Effect.never;
               }
-              return {
-                threadId: target,
-                runId: run1,
-                status: "waiting",
-                timedOut: false,
-                pendingRequestIds: ["question-1"],
-              };
-            });
-          return listing === "failure"
-            ? Effect.fail(
-                new SshRemoteDispatch.SshRemoteDispatchError({
-                  reason: "ssh_failed",
-                  message: "list failed",
-                }),
-              )
-            : Effect.succeed({ requestIds: listing === "other" ? ["question-2"] : [] });
-        };
-        yield* withService(world, baseDir, (service) =>
-          Effect.gen(function* () {
-            yield* watchRemote(service, run1);
-            yield* Deferred.await(restarted);
-            const [watch] = yield* service.list(launcher);
-            expect(watch?.reportedQuestions.toSorted()).toEqual(
-              listing === "other" ? ["run-1/question-1", "run-1/question-2"] : ["run-1/question-1"],
-            );
-            expect(world.deliveredLog).toHaveLength(listing === "other" ? 2 : 1);
-            expect(
-              world.hostCalls.filter(({ call }) => call.tool === "goat_thread_wait")[1]?.call
-                .arguments.ignoreRequestIds,
-            ).toEqual(listing === "other" ? ["question-2", "question-1"] : ["question-1"]);
-          }),
-        );
-      }),
+              return { ...waiting, pendingRequestIds: ["question-1"] };
+            })
+          : // question-2 is another run's, which only the thread-wide list would show.
+            Effect.succeed({ requestIds: ["question-2"] });
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* watchRemote(service, run1);
+          yield* Deferred.await(restarted);
+          const [watch] = yield* service.list(launcher);
+          expect(watch?.reportedQuestions).toEqual(["run-1/question-1"]);
+          expect(world.deliveredLog).toHaveLength(1);
+          expect(
+            world.hostCalls.filter(({ call }) => call.tool === "goat_thread_wait")[1]?.call
+              .arguments.ignoreRequestIds,
+          ).toEqual(["question-1"]);
+        }),
+      );
+    }),
   );
 
   it.effect.each([
@@ -477,7 +468,7 @@ describe("LaunchWatchService", () => {
                 yield* Deferred.succeed(restarted, undefined);
                 return yield* Effect.never;
               }
-              return { threadId: target, runId: run1, status: "waiting", timedOut: false };
+              return { ...waiting, pendingRequestIds: ["question-1"] };
             })
           : Effect.succeed({ requestIds: ["question-1"] });
       yield* withService(world, baseDir, (service) =>

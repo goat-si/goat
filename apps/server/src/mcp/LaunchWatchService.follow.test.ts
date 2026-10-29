@@ -470,7 +470,7 @@ describe("LaunchWatchService runs the thread starts itself", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("does not report another run's question while its own run waits in the queue", () =>
+  it.effect("reports none of the questions another run left pending, queued or not", () =>
     Effect.gen(function* () {
       const world = yield* makeWorld;
       const reported = yield* reportsQueue(world);
@@ -486,15 +486,24 @@ describe("LaunchWatchService runs the thread starts itself", () => {
             trigger: "message:mcp:client%3Abot-b:thread-send:request-1",
           });
           addRun(world, run3, 3, { completedAt: null, status: "queued" });
-          world.requests.push({ id: "request-1", status: "pending", kind: "user_input" });
-          yield* Queue.offer(
-            world.waits,
-            Effect.succeed({
-              threadId: target,
-              run: { id: run3, status: "queued" } as never,
-              timedOut: true,
-            }),
-          );
+          world.requests.push({
+            id: "request-1",
+            status: "pending",
+            kind: "user_input",
+            runId: run2,
+          });
+          const step = (status: string) =>
+            Queue.offer(
+              world.waits,
+              Effect.succeed({
+                threadId: target,
+                run: { id: run3, status } as never,
+                timedOut: true,
+              }),
+            );
+          yield* step("queued");
+          // Recovery cancels run-2 but keeps its question pending while run-3 runs.
+          yield* step("running");
           yield* Queue.offer(world.waits, finished(run3));
           yield* look(world);
           yield* Queue.take(reported);
