@@ -79,3 +79,19 @@ export function findLinkedRoute(
   }
   return undefined;
 }
+
+export function pairingFormLinkAction(
+  link: LinkState | undefined,
+  current: NavigationState | undefined,
+) {
+  const names = ["Pair", "ConnectionsNew", "SettingsEnvironmentNew"];
+  const linked = findLinkedRoute(withoutPairingTarget(link), names);
+  const open = current?.routes[current.index];
+  if (!linked || !current || !open || !names.includes(open.name)) return undefined;
+  return {
+    type: "REPLACE_PARAMS" as const,
+    payload: { params: linked.params ?? {} },
+    source: open.key,
+    target: current.key,
+  };
+}

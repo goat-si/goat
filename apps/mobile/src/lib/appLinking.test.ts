@@ -7,12 +7,65 @@ import { finishHubPairing, resolveConnectHubIntent } from "../features/connectio
 
 import {
   findLinkedRoute,
+  pairingFormLinkAction,
   restoreDraftLinkState,
   shouldHandleAppLink,
   withoutPairingTarget,
 } from "./appLinking";
 
 describe("pairing links", () => {
+  it("reuses the open form for a sanitized link without retaining its previous target", async () => {
+    const require = NodeModule.createRequire(import.meta.url);
+    const nativeRequire = NodeModule.createRequire(require.resolve("@react-navigation/native"));
+    const corePath = nativeRequire.resolve("@react-navigation/core");
+    const coreRequire = NodeModule.createRequire(corePath);
+    const { getStateFromPath, getActionFromState } = await import(
+      NodeURL.pathToFileURL(corePath).href
+    );
+    const { StackRouter } = await import(
+      NodeURL.pathToFileURL(coreRequire.resolve("@react-navigation/routers")).href
+    );
+    const linking = {
+      screens: {
+        Home: "",
+        Settings: "settings",
+        SettingsEnvironmentNew: "settings/environment-new",
+        ConnectionsNew: "connections/new",
+      },
+    };
+    const router = StackRouter({});
+    const options = {
+      routeNames: Object.keys(linking.screens),
+      routeParamList: {},
+      routeGetIdList: {},
+    };
+    const open = router.getRehydratedState(
+      {
+        index: 2,
+        routes: [
+          { name: "Home" },
+          { name: "Settings" },
+          { name: "SettingsEnvironmentNew", params: { intent: "change-hub", routeFor: "old" } },
+        ],
+      },
+      options,
+    );
+    const link = withoutPairingTarget(
+      getStateFromPath("connections/new?pairingUrl=example&routeFor=old", linking),
+    );
+    const action = pairingFormLinkAction(link, open) ?? getActionFromState(link, linking);
+    const next = router.getStateForAction(open, action, options);
+    expect(next?.routes.map((route: { name: string }) => route.name)).toEqual([
+      "Home",
+      "Settings",
+      "SettingsEnvironmentNew",
+    ]);
+    expect(next?.routes.at(-1)).toMatchObject({
+      key: open.routes[2].key,
+      params: { pairingUrl: "example", intent: "add-server" },
+    });
+    expect(next?.routes.at(-1)?.params).not.toHaveProperty("routeFor");
+  });
   it.each([
     ["pair", "Pair", ""],
     ["connections/new", "ConnectionsNew", "?pairingUrl=example&autoConnect=1"],
