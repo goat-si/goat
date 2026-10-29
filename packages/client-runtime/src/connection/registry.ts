@@ -39,6 +39,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -58,17 +59,6 @@ import {
 } from "./routes.ts";
 
 const isSshConnectionProfile = Schema.is(SshConnectionProfile);
-
-function unsupportedState(
-  entry: ConnectionCatalogEntry,
-): Pick<ConnectionCatalogEntry, "unsupportedReason" | "serverUpdateRequired"> {
-  return {
-    ...(entry.unsupportedReason === undefined
-      ? {}
-      : { unsupportedReason: entry.unsupportedReason }),
-    ...(entry.serverUpdateRequired === true ? { serverUpdateRequired: true } : {}),
-  };
-}
 
 export class EnvironmentNotRegisteredError extends Schema.TaggedError<EnvironmentNotRegisteredError>()(
   "EnvironmentNotRegisteredError",
@@ -100,20 +90,12 @@ export class EnvironmentRegistry extends Context.Service<
     >;
     readonly networkStatus: SubscriptionRef.SubscriptionRef<NetworkStatus>;
     readonly start: Effect.Effect<void>;
-    /**
-     * Succeeds with `false` and changes nothing when the environment is
-     * platform-managed, since the host owns that entry. With `knownAddressOnly`, it fails like
-     * `assertKnownAddress`, checked under the environment's lease.
-     */
+    /** Platform-managed entries are unchanged; known addresses are checked under the lease. */
     readonly register: (
       registration: ConnectionRegistration,
       options?: { readonly knownAddressOnly?: boolean },
     ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError | ConnectionBlockedError>;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
-    /**
-     * Fails when the route would add a new address to a saved user environment. Pairing that does
-     * not target an environment checks this, because the server reports its own environment id.
-     */
     readonly assertKnownAddress: (
       route: ConnectionRoute,
     ) => Effect.Effect<void, ConnectionBlockedError>;
@@ -545,22 +527,7 @@ export const make = Effect.gen(function* () {
     return { entry: rest, addressesChanged: true };
   };
 
-  const assertKnownAddress = Effect.fn("EnvironmentRegistry.assertKnownAddress")(function* (
-    route: ConnectionRoute,
-  ) {
-    const environmentId = route.target.environmentId;
-    if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) return;
-    const saved = (yield* SubscriptionRef.get(entries)).get(environmentId);
-    if (
-      saved !== undefined &&
-      findRouteToSameAddress(connectionRoutes(saved), route) === undefined
-    ) {
-      return yield* new ConnectionBlockedError({
-        reason: "configuration",
-        detail: `That address claims to be ${saved.target.label}, which is already saved. Add it as a route from that environment's settings instead.`,
-      });
-    }
-  });
+  const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
 
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,

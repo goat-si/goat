@@ -46,6 +46,7 @@ describe("connection catalog host with Connect disabled", () => {
           networkStatus,
           start: Effect.void,
           register: unused,
+          assertKnownAddress: unused,
           registerPlatform: unused,
           reconcilePlatform: unused,
           remove: (id) =>
