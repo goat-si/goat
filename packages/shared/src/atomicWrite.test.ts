@@ -70,30 +70,29 @@ it.layer(NodeServices.layer)("writeFileStringAtomically", (it) => {
     }),
   );
 
-  // quarantine: #2122 Windows reads the relative link back with backslashes.
-  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "resolves a relative link through a symlinked parent directory",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-atomic-write-" });
-        const destination = path.join(root, "dotfiles", "config", "settings.json");
-        const linkedState = path.join(root, "dotfiles", "state");
-        const home = path.join(root, "home");
-        const link = path.join(home, "state", "settings.json");
-        yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
-        yield* fs.makeDirectory(linkedState, { recursive: true });
-        yield* fs.makeDirectory(home, { recursive: true });
-        yield* fs.symlink(linkedState, path.join(home, "state"));
-        yield* fs.writeFileString(destination, "before");
-        yield* fs.symlink("../config/settings.json", link);
+  it.effect("resolves a relative link through a symlinked parent directory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-atomic-write-" });
+      const destination = path.join(root, "dotfiles", "config", "settings.json");
+      const linkedState = path.join(root, "dotfiles", "state");
+      const home = path.join(root, "home");
+      const link = path.join(home, "state", "settings.json");
+      yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
+      yield* fs.makeDirectory(linkedState, { recursive: true });
+      yield* fs.makeDirectory(home, { recursive: true });
+      yield* fs.symlink(linkedState, path.join(home, "state"));
+      yield* fs.writeFileString(destination, "before");
+      // Windows stores and reads back a link target with its own separator.
+      const target = path.join("..", "config", "settings.json");
+      yield* fs.symlink(target, link);
 
-        yield* writeFileStringAtomically({ filePath: link, contents: "after" });
+      yield* writeFileStringAtomically({ filePath: link, contents: "after" });
 
-        assert.strictEqual(yield* fs.readLink(link), "../config/settings.json");
-        assert.strictEqual(yield* fs.readFileString(destination), "after");
-      }),
+      assert.strictEqual(yield* fs.readLink(link), target);
+      assert.strictEqual(yield* fs.readFileString(destination), "after");
+    }),
   );
 
   it.effect("does not replace a newer save that landed while the lock was held", () =>

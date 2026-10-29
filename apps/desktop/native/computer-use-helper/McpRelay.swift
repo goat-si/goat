@@ -53,6 +53,9 @@ func runMcp() -> Never {
   // The launcher this service was started by, captured before anything can re-parent it.
   let launcher = getppid()
   guard launcherIsSelf() else { mcpFail(77, "Start the helper through its launcher.") }
+  guard WindowServer.connected else {
+    mcpFail(70, "The helper service started without a window server connection.")
+  }
   let arguments = Array(CommandLine.arguments.dropFirst())
   guard let flag = arguments.firstIndex(of: "--capability-manifest"),
     flag + 1 < arguments.count, arguments[flag + 1].hasPrefix("/")

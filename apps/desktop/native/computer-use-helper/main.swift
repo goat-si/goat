@@ -646,6 +646,10 @@ func runService() -> Never {
   guard launcherIsSelf() else {
     refuse("untrusted_parent", "Start the helper through its launcher.", 77)
   }
+  // Started any way but WindowServer.startHelper, the first capture would abort the service.
+  guard WindowServer.connected else {
+    refuse("window_server", "The helper service started without a window server connection.", 70)
+  }
   let service = DriverService()
   for signalNumber in [SIGTERM, SIGINT, SIGHUP] {
     signal(signalNumber, SIG_IGN)
@@ -688,12 +692,10 @@ func runService() -> Never {
   dispatchMain()
 }
 
-if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
-  // Before any capture, window listing or overlay: without it the first live-picture capture
-  // aborted the service (CGS_REQUIRE_INIT), and with it every capture the agent was promised.
-  WindowServer.connect()
-  if CommandLine.arguments.contains("--mcp") { runMcp() }
-  runService()
-} else {
-  runLauncher()
-}
+WindowServer.startHelper(
+  disclaimed: ProcessInfo.processInfo.environment[disclaimedVariable] == "1",
+  mcp: CommandLine.arguments.contains("--mcp"),
+  launcher: runLauncher,
+  mcpServer: runMcp,
+  service: runService
+)

@@ -180,7 +180,46 @@ it.effect.each([{ args: ["publish"] }, { args: ["link", "--publish-only"] }])(
         "Restart GOAT to finish authorizing",
       );
     }).pipe(
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          NetService.layer,
+          TestConsole.layer,
+          // The test's own shell may be an SSH session; this case is a local one.
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+        ),
+      ),
+      Effect.scoped,
+    ),
+);
+
+it.effect.each([{ SSH_CONNECTION: "203.0.113.1 50000 203.0.113.2 22" }, { SSH_TTY: "/dev/pts/0" }])(
+  "link from an SSH session %j refuses before asking for a browser approval",
+  (env) =>
+    Effect.gen(function* () {
+      const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "connect-ssh-",
+      });
+      const error = yield* Command.runWith(connectCommand, { version: "0.0.0" })([
+        "link",
+        "--publish-only",
+        "--base-dir",
+        directory,
+      ]).pipe(Effect.flip);
+      assert.instanceOf(error, CliTokenManager.CloudCliAuthorizationUnsupportedError);
+      assert.notInclude(
+        (yield* TestConsole.errorLines).join("\n"),
+        "unavailable in the reachability-only Connect beta",
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          NetService.layer,
+          TestConsole.layer,
+          ConfigProvider.layer(ConfigProvider.fromEnv({ env })),
+        ),
+      ),
       Effect.scoped,
     ),
 );

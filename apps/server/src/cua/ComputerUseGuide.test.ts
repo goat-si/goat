@@ -4,8 +4,6 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
-import * as HostProcess from "@goat/shared/HostProcess";
-
 import { installComputerUseSkill, makeAppGuide } from "./ComputerUseGuide.ts";
 
 const answer = (id: number, structured: Record<string, unknown>, isError = false) =>
@@ -105,11 +103,15 @@ describe("computer use skill on disk", () => {
     }
   });
 
-  // quarantine: #2121 /dev/null/not-a-directory is a writable path on Windows.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "returns no path when the state directory cannot be written",
-    () => {
-      assert.isUndefined(installComputerUseSkill("/dev/null/not-a-directory", "darwin"));
-    },
-  );
+  it("returns no path when the state directory cannot be written", () => {
+    const state = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-computer-use-guide-"));
+    try {
+      // A directory below a regular file cannot be created on any platform.
+      const file = NodePath.join(state, "file");
+      NodeFS.writeFileSync(file, "");
+      assert.isUndefined(installComputerUseSkill(NodePath.join(file, "state"), "darwin"));
+    } finally {
+      NodeFS.rmSync(state, { recursive: true, force: true });
+    }
+  });
 });

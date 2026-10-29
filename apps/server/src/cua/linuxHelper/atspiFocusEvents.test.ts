@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
-import * as HostProcess from "@goat/shared/HostProcess";
+import { canListenOnSocketPath, listenOnSocketPath } from "../socketServer.testkit.ts";
 
 import {
   busSocketPath,
@@ -112,7 +112,7 @@ async function scriptedBus(
     });
     socket.on("error", () => undefined);
   });
-  await new Promise<void>((resolve) => server.listen(path, resolve));
+  await listenOnSocketPath(server, path);
   return {
     address: "unix:path=" + path.replaceAll(",", "%2c") + ",guid=0123",
     calls,
@@ -217,9 +217,7 @@ describe("AT-SPI focus events", () => {
     expect(busSocketPath("tcp:host=x;unix:abstract=/tmp/dbus-x%2cy")).toBe("\0/tmp/dbus-x,y");
     expect(busSocketPath("tcp:host=localhost,port=1")).toBeUndefined();
   });
-
-  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "registers for focus events on its own connection, hears GTK3 and GTK4, and reconnects when the bus drops (#1638)",
     async () => {
       // A registry that only knows the two-argument RegisterEvent.
@@ -275,9 +273,7 @@ describe("AT-SPI focus events", () => {
       }
     },
   );
-
-  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "drops a bus that never answers authentication at the setup limit, retries, and closes a connection still authenticating (#1644 r1)",
     async () => {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-a11y-silent-"));
@@ -292,7 +288,7 @@ describe("AT-SPI focus events", () => {
         socket.on("error", () => undefined);
         arrivals.shift()?.(socket);
       });
-      await new Promise<void>((resolve) => server.listen(path, resolve));
+      await listenOnSocketPath(server, path);
       const limit = Promise.withResolvers<void>();
       // Only the first connection's setup limit passes; the second waits on close alone.
       const limits = [limit.promise, new Promise<void>(() => undefined)];
@@ -334,9 +330,7 @@ describe("AT-SPI focus events", () => {
       }
     },
   );
-
-  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "connects only while someone listens, and leaving drops the registration (#1650)",
     async () => {
       const bus = await scriptedBus(() => false);
@@ -369,9 +363,7 @@ describe("AT-SPI focus events", () => {
       }
     },
   );
-
-  // quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "stops trying older RegisterEvent forms once the bus closes the connection (#1680 r1)",
     async () => {
       // Only the call deadlines are faked, to count them; sockets run for real.

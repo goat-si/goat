@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
-import * as HostProcess from "@goat/shared/HostProcess";
+import { canListenOnSocketPath, listenOnSocketPath } from "./socketServer.testkit.ts";
 import * as Effect from "effect/Effect";
 
 import { dbusMethodCall, dbusParseMessages, dbusSocketPath, dbusAuthLine } from "./CuaDbusProbe.ts";
@@ -70,9 +70,10 @@ const temporaryDirectory = Effect.acquireRelease(
 
 const listen = (socketPath: string, onConnection: (socket: NodeNet.Socket) => void) =>
   Effect.acquireRelease(
-    Effect.callback<NodeNet.Server>((resume) => {
+    Effect.promise(async () => {
       const server = NodeNet.createServer(onConnection);
-      server.listen(socketPath, () => resume(Effect.succeed(server)));
+      await listenOnSocketPath(server, socketPath);
+      return server;
     }),
     (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
   );
@@ -151,9 +152,7 @@ describe("D-Bus wire format", () => {
     expect(dbusAuthLine(1000)).toBe("\0AUTH EXTERNAL 31303030\r\n");
   });
 });
-
-// quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("live probes", () => {
+describe.skipIf(!canListenOnSocketPath)("live probes", () => {
   it.live("tries every Xauthority cookie and keeps the one the X server accepts", () =>
     Effect.gen(function* () {
       const directory = yield* temporaryDirectory;
