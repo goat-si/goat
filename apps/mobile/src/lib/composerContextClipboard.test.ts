@@ -133,6 +133,27 @@ beforeEach(() => {
 });
 
 describe("mobile context clipboard imports", () => {
+  it("removes a stale host from a thread local to the destination", async () => {
+    const stale = { ...localThread, host: "old-route" };
+    const clipboard = {
+      text: formatComposerContextReference(stale),
+      html: "",
+      fragment: encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: foreignThread.environmentId },
+        records: [stale],
+      })!,
+    };
+    const result = await importComposerContextClipboard(
+      clipboard,
+      0,
+      new AbortController().signal,
+      0,
+      localThread.environmentId,
+      new Map(),
+    );
+    expect(result?.context.records[0]).not.toHaveProperty("host");
+  });
   it("imports a linked thread only when its route identifies the source environment", async () => {
     const result = await importComposerContextClipboard(
       mixedClipboard,

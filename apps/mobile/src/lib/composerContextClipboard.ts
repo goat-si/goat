@@ -75,12 +75,11 @@ export async function importComposerContextClipboard(
   const selected = referencedComposerContext(input.text, { version: 1, records: fragment.records });
   const imported = reidentifyComposerContext(input.text, selected?.records ?? [], uuidv4);
   const routedRecords = imported.context.records.map((record) => {
-    if (
-      record.kind !== "thread" ||
-      !("threadId" in record) ||
-      record.environmentId === destinationEnvironmentId
-    )
-      return record;
+    if (record.kind !== "thread" || !("threadId" in record)) return record;
+    if (record.environmentId === destinationEnvironmentId) {
+      const { host: _host, ...local } = record;
+      return local;
+    }
     const host = verifiedHosts?.get(record.environmentId);
     if (!host || (record.host && record.host !== host)) return record;
     return { ...record, host };
