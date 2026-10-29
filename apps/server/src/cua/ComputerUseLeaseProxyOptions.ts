@@ -55,7 +55,7 @@ export interface OutstandingCall {
   readonly reservationId?: string;
   readonly connectionId: string;
   readonly sentAt?: number;
-  readonly cancelled?: boolean;
+  cancelled?: boolean;
   readonly sink: ReplySink;
 }
 

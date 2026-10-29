@@ -297,7 +297,48 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         yield* h.reply(
           JSON.stringify({ jsonrpc: "2.0", id: provBatch.id, result: { content: [] } }),
         );
+        assert.equal((yield* h.nextToProvider).id, "prov:batch");
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: aux1.id, result: { content: [] } }));
+        assert.equal((yield* h.primitiveReply).status, "settled");
+
+        // Reusing the same provider request ID ("prov:batch") for a get_window_state with timeout_ms: 10000
+        // (macOS driver backstop = 2 * 10000 + 5000 = 25000 ms) must not inherit the old reply marker and must not be cut off at 13 s.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:batch",
+            method: "tools/call",
+            params: {
+              name: "get_window_state",
+              arguments: { pid: 42, window_id: 1, timeout_ms: 10_000 },
+            },
+          }),
+        );
+        const reusedRead = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxReused",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 10,
+          deadlineMillis: 11_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxReused = yield* h.nextToDriver;
+        yield* TestClock.adjust("15 seconds");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: reusedRead.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:batch");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxReused.id, result: { content: [] } }),
+        );
         assert.equal((yield* h.primitiveReply).status, "settled");
 
         // (a2) A 90 s provider run_script (timeout_ms: 120_000, cap 121.5 s) followed by a 1.5 s auxiliary read is not cut off at 61 s;
@@ -322,7 +363,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 1,
-          deadlineMillis: 61_500,
+          deadlineMillis: 76_500,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -375,7 +416,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 2,
-          deadlineMillis: 135_000,
+          deadlineMillis: 150_100,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -410,7 +451,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 3,
-          deadlineMillis: 150_500,
+          deadlineMillis: 165_700,
           tool: "list_windows",
           args: { pid: 42 },
         });

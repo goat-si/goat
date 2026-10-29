@@ -32,11 +32,12 @@ export const driverCallCapMs = (tool: string, args: unknown): number => {
   const given = record(args);
   if (tool === "get_window_state") {
     const base = given.include_screenshot === true ? 7_000 : 4_000;
+    if (given.include_accessibility_tree === false) return base;
     const walk =
-      typeof given.timeout_ms === "number"
-        ? Math.min(120_000, Math.max(100, Math.trunc(given.timeout_ms)))
+      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
+        ? Math.min(120_000, Math.max(100, given.timeout_ms))
         : 0;
-    return Math.max(base, walk + 2_000);
+    return walk > 0 ? Math.max(base, walk * 2 + 5_000) : base;
   }
   if (tool === "run_script") {
     const ms =

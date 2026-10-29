@@ -698,7 +698,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       handshakeAnswers.cancel(cancelled);
       const request = outstanding.get(cancelled);
       // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
-      if (request !== undefined) outstanding.set(cancelled, { ...request, cancelled: true });
+      if (request !== undefined) request.cancelled = true;
     }
     const key = isRequest ? JSON.stringify(id) : "";
     if (isRequest && (outstanding.has(key) || handshakeAnswers.pending(key)))

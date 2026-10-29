@@ -59,9 +59,9 @@ export const makeUnansweredWatch = <E>(
   },
 ) => {
   // Marked as each line leaves the driver, ahead of the replies GOAT is still checking in order.
-  const replied = new Set<string>();
+  const replied = new WeakSet<object>();
   // When the current head call of each connection reached the front of the pipe.
-  const headByConn = new Map<string, { readonly key: string; readonly since: number }>();
+  const headByConn = new Map<string, { readonly call: object; readonly since: number }>();
   // The chain a private or taken-over target closed; no call reaches it until it is replaced.
   let fenced: string | undefined;
   // Calls past their deadline, by key, until a reply lands or their grace ends. A new call to the
@@ -77,10 +77,10 @@ export const makeUnansweredWatch = <E>(
   };
   const currentHead = (connectionId: string, now: number, advanced = false) => {
     for (const [k, each] of proxy.outstanding) {
-      if (each.connectionId !== connectionId || replied.has(k)) continue;
+      if (each.connectionId !== connectionId || replied.has(each)) continue;
       const prev = headByConn.get(connectionId);
-      const since = prev?.key === k ? prev.since : advanced ? now : (each.sentAt ?? now);
-      if (prev?.key !== k) headByConn.set(connectionId, { key: k, since });
+      const since = prev?.call === each ? prev.since : advanced ? now : (each.sentAt ?? now);
+      if (prev?.call !== each) headByConn.set(connectionId, { call: each, since });
       return { key: k, call: each, since };
     }
     headByConn.delete(connectionId);
@@ -128,11 +128,11 @@ export const makeUnansweredWatch = <E>(
   const replace = (key: string) =>
     Effect.suspend(() => {
       const call = proxy.outstanding.get(key);
-      if (replied.has(key) || call === undefined) return Effect.void;
+      if (call === undefined || replied.has(call)) return Effect.void;
       return replaceUnder(
         DRIVER_UNANSWERED,
         call.connectionId,
-        () => !replied.has(key) && proxy.outstanding.get(key) === call,
+        () => !replied.has(call) && proxy.outstanding.get(key) === call,
       );
     });
   return {
@@ -174,11 +174,10 @@ export const makeUnansweredWatch = <E>(
           Effect.sync(() => {
             const key = replyKey(line);
             if (key === undefined) return;
-            for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
             const answered = proxy.outstanding.get(key);
             if (answered !== undefined) {
-              const wasHead = currentHead(answered.connectionId, now)?.key === key;
-              replied.add(key);
+              const wasHead = currentHead(answered.connectionId, now)?.call === answered;
+              replied.add(answered);
               currentHead(answered.connectionId, now, wasHead);
             }
             overdue.delete(key);
@@ -192,6 +191,8 @@ export const makeUnansweredWatch = <E>(
       function* (key: string, deadlineMillis: number) {
         const started = yield* Clock.currentTimeMillis;
         const budgetMs = Math.max(0, deadlineMillis - started);
+        const target = proxy.outstanding.get(key);
+        if (!target) return;
         // Wait only while the currently blocking call at the head of the pipe is within its own
         // cap; if that head call remains unanswered through its grace window, replace immediately.
         for (;;) {
@@ -199,49 +200,44 @@ export const makeUnansweredWatch = <E>(
           const now = yield* Clock.currentTimeMillis;
           const call = proxy.outstanding.get(key);
           if (
-            !call ||
-            replied.has(key) ||
+            call !== target ||
+            replied.has(target) ||
             proxy.lifecycle.current?.connectionId !== call.connectionId
           )
             return;
           const head = currentHead(call.connectionId, now);
-          if (!head || head.key === key) break;
+          if (!head || head.call === target) break;
           const headDeadline = head.since + driverCallCapMs(head.call.tool ?? "", head.call.args);
           if (now < headDeadline) {
             const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
             if (Option.isSome(step)) continue;
           }
           const afterCap = yield* Clock.currentTimeMillis;
-          if (currentHead(call.connectionId, afterCap)?.key !== head.key) continue;
+          if (currentHead(call.connectionId, afterCap)?.call !== head.call) continue;
           overdue.set(key, call.connectionId);
           const graceEnd = afterCap + UNANSWERED_GRACE_MS;
           for (;;) {
             const graceWoken = Deferred.await(settled);
             const t = yield* Clock.currentTimeMillis;
-            if (currentHead(call.connectionId, t)?.key !== head.key || t >= graceEnd) break;
+            if (currentHead(call.connectionId, t)?.call !== head.call || t >= graceEnd) break;
             const step = yield* graceWoken.pipe(Effect.timeoutOption(graceEnd - t));
             if (Option.isNone(step)) break;
           }
           const afterGrace = yield* Clock.currentTimeMillis;
-          if (currentHead(call.connectionId, afterGrace)?.key === head.key) {
+          if (currentHead(call.connectionId, afterGrace)?.call === head.call) {
             yield* replace(head.key);
           }
           settle(key);
         }
         yield* Effect.sleep(budgetMs);
         const call = proxy.outstanding.get(key);
-        if (call !== undefined && !replied.has(key)) overdue.set(key, call.connectionId);
+        if (call === target && !replied.has(target)) overdue.set(key, call.connectionId);
         yield* Effect.sleep(UNANSWERED_GRACE_MS);
         yield* replace(key);
       },
       (effect, key) =>
         effect.pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
-              settle(key);
-            }),
-          ),
+          Effect.ensuring(Effect.sync(() => settle(key))),
           Effect.forkIn(proxy.scope),
           Effect.asVoid,
         ),
