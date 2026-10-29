@@ -86,7 +86,13 @@ const __enqueue = (method, arg) => new Promise((resolve, reject) => {
 });
 const __tabQuery = (query) =>
   typeof query === 'string' ? (/^[a-z][a-z0-9+.-]*:/i.test(query) ? { url: query } : { tabId: query }) : query;
-const __call = async (method, arg) => (await __reply(method, [arg])).v;
+// Older call forms return the host's value as it was before Done carried timing.
+const __plain = (value) => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || !('_timing' in value || '_noResult' in value)) return value;
+  const { _timing: _t, _noResult: none, ...rest } = value;
+  return none === true ? undefined : rest;
+};
+const __call = async (method, arg) => __plain((await __reply(method, [arg])).v);
 const __checked = async (method, arg, queued = false) => {
   try { return await (queued ? __enqueue(method, arg) : __reply(method, [arg])); }
   catch (raw) {
@@ -152,8 +158,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     // The host's time for this call rides in _timing and comes out on Done as ms and phases.
     const timing = isObj && reply.v._timing && typeof reply.v._timing === 'object' ? reply.v._timing : undefined;
     let cleanResult = reply.v;
-    if (isObj && ('_observed' in reply.v || '_timing' in reply.v)) {
-      const { _observed: _omitted, _timing: _timed, ...rest } = reply.v;
+    if (isObj && ('_observed' in reply.v || '_timing' in reply.v || '_noResult' in reply.v)) {
+      const { _observed: _omitted, _timing: _timed, _noResult: _none, ...rest } = reply.v;
       cleanResult = rest;
     }
     const extra =
@@ -165,9 +171,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
             ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
           }
         : {};
-    // A value that held only the host's own fields has no result of its own.
-    const bare = isObj && Object.keys(cleanResult).length === 0 && Object.keys(reply.v).length > 0;
-    return { verdict, ...extra, ...(bare ? {} : { result: cleanResult }) };
+    return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
   };
   const element = (target) => {
     const observation = seen.observation;
@@ -606,7 +610,7 @@ globalThis.screen = Object.freeze({ values: __values, state: {},
   tab: async (query = {}) => __tab(await __call('select_tab', __tabQuery(query))),
   openTab: async (arg = {}) => __tab(await __call('open_tab', arg)),
   listTabs: () => __call('list_tabs', {}),
-  ${methods.map((method) => `${method}: async (...args) => (await __reply(${JSON.stringify(method)}, args)).v`).join(",\n  ")}
+  ${methods.map((method) => `${method}: async (...args) => __plain((await __reply(${JSON.stringify(method)}, args)).v)`).join(",\n  ")}
 });
 globalThis.console = Object.freeze({ log: (...args) => __log(args.map(String).join(' ')) });
 `;

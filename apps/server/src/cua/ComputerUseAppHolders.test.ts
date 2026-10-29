@@ -132,6 +132,18 @@ describe("app holders on the lease service", () => {
           ]),
         );
         expect(yield* holders(a.threadId)).toEqual([]);
+        // Looking changes nothing: the controls, the foreground epoch and B's refusal stay as they were.
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const sessions = yield* leases.sessions;
+        const epoch = yield* leases.foregroundApprovalEpoch;
+        for (let look = 0; look < 3; look++) yield* holders(b.threadId);
+        expect(yield* leases.sessions).toEqual(sessions);
+        expect(yield* leases.foregroundApprovalEpoch).toBe(epoch);
+        assert.deepInclude(yield* click(b, TEXTEDIT, 8), {
+          status: "refused",
+          detail: "app_busy",
+          holderThreadId: a.threadId,
+        });
         yield* TestClock.adjust(APP_LEASE_IDLE_MS);
         expect(yield* holders(b.threadId)).toEqual([]);
       }).pipe(Effect.provide(layer)),

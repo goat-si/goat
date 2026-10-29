@@ -2,7 +2,7 @@ import { expect, it } from "@effect/vitest";
 import type { ScreenHostCall, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { AppHolder } from "../cua/ComputerUseAppLeases.ts";
-import { call, context, fixture } from "./DesktopTargetHost.testkit.ts";
+import { call, context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 
 const other = "thread-other" as ThreadId;
@@ -88,6 +88,14 @@ it.effect("discover says holders are unknown whenever it cannot tell a row's app
       list_apps: { message: "Driver reply exceeded the primitive channel limit." },
     });
     expect((yield* cut.host.discover(at(10_000, call("list_windows")), context)).value).toEqual({
+      windows: [{ ...windowRows[0], ...held }, windowRows[1], windowRows[2]],
+      holdersUnknown: true,
+    });
+    // An app list the driver failed to give maps nothing either.
+    const failed = discoverWith(holders, {
+      list_apps: new DriverError({ status: "failed" }, "list_apps failed"),
+    });
+    expect((yield* failed.host.discover(at(10_000, call("list_windows")), context)).value).toEqual({
       windows: [{ ...windowRows[0], ...held }, windowRows[1], windowRows[2]],
       holdersUnknown: true,
     });

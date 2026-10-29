@@ -165,6 +165,7 @@ const guestDoneBytes = (
   resultValue: unknown,
   observed: ReadonlyArray<string> | undefined,
   timing: InputTiming | undefined,
+  noResult: boolean,
 ): number => {
   const obj = object(resultValue);
   const doneShape = {
@@ -173,35 +174,38 @@ const guestDoneBytes = (
     ...(observed && observed.length > 0 ? { observed } : {}),
     ...(obj && "point" in obj ? { point: obj.point } : {}),
     ...(obj && "hit" in obj ? { hit: obj.hit } : {}),
-    ...(resultValue === undefined ? {} : { result: resultValue }),
+    ...(resultValue === undefined || noResult ? {} : { result: resultValue }),
   };
   return Buffer.byteLength(JSON.stringify(doneShape) ?? "");
 };
 
-/** The host value carries timing as _timing and observed rows as _observed; the guest lifts both onto Done. */
+// The host value carries _observed, _timing and _noResult (the driver answered nothing); the
+// guest lifts them onto Done.
 const fitsInputBudget = (
   candidateResult: Record<string, unknown>,
   observed: ReadonlyArray<string> | undefined,
   returnBytes: number,
   timing: InputTiming | undefined,
+  noResult = false,
 ): unknown | undefined => {
   const payload = {
     ...candidateResult,
     ...(observed && observed.length > 0 ? { _observed: observed } : {}),
     ...(timing === undefined ? {} : { _timing: timing }),
+    ...(noResult ? { _noResult: true } : {}),
   };
   if (
     Buffer.byteLength(JSON.stringify(payload) ?? "") <= returnBytes &&
-    guestDoneBytes(candidateResult, observed, timing) <= returnBytes
+    guestDoneBytes(candidateResult, observed, timing, noResult) <= returnBytes
   )
     return payload;
   return undefined;
 };
 
 /**
- * The largest input result that fits returnBytes both as the host value and as the guest's Done:
- * timing goes first, then observed rows and window detail. When nothing fits, the driver's value
- * goes back as it was, and the bridge refuses it as output_limit if it is over the cap.
+ * The largest input result that fits returnBytes as the host value and as the guest's Done; timing
+ * goes first, then observed rows and window detail. Otherwise the driver's value goes back as it
+ * was, and the bridge refuses it as output_limit if it is over the cap.
  */
 export const fitInputWindows = (
   driverVal: unknown,
@@ -211,6 +215,7 @@ export const fitInputWindows = (
   timing?: InputTiming,
 ): unknown => {
   const base = object(driverVal) ?? {};
+  const noResult = driverVal === undefined && report === undefined;
   const withWindows = { ...base, windows: report };
   const withFlag = { ...base, windowsTruncated: true };
   const candidates: ReadonlyArray<
@@ -227,20 +232,24 @@ export const fitInputWindows = (
         ];
   for (const withTiming of timing === undefined ? [undefined] : [timing, undefined])
     for (const [candidate, rows] of candidates) {
-      const fitted = fitsInputBudget(candidate, rows, returnBytes, withTiming);
+      if (noResult && withTiming === undefined && !(rows && rows.length > 0)) return driverVal;
+      const fitted = fitsInputBudget(candidate, rows, returnBytes, withTiming, noResult);
       if (fitted !== undefined) return fitted;
     }
   return driverVal;
 };
 
-/** A tab input's answer with its host time when that still fits returnBytes; nothing answered is {}. */
+/** A tab input's answer with its host time when that still fits returnBytes. */
 export const withInputTiming = (
   value: unknown,
   timing: InputTiming,
   returnBytes: number,
 ): unknown => {
   if (value !== undefined && object(value) === undefined) return value;
-  return fitsInputBudget(object(value) ?? {}, undefined, returnBytes, timing) ?? value;
+  return (
+    fitsInputBudget(object(value) ?? {}, undefined, returnBytes, timing, value === undefined) ??
+    value
+  );
 };
 
 export const sheetParentId = (state: Record<string, unknown>): number | undefined => {
@@ -432,9 +441,8 @@ const sameApp = (a: string | undefined, b: string | undefined) =>
   a !== undefined && b !== undefined && cuaAppKey(a) === cuaAppKey(b);
 
 /**
- * Marks the rows another thread uses with inUse and holderThreadId: its processes, and when it
- * names an app id, every row of that app. appOf gives a row's app id; a row whose id is unknown
- * while some holder names an app might be that app, so the answer is then partial (unknown).
+ * Marks rows another thread uses: its processes, and every row of an app id it names. A row whose
+ * app id is unknown while a holder names one might be that app, so the answer is partial.
  */
 export const markHeldRows = (
   rows: ReadonlyArray<unknown>,
@@ -462,10 +470,9 @@ const fitsReturn = (value: unknown, returnBytes: number) =>
   Buffer.byteLength(JSON.stringify(value) ?? "") <= returnBytes;
 
 /**
- * discover's answer with the rows other threads use marked (D17). The lookup never waits on or
- * changes admission; a window list maps its processes to apps with one list_apps only when a
- * holder names an app and the cell can still afford it. A lookup that cannot answer, a row it
- * cannot place, or marks over the return budget leave holdersUnknown instead of a silent "free".
+ * discover's rows with other threads' use marked. Windows map to apps by one list_apps only when a
+ * holder names an app and the cell can afford it; a lookup that cannot answer, a row it cannot
+ * place, or marks over the return budget give holdersUnknown, never a silent "free".
  */
 export const withHolders = Effect.fn("DesktopWindows.withHolders")(function* (
   reply: ComputerUsePrimitiveReply,

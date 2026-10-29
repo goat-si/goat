@@ -5,6 +5,7 @@ import * as TestClock from "effect/testing/TestClock";
 import type { ScreenHostCall, ScreenObservation, ScreenTargetRef } from "@goat/contracts";
 import { call, context, fixture } from "./DesktopTargetHost.testkit.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
+import { withInputTiming } from "./DesktopWindows.ts";
 
 const at = (deadlineMillis: number, each: ScreenHostCall): ScreenHostCall => ({
   ...each,
@@ -237,3 +238,17 @@ it.effect("an input's result carries its total and per-phase host time", () =>
     });
   }),
 );
+
+it("an answer keeps its timing exactly while both the host value and the guest's Done fit returnBytes", () => {
+  const timing = { ms: 0, phases: { driverMs: 0 } };
+  // Nothing answered: the guest's Done is the verdict and the timing, with no result.
+  const host = JSON.stringify({ _timing: timing, _noResult: true }).length;
+  const guest = JSON.stringify({ verdict: "unverifiable", ...timing }).length;
+  const limit = Math.max(host, guest);
+  expect(withInputTiming(undefined, timing, limit)).toEqual({ _timing: timing, _noResult: true });
+  expect(withInputTiming(undefined, timing, limit - 1)).toBeUndefined();
+  // An empty answer stays an empty result.
+  const empty = JSON.stringify({ verdict: "unverifiable", ...timing, result: {} }).length;
+  expect(withInputTiming({}, timing, empty)).toEqual({ _timing: timing });
+  expect(withInputTiming({}, timing, empty - 1)).toEqual({});
+});

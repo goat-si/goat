@@ -163,6 +163,11 @@ it.effect(
       fixture.state.clickResult = undefined as never;
       expect((yield* fixture.dispatch("press_key", { key: "Escape" }))?.value).toEqual({
         _timing: timing,
+        _noResult: true,
+      });
+      fixture.state.clickResult = {};
+      expect((yield* fixture.dispatch("press_key", { key: "Escape" }))?.value).toEqual({
+        _timing: timing,
       });
     }),
 );
