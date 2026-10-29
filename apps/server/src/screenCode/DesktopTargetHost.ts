@@ -75,6 +75,7 @@ import {
   parseWindowList,
   sheetParentId,
   type WindowEntry,
+  withHolders,
 } from "./DesktopWindows.ts";
 import { isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
 import {
@@ -360,7 +361,7 @@ export const createDesktopTargetHost = (deps: {
         call,
         context,
       );
-      return { value: driverValue(reply), category: "unverifiable" };
+      return yield* withHolders(reply, call, context, deps.leases, request);
     },
   );
   const bindApp: DesktopTargetHost["bindApp"] = Effect.fn("DesktopTargetHost.bindApp")(

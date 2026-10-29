@@ -44,6 +44,7 @@ import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRun
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
+import type { AppHolder } from "./ComputerUseAppLeases.ts";
 import {
   type CursorTargetReport,
   nextTurn,
@@ -207,6 +208,12 @@ export class ComputerUseLeases extends Context.Service<
       readonly threadId: ThreadId;
       readonly controlId: string;
     }) => Effect.Effect<boolean>;
+    /**
+     * Which other threads use which apps now (D17 leases and calls still out), for discover. It
+     * reads without waiting on or changing admission. Optional only so partial test services
+     * need not stub it; this service always provides it.
+     */
+    readonly appHolders?: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<AppHolder>>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     /**
@@ -703,6 +710,7 @@ const make = Effect.gen(function* () {
     callReservation: calls.reserve,
     releaseApps: calls.releaseApps,
     streamOpened: calls.streamOpened,
+    appHolders: calls.appHolders,
     stop: (threadId) =>
       Clock.currentTimeMillis.pipe(
         Effect.map((now) => end(threadId, "stopped", now)),

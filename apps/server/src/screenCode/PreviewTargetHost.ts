@@ -24,6 +24,8 @@ import {
   type ScreenHostDispatcher,
 } from "./ScreenHostBridge.ts";
 import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
+import { withInputTiming } from "./DesktopWindows.ts";
+import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
@@ -338,6 +340,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         };
       }
       if (call.method === "open_tab") {
+        if (nonWebUrl(arg.url)) return yield* Effect.fail(fail("unsupported", WEB_ONLY));
         // Once the browser may have opened the tab, a cutoff must not stop us claiming it, and a
         // tab that cannot be claimed is closed, so no agent tab escapes turn cleanup.
         return yield* Effect.uninterruptible(
@@ -542,6 +545,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
         click: "click",
         right_click: "click",
+        hover: "hover",
         drag: "drag",
         scroll: "scroll",
         select: "select",
@@ -558,6 +562,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const operation = actions[call.method];
       if (!operation || call.method === "select_text")
         return yield* Effect.fail(fail("unsupported", "This tab operation is unavailable."));
+      const startedAt = yield* Clock.currentTimeMillis;
       // The caller's own tab, such as one goat_preview_open made, needs no separate claim.
       const ownedByCaller = current.control?.ownedByCaller === true;
       if (call.method !== "wait_for") {
@@ -663,7 +668,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           fail("invalid_argument", "Use a point from the current screenshot."),
         );
       // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
-      if (point && !["click", "right_click", "drag", "scroll"].includes(call.method))
+      if (point && !["click", "right_click", "hover", "drag", "scroll"].includes(call.method))
         return yield* Effect.fail(
           fail("invalid_argument", "Click the point first, or name an element or selector."),
         );
@@ -679,15 +684,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       let input: Record<string, unknown> = {};
       switch (call.method) {
         case "click":
-        case "right_click": {
-          if (!locator && !point)
-            return yield* Effect.fail(
-              fail("invalid_argument", "Use a current element or image point."),
-            );
-          input = {
-            ...(locator ? { locator } : { x: point?.x, y: point?.y }),
-            ...(call.method === "right_click" ? { button: "right" } : {}),
-          };
+        case "right_click":
+        case "hover": {
+          const now = yield* Clock.currentTimeMillis;
+          const pointer = pointerInput(
+            call.method,
+            arg,
+            locator ?? point,
+            call.deadlineMillis,
+            now,
+          );
+          if ("error" in pointer) return yield* Effect.fail(pointer.error);
+          input = pointer.fields;
           break;
         }
         case "drag": {
@@ -757,28 +765,36 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ...(Array.isArray(arg.modifiers) ? { modifiers: arg.modifiers } : {}),
           };
           break;
-        case "wait_for":
+        case "wait_for": {
+          const conditions = waitConditions(arg);
+          if ("error" in conditions) return yield* Effect.fail(conditions.error);
           input = {
             ...(locator ? { locator } : {}),
             ...(stringField(arg, "text") ? { text: arg.text } : {}),
             ...(stringField(arg, "urlIncludes") ? { urlIncludes: arg.urlIncludes } : {}),
             ...(stringField(arg, "loadState") ? { loadState: arg.loadState } : {}),
+            ...conditions.fields,
           };
           if (Object.keys(input).length === 0)
             return yield* Effect.fail(fail("invalid_argument", "Provide a wait condition."));
           break;
+        }
         case "navigate_tab":
           if (!stringField(arg, "url"))
             return yield* Effect.fail(fail("invalid_argument", "Provide a URL."));
+          if (nonWebUrl(arg.url)) return yield* Effect.fail(fail("unsupported", WEB_ONLY));
           input = { url: arg.url };
           break;
       }
       // Input waits for its target or a dialog; the request deadline, which the server starts
       // before queueing, ends with the cell so nothing lands after the cell stopped waiting.
       let cellBudgetMs: number | undefined;
-      if (["select", "type", "click", "drag", "scroll"].includes(operation)) {
+      if (["select", "type", "click", "hover", "drag", "scroll"].includes(operation)) {
         const now = yield* Clock.currentTimeMillis;
-        cellBudgetMs = Math.max(1, Math.min(15_000, call.deadlineMillis - now));
+        // A click or hover asked to wait longer for its target keeps the request open for it.
+        const asked =
+          operation === "click" || operation === "hover" ? Number(input.timeoutMs) + 500 : 0;
+        cellBudgetMs = Math.max(1, Math.min(Math.max(15_000, asked), call.deadlineMillis - now));
         if (operation === "select" || operation === "type")
           input = { ...input, timeoutMs: cellBudgetMs };
       }
@@ -837,6 +853,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       // A point, or a ref from an incomplete tree, carries its document so the browser's input
       // gate can refuse it.
       const pointDocument = point || documentBound ? bound.documentGeneration : undefined;
+      const sentAt = yield* Clock.currentTimeMillis;
       const result = yield* invoke(
         bound,
         context,
@@ -855,6 +872,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           }),
         ),
       );
+      const endedAt = yield* Clock.currentTimeMillis;
       // Navigation answers with the page it reached, as a click that navigated may.
       const reached =
         typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
@@ -881,18 +899,34 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       // cell goes on and one observation settles it. Typed text stays unverifiable: no read the
       // page cannot also produce tells this input's insert from the page's own.
       const seen =
-        operation === "click" && typeof result === "object" && result !== null
+        (operation === "click" || call.method === "set_value") &&
+        typeof result === "object" &&
+        result !== null
           ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
-      const confirmed = navigated || (seen?.effect === "confirmed" && Array.isArray(seen.evidence));
+      // A range the browser set and read back is confirmed; typed text never is.
+      const confirmed =
+        navigated ||
+        (seen?.effect === "confirmed" &&
+          Array.isArray(seen.evidence) &&
+          (operation === "click" || seen.evidence.includes("value")));
       return {
-        value: result,
+        value:
+          call.method === "close_tab"
+            ? result
+            : withInputTiming(
+                result,
+                { ms: endedAt - startedAt, phases: { driverMs: endedAt - sentAt } },
+                context.limits.returnBytes,
+              ),
         category: confirmed ? "confirmed" : "unverifiable",
         evidence: navigated
           ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
           : confirmed && seen
-            ? (seen.evidence as ReadonlyArray<unknown>).map((each) => `click:${String(each)}`)
+            ? (seen.evidence as ReadonlyArray<unknown>).map(
+                (each) => `${operation === "click" ? "click" : "set_value"}:${String(each)}`,
+              )
             : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
         outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },

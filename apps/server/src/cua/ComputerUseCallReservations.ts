@@ -6,6 +6,7 @@ import type {
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- ids are minted inside the atomic claim.
 import * as NodeCrypto from "node:crypto";
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+import type { AppHolder } from "./ComputerUseAppLeases.ts";
 import { backgroundBatch, batchWindow, isBatchTool } from "./ComputerUseBatchScope.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
@@ -188,6 +189,25 @@ export const makeCallReservations = () => {
           };
       }
       return undefined;
+    },
+    /**
+     * Other threads' window calls still out, one per call, for discover. Unlike appTicket it never
+     * marks a ticket stopped, so reading starts no grace; a ticket admission would still count is
+     * listed. A desktop-wide ticket names no app, and appTicket passes it by too.
+     */
+    ticketHolders(threadId: ThreadId, now: number): ReadonlyArray<AppHolder> {
+      const held: AppHolder[] = [];
+      for (const ticket of tickets.values()) {
+        if (ticket.threadId === threadId || typeof ticket.resource !== "object") continue;
+        if (ticket.stoppedAt !== undefined && now - ticket.stoppedAt >= ORPHAN_CALL_GRACE_MS)
+          continue;
+        held.push({
+          holderThreadId: ticket.threadId,
+          pids: [ticket.resource.pid],
+          ...(ticket.call.app === undefined ? {} : { app: ticket.call.app }),
+        });
+      }
+      return held;
     },
     /** The control stopped, idled, was replaced or lost its proxy: its calls out are stopping. */
     markStopped(threadId: ThreadId, controlId: string, now: number) {

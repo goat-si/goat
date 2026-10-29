@@ -1,0 +1,123 @@
+import type { Locator } from "playwright-core";
+
+/** A wait's conditions that must hold together on its one target (see PreviewWaitStateFields). */
+interface StateInput {
+  readonly enabled?: boolean | undefined;
+  readonly value?: string | undefined;
+  readonly checked?: boolean | undefined;
+  readonly selected?: boolean | undefined;
+  readonly state?: string | undefined;
+  readonly text?: string | undefined;
+  readonly urlIncludes?: string | undefined;
+}
+
+/** The element conditions a wait asked for, as its timeout names them. */
+export const stateConditions = (input: StateInput): ReadonlyArray<string> =>
+  (["enabled", "value", "checked", "selected"] as const).flatMap((key) =>
+    input[key] === undefined ? [] : [`${key}=${JSON.stringify(input[key])}`],
+  );
+
+/**
+ * Whether the one element a strict locator names holds every condition at once, with the wait's
+ * visibility (and page text and URL when it is in the main frame), read in one page task. A
+ * missing, mixed or indeterminate checked or selected state matches neither true nor false.
+ */
+export const matchesState = async (locator: Locator, input: StateInput, budgetMs: number) => {
+  const read = await locator
+    .evaluate(
+      (element, [text, url]) => {
+        type Node = {
+          readonly tagName: string;
+          readonly value?: unknown;
+          readonly checked?: unknown;
+          readonly indeterminate?: unknown;
+          readonly selected?: unknown;
+          readonly type?: unknown;
+          readonly textContent: string | null;
+          matches(selector: string): boolean;
+          closest(selector: string): unknown;
+          getAttribute(name: string): string | null;
+          getBoundingClientRect(): { readonly width: number; readonly height: number };
+        };
+        const view = globalThis as unknown as {
+          getComputedStyle(node: unknown): {
+            readonly visibility: string;
+            readonly display: string;
+          };
+          readonly location: { readonly href: string };
+          readonly document: {
+            readonly body: { readonly innerText: string } | null;
+            createRange(): {
+              selectNodeContents(node: unknown): void;
+              getBoundingClientRect(): Rect;
+            };
+          };
+          readonly top: unknown;
+        };
+        const node = element as unknown as Node;
+        const aria = (name: string) => {
+          const said = node.getAttribute(name);
+          return said === "true" ? true : said === "false" ? false : null;
+        };
+        const checkable =
+          node.tagName === "INPUT" && (node.type === "checkbox" || node.type === "radio");
+        const checked = checkable
+          ? node.indeterminate === true
+            ? null
+            : node.checked === true
+          : aria("aria-checked");
+        const selected = node.tagName === "OPTION" ? node.selected === true : aria("aria-selected");
+        const form = ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName);
+        type Rect = { readonly width: number; readonly height: number };
+        const rendered = (box: Rect) => box.width > 0 && box.height > 0;
+        // As Playwright judges it: a display: contents element shows through its child elements
+        // and its own non-empty text.
+        const visible = (each: Node): boolean => {
+          const style = view.getComputedStyle(each);
+          if (style.display !== "contents")
+            return rendered(each.getBoundingClientRect()) && style.visibility !== "hidden";
+          const kids = (
+            each as unknown as {
+              readonly childNodes: ArrayLike<{
+                readonly nodeType: number;
+                readonly textContent: string | null;
+              }>;
+            }
+          ).childNodes;
+          return Array.from(kids).some((kid) => {
+            if (kid.nodeType === 1) return visible(kid as unknown as Node);
+            if (kid.nodeType !== 3 || (kid.textContent ?? "").trim() === "") return false;
+            const range = view.document.createRange();
+            range.selectNodeContents(kid);
+            return rendered(range.getBoundingClientRect()) && style.visibility !== "hidden";
+          });
+        };
+        // Page text and URL belong to the main page; a target in a frame leaves them to that check.
+        const top = view.top === globalThis;
+        return {
+          enabled: !node.matches(":disabled") && node.closest('[aria-disabled="true"]') === null,
+          checked,
+          selected: selected ?? checked,
+          value:
+            form && typeof node.value === "string" ? node.value : (node.textContent ?? "").trim(),
+          visible: visible(node),
+          text: text === null || !top || (view.document.body?.innerText ?? "").includes(text),
+          url: url === null || !top || view.location.href.includes(url),
+        };
+      },
+      [input.text ?? null, input.urlIncludes ?? null] as const,
+      { timeout: Math.max(1, Math.min(budgetMs, 1_000)) },
+    )
+    .catch((cause: unknown) => {
+      // A hidden wait also holds for a detached target, which has no state to read: not yet.
+      if (cause instanceof Error && cause.name === "TimeoutError") return undefined;
+      throw cause;
+    });
+  if (read === undefined) return false;
+  const element = (["enabled", "value", "checked", "selected"] as const).every(
+    (key) => input[key] === undefined || read[key] === input[key],
+  );
+  const shown =
+    input.state === "visible" ? read.visible : input.state === "hidden" ? !read.visible : true;
+  return element && shown && read.text && read.url;
+};

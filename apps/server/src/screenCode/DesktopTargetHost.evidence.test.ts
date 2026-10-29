@@ -314,12 +314,12 @@ it.effect(
 );
 
 it.effect(
-  "T42: watched window value, new window and title changes are reported as observed evidence only",
+  "T42: a stateless click reports new windows and title changes, and reads no other row's state",
   () =>
     Effect.gen(function* () {
       let lCalls = 0;
       let vCalls = 0;
-      const { host } = fixture({
+      const { host, sent } = fixture({
         get_window_state: {
           pid: 42,
           window_id: 7,
@@ -379,7 +379,9 @@ it.effect(
       if (!btn) throw new Error("Missing button");
       const res = yield* invokeEv(host, evCall("click", { elementRef: btn.ref }, ref));
       expect(res.category).toBe("unverifiable");
-      expect(res.evidence).toContain('observed:window_change:Display "0"→"702"');
+      expect(sent.filter((each) => each.tool === "verify_state")).toHaveLength(0);
+      expect(vCalls).toBe(0);
+      expect(res.evidence).not.toContain('observed:window_change:Display "0"→"702"');
       expect(res.evidence).toContain("observed:window_opened:82871");
       expect(res.evidence).toContain('observed:window_title:"Appearance"→"About"');
     }),
@@ -603,10 +605,10 @@ it.live(
 );
 
 it.live(
-  "T63a: 60 ms post-input settle sleep observes delayed main-runloop updates onto Done.observed within guestDoneBytes budget",
+  "T63a: an element click reads its own delayed state change onto Done.observed with its timing, a pixel click reads no element state, and Done stays within returnBytes",
   () =>
     Effect.gen(function* () {
-      let inPostRead = false;
+      let verifies = 0;
       let bigHit: unknown;
       const { host } = fixture({
         list_windows: { windows: [win(7, { bounds: { x: 0, y: 0, width: 674, height: 408 } })] },
@@ -648,16 +650,13 @@ it.live(
             window_bounds: { x: 0, y: 0, width: 674, height: 408 },
           };
         },
-        click: () => {
-          inPostRead = true;
-          return {
-            effect: "unverifiable",
-            ...(bigHit === undefined ? {} : { hit: bigHit }),
-          };
-        },
+        click: () => ({
+          effect: "unverifiable",
+          ...(bigHit === undefined ? {} : { hit: bigHit }),
+        }),
+        // Each read-back pairs a read before the input with one after it.
         verify_state: () => {
-          const post = inPostRead;
-          if (post) inPostRead = false;
+          const post = ++verifies % 2 === 0;
           return {
             status: "satisfied",
             predicates: [
@@ -684,20 +683,26 @@ it.live(
         },
       });
 
-      // T63a (1) & (2): pixel click and element click observe the 40 ms delayed transition via the 60 ms post-input settle sleep,
-      // even when dense-row index (11) differs from verify_state exhaustive-walk element_index (18).
+      // A pixel click has no acted element to read back; the checkbox click reads its own state after the
+      // settle, even when the dense-row index (11) differs from verify_state's exhaustive-walk element_index (18).
       const res = yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
           "globalThis.calcApp = app; await app.observe(); await app.screenshot(); " +
           "const pxDone = await app.click([20, 20]); " +
           "const elDone = await app.click(11); " +
-          "return { pxObs: pxDone.observed, pxRawObs: pxDone.result?._observed, elObs: elDone.observed };",
+          "return { pxObs: pxDone.observed, pxRawObs: pxDone.result?._observed, elObs: elDone.observed, " +
+          "elMs: typeof elDone.ms, elDriverMs: typeof elDone.phases?.driverMs, elSettleMs: typeof elDone.phases?.settleMs, " +
+          "elRawTiming: elDone.result?._timing };",
       ).pipe(Effect.provide(cellService(host)));
       expect(res.value).toEqual({
-        pxObs: ['observed:window_change:Secondary Functions "0"→"1"'],
+        pxObs: undefined,
         pxRawObs: undefined,
         elObs: ['observed:element_state:value "0"→"1"'],
+        elMs: "number",
+        elDriverMs: "number",
+        elSettleMs: "number",
       });
+      expect(verifies).toBe(2);
 
       // T63a (3): a >200-byte hit object near returnBytes is measured via guestDoneBytes so returning Done directly never exceeds returnBytes.
       bigHit = { role: "AXButton", label: "x".repeat(180), element_token: "s1:11" };
@@ -720,7 +725,7 @@ it.live(
 );
 
 it.effect(
-  "T63b: 60 ms post-input settle sleep waits before post-input verify_state to catch a 40 ms delayed transition, and tight-budget screenshot preserves needsSettleBeforeCapture",
+  "T63b: a read-back of the acted element waits 60 ms after the input before verify_state, and a screenshot the cell cannot settle leaves the settle to the next one",
   () =>
     Effect.gen(function* () {
       let clickedAt: number | undefined;
@@ -808,15 +813,15 @@ it.effect(
         evCall("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       )).value as ScreenTargetRef;
-      yield* host.observe(call("get_window_state", {}, bound), context);
+      const read = (yield* host.observe(call("get_window_state", {}, bound), context))
+        .value as ScreenObservation;
+      const checkbox = read.elements.find((each) => each.name === "Secondary Functions");
+      if (!checkbox) throw new Error("Missing checkbox");
 
-      // 1. Prove on TestClock that post-input verify_state waits for the 60 ms settle sleep (not sent at +30 ms)
+      // 1. On TestClock the post-input verify_state waits for the 60 ms settle (not sent at +30 ms)
       // and therefore observes the 40 ms delayed transition ("0" -> "1") at +60 ms.
       const clickFiber = yield* host
-        .invoke(
-          evCall("click", { x: 10, y: 10, coordinate_space: "window_points" }, bound),
-          context,
-        )
+        .invoke(evCall("click", { elementRef: checkbox.ref }, bound), context)
         .pipe(Effect.forkChild);
       yield* Effect.yieldNow;
       yield* TestClock.adjust("30 millis");
@@ -825,9 +830,9 @@ it.effect(
       yield* TestClock.adjust("30 millis");
       const clickOut = yield* Fiber.join(clickFiber);
       expect(sent.filter((s) => s.tool === "verify_state")).toHaveLength(2);
-      expect(clickOut.evidence).toContain('observed:window_change:Secondary Functions "0"→"1"');
+      expect(clickOut.evidence).toContain('observed:element_state:value "0"→"1"');
 
-      // 2. Tight-budget input (< 1,560 ms after reserve) skips the 60 ms post-input sleep and leaves needsSettleBeforeCapture = true.
+      // 2. A pixel input never settles itself, so it leaves needsSettleBeforeCapture for the next read.
       yield* host.invoke(
         {
           ...call("click", { x: 10, y: 10, coordinate_space: "window_points" }, bound),

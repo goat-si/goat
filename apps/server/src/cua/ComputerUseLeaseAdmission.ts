@@ -211,5 +211,26 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
       streams.set(controlId, (streams.get(controlId) ?? 0) + 1);
       gone.delete(controlId);
     });
-  return { reserve, releaseApps, streamOpened };
+  /**
+   * Which other threads use which apps now, for discover. It reads without the permit and without
+   * a yield, so it neither waits on admission nor changes it. An idle control still counts: one
+   * held for a person reads as paused and keeps its app (ComputerUseLeases controlState).
+   */
+  const appHolders = (threadId: ThreadId) =>
+    DateTime.now.pipe(
+      Effect.map((now) => {
+        const at = DateTime.toEpochMillis(now);
+        const live = (holder: ThreadId, controlId: string) => {
+          const record = controls.get(holder);
+          return (
+            !gone.has(controlId) && record?.controlId === controlId && record.ended === undefined
+          );
+        };
+        return [
+          ...appLeases.holders(threadId, at, live),
+          ...reservations.ticketHolders(threadId, at),
+        ];
+      }),
+    );
+  return { reserve, releaseApps, streamOpened, appHolders };
 };

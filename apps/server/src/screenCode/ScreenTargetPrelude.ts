@@ -86,7 +86,13 @@ const __enqueue = (method, arg) => new Promise((resolve, reject) => {
 });
 const __tabQuery = (query) =>
   typeof query === 'string' ? (/^[a-z][a-z0-9+.-]*:/i.test(query) ? { url: query } : { tabId: query }) : query;
-const __call = async (method, arg) => (await __reply(method, [arg])).v;
+// Older call forms return the host's value as it was before Done carried timing.
+const __plain = (value) => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || !('_timing' in value || '_noResult' in value)) return value;
+  const { _timing: _t, _noResult: none, ...rest } = value;
+  return none === true ? undefined : rest;
+};
+const __call = async (method, arg) => __plain((await __reply(method, [arg])).v);
 const __checked = async (method, arg, queued = false) => {
   try { return await (queued ? __enqueue(method, arg) : __reply(method, [arg])); }
   catch (raw) {
@@ -117,17 +123,19 @@ const __legacy = (arg) =>
   ('ref' in arg || 'elementRef' in arg || 'point' in arg || 'x' in arg || 'selector' in arg || 'targetRef' in arg ||
     'sourceRef' in arg || 'deltaY' in arg || 'deltaX' in arg || 'mode' in arg || 'baseObservationId' in arg || 'urlIncludes' in arg || 'loadState' in arg);
 const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
-const __inputs = new Set(['click', 'right_click', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
+const __inputs = new Set(['click', 'right_click', 'hover', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
 const __target = (binding, note, owner, extraProps = {}) => {
   let ref = binding.targetRef ?? binding;
   let currentWindowId = extraProps.windowId;
   let currentNote = note;
   const tab = ref.kind === 'tab';
-  const seen = { observation: undefined, image: undefined, replaced: false };
-  // Older call forms reach the host directly; tab clicks keep their screenshot, other tab inputs retire it.
+  const seen = { observation: undefined, image: undefined, replaced: false, retired: false };
+  // Tab clicks keep their screenshot; any other tab input may scroll or change the page, so it retires it.
+  const retire = () => { if (seen.image) seen.retired = true; seen.image = undefined; };
+  // Older call forms reach the host directly.
   const call = (method, arg = {}) => {
-    if (tab && __inputs.has(method) && method !== 'click' && method !== 'right_click') seen.image = undefined;
+    if (tab && __inputs.has(method) && method !== 'click' && method !== 'right_click') retire();
     const withRegion =
       !tab &&
       __pointerMethods.has(method) &&
@@ -142,27 +150,30 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return __call(method, { ...withRegion, targetRef: ref });
   };
   const act = async (name, method, arg) => {
-    if (tab && method !== 'click' && method !== 'right_click') seen.image = undefined;
+    if (tab && method !== 'click' && method !== 'right_click') retire();
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
     if (reply.v === undefined) return { verdict };
     const isObj = reply.v !== null && typeof reply.v === 'object' && !Array.isArray(reply.v);
     const observed = isObj && Array.isArray(reply.v._observed) ? reply.v._observed : undefined;
+    // The host's time for this call rides in _timing and comes out on Done as ms and phases.
+    const timing = isObj && reply.v._timing && typeof reply.v._timing === 'object' ? reply.v._timing : undefined;
     let cleanResult = reply.v;
-    if (isObj && '_observed' in reply.v) {
-      const { _observed: _omitted, ...rest } = reply.v;
+    if (isObj && ('_observed' in reply.v || '_timing' in reply.v || '_noResult' in reply.v)) {
+      const { _observed: _omitted, _timing: _timed, _noResult: _none, ...rest } = reply.v;
       cleanResult = rest;
     }
     const extra =
       isObj
         ? {
+            ...(timing ? { ms: timing.ms, phases: timing.phases } : {}),
             ...(observed && observed.length > 0 ? { observed } : {}),
             ...('point' in reply.v ? { point: reply.v.point } : {}),
             ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
           }
         : {};
-    return { verdict, ...extra, result: cleanResult };
+    return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
   };
   const element = (target) => {
     const observation = seen.observation;
@@ -202,6 +213,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
   const shot = () => {
     if (!seen.image && seen.replaced)
       throw new ScreenError('stale_reference', 'The window this screenshot showed was replaced; take a new screenshot.', true);
+    if (!seen.image && seen.retired)
+      throw new ScreenError('stale_reference', 'The page scrolled or changed since that screenshot. Observe({screenshot:true}) again.', true);
     if (!seen.image)
       throw new ScreenError(
         'invalid_argument',
@@ -254,7 +267,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       }
     }
     if (observation && Array.isArray(observation.elements)) seen.observation = observation;
-    if (observation && observation.image) { seen.image = observation.image; seen.replaced = false; }
+    if (observation && observation.image) { seen.image = observation.image; seen.replaced = false; seen.retired = false; }
     return observation;
   };
   const observe = async (arg = {}) => {
@@ -304,6 +317,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
       ...(wanted.text === undefined ? {} : { text: wanted.text }),
       ...(wanted.url === undefined ? {} : { urlIncludes: wanted.url }),
       ...(wanted.load === undefined ? {} : { loadState: wanted.load }),
+      ...(wanted.enabled === undefined ? {} : { enabled: wanted.enabled }),
+      ...(wanted.value === undefined ? {} : { value: wanted.value }),
+      ...(wanted.checked === undefined ? {} : { checked: wanted.checked }),
+      ...(wanted.selected === undefined ? {} : { selected: wanted.selected }),
+      ...(wanted.state === undefined ? {} : { state: wanted.state }),
       ...(wanted.target === undefined ? {} : aim(wanted.target)),
       // {role, name} waits for an element that may not exist yet, so it names it by role.
       ...(wanted.target !== undefined || wanted.role === undefined
@@ -332,16 +350,25 @@ const __target = (binding, note, owner, extraProps = {}) => {
     observe,
     click: (target = {}, options = {}) => {
       if (__legacy(target)) return call('click', target);
-      if (tab && options.count !== undefined && options.count !== 1)
-        throw new ScreenError('unsupported', 'Tabs click once per call.', true);
+      if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
+        throw new ScreenError('invalid_argument', 'A tab click count is 1, 2 or 3.', true);
       const run = () =>
         act('click', options.button === 'right' ? 'right_click' : 'click', {
           ...aim(target),
-          ...(!tab && options.count !== undefined ? { count: options.count } : {}),
+          ...(options.count !== undefined ? { count: options.count } : {}),
+          ...(tab && options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
         });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
+    },
+    // Tabs move the pointer over the target, which shows hover-only controls; apps cannot yet.
+    hover: (target, options = {}) => {
+      if (!tab) throw new ScreenError('unsupported', 'Apps cannot hover yet; nothing was sent.', true);
+      return act('hover', 'hover', {
+        ...aim(target),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
     },
     type: (text, target, options = {}) => {
       if (Array.isArray(target) || __winPt(target))
@@ -422,7 +449,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
     // The timeout comes as a number, waitFor(c, 5000), or as options, waitFor(c, {timeoutMs: 5000}).
     waitFor: (wanted = {}, options = {}) => wait(wanted, typeof options === 'number' ? options : options.timeoutMs),
-    verify: (wanted = {}) => wait(wanted, tab ? 250 : 0),
+    // An app input no longer waits for its effect to settle, so verify gives the app 60 ms to show it.
+    verify: (wanted = {}) => wait(wanted, tab ? 250 : 60),
     rightClick: (arg = {}) => call('right_click', arg),
     selectText: (target, text, options = {}) => {
       if (text === undefined) return call('select_text', target ?? {});
@@ -612,7 +640,7 @@ globalThis.screen = Object.freeze({ values: __values, state: {},
   tab: async (query = {}) => __tab(await __call('select_tab', __tabQuery(query))),
   openTab: async (arg = {}) => __tab(await __call('open_tab', arg)),
   listTabs: () => __call('list_tabs', {}),
-  ${methods.map((method) => `${method}: async (...args) => (await __reply(${JSON.stringify(method)}, args)).v`).join(",\n  ")}
+  ${methods.map((method) => `${method}: async (...args) => __plain((await __reply(${JSON.stringify(method)}, args)).v)`).join(",\n  ")}
 });
 globalThis.console = Object.freeze({ log: (...args) => __log(args.map(String).join(' ')) });
 `;

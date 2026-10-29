@@ -441,8 +441,9 @@ it.effect(
         const result = yield* runReuseScenario(scenario);
         expect(result.second._tag).toBe("Success");
         expect(result.clicks).toEqual([
-          { x: 10, y: 10 },
-          { x: 20, y: 20 },
+          // The cell ends at 1 s; a click waits for its target until 500 ms before that.
+          { x: 10, y: 10, timeoutMs: 500 },
+          { x: 20, y: 20, timeoutMs: 500 },
         ]);
         expect(result.snapshots).toBe(1);
         expect(result.domValue).toBe(2);

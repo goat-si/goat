@@ -247,7 +247,7 @@ it.live(
       expect(result).toMatchObject({
         status: "completed",
         value: true,
-        contractVersion: "screen-target/3",
+        contractVersion: "screen-target/4",
       });
       const presses = sent.filter((entry) => entry.tool === "press_key");
       expect(presses).toHaveLength(2);
@@ -530,13 +530,13 @@ it.live(
         });
         expect(result).toMatchObject({
           status: "completed",
-          value: { afterPress: "invalid_argument", afterNavigate: "invalid_argument" },
+          value: { afterPress: "stale_reference", afterNavigate: "stale_reference" },
         });
         expect(snapshots).toBe(2);
         expect(clickInputs).toEqual([
-          { x: 20, y: 30 },
-          { x: 40, y: 50, button: "right" },
-          { x: 20, y: 30 },
+          { x: 20, y: 30, timeoutMs: 5_000 },
+          { x: 40, y: 50, button: "right", timeoutMs: 5_000 },
+          { x: 20, y: 30, timeoutMs: 5_000 },
         ]);
         expect(ops).toContain("press");
       }).pipe(
@@ -555,3 +555,100 @@ it.live(
     });
   },
 );
+
+it.live(
+  "a tab double click goes out once with count 2, a count outside 1 to 3 is refused unsent in every call form, and Done carries its time and keeps an empty result apart from none",
+  () => {
+    const clicks: Array<unknown> = [];
+    const answers: Record<string, unknown> = {
+      "#submit": { ok: true },
+      "#empty": {},
+      "#none": undefined,
+    };
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([formTab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        if (request.operation === "click") {
+          clicks.push(request.input);
+          return Effect.succeed(
+            answers[String((request.input as { locator?: unknown }).locator)] as A,
+          );
+        }
+        return Effect.succeed({
+          tabId: formTab.tabId,
+          url: formTab.url,
+          control: { owner: "unclaimed", generation: 0 },
+        } as A);
+      },
+    };
+    return Effect.gen(function* () {
+      const [result] = yield* runCells(broker, [
+        `const tab = await screen.tab({tabId: 'form'});
+        await tab.claim();
+        const done = await tab.click('#submit', { count: 2 });
+        const empty = await tab.click('#empty');
+        const none = await tab.click('#none');
+        const legacy = await tab.click({ selector: '#submit' });
+        const refused = [];
+        for (const attempt of [() => tab.click('#submit', { count: 4 }), () => tab.click({ selector: '#submit', count: 9 })])
+          try { await attempt(); } catch (error) { refused.push([error.code, error.nothingSent]); }
+        return { ms: typeof done.ms, driverMs: typeof done.phases?.driverMs, raw: done.result?._timing,
+          empty: empty.result, none: 'result' in none, noneMs: typeof none.ms, legacy, refused };`,
+      ]);
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: {
+          status: "completed",
+          value: {
+            ms: "number",
+            driverMs: "number",
+            empty: {},
+            none: false,
+            noneMs: "number",
+            legacy: { ok: true },
+            refused: [
+              ["invalid_argument", true],
+              ["invalid_argument", true],
+            ],
+          },
+        },
+      });
+      expect(clicks).toMatchObject([{ clickCount: 2 }, {}, {}, {}]);
+      expect(clicks).toHaveLength(4);
+    });
+  },
+);
+
+it.live("an app verify gives the window 60 ms to show the condition", () => {
+  const { host, sent } = fixture({ verify_state: { status: "satisfied" } });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: desktopContext.invocation,
+      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+      let hover;
+      try { await app.hover('Apply'); } catch (error) { hover = [error.code, error.nothingSent]; }
+      return [(await app.verify({ role: 'AXButton', name: 'Apply' })).met, hover];`,
+    });
+    expect(result).toMatchObject({ status: "completed", value: [true, ["unsupported", true]] });
+    expect(sent.find((entry) => entry.tool === "verify_state")?.args).toMatchObject({
+      timeout_ms: 60,
+    });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        desktopHost: host,
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});

@@ -1,11 +1,21 @@
 import { tooLargeStep } from "./DesktopObserveRead.ts";
 import {
   COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+  type ComputerUsePrimitiveReply,
+  type ScreenHostCall,
   type ScreenRunError,
   type ScreenWindowSummary,
+  type ThreadId,
 } from "@goat/contracts";
+import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+import * as Clock from "effect/Clock";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import type { AppHolder } from "../cua/ComputerUseAppLeases.ts";
+import { CELL_RESERVE_MS, driverCallCapMs } from "../cua/ComputerUseCallCaps.ts";
 import { boundsOf, type Rect } from "./DesktopFrames.ts";
-import { fail } from "./DesktopDriverReplies.ts";
+import { driverValue, fail } from "./DesktopDriverReplies.ts";
+import type { ScreenHostContext } from "./ScreenHostBridge.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Window lists and return budgets are measured against driver JSON.
 /**
  * Desktop window tracking for wp4: before/after window diffs on each non-batch input, cell-level
@@ -29,6 +39,17 @@ export interface InputWindowsReport {
   readonly notListed: ReadonlyArray<ScreenWindowSummary>;
   readonly bound: "present" | "offscreen" | "not_listed" | "unverified";
   readonly truncated?: boolean;
+}
+
+/** Host time an input took, in total and by step; a step that did not run is left out. */
+export interface InputTiming {
+  readonly ms: number;
+  readonly phases: {
+    readonly preMs?: number;
+    readonly driverMs: number;
+    readonly settleMs?: number;
+    readonly postMs?: number;
+  };
 }
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
@@ -143,53 +164,92 @@ export const diffInputWindows = (
 const guestDoneBytes = (
   resultValue: unknown,
   observed: ReadonlyArray<string> | undefined,
+  timing: InputTiming | undefined,
+  noResult: boolean,
 ): number => {
   const obj = object(resultValue);
   const doneShape = {
     verdict: "unverifiable",
+    ...(timing === undefined ? {} : timing),
     ...(observed && observed.length > 0 ? { observed } : {}),
     ...(obj && "point" in obj ? { point: obj.point } : {}),
     ...(obj && "hit" in obj ? { hit: obj.hit } : {}),
-    ...(resultValue === undefined ? {} : { result: resultValue }),
+    ...(resultValue === undefined || noResult ? {} : { result: resultValue }),
   };
   return Buffer.byteLength(JSON.stringify(doneShape) ?? "");
 };
 
+// The host value carries _observed, _timing and _noResult (the driver answered nothing); the
+// guest lifts them onto Done.
 const fitsInputBudget = (
   candidateResult: Record<string, unknown>,
   observed: ReadonlyArray<string> | undefined,
   returnBytes: number,
+  timing: InputTiming | undefined,
+  noResult = false,
 ): unknown | undefined => {
-  const payload =
-    observed && observed.length > 0 ? { ...candidateResult, _observed: observed } : candidateResult;
+  const payload = {
+    ...candidateResult,
+    ...(observed && observed.length > 0 ? { _observed: observed } : {}),
+    ...(timing === undefined ? {} : { _timing: timing }),
+    ...(noResult ? { _noResult: true } : {}),
+  };
   if (
     Buffer.byteLength(JSON.stringify(payload) ?? "") <= returnBytes &&
-    guestDoneBytes(candidateResult, observed) <= returnBytes
+    guestDoneBytes(candidateResult, observed, timing, noResult) <= returnBytes
   )
     return payload;
   return undefined;
 };
 
+/**
+ * The largest input result that fits returnBytes as the host value and as the guest's Done; timing
+ * goes first, then observed rows and window detail. Otherwise the driver's value goes back as it
+ * was, and the bridge refuses it as output_limit if it is over the cap.
+ */
 export const fitInputWindows = (
   driverVal: unknown,
-  report: InputWindowsReport,
+  report: InputWindowsReport | undefined,
   returnBytes: number,
   observed?: ReadonlyArray<string>,
+  timing?: InputTiming,
 ): unknown => {
   const base = object(driverVal) ?? {};
+  const noResult = driverVal === undefined && report === undefined;
   const withWindows = { ...base, windows: report };
-  const full = fitsInputBudget(withWindows, observed, returnBytes);
-  if (full !== undefined) return full;
-  const winOnly = fitsInputBudget(withWindows, undefined, returnBytes);
-  if (winOnly !== undefined) return winOnly;
   const withFlag = { ...base, windowsTruncated: true };
-  const flagAndObs = fitsInputBudget(withFlag, observed, returnBytes);
-  if (flagAndObs !== undefined) return flagAndObs;
-  const flagOnly = fitsInputBudget(withFlag, undefined, returnBytes);
-  if (flagOnly !== undefined) return flagOnly;
-  const obsOnly = fitsInputBudget(base, observed, returnBytes);
-  if (obsOnly !== undefined) return obsOnly;
+  const candidates: ReadonlyArray<
+    readonly [Record<string, unknown>, ReadonlyArray<string> | undefined]
+  > =
+    report === undefined
+      ? [[base, observed]]
+      : [
+          [withWindows, observed],
+          [withWindows, undefined],
+          [withFlag, observed],
+          [withFlag, undefined],
+          [base, observed],
+        ];
+  for (const withTiming of timing === undefined ? [undefined] : [timing, undefined])
+    for (const [candidate, rows] of candidates) {
+      if (noResult && withTiming === undefined && !(rows && rows.length > 0)) return driverVal;
+      const fitted = fitsInputBudget(candidate, rows, returnBytes, withTiming, noResult);
+      if (fitted !== undefined) return fitted;
+    }
   return driverVal;
+};
+
+/** A tab input's answer with its host time when that still fits returnBytes. */
+export const withInputTiming = (
+  value: unknown,
+  timing: InputTiming,
+  returnBytes: number,
+): unknown => {
+  if (value !== undefined && object(value) === undefined) return value;
+  return (
+    fitsInputBudget(object(value) ?? {}, undefined, returnBytes, timing, value === undefined) ??
+    value
+  );
 };
 
 export const sheetParentId = (state: Record<string, unknown>): number | undefined => {
@@ -366,3 +426,102 @@ export const checkWindowReplyState = (
     return { ok: false, evictTarget: true, error: fail("stale_reference") };
   return { ok: true, state };
 };
+
+type HolderLookup = {
+  readonly appHolders?: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<AppHolder>>;
+};
+type DriverRequest = (
+  tool: string,
+  args: Record<string, unknown>,
+  call: ScreenHostCall,
+  context: ScreenHostContext,
+) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+
+const sameApp = (a: string | undefined, b: string | undefined) =>
+  a !== undefined && b !== undefined && cuaAppKey(a) === cuaAppKey(b);
+
+/**
+ * Marks rows another thread uses: its processes, and every row of an app id it names. A row whose
+ * app id is unknown while a holder names one might be that app, so the answer is partial.
+ */
+const markHeldRows = (
+  rows: ReadonlyArray<unknown>,
+  holders: ReadonlyArray<AppHolder>,
+  appOf: (row: Record<string, unknown>) => string | undefined,
+): { readonly rows: ReadonlyArray<unknown>; readonly unknown: boolean } => {
+  const named = holders.some((holder) => holder.app !== undefined);
+  let unknown = false;
+  const marked = rows.map((row) => {
+    const rec = object(row);
+    if (!rec) return row;
+    const pid = natural(rec.pid);
+    const app = appOf(rec);
+    const holder =
+      holders.find((each) => pid !== undefined && each.pids.includes(pid)) ??
+      holders.find((each) => sameApp(each.app, app));
+    if (holder) return { ...rec, inUse: true, holderThreadId: holder.holderThreadId };
+    if (named && app === undefined) unknown = true;
+    return row;
+  });
+  return { rows: marked, unknown };
+};
+
+const fitsReturn = (value: unknown, returnBytes: number) =>
+  Buffer.byteLength(JSON.stringify(value) ?? "") <= returnBytes;
+
+/**
+ * discover's rows with other threads' use marked. Windows map to apps by one list_apps only when a
+ * holder names an app and the cell can afford it; a lookup that cannot answer, a row it cannot
+ * place, or marks over the return budget give holdersUnknown, never a silent "free".
+ */
+export const withHolders = Effect.fn("DesktopWindows.withHolders")(function* (
+  reply: ComputerUsePrimitiveReply,
+  call: ScreenHostCall,
+  context: ScreenHostContext,
+  leases: HolderLookup,
+  request: DriverRequest,
+) {
+  const value = driverValue(reply);
+  const key = call.method === "list_apps" ? "apps" : "windows";
+  const listed = object(value);
+  const rows = listed?.[key];
+  const answer = (next: unknown) => ({ value: next, category: "unverifiable" as const });
+  if (!listed || !Array.isArray(rows)) return answer(value);
+  const unknown = { ...listed, holdersUnknown: true };
+  const holders = leases.appHolders
+    ? yield* leases.appHolders(context.invocation.thread.threadId)
+    : undefined;
+  if (holders === undefined)
+    return answer(fitsReturn(unknown, context.limits.returnBytes) ? unknown : value);
+  if (holders.length === 0) return answer(value);
+  let appOf = (row: Record<string, unknown>): string | undefined =>
+    typeof row.bundle_id === "string" && row.bundle_id.length > 0 ? row.bundle_id : undefined;
+  if (key === "windows") {
+    const byPid = new Map<number, string | undefined>();
+    const now = yield* Clock.currentTimeMillis;
+    const affordable =
+      call.deadlineMillis - now - CELL_RESERVE_MS >= driverCallCapMs("list_apps", {});
+    if (holders.some((holder) => holder.app !== undefined) && affordable) {
+      const apps = yield* request("list_apps", {}, call, context).pipe(Effect.option);
+      const appRows = Option.isSome(apps) ? object(driverValue(apps.value))?.apps : undefined;
+      if (Array.isArray(appRows))
+        for (const row of appRows) {
+          const rec = object(row);
+          const pid = natural(rec?.pid);
+          if (rec && pid !== undefined) byPid.set(pid, appOf(rec));
+        }
+    }
+    appOf = (row) => {
+      const pid = natural(row.pid);
+      return pid === undefined ? undefined : byPid.get(pid);
+    };
+  }
+  const marked = markHeldRows(rows, holders, appOf);
+  const next = {
+    ...listed,
+    [key]: marked.rows,
+    ...(marked.unknown ? { holdersUnknown: true } : {}),
+  };
+  if (fitsReturn(next, context.limits.returnBytes)) return answer(next);
+  return answer(fitsReturn(unknown, context.limits.returnBytes) ? unknown : value);
+});

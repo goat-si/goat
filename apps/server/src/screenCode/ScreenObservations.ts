@@ -506,7 +506,7 @@ export class ScreenObservations {
     const elements = selected.slice(0, 4096).map((element, position) => {
       const id = NodeCrypto.randomUUID();
       tokens.set(id, element.driverToken);
-      if (/^(textbox|searchbox|combobox|spinbutton)$/i.test(element.role)) editable.add(id);
+      if (/^(textbox|searchbox|combobox|spinbutton|slider)$/i.test(element.role)) editable.add(id);
       const { actions, enabled, selected: isSelected, frame, range, parent, id: axId } = element;
       const { focused, selectedText, selectedTextRange, valueDescription, url } = element;
       return {
