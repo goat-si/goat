@@ -1,11 +1,20 @@
 import { composerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import type { EnvironmentId } from "@goat/contracts";
-import { useThreadShells } from "../state/entities";
+import { useAtomValue } from "@effect/atom-react";
+import { Atom } from "effect/reactivity";
+import { environmentThreadShells } from "../state/threads";
 import { useEnvironmentQuery } from "../state/query";
 import { serverEnvironment } from "../state/server";
 
+const EMPTY_MOUNTED: ReadonlySet<EnvironmentId> = new Set<EnvironmentId>();
+const EMPTY_THREAD_ENVIRONMENTS = Atom.make(EMPTY_MOUNTED);
+
 export function useThreadContextHosts(environmentId: EnvironmentId | null) {
-  const shells = useThreadShells();
+  const mounted = useAtomValue(
+    environmentId === null
+      ? EMPTY_THREAD_ENVIRONMENTS
+      : environmentThreadShells.threadEnvironmentIdsAtom,
+  );
   const snapshot = useEnvironmentQuery(
     environmentId === null ? null : serverEnvironment.hubNodesLive({ environmentId, input: {} }),
   ).data;
@@ -21,7 +30,7 @@ export function useThreadContextHosts(environmentId: EnvironmentId | null) {
   }
   return composerThreadHosts({
     nodes: snapshot.nodes,
-    mounted: new Set(shells.map((shell) => shell.environmentId)),
+    mounted,
     sshHosts,
   });
 }

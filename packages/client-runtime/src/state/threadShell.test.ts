@@ -54,6 +54,39 @@ function makeHarness(environmentIds: ReadonlyArray<EnvironmentId> = [environment
 }
 
 describe("v2 thread shell lists", () => {
+  it("keeps mounted thread environment ids stable across streaming and same-environment additions", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const snapshot = { ...v2ShellSnapshot, threads: [v2ThreadShell] };
+    registry.set(snapshotAtom(environmentId), snapshot);
+    let notifications = 0;
+    const dispose = registry.subscribe(
+      threads.threadEnvironmentIdsAtom,
+      () => {
+        notifications += 1;
+      },
+      { immediate: true },
+    );
+    const before = registry.get(threads.threadEnvironmentIdsAtom);
+    const initialNotifications = notifications;
+    expect([...before]).toEqual([environmentId]);
+    registry.set(snapshotAtom(environmentId), {
+      ...snapshot,
+      threads: [{ ...v2ThreadShell, title: "Streaming" }],
+    });
+    expect(registry.get(threads.threadEnvironmentIdsAtom)).toBe(before);
+    expect(notifications).toBe(initialNotifications);
+    registry.set(snapshotAtom(environmentId), {
+      ...snapshot,
+      threads: [v2ThreadShell, { ...v2ThreadShell, id: ThreadId.make("second") }],
+    });
+    expect(registry.get(threads.threadEnvironmentIdsAtom)).toBe(before);
+    expect(notifications).toBe(initialNotifications);
+    registry.set(snapshotAtom(environmentId), { ...snapshot, threads: [] });
+    expect([...registry.get(threads.threadEnvironmentIdsAtom)]).toEqual([]);
+    expect(notifications).toBe(initialNotifications + 1);
+    dispose();
+    registry.dispose();
+  });
   it("preserves ordered reference arrays when a middle thread changes", () => {
     const { registry, threads, snapshotAtom } = makeHarness();
     const snapshot = {

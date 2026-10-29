@@ -379,6 +379,18 @@ export function createEnvironmentThreadShellAtoms(input: {
     return refs;
   }).pipe(Atom.withLabel("environment-thread-refs"));
 
+  let previousThreadEnvironmentIds: ReadonlySet<EnvironmentId> = new Set();
+  const threadEnvironmentIdsAtom = Atom.make((get) => {
+    const next = new Set(get(threadRefsAtom).map((ref) => ref.environmentId));
+    if (
+      next.size === previousThreadEnvironmentIds.size &&
+      [...next].every((id) => previousThreadEnvironmentIds.has(id))
+    )
+      return previousThreadEnvironmentIds;
+    previousThreadEnvironmentIds = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-thread-environment-ids"));
+
   let previousThreadShells: ReadonlyArray<EnvironmentThreadShell> = [];
   const threadShellsAtom = Atom.make((get) => {
     const next: EnvironmentThreadShell[] = [];
@@ -448,6 +460,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,
     threadRefsAtom,
+    threadEnvironmentIdsAtom,
     threadShellsAtom,
     quietThreadShellsAtom,
     navigationThreadShellsAtom,

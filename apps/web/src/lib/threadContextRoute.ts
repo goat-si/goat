@@ -6,17 +6,7 @@ import {
 } from "@goat/shared/composerContextReferences";
 import * as Option from "effect/Option";
 
-/**
- * How the agent of one environment reaches a thread attached as context.
- *
- * The thread tools route by SSH alias (`goat_thread_read({ threadId, host })`), and the
- * agent's server resolves that alias with its own SSH config. The only aliases this client
- * knows are the ones on its saved SSH connections, which the desktop app resolved with the
- * SSH config of the machine it runs on. So a saved alias is meaningful to exactly one
- * server: the desktop app's own primary backend, which runs on that machine as the same user.
- * Anything else (a browser, a remote agent, a WSL or GOAT Connect environment) has no alias
- * this client can vouch for, and the attachment is refused with the reason.
- */
+/** Without verified hub routes, a saved SSH alias is valid only for the desktop's primary server. */
 export type ThreadContextRoute =
   | { readonly kind: "local" }
   | { readonly kind: "ssh"; readonly host: string }
@@ -178,7 +168,7 @@ function threadContextUnreachableMessage(input: {
       return {
         title: `Can't verify the route to ${threadPlace}`,
         description:
-          "Reconnect the environment and resolve any SSH or linked-host name collision before attaching this thread.",
+          "Connect this environment to the agent's server over SSH or as a linked host, and resolve any conflicting host names before attaching this thread.",
       };
     case "agent-not-on-this-device":
       return {

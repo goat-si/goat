@@ -5,6 +5,7 @@ import {
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { ComposerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import { RegistryContext } from "@effect/atom-react";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import * as Option from "effect/Option";
@@ -50,6 +51,79 @@ function setup() {
   boundary.phase = "connected";
 }
 
+it("renders a verified linked-host thread as readable with its routing name", async () => {
+  setup();
+  const local = EnvironmentId.make("desktop");
+  const remote = EnvironmentId.make("remote");
+  const record = {
+    ...threadContextRecord(
+      { environmentId: remote, threadId: ThreadId.make("work") },
+      "Remote work",
+    ),
+    host: "linked-box",
+  };
+  await using screen = await render(
+    <ComposerContextActionsContext
+      value={{
+        environmentId: local,
+        verifiedHosts: new Map([[remote, "linked-box"]]),
+        expandImage() {},
+        expandVideo() {},
+        openFile() {},
+        openMention() {},
+        openPullRequest() {},
+      }}
+    >
+      <ComposerContextRecordsContext
+        value={new Map([[record.contextId, { kind: "thread", record }]])}
+      >
+        <ComposerContextReferenceChip
+          kind="thread"
+          contextId={record.contextId}
+          label="Remote work"
+        />
+      </ComposerContextRecordsContext>
+    </ComposerContextActionsContext>,
+  );
+  await expect.element(screen.getByRole("link")).toMatchTextContent(/linked-box/);
+  await expect.element(screen.getByRole("link")).not.toHaveAttribute("data-state", "invalid");
+});
+
+it("presents a hostless remote draft using the same verified route as send", async () => {
+  setup();
+  const local = EnvironmentId.make("desktop");
+  const remote = EnvironmentId.make("remote");
+  const record = threadContextRecord(
+    { environmentId: remote, threadId: ThreadId.make("work") },
+    "Remote work",
+  );
+  await using screen = await render(
+    <ComposerContextActionsContext
+      value={{
+        environmentId: local,
+        verifiedHosts: new Map([[remote, "linked-box"]]),
+        expandImage() {},
+        expandVideo() {},
+        openFile() {},
+        openMention() {},
+        openPullRequest() {},
+      }}
+    >
+      <ComposerContextRecordsContext
+        value={new Map([[record.contextId, { kind: "thread", record }]])}
+      >
+        <ComposerContextReferenceChip
+          kind="thread"
+          contextId={record.contextId}
+          label="Remote work"
+        />
+      </ComposerContextRecordsContext>
+    </ComposerContextActionsContext>,
+  );
+  await expect.element(screen.getByRole("link")).toMatchTextContent(/linked-box/);
+  await expect.element(screen.getByRole("link")).not.toHaveAttribute("data-state", "invalid");
+});
+
 it("keeps an SSH thread readable across disconnect and reconnect", async () => {
   setup();
   const previousBridge = Object.getOwnPropertyDescriptor(window, "desktopBridge");
@@ -67,7 +141,7 @@ it("keeps an SSH thread readable across disconnect and reconnect", async () => {
       { environmentId: remote, threadId: ThreadId.make("work") },
       "Remote work",
     ),
-    host: "stale-alias",
+    host: "build-box",
   };
   const registry = AtomRegistry.make();
   using _registry = { [Symbol.dispose]: () => registry.dispose() };
@@ -112,11 +186,18 @@ it("keeps an SSH thread readable across disconnect and reconnect", async () => {
     }>,
     { isReady: true, entries },
   );
-  const ui = (environmentId = local) => (
+  const hosts = new ComposerThreadHosts([[remote, "linked-box"]]);
+  hosts.allow(remote, "build-box");
+  hosts.allow(remote, "linked-box");
+  const ui = (
+    environmentId = local,
+    verifiedHosts = environmentId === local ? hosts : new Map<EnvironmentId, string>(),
+  ) => (
     <RegistryContext.Provider value={registry}>
       <ComposerContextActionsContext
         value={{
           environmentId,
+          verifiedHosts,
           expandImage() {},
           expandVideo() {},
           openFile() {},
@@ -149,7 +230,7 @@ it("keeps an SSH thread readable across disconnect and reconnect", async () => {
   await expect
     .element(
       page.getByText(
-        "Host build-box is not connected. The connection is unavailable or reconnecting; the agent can still try reading it over SSH.",
+        "Host build-box is not connected. The connection is unavailable or reconnecting; the agent can still try reading it through this host.",
       ),
     )
     .toBeVisible();
@@ -158,15 +239,9 @@ it("keeps an SSH thread readable across disconnect and reconnect", async () => {
   await expect.element(chip).not.toHaveAttribute("data-state", "unavailable");
   await screen.rerender(ui(EnvironmentId.make("unrelated")));
   await expect.element(chip).toHaveAttribute("data-state", "invalid");
-  await expect.element(chip).not.toMatchTextContent(/build-box/);
+  await expect.element(chip).toMatchTextContent(/build-box/);
   await screen.rerender(ui());
-  registry.set(
-    environmentCatalog.catalogValueAtom as Atom.Writable<{
-      isReady: boolean;
-      entries: typeof entries;
-    }>,
-    { isReady: true, entries: new Map([[local, entries.get(local)!]]) },
-  );
+  await screen.rerender(ui(local, new Map()));
   await expect.element(chip).toHaveAttribute("data-state", "invalid");
   await screen.rerender(
     <ThreadContextChip

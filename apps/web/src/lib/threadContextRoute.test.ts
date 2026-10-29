@@ -196,7 +196,9 @@ describe("routeThreadContextRecords", () => {
       routeThreadContextRecords({ ...input, verifiedHosts: new Map([[cloudId, "linked-box"]]) })
         .routed[0]?.host,
     ).toBe("linked-box");
-    expect(routeThreadContextRecords({ ...input, verifiedHosts: new Map() }).routed).toEqual([]);
+    const refusal = routeThreadContextRecords({ ...input, verifiedHosts: new Map() });
+    expect(refusal.routed).toEqual([]);
+    expect(refusal.refusal?.description).toContain("as a linked host");
   });
 
   it("preserves a verified SSH chip when the preferred route is a linked host", () => {
