@@ -61,10 +61,29 @@ const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
     .filter((action): action is string => typeof action === "string")
     .map(actionName);
   const parent = natural(entry.parent_index);
+  const selection = object(entry.selected_text_range);
+  const location = natural(selection?.location);
+  const length = natural(selection?.length);
+  const valueDescription = string(entry.value_description);
+  const url = string(entry.url);
   return {
     ...(actions.length > 0 ? { actions } : {}),
     ...(typeof entry.enabled === "boolean" ? { enabled: entry.enabled } : {}),
     ...(typeof entry.selected === "boolean" ? { selected: entry.selected } : {}),
+    ...(typeof entry.focused === "boolean" ? { focused: entry.focused } : {}),
+    // A caret selects "", which is a reading of its own.
+    ...(typeof entry.selected_text === "string"
+      ? { selectedText: entry.selected_text.slice(0, 4096) }
+      : {}),
+    ...(location !== undefined &&
+    length !== undefined &&
+    (selection?.units === undefined || selection.units === "utf16")
+      ? { selectedTextRange: { location, length } }
+      : {}),
+    ...(valueDescription === undefined
+      ? {}
+      : { valueDescription: valueDescription.slice(0, 1024) }),
+    ...(url === undefined ? {} : { url: url.slice(0, 8192) }),
     ...(frame && finite(frame.x) && finite(frame.y) && finite(frame.w) && finite(frame.h)
       ? { frame: { x: frame.x, y: frame.y, width: frame.w, height: frame.h } }
       : {}),
@@ -325,11 +344,13 @@ export const buildObservedDraft = (input: {
     string(input.state.title) ??
     input.fallbackTitle
   )?.slice(0, 1024);
+  const url = string(input.state.url)?.slice(0, 8192);
   return {
     targetRef: input.targetRef,
     targetGeneration: input.generation,
     surfaceGeneration: input.generation,
     ...(title === undefined ? {} : { title }),
+    ...(url === undefined ? {} : { url }),
     indexedText: input.shownText,
     complete: input.state.elements_complete === true && !input.filtered,
     truncated: input.state.truncated === true || input.limit < READ_BOUNDS[0],

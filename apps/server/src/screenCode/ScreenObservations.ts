@@ -120,7 +120,18 @@ const tabTreeElement = (
 /** State and geometry a driver reports for an element; carried to the agent unchanged. */
 export type ScreenElementDetail = Pick<
   ScreenObservation["elements"][number],
-  "actions" | "enabled" | "selected" | "frame" | "range" | "parent" | "id"
+  | "actions"
+  | "enabled"
+  | "selected"
+  | "focused"
+  | "selectedText"
+  | "selectedTextRange"
+  | "valueDescription"
+  | "url"
+  | "frame"
+  | "range"
+  | "parent"
+  | "id"
 >;
 
 export interface ScreenObservationDraft {
@@ -497,6 +508,7 @@ export class ScreenObservations {
       tokens.set(id, element.driverToken);
       if (/^(textbox|searchbox|combobox|spinbutton)$/i.test(element.role)) editable.add(id);
       const { actions, enabled, selected: isSelected, frame, range, parent, id: axId } = element;
+      const { focused, selectedText, selectedTextRange, valueDescription, url } = element;
       return {
         index: element.index ?? position,
         role: element.role.slice(0, 200),
@@ -507,6 +519,20 @@ export class ScreenObservations {
           : { actions: actions.slice(0, 16).map((action) => action.slice(0, 80)) }),
         ...(enabled === undefined ? {} : { enabled }),
         ...(isSelected === undefined ? {} : { selected: isSelected }),
+        ...(focused === undefined ? {} : { focused }),
+        ...(selectedText === undefined ? {} : { selectedText: selectedText.slice(0, 4096) }),
+        ...(selectedTextRange === undefined
+          ? {}
+          : {
+              selectedTextRange: {
+                location: selectedTextRange.location,
+                length: selectedTextRange.length,
+              },
+            }),
+        ...(valueDescription === undefined
+          ? {}
+          : { valueDescription: valueDescription.slice(0, 1024) }),
+        ...(url === undefined ? {} : { url: url.slice(0, 8192) }),
         ...(frame === undefined ? {} : { frame }),
         ...(range === undefined ? {} : { range }),
         ...(parent === undefined ? {} : { parent }),
@@ -539,6 +565,7 @@ export class ScreenObservations {
     const fullText = numbered(new Set(numbers.keys()));
     let text = cut(fullText);
     let title = draft.title === undefined ? undefined : draft.title.slice(0, 1024);
+    let url = draft.url === undefined ? undefined : draft.url.slice(0, 8192);
     let truncated =
       draft.truncated ||
       queryTruncated ||
@@ -576,14 +603,22 @@ export class ScreenObservations {
       complete: draft.complete && !truncated,
       loading: draft.loading,
       ...(title === undefined ? {} : { title }),
-      ...(draft.url === undefined ? {} : { url: draft.url }),
+      ...(url === undefined ? {} : { url }),
       truncated,
       indexedText: text,
       elements,
     });
     const budget = Math.min(input.limits.treeBytes, 128 * 1024);
-    // An app read over budget gives up redundant annotations, then elements in the order
+    // An app read over budget gives up its url and title, then elements in the order
     // desktopCutOrder plans (chrome outlasts table body, visible outlasts off-window).
+    if (
+      draft.targetRef.kind === "app" &&
+      Buffer.byteLength(JSON.stringify(build())) > budget &&
+      url !== undefined
+    ) {
+      url = undefined;
+      truncated = true;
+    }
     if (
       draft.targetRef.kind === "app" &&
       Buffer.byteLength(JSON.stringify(build())) > budget &&
@@ -666,6 +701,10 @@ export class ScreenObservations {
       text = cut(numbered(new Set(tokens.values())));
     while (Buffer.byteLength(JSON.stringify(build())) > budget && text.length > 0) {
       text = text.slice(0, Math.max(0, text.length - 256));
+      truncated = true;
+    }
+    if (Buffer.byteLength(JSON.stringify(build())) > budget && url !== undefined) {
+      url = undefined;
       truncated = true;
     }
     if (Buffer.byteLength(JSON.stringify(build())) > budget && title !== undefined) {

@@ -242,6 +242,15 @@ export const ScreenObservation = Schema.Struct({
       actions: Schema.optionalKey(Schema.Array(text(80)).check(Schema.isMaxLength(16))),
       enabled: Schema.optionalKey(Schema.Boolean),
       selected: Schema.optionalKey(Schema.Boolean),
+      /** The app's keyboard focus is on this element. */
+      focused: Schema.optionalKey(Schema.Boolean),
+      /** An editable field's selected text, "" for a caret, and its range in UTF-16 code units. */
+      selectedText: Schema.optionalKey(text(4096)),
+      selectedTextRange: Schema.optionalKey(Schema.Struct({ location: natural, length: natural })),
+      /** The value as the app words it, such as "8 dB" for a slider at 8. */
+      valueDescription: Schema.optionalKey(text(1024)),
+      /** The file or web address the element names. */
+      url: Schema.optionalKey(text(8192)),
       frame: Schema.optionalKey(
         Schema.Struct({ x: finite, y: finite, width: finite, height: finite }),
       ),
