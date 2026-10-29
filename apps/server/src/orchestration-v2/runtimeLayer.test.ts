@@ -3705,7 +3705,11 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           ),
         ),
       );
-      for (let pass = 0; pass < 15; pass += 1) yield* reactor.sweep;
+      for (let pass = 0; pass < 61; pass += 1) {
+        yield* reactor.sweep;
+        // Failed reads back off, so reaching the limit takes about two hours of sweeps.
+        yield* TestClock.adjust("2 minutes");
+      }
 
       const thread = yield* orchestrator.getThreadShell(threadId);
       assert.isUndefined(thread?.pullRequests?.[0]?.watch);

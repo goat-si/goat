@@ -340,3 +340,19 @@ describe("a watch on a pull request that merged or closed", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 });
+
+describe("a watch that cannot read its pull request", () => {
+  it.effect("backs off between failed reads, then ends with a reason", () =>
+    Effect.gen(function* () {
+      const { host, reads, reactor, link, records } = yield* watchedThread("backoff");
+      yield* Ref.set(host, "unreachable");
+      // Eight sweeps two minutes apart: without backoff, each one reads the host again.
+      yield* sweeps(reactor, 8);
+      assert.isBelow(yield* Ref.get(reads), 5);
+      assert.isDefined((yield* link)?.watch);
+      yield* sweeps(reactor, 120);
+      assert.isUndefined((yield* link)?.watch);
+      assert.deepEqual((yield* records).summaries, ["#41: stopped watching, could not read it"]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+});

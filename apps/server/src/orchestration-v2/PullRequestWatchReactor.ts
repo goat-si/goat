@@ -48,6 +48,8 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
 const READ_FAILURE_LIMIT = 8;
+/** A failed read waits twice as long as the one before it, up to this, before the next try. */
+const READ_RETRY_MAX_MS = 30 * 60_000;
 /** Without fingerprints, reread quiet PRs on snapshot changes or this interval to catch edits. */
 const QUIET_REREAD_MS = 10 * 60_000;
 /** Reread despite unchanged fingerprints; they miss review-thread comment edits. */
@@ -247,6 +249,7 @@ export const make = Effect.gen(function* () {
     Effect.suspend(() => reportEnd(lifeKey(target), lifeOf(target), reason));
 
   const readFailures = new Map<string, number>();
+  const readRetryAt = new Map<string, number>();
   const lastReads = new Map<string, LastRead>();
   const threadTails = new Map<
     string,
@@ -512,12 +515,18 @@ export const make = Effect.gen(function* () {
       if (isRateLimited(read.cause)) return;
       const failures = (readFailures.get(group.key) ?? 0) + 1;
       readFailures.set(group.key, failures);
+      readRetryAt.set(
+        group.key,
+        now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (failures - 1), READ_RETRY_MAX_MS),
+      );
       if (failures >= READ_FAILURE_LIMIT && (yield* eachTarget(group, giveUp))) {
         readFailures.delete(group.key);
+        readRetryAt.delete(group.key);
       }
       return yield* Effect.failCause(read.cause);
     }
     readFailures.delete(group.key);
+    readRetryAt.delete(group.key);
     const [detail, activity] = read.value;
     const headSha = detail.headSha ?? null;
     for (const target of group.targets) {
@@ -623,7 +632,7 @@ export const make = Effect.gen(function* () {
       targets: members,
       fingerprint: [...new Set(members.map(snapshotFingerprint))].toSorted().join("\n"),
     }));
-    for (const cache of [readFailures, lastReads, threadTails]) {
+    for (const cache of [readFailures, readRetryAt, lastReads, threadTails]) {
       for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
     }
     yield* Effect.forEach(
@@ -647,11 +656,13 @@ export const make = Effect.gen(function* () {
         ),
       { discard: true },
     );
-    const fingerprints = yield* Effect.forEach(groups, fingerprintOf, {
+    const now = yield* Clock.currentTimeMillis;
+    const due = groups.filter((group) => (readRetryAt.get(group.key) ?? 0) <= now);
+    const fingerprints = yield* Effect.forEach(due, fingerprintOf, {
       concurrency: "unbounded",
     });
     yield* Effect.forEach(
-      groups,
+      due,
       (group, index) => {
         const fingerprint = fingerprints[index]!;
         return fingerprint === "paused"
