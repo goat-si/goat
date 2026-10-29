@@ -94,8 +94,8 @@ const layer = (
 ) =>
   ChannelDeliveryWorker.layer.pipe(
     Layer.provide(Layer.mock(ChannelGateway.ChannelGateway)({ send })),
-    Layer.provide(wake),
     Layer.provideMerge(ChannelLedger.layer),
+    Layer.provide(wake),
     Layer.provideMerge(Sqlite.layerMemory),
   );
 
@@ -135,6 +135,42 @@ describe("absolute receipt delivery deadlines", () => {
       ),
     );
   });
+  it.effect(
+    "a retry left pending by an earlier process wakes the loop when its deadline expires it",
+    () => {
+      let wakes = 0;
+      return Effect.gen(function* () {
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const id = yield* receipt("restart-retry");
+        const [claimed] = yield* ledger.claimDueDeliveries({ owner, now: yield* nowIso, limit: 1 });
+        const later = DateTime.formatIso(DateTime.add(yield* DateTime.now, { minutes: 2 }));
+        yield* ledger.recordDelivery({
+          owner,
+          deliveryId: id,
+          attempt: claimed!.attempts,
+          now: yield* nowIso,
+          outcome: { type: "retry", at: later, errorCode: "rate_limited" },
+        });
+        assert.strictEqual(wakes, 0);
+        // No worker timer survives a restart; the runtime's deadline scan expires the row instead.
+        yield* TestClock.adjust("60 seconds");
+        yield* ledger.expireReceipts({ owner, now: yield* nowIso });
+        assert.strictEqual(yield* ledger.getDeliveryState(id), "failed");
+        assert.strictEqual(wakes, 1);
+        yield* ledger.expireReceipts({ owner, now: yield* nowIso });
+        assert.strictEqual(wakes, 1);
+      }).pipe(
+        Effect.provide(
+          layer(
+            () => Effect.die("unused"),
+            countingWake(() => {
+              wakes += 1;
+            }),
+          ),
+        ),
+      );
+    },
+  );
   it.effect("an older attempt cannot reset a receipt claimed by a newer attempt", () =>
     Effect.gen(function* () {
       const ledger = yield* ChannelLedger.ChannelLedger;

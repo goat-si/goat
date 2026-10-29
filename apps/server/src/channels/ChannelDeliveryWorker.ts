@@ -83,7 +83,6 @@ const make = Effect.gen(function* () {
       (delivery.receiptDeadline ?? DateTime.toEpochMillis(clock)) - DateTime.toEpochMillis(clock);
     if (remaining <= 0) {
       yield* ledger.expireReceipts({ owner, now: DateTime.formatIso(clock) });
-      yield* wake.wake;
       return;
     }
     const expiry = yield* Effect.sleep(remaining).pipe(
@@ -92,7 +91,6 @@ const make = Effect.gen(function* () {
           ledger.expireReceipts({ owner, now: DateTime.formatIso(now) }),
         ),
       ),
-      Effect.andThen(wake.wake),
       Effect.ignore,
       Effect.forkIn(scope),
     );
