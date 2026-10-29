@@ -65,3 +65,28 @@ it("an app error after the first screen is not retried", async () => {
 
   expect(sessions).toEqual(["run"]);
 });
+
+it("an app error before any recorded step is not retried", async () => {
+  const { sessions, attempt } = attempts({
+    pose,
+    steps: [],
+    error: "the app did not show the fixture threads after pairing (screen: New thread)",
+  });
+
+  const result = await attemptPose(attempt, "run", () => {});
+
+  expect(sessions).toEqual(["run"]);
+  expect(poolBlocked(result)).toBe(false);
+});
+
+it("a pool failure before the first screen is retried on a fresh session", async () => {
+  const { sessions, attempt } = attempts(
+    { pose, steps: [], error: "agent-device open: WORKER_UNREACHABLE" },
+    { pose, steps: [threads] },
+  );
+
+  const result = await attemptPose(attempt, "run", () => {});
+
+  expect(sessions).toEqual(["run", "run-retry1"]);
+  expect(result.error).toBeUndefined();
+});
