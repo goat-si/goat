@@ -47,6 +47,7 @@ export function SettingsThreadsRouteScreen() {
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         >
           <NewThreadProjectSettingsSection />
+          <ThreadListSettingsSection />
           <AutoSettleSettingsRows />
           <BetaSettingsSection />
           <LegacySettingsSection />
@@ -305,6 +306,22 @@ function NewThreadProjectSettingsSection() {
           preferences.value.useLastProjectForNewThreads !== false
         }
         onValueChange={(value) => savePreferences({ useLastProjectForNewThreads: value })}
+      />
+    </SettingsSection>
+  );
+}
+
+function ThreadListSettingsSection() {
+  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
+  const preferences = useAtomValue(mobilePreferencesAtom);
+  return (
+    <SettingsSection title="Thread list">
+      <SettingsSwitchRow
+        icon="bubble.left.and.bubble.right"
+        label="Show GOAT Bot threads"
+        subtitle="List the threads GOAT Bot runs to follow your work. Search finds them either way. Applies to this device."
+        value={AsyncResult.isSuccess(preferences) && preferences.value.showGoatBotThreads === true}
+        onValueChange={(value) => savePreferences({ showGoatBotThreads: value })}
       />
     </SettingsSection>
   );

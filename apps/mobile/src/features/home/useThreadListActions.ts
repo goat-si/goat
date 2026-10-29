@@ -30,6 +30,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { hiddenGoatBotThreadKeysAtom } from "../threads/goatBotThreadVisibility";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
@@ -630,6 +631,9 @@ export function useThreadListActions(): {
       appAtomRegistry.set(threadDropBusyAtom, false);
       return settled;
     }
+    // A hidden GOAT Bot thread has no place among the rows shown; only search reaches it.
+    const hiddenBotThreadKeys = appAtomRegistry.get(hiddenGoatBotThreadKeysAtom);
+    if (hiddenBotThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id))) return false;
     const configs = appAtomRegistry.get(environmentServerConfigsAtom);
     const supportsReorder = (environmentId: EnvironmentThreadShell["environmentId"]) => {
       const capabilities = configs.get(environmentId)?.environment.capabilities;
@@ -649,6 +653,7 @@ export function useThreadListActions(): {
       section,
       now: new Date().toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
+      hiddenBotThreadKeys,
       settlementEnvironmentIds: new Set(
         [...configs].flatMap(([id, config]) =>
           config.environment.capabilities.threadSettlement === true ? [id] : [],

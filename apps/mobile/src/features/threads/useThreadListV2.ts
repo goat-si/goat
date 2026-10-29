@@ -1,10 +1,12 @@
 import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { hiddenGoatBotThreadKeysAtom } from "./goatBotThreadVisibility";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -56,6 +58,7 @@ export function useThreadListV2(input: {
   readonly selectedThreadKey: string | null;
 }) {
   const { threads, workingShelfEnabled } = input;
+  const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(
     threadListInboxReturns.subscribe,
@@ -84,6 +87,7 @@ export function useThreadListV2(input: {
         settlementEnvironmentIds: input.settlementEnvironmentIds,
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
+        hiddenBotThreadKeys,
       }),
     });
   const moveAvailability = new Map([
@@ -117,6 +121,7 @@ export function useThreadListV2(input: {
     snoozedShelfExpanded: input.snoozedShelfExpanded,
     settledShelfExpanded: input.settledShelfExpanded,
     selectedThreadKey: input.selectedThreadKey,
+    hiddenBotThreadKeys,
     isListedSettled: olderSettledShelf.isListed,
     unloadedSettledCount: olderSettledShelf.unloadedCount(
       threads.filter(

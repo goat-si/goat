@@ -19,6 +19,7 @@ const state = vi.hoisted(() => ({
   archivedRefreshes: [] as string[],
   scopes: new Map<string, Set<string>>(),
   shells: [] as EnvironmentThreadShell[],
+  hiddenBotThreadKeys: new Set<string>() as ReadonlySet<string>,
   requests: [] as {
     action: string;
     environmentId: string;
@@ -73,30 +74,36 @@ vi.mock("../../state/atom-registry", () => ({
         ? state.dropBusy
         : atom === "thread-shells"
           ? state.shells
-          : atom === "queued-thread-keys"
-            ? new Set<string>()
-            : new Map(
-                [...state.scopes.keys()].map((environmentId) => [
-                  environmentId,
-                  {
-                    environment: {
-                      capabilities: {
-                        threadSettlement: true,
-                        threadSnooze: true,
-                        threadPinning: true,
-                        threadPinReorder: true,
-                        threadTitleRegeneration: true,
+          : atom === "hidden-bot-thread-keys"
+            ? state.hiddenBotThreadKeys
+            : atom === "queued-thread-keys"
+              ? new Set<string>()
+              : new Map(
+                  [...state.scopes.keys()].map((environmentId) => [
+                    environmentId,
+                    {
+                      environment: {
+                        capabilities: {
+                          threadSettlement: true,
+                          threadSnooze: true,
+                          threadPinning: true,
+                          threadPinReorder: true,
+                          threadActiveReorder: true,
+                          threadTitleRegeneration: true,
+                        },
                       },
                     },
-                  },
-                ]),
-              ),
+                  ]),
+                ),
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: unknown) => command,
 }));
 vi.mock("../../state/use-thread-outbox", () => ({ queuedThreadKeysAtom: "queued-thread-keys" }));
+vi.mock("../threads/goatBotThreadVisibility", () => ({
+  hiddenGoatBotThreadKeysAtom: "hidden-bot-thread-keys",
+}));
 vi.mock("../../state/thread-order", () => ({
   threadDropBusyAtom: "thread-drop-busy",
   getPendingThreadOrder: () => state.pendingOrder,
@@ -186,6 +193,7 @@ beforeEach(() => {
   ]);
   state.requests = [];
   state.shells = [];
+  state.hiddenBotThreadKeys = new Set();
   state.dialogs = [];
   state.alerts = [];
   state.afterRequest = undefined;
@@ -280,6 +288,55 @@ describe("pinned thread operation permissions", () => {
 
     expect(await useThreadListActions().moveThread(moved, "up")).toBe(false);
     expect(state.requests).toHaveLength(1);
+  });
+});
+
+describe("moving threads with hidden GOAT Bot threads", () => {
+  const pinned = (id: string, pinOrderKey: string) =>
+    makeThread({ id: ThreadId.make(id), pinnedAt: "2026-09-02T00:00:00.000Z", pinOrderKey });
+  const SESSION = "goat-bot-session:conversation";
+  const hide = (...ids: string[]) => {
+    state.hiddenBotThreadKeys = new Set(ids.map((id) => `${primaryEnvironmentId}:${id}`));
+  };
+
+  it("moves past the next shown thread and leaves the hidden one between them unwritten", async () => {
+    const moved = pinned("moved", "m");
+    state.shells = [pinned("shown", "c"), pinned(SESSION, "g"), moved];
+    hide(SESSION);
+
+    expect(await useThreadListActions().moveThread(moved, "up")).toBe(true);
+
+    expect(state.requests).toHaveLength(1);
+    expect(state.requests[0]).toMatchObject({ action: "reorderPin", input: { threadId: "moved" } });
+    expect(state.requests[0]!.input.orderKey! < "c").toBe(true);
+  });
+
+  it.each([
+    ["up", "up"],
+    ["to Active", { targetId: null, section: "active", placement: "before" }],
+    ["to Pinned", { targetId: null, section: "pinned", placement: "before" }],
+  ] as const)("does not reorder a hidden thread reached through search (%s)", async (_, to) => {
+    const session = pinned(SESSION, "g");
+    state.shells = [pinned("shown", "c"), session];
+    hide(SESSION);
+
+    expect(await useThreadListActions().moveThread(session, to)).toBe(false);
+    expect(state.requests).toEqual([]);
+  });
+
+  it("still settles a hidden thread dropped on Settled", async () => {
+    const session = pinned(SESSION, "g");
+    state.shells = [pinned("shown", "c"), session];
+    hide(SESSION);
+
+    const settled = await useThreadListActions().moveThread(session, {
+      targetId: null,
+      section: "settled",
+      placement: "before",
+    });
+
+    expect(settled).toBe(true);
+    expect(state.requests.map((request) => request.action)).toEqual(["settle"]);
   });
 });
 
