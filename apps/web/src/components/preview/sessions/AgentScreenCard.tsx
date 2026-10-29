@@ -54,9 +54,6 @@ import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 type Chip = ReturnType<typeof previewSessionChip>;
 
-/** Agent sessions list only server tabs; this asks whether this client draws one natively. */
-const SERVER_TAB = { runtime: "server" } as const;
-
 /** Who holds the session, said by the dot beside the name and the picture's outline. */
 const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
   "Agent controlling": { dot: "bg-info", ring: "ring-info/60" },
@@ -571,9 +568,9 @@ export function AgentScreenCard(
     previewSessionsEnvironment.control.permissionAtom(session.environmentId),
   );
   const canOperateBrowser = useEnvironmentScope(session.environmentId, AuthPreviewOperateScope);
-  const drawnHere =
-    useRendersServerTabNatively(session.environmentId, SERVER_TAB) && browserTab !== null;
   const hosted = useHostedTab(session);
+  // The thread's own snapshot, which ElectronBrowserHost hosts from, decides where the tab draws.
+  const drawnHere = useRendersServerTabNatively(session.environmentId, hosted?.snapshot);
   return (
     <AgentScreenCardView
       session={session}
