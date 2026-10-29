@@ -252,6 +252,11 @@ describe("a script is marked may-have-acted only when its call log shows input",
   const safety = (line: string) =>
     parsed(markUnverified("run_script", line)).result.structuredContent.safety;
 
+  it("a logged menu_bar_extras call names no operation, so it may have acted", () => {
+    const extras = { ...read("menu_bar_extras") };
+    assert.deepInclude(safety(script([extras])), { possibleCommit: true });
+  });
+
   it("a script that made no driver call, or only reads, sent nothing", () => {
     for (const calls of [[], [read("list_windows"), read("get_window_state")]]) {
       assert.deepInclude(safety(script(calls)), { possibleCommit: false });
@@ -335,4 +340,27 @@ describe("a helper that ends on its own is named by its exit code", () => {
       assert.equal(yield* exiting(undefined), "helper_restarted");
     }),
   );
+});
+
+describe("menu_bar_extras reads only when it finds SystemUIServer or lists status items", () => {
+  const failed = reply({ code: "tool_call_failed" });
+  it("system and list failures are reads; open, click and close may have acted", () => {
+    for (const operation of ["system", "list"]) {
+      const safety = driverOutcomeSafety("menu_bar_extras", parsed(failed), { operation });
+      assert.deepInclude(safety, { possibleCommit: false, writeStatus: "not_applicable" });
+      const marked = parsed(markUnverified("menu_bar_extras", failed, { operation }));
+      assert.isUndefined(marked.result.structuredContent.effect);
+      assert.deepInclude(marked.result.structuredContent.safety, { possibleCommit: false });
+    }
+    for (const args of [
+      { operation: "open" },
+      { operation: "click" },
+      { operation: "close" },
+      {},
+    ]) {
+      assert.isTrue(driverOutcomeSafety("menu_bar_extras", parsed(failed), args).possibleCommit);
+      const marked = parsed(markUnverified("menu_bar_extras", failed, args));
+      assert.equal(marked.result.structuredContent.effect, "unverifiable");
+    }
+  });
 });

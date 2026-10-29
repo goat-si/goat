@@ -168,6 +168,20 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_config",
 ]);
 
+/**
+ * menu_bar_extras shares one tool between reads and presses: system finds SystemUIServer and
+ * list names status items, while open, click and close press them.
+ */
+export const readsMenuBarExtras = (tool: unknown, args: unknown): boolean => {
+  if (tool !== "menu_bar_extras" || typeof args !== "object" || args === null) return false;
+  const operation = (args as Record<string, unknown>).operation;
+  return operation === "system" || operation === "list";
+};
+
+/** Whether one call only reads, judged by its tool and, for menu_bar_extras, its operation. */
+export const isReadOnlyCall = (tool: unknown, args?: unknown): boolean =>
+  (typeof tool === "string" && READ_ONLY_TOOLS.has(tool)) || readsMenuBarExtras(tool, args);
+
 export const MAY_HAVE_ACTED =
   "This call was already with the driver when it was cut off, so it may already have acted. Never resend it unchanged, and observe the window before any later action.";
 export const READ_CUT_OFF =
