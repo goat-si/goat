@@ -357,7 +357,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             return yield* new OrchestratorMcpFailure({
               code: "capability_denied",
               message:
-                "An agent cannot turn a person's queued message into a slash command; send your own message instead.",
+                "An agent cannot turn a person's queued message into a slash command. Commands such as /logout are the person's to send; ask them.",
             });
         }
         return yield* dispatch(input.threadId, (common) => ({
