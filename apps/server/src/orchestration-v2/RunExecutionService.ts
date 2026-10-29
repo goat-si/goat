@@ -7,6 +7,7 @@ import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
+  isGoatBotSessionThreadId,
   CommandId,
   RunId,
   TurnItemId,
@@ -1458,7 +1459,8 @@ export const layer: Layer.Layer<
           }
           return true;
         });
-        const filterAssistantEvent = makeAssistantStreamingFilter(responseStreamingMode);
+        const receipt = { receiptLine: isGoatBotSessionThreadId(input.run.threadId) };
+        const filterAssistantEvent = makeAssistantStreamingFilter(responseStreamingMode, receipt);
         const closeEventSubscription = Effect.andThen(
           eventSubscription.close,
           cloud

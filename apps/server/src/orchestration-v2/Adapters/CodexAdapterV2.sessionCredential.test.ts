@@ -5,6 +5,32 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
 import { fixture, layerAdapterTest } from "./CodexAdapterV2.attachment.testkit.ts";
+import { codexThreadRuntimeParams } from "./CodexAdapterV2.ts";
+
+it("disables session questions before an MCP credential is attached", () => {
+  expect(
+    codexThreadRuntimeParams({
+      mcpSession: undefined,
+      threadId: ThreadId.make("goat-bot-session:no-credential:1"),
+    }).config["features.default_mode_request_user_input"],
+  ).toBe(false);
+});
+
+it.each([true, false])(
+  "session=%s disables native default-mode questions only for sessions",
+  (session) => {
+    const f = fixture("question-feature");
+    const params = codexThreadRuntimeParams({
+      mcpSession: {
+        ...f.config,
+        threadId: ThreadId.make(session ? "goat-bot-session:questions:1" : "ordinary"),
+      },
+    });
+    expect(params.config["features.default_mode_request_user_input"]).toBe(
+      session ? false : undefined,
+    );
+  },
+);
 
 it.effect.each([true, false])(
   "stale credential while busy: session=%s fails before turn/start; preserves ordinary behavior",
