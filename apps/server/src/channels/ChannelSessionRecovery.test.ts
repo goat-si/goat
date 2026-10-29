@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ChannelReceptionId } from "@goat/contracts";
+import { ChannelGatewayError, ChannelReceptionId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -8,13 +8,20 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import { taskIdFor } from "./channelIds.ts";
-import { defaultScript, goatInput, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
+import {
+  botMessages,
+  defaultScript,
+  goatInput,
+  rpcContext,
+  setupBot,
+} from "./testkit/ChannelHarness.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 
 const freshObserver = Layer.build(Layer.fresh(ChannelSessionFirst.layer)).pipe(
@@ -22,6 +29,61 @@ const freshObserver = Layer.build(Layer.fresh(ChannelSessionFirst.layer)).pipe(
 );
 
 describe("session receipt recovery", () => {
+  it.effect.each(["before the first line", "after a sealed first line"] as const)(
+    "restores a read mark lost to a crash after the claim: %s",
+    (variant) => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        yield* runtime.drain;
+        const input = yield* gateway.ingest(goatInput("Inspect the disk", variant), rpcContext);
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const beforeCrash = yield* freshObserver.pipe(
+              Effect.provideService(ChannelBotTimeline.ChannelBotTimeline, {
+                record: () =>
+                  Effect.fail(new ChannelGatewayError({ reason: "persistence_failed" })),
+              }),
+            );
+            assert.isTrue(yield* beforeCrash.offer(input.inputId, runtime.ownerToken));
+          }),
+        );
+        const inbound = Effect.map(botMessages, (records) =>
+          records.messages.filter(
+            (message) => message.role === "user" && message.channel?.inputId === input.inputId,
+          ),
+        );
+        assert.isUndefined((yield* inbound)[0]?.channel?.readAt);
+        const task = taskIdFor(input.inputId, 0);
+        if (variant === "after a sealed first line") {
+          yield* runtime.runPass;
+          harness.assistant((yield* ledger.getTask(task))!.task, "Checking disk usage.\n", true);
+        }
+        const restarted = yield* freshObserver;
+        yield* restarted.observe(runtime.ownerToken);
+        yield* restarted.deadlines(runtime.ownerToken);
+        yield* restarted.settle([input.inputId]);
+        const copies = yield* inbound;
+        assert.lengthOf(copies, 1);
+        assert.strictEqual(
+          copies[0]?.channel?.readAt,
+          (yield* ledger.getInput(input.inputId))?.snapshot.readAt,
+        );
+        if (variant === "after a sealed first line") {
+          yield* runtime.drain;
+          const receipt = (yield* botMessages).messages.find(
+            (message) => message.role === "assistant" && message.text === "Checking disk usage.",
+          );
+          assert.strictEqual(receipt?.channel?.inReplyToInputId, input.inputId);
+          assert.strictEqual(receipt?.channel?.taskId, task);
+        }
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect("replays a sealed projection after a crash before the receipt commit", () => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {
