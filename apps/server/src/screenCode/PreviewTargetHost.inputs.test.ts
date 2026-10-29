@@ -126,3 +126,38 @@ it.effect(
       expect(receipts()).toEqual(["confirmed", "unverifiable", "unverifiable"]);
     }),
 );
+
+it.effect(
+  "a tab hover reaches the browser with its target and a 5 s wait, and retires the screenshot's points",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const ref = (yield* fixture.observe()).elements[0]!.ref;
+      expect((yield* fixture.dispatch("hover", { ref }))?.outcome).toBe("ok");
+      expect(fixture.requests.find((request) => request.operation === "hover")?.input).toEqual({
+        locator: "aria-ref=e1",
+        timeoutMs: 5_000,
+      });
+      const refused = yield* fixture.dispatch("hover", { ref, timeoutMs: -5 });
+      expect(refused?.error).toMatchObject({ code: "invalid_argument", effectStarted: false });
+    }),
+);
+
+it.effect("an observed slider takes setValue by its number, while a button still does not", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    fixture.state.tree = "- slider Volume [ref=e3]\n- button Save [ref=e1]";
+    const elements = (yield* fixture.observe()).elements;
+    const slider = elements.find((element) => element.role === "slider")!.ref;
+    const button = elements.find((element) => element.role === "button")!.ref;
+    expect((yield* fixture.dispatch("set_value", { ref: slider, text: "70" }))?.outcome).toBe("ok");
+    expect(
+      (yield* fixture.dispatch("set_value", { ref: button, text: "70" }))?.error,
+    ).toMatchObject({
+      code: "unsupported",
+      effectStarted: false,
+    });
+  }),
+);

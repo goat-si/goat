@@ -25,6 +25,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import * as Session from "./previewAutomationSession.ts";
 import * as Screen from "./previewAutomationScreen.ts";
+import { PreviewWaitStateFields, waitStateConflict } from "./previewWaitState.ts";
 import {
   PreviewAutomationFeature,
   PreviewAutomationConsoleEntry,
@@ -534,14 +535,14 @@ export const PreviewAutomationWaitForInput = Schema.Struct({
   ),
   urlIncludes: Schema.optional(TrimmedNonEmptyString),
   timeoutMs: OptionalTimeoutMs,
+  ...PreviewWaitStateFields,
 }).check(
   Schema.makeFilter((input) => {
     if (input.selector !== undefined && input.locator !== undefined) {
       return "Provide at most one of selector or locator.";
     }
-    if (input.state !== undefined && input.selector === undefined && input.locator === undefined) {
-      return "Provide locator or selector when specifying state.";
-    }
+    const conflict = waitStateConflict(input);
+    if (conflict !== undefined) return conflict;
     return (
       input.selector !== undefined ||
       input.locator !== undefined ||

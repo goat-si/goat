@@ -75,18 +75,30 @@ export const pointerTimeout = (
   return { timeoutMs: Math.min(typeof requested === "number" ? requested : CLICK_WAIT_MS, room) };
 };
 
-/** A tab click's count (1 to 3) and target wait, checked before anything is sent. */
+/**
+ * A tab click's or hover's browser input: its target (a locator, or a resolved screenshot point),
+ * a click's button and count (1 to 3), and how long it waits for the target; checked unsent.
+ */
 export const pointerInput = (
+  method: string,
   arg: Record<string, unknown>,
+  target: string | { readonly x: number; readonly y: number } | undefined,
   deadlineMillis: number,
   now: number,
 ): { readonly fields: Record<string, unknown> } | { readonly error: ScreenRunError } => {
-  const count = arg.count;
+  if (target === undefined)
+    return { error: fail("invalid_argument", "Use a current element or image point.") };
+  const count = method === "hover" ? undefined : arg.count;
   if (count !== undefined && !(Number.isInteger(count) && Number(count) >= 1 && Number(count) <= 3))
     return { error: fail("invalid_argument", "A tab click count is 1, 2 or 3.") };
   const wait = pointerTimeout(arg.timeoutMs, deadlineMillis, now);
   if ("error" in wait) return wait;
   return {
-    fields: { ...(count === undefined ? {} : { clickCount: count }), timeoutMs: wait.timeoutMs },
+    fields: {
+      ...(typeof target === "string" ? { locator: target } : { x: target.x, y: target.y }),
+      ...(method === "right_click" ? { button: "right" } : {}),
+      ...(count === undefined ? {} : { clickCount: count }),
+      timeoutMs: wait.timeoutMs,
+    },
   };
 };

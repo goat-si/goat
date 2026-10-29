@@ -80,6 +80,8 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
     snapshotFailure: undefined as PreviewAutomationError | undefined,
     navigateOnClick: false,
     clickResult: { ok: true } as object,
+    /** Replaces the observed tree, for a page with other controls. */
+    tree: undefined as string | undefined,
     /** Applies the input, then loses the reply, as a dropped connection does. */
     lostReply: undefined as PreviewAutomationError | undefined,
   };
@@ -103,8 +105,9 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
           title: tab.title,
           loading: false,
           accessibilityTree:
+            state.tree ??
             "- heading Workspace\n- button Save [ref=e1]\n- text: Ready" +
-            (state.clicked ? "\n- button Cancel [ref=e2]" : ""),
+              (state.clicked ? "\n- button Cancel [ref=e2]" : ""),
           treeComplete: true,
           refGeneration: state.clicked ? "ns-4" : "ns-3",
         } as A);

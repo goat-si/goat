@@ -138,6 +138,7 @@ const VERBS: Readonly<Record<ScreenMethod, Verb>> = {
   screenshot: "observe",
   click: "click",
   right_click: "right-click",
+  hover: "hover",
   drag: "drag",
   scroll: "scroll",
   type_text: "type",

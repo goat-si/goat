@@ -69,6 +69,9 @@ export const DIAGNOSTIC_BUFFER_LIMIT = 200;
 
 export { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { matchesState, stateConditions } from "./locatorState.ts";
+import { setRange } from "./rangeValue.ts";
+import { settleScroll } from "./scrollPositions.ts";
 
 export const toOperationError = (
   cause: unknown,
@@ -790,6 +793,9 @@ export const type = async (
           readonly isContentEditable?: boolean;
           readonly focus?: () => void;
         };
+        // A native range takes a value, not keystrokes; setRange sets it after the gate.
+        if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
+          return "range";
         const nonText = [
           "button",
           "checkbox",
@@ -826,6 +832,11 @@ export const type = async (
         }
         return owned;
       }, input.clear === true));
+    if (focused === "range" && handle) {
+      remaining(deadline);
+      gate();
+      return await setRange(handle, input.text);
+    }
     if (focused !== true) {
       throw new ServerBrowserOperationError(
         "PreviewAutomationTargetNotEditableError",
@@ -986,22 +997,26 @@ export const scroll = async (
   page: Page,
   input: PreviewAutomationScrollInput,
   gate: DispatchGate = open,
-) => {
+): Promise<{ readonly settled: boolean }> => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
   if (input.x !== undefined && input.y !== undefined) {
-    return wheelAt(page, { x: input.x, y: input.y }, delta, gate, gate.deadline ?? Infinity);
+    await wheelAt(page, { x: input.x, y: input.y }, delta, gate, gate.deadline ?? Infinity);
+    return {
+      settled: await settleScroll(page, { point: { x: input.x, y: input.y } }, gate.deadline),
+    };
   }
   const locator = targetLocator(page, input);
   if (locator === null) {
     gate();
     // Page-side code is passed as source: the server compiles without DOM types.
     await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
-    return;
+    return { settled: await settleScroll(page, undefined, gate.deadline) };
   }
   const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS);
   try {
     gate();
     await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
+    return { settled: await settleScroll(page, { element: handle }, gate.deadline) };
   } finally {
     void handle.dispose().catch(constVoid);
   }
@@ -1080,7 +1095,10 @@ export const waitFor = async (
   const deadline = Date.now() + timeoutMs;
   const target = targetLocator(page, input);
   // Legacy presence checks accepted multiple matches, including hidden elements.
-  const locator = input.state === undefined ? target?.first() : target;
+  const elementConditions = stateConditions(input);
+  // Legacy presence waits take the first of several matches; element conditions need the one.
+  const locator =
+    input.state === undefined && elementConditions.length === 0 ? target?.first() : target;
   const state = input.state ?? "attached";
   const loadState =
     input.loadState === "domContentLoaded"
@@ -1094,6 +1112,7 @@ export const waitFor = async (
   ))()`;
   const conditions = [
     ...(locator ? [`locator:${state}`] : []),
+    ...elementConditions,
     ...(input.text === undefined ? [] : ["text"]),
     ...(input.urlIncludes === undefined ? [] : ["url"]),
     ...(input.loadState === undefined ? [] : [`load:${input.loadState}`]),
@@ -1162,7 +1181,13 @@ export const waitFor = async (
       remaining();
       // Revalidate snapshot refs after a navigation even if the native locator happened to settle.
       if (target) targetLocator(page, input);
-      if (version === documentVersion && locatorMatches && documentMatches === true) return;
+      const held =
+        locator && elementConditions.length > 0 && locatorMatches && documentMatches === true
+          ? await matchesState(locator, input, remaining())
+          : true;
+      if (version === documentVersion && locatorMatches && documentMatches === true && held) return;
+      // An element condition has no event to wait on: look again shortly, within the deadline.
+      if (!held) await new Promise((resolve) => setTimeout(resolve, Math.min(50, remaining())));
     }
   };
   try {

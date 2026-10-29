@@ -47,6 +47,7 @@ const methods = [
   "screenshot",
   "click",
   "right_click",
+  "hover",
   "drag",
   "scroll",
   "type_text",

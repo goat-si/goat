@@ -545,6 +545,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
         click: "click",
         right_click: "click",
+        hover: "hover",
         drag: "drag",
         scroll: "scroll",
         select: "select",
@@ -667,7 +668,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           fail("invalid_argument", "Use a point from the current screenshot."),
         );
       // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
-      if (point && !["click", "right_click", "drag", "scroll"].includes(call.method))
+      if (point && !["click", "right_click", "hover", "drag", "scroll"].includes(call.method))
         return yield* Effect.fail(
           fail("invalid_argument", "Click the point first, or name an element or selector."),
         );
@@ -683,18 +684,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       let input: Record<string, unknown> = {};
       switch (call.method) {
         case "click":
-        case "right_click": {
-          if (!locator && !point)
-            return yield* Effect.fail(
-              fail("invalid_argument", "Use a current element or image point."),
-            );
-          const pointer = pointerInput(arg, call.deadlineMillis, yield* Clock.currentTimeMillis);
+        case "right_click":
+        case "hover": {
+          const now = yield* Clock.currentTimeMillis;
+          const pointer = pointerInput(
+            call.method,
+            arg,
+            locator ?? point,
+            call.deadlineMillis,
+            now,
+          );
           if ("error" in pointer) return yield* Effect.fail(pointer.error);
-          input = {
-            ...(locator ? { locator } : { x: point?.x, y: point?.y }),
-            ...(call.method === "right_click" ? { button: "right" } : {}),
-            ...pointer.fields,
-          };
+          input = pointer.fields;
           break;
         }
         case "drag": {
@@ -788,7 +789,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       // Input waits for its target or a dialog; the request deadline, which the server starts
       // before queueing, ends with the cell so nothing lands after the cell stopped waiting.
       let cellBudgetMs: number | undefined;
-      if (["select", "type", "click", "drag", "scroll"].includes(operation)) {
+      if (["select", "type", "click", "hover", "drag", "scroll"].includes(operation)) {
         const now = yield* Clock.currentTimeMillis;
         cellBudgetMs = Math.max(1, Math.min(15_000, call.deadlineMillis - now));
         if (operation === "select" || operation === "type")

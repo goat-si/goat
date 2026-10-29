@@ -132,7 +132,7 @@ it.live(
       listBoundTabs: () => Effect.succeed([tab]),
       invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
         Effect.sync(() => {
-          if (["click", "scroll", "waitFor"].includes(request.operation))
+          if (["click", "scroll", "waitFor", "hover"].includes(request.operation))
             inputs.push([request.operation, request.input]);
           return (
             request.operation === "status"
@@ -177,7 +177,10 @@ it.live(
           await tab.observe({screenshot: true});
           await tab.click([10, 10]);
           await tab.waitFor({ role: 'button', name: 'Continue', enabled: true }, 300);
-          return stale;`,
+          await tab.hover([20, 20]);
+          let afterHover;
+          try { await tab.click([20, 20]); } catch (error) { afterHover = error.code; }
+          return [...stale, afterHover];`,
         });
         expect(result).toMatchObject({
           status: "completed",
@@ -185,9 +188,16 @@ it.live(
             "stale_reference",
             "The page scrolled or changed since that screenshot. Observe({screenshot:true}) again.",
             true,
+            "stale_reference",
           ],
         });
-        expect(inputs.map(([operation]) => operation)).toEqual(["scroll", "click", "waitFor"]);
+        expect(inputs.map(([operation]) => operation)).toEqual([
+          "scroll",
+          "click",
+          "waitFor",
+          "hover",
+        ]);
+        expect(inputs[3]?.[1]).toEqual({ x: 20, y: 20, timeoutMs: 5_000 });
         expect(inputs[2]?.[1]).toMatchObject({
           locator: 'role=button[name="Continue" s]',
           enabled: true,

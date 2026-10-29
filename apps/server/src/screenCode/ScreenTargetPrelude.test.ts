@@ -630,9 +630,11 @@ it.live("an app verify gives the window 60 ms to show the condition", () => {
       environmentId: "env",
       invocation: desktopContext.invocation,
       source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
-      return (await app.verify({ role: 'AXButton', name: 'Apply' })).met;`,
+      let hover;
+      try { await app.hover('Apply'); } catch (error) { hover = [error.code, error.nothingSent]; }
+      return [(await app.verify({ role: 'AXButton', name: 'Apply' })).met, hover];`,
     });
-    expect(result).toMatchObject({ status: "completed", value: true });
+    expect(result).toMatchObject({ status: "completed", value: [true, ["unsupported", true]] });
     expect(sent.find((entry) => entry.tool === "verify_state")?.args).toMatchObject({
       timeout_ms: 60,
     });

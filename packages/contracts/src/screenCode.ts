@@ -57,6 +57,7 @@ export const ScreenMethod = Schema.Literals([
   "screenshot",
   "click",
   "right_click",
+  "hover",
   "drag",
   "scroll",
   "type_text",

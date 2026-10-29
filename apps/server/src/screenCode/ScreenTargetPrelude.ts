@@ -123,7 +123,7 @@ const __legacy = (arg) =>
   ('ref' in arg || 'elementRef' in arg || 'point' in arg || 'x' in arg || 'selector' in arg || 'targetRef' in arg ||
     'sourceRef' in arg || 'deltaY' in arg || 'deltaX' in arg || 'mode' in arg || 'baseObservationId' in arg || 'urlIncludes' in arg || 'loadState' in arg);
 const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
-const __inputs = new Set(['click', 'right_click', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
+const __inputs = new Set(['click', 'right_click', 'hover', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
 const __target = (binding, note, owner, extraProps = {}) => {
   let ref = binding.targetRef ?? binding;
@@ -361,6 +361,14 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
         });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
+    },
+    // Tabs move the pointer over the target, which shows hover-only controls; apps cannot yet.
+    hover: (target, options = {}) => {
+      if (!tab) throw new ScreenError('unsupported', 'Apps cannot hover yet; nothing was sent.', true);
+      return act('hover', 'hover', {
+        ...aim(target),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      });
     },
     type: (text, target, options = {}) => {
       if (Array.isArray(target) || __winPt(target))
