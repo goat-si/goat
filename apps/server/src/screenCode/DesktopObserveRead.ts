@@ -18,7 +18,12 @@ import {
   unmarkUnverified,
 } from "./DesktopTreeText.ts";
 
-export type DesktopRow = ScreenObservationDraft["elements"][number];
+export type DesktopRow = ScreenObservationDraft["elements"][number] & {
+  /** True when the element had no label of its own and took text written under it. */
+  readonly lifted?: boolean;
+  /** Raw action names as the driver reported them, before custom-action trimming. */
+  readonly rawActions?: ReadonlyArray<string>;
+};
 export interface DesktopQuery {
   readonly role?: string;
   readonly name?: string;
@@ -85,12 +90,12 @@ export const desktopRows = (
     if (!token) return [];
     const index = natural(entry.element_index);
     const label = string(entry.label) ?? "";
-    const named =
-      index === undefined
-        ? label
-        : label === ""
-          ? (!repeated.has(index) && names.get(index)) || ""
-          : label;
+    const liftedName =
+      index !== undefined && label === "" && !repeated.has(index) ? names.get(index) : undefined;
+    const named = liftedName ?? label;
+    const rawActions = (Array.isArray(entry.actions) ? entry.actions : []).filter(
+      (action): action is string => typeof action === "string",
+    );
     // Only a structured id: tree text is written unescaped and can pose as metadata.
     const id = string(entry.identifier)?.slice(0, 400);
     return [
@@ -101,6 +106,8 @@ export const desktopRows = (
         ...(index === undefined ? {} : { index }),
         ...elementDetail(entry),
         ...(id === undefined ? {} : { id }),
+        ...(liftedName !== undefined && liftedName !== "" ? { lifted: true } : {}),
+        ...(rawActions.length > 0 ? { rawActions } : {}),
         driverToken: token,
       },
     ];

@@ -1,0 +1,802 @@
+import { expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeURL from "node:url";
+import type { ScreenObservation, ScreenRunResult, ScreenTargetRef } from "@goat/contracts";
+import {
+  call,
+  context,
+  DriverError,
+  fixture,
+  goat2WindowState,
+} from "./DesktopTargetHost.testkit.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { ScreenRunService } from "./ScreenRunService.ts";
+import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+
+const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 5000 });
+
+const win = (windowId: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  pid: 42,
+  window_id: windowId,
+  app_name: "Editor",
+  title: "Document",
+  bounds: { x: 0, y: 0, width: 800, height: 600 },
+  is_on_screen: true,
+  on_current_space: true,
+  ...extra,
+});
+
+const verifyOutcome = (
+  index: number,
+  observed: Record<string, unknown> | undefined,
+  status = "satisfied",
+) => ({
+  index,
+  status,
+  ...(observed === undefined ? {} : { observed_json: JSON.stringify(observed) }),
+});
+
+const cellService = (
+  host: ReturnType<typeof fixture>["host"],
+  scheduleDeadline?: (run: () => void, ms: number) => () => void,
+) =>
+  ScreenRunService.layerWithRuntime({
+    dispatcher: createScreenDispatchRouter({ app: host }),
+    desktopHost: host,
+    invocation: {
+      command: process.execPath,
+      entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+    },
+    assetResolver: () => resolveScreenRuntimeAsset("dev"),
+    ...(scheduleDeadline === undefined ? {} : { scheduleDeadline }),
+  }).pipe(Layer.provide(NodeServices.layer));
+
+const runCell = (source: string, limits?: Partial<typeof context.limits>) =>
+  Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    return yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source,
+      ...(limits === undefined ? {} : { limits }),
+    });
+  });
+
+it.effect(
+  "T40/T40c/T40d/T40e/T40f: window absence and offscreen transitions report observed evidence without confirming on goat.8",
+  () =>
+    Effect.gen(function* () {
+      let phase = 0;
+      const { host } = fixture({
+        list_windows: () => {
+          phase++;
+          if (phase <= 2) return { windows: [win(7), win(8, { title: "Palette" })] };
+          return { windows: [win(8, { title: "Palette" })] };
+        },
+        press_key: { effect: "unverifiable" },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const closedWithWitness = yield* host.invoke(
+        evCall("press_key", { key: "w", modifiers: ["command"] }, ref),
+        context,
+      );
+      expect(closedWithWitness.category).toBe("unverifiable");
+      expect(closedWithWitness.evidence).toContain("observed:window_not_listed");
+      expect((closedWithWitness.value as { windows?: { bound?: string } })?.windows?.bound).toBe(
+        "not_listed",
+      );
+
+      let fPhase = 0;
+      const filteredHost = fixture({
+        list_windows: () => {
+          fPhase++;
+          if (fPhase <= 2)
+            return {
+              windows: [win(7, { title: "", on_current_space: null }), win(8, { title: "Main" })],
+            };
+          return { windows: [win(8, { title: "Main" })] };
+        },
+        click: { effect: "unverifiable" },
+      }).host;
+      const fBound = yield* filteredHost.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const fRes = yield* filteredHost.invoke(
+        evCall("click", { x: 10, y: 10 }, fBound.value as ScreenTargetRef),
+        context,
+      );
+      expect(fRes.category).toBe("unverifiable");
+      expect(fRes.evidence).toContain("observed:window_not_listed");
+      expect((fRes.value as { windows?: { bound?: string } })?.windows?.bound).toBe("not_listed");
+
+      let uPhase = 0;
+      const unverifiedHost = fixture({
+        list_windows: () => {
+          uPhase++;
+          return uPhase <= 2 ? { windows: [win(7)] } : { windows: [] };
+        },
+        press_key: { effect: "unverifiable" },
+      }).host;
+      const uBound = yield* unverifiedHost.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const uRes = yield* unverifiedHost.invoke(
+        evCall("press_key", { key: "w", modifiers: ["command"] }, uBound.value as ScreenTargetRef),
+        context,
+      );
+      expect(uRes.category).toBe("unverifiable");
+      expect(uRes.evidence).toContain("observed:window_list_unverified");
+      expect((uRes.value as { windows?: { bound?: string } })?.windows?.bound).toBe("unverified");
+
+      let oPhase = 0;
+      const offHost = fixture({
+        list_windows: () => {
+          oPhase++;
+          return oPhase <= 2
+            ? { windows: [win(7), win(8)] }
+            : { windows: [win(7, { is_on_screen: false, on_current_space: false }), win(8)] };
+        },
+        click: { effect: "unverifiable" },
+      }).host;
+      const oBound = yield* offHost.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const oRes = yield* offHost.invoke(
+        evCall("click", { x: 10, y: 10 }, oBound.value as ScreenTargetRef),
+        context,
+      );
+      expect(oRes.category).toBe("unverifiable");
+      expect(oRes.evidence).toContain("observed:window_offscreen:on_current_space=false");
+      expect((oRes.value as { windows?: { bound?: string } })?.windows?.bound).toBe("offscreen");
+    }),
+);
+
+it.effect(
+  "T41/T41c: acted element state change is observed only for unique non-lifted driver labels, and never confirms",
+  () =>
+    Effect.gen(function* () {
+      let vCalls = 0;
+      const { host } = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          tree_markdown: [
+            '- [0] AXWindow "Doc"',
+            '  - [1] AXCheckBox "Bold" = "0" [actions=[press]]',
+            "  - [2] AXRow [actions=[press]]",
+            '    - AXStaticText = "Italic"',
+            '  - [3] AXRow "Italic" = "0" [actions=[press]]',
+          ].join("\n"),
+          elements_complete: false,
+          elements: [
+            { role: "AXWindow", element_index: 0, element_token: "s1:0", label: "Doc" },
+            {
+              role: "AXCheckBox",
+              element_index: 1,
+              element_token: "s1:1",
+              label: "Bold",
+              value: "0",
+              selected: false,
+              actions: ["AXPress"],
+            },
+            {
+              role: "AXRow",
+              element_index: 2,
+              element_token: "s1:2",
+              actions: ["AXPress"],
+            },
+            {
+              role: "AXRow",
+              element_index: 3,
+              element_token: "s1:3",
+              label: "Italic",
+              value: "0",
+              actions: ["AXPress"],
+            },
+          ],
+        },
+        verify_state: () => {
+          vCalls++;
+          return {
+            status: "satisfied",
+            predicates: [
+              verifyOutcome(
+                0,
+                vCalls === 1
+                  ? { role: "AXCheckBox", label: "Bold", value: "0", selected: false }
+                  : { role: "AXCheckBox", label: "Bold", value: "1", selected: true },
+              ),
+            ],
+          };
+        },
+        click: { effect: "unverifiable" },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const obs = (yield* host.observe(call("get_window_state", {}, ref), context))
+        .value as ScreenObservation;
+      const bold = obs.elements.find((e) => e.index === 1);
+      const liftedRow = obs.elements.find((e) => e.index === 2);
+      if (!bold || !liftedRow) throw new Error("Missing elements");
+
+      const clickedBold = yield* host.invoke(
+        evCall("click", { elementRef: bold.ref }, ref),
+        context,
+      );
+      expect(clickedBold.category).toBe("unverifiable");
+      expect(clickedBold.evidence).toContain('observed:element_state:value "0"→"1"');
+
+      const clickedLifted = yield* host.invoke(
+        evCall("click", { elementRef: liftedRow.ref }, ref),
+        context,
+      );
+      expect(
+        (clickedLifted.evidence ?? []).some((e) => e.startsWith("observed:element_state")),
+      ).toBe(false);
+    }),
+);
+
+it.effect(
+  "T42: watched window value, new window and title changes are reported as observed evidence only",
+  () =>
+    Effect.gen(function* () {
+      let lCalls = 0;
+      let vCalls = 0;
+      const { host } = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          tree_markdown:
+            '- [0] AXWindow "Appearance"\n  - [1] AXStaticText "Display" = "0"\n  - [2] AXButton "About" [actions=[press]]',
+          elements_complete: false,
+          elements: [
+            { role: "AXWindow", element_index: 0, element_token: "s1:0", label: "Appearance" },
+            {
+              role: "AXStaticText",
+              element_index: 1,
+              element_token: "s1:1",
+              label: "Display",
+              value: "0",
+            },
+            {
+              role: "AXButton",
+              element_index: 2,
+              element_token: "s1:2",
+              label: "About",
+              actions: ["AXPress"],
+            },
+          ],
+        },
+        list_windows: () => {
+          lCalls++;
+          return lCalls <= 2
+            ? { windows: [win(7, { title: "Appearance" })] }
+            : {
+                windows: [win(7, { title: "About" }), win(82871, { title: "Inspector" })],
+              };
+        },
+        verify_state: () => {
+          vCalls++;
+          return {
+            status: "satisfied",
+            predicates: [
+              verifyOutcome(
+                0,
+                vCalls === 1
+                  ? { role: "AXStaticText", label: "Display", value: "0" }
+                  : { role: "AXStaticText", label: "Display", value: "702" },
+              ),
+            ],
+          };
+        },
+        click: { effect: "unverifiable" },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const obs = (yield* host.observe(call("get_window_state", {}, ref), context))
+        .value as ScreenObservation;
+      const btn = obs.elements.find((e) => e.index === 2);
+      if (!btn) throw new Error("Missing button");
+      const res = yield* host.invoke(evCall("click", { elementRef: btn.ref }, ref), context);
+      expect(res.category).toBe("unverifiable");
+      expect(res.evidence).toContain('observed:window_change:Display "0"→"702"');
+      expect(res.evidence).toContain("observed:window_opened:82871");
+      expect(res.evidence).toContain('observed:window_title:"Appearance"→"About"');
+    }),
+);
+
+it.effect("T43: evidence read errors never resend and never fail the input", () =>
+  Effect.gen(function* () {
+    let listCalls = 0;
+    const { host, sent } = fixture({
+      list_windows: () => {
+        listCalls++;
+        if (listCalls === 1) return { windows: [win(7)] };
+        return new DriverError({ status: "failed" }, "WindowServer error");
+      },
+      verify_state: new DriverError({ status: "failed" }, "verify error"),
+      click: { effect: "unverifiable" },
+    });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const ref = bound.value as ScreenTargetRef;
+    const res = yield* host.invoke(evCall("click", { x: 10, y: 10 }, ref), context);
+    expect(res.category).toBe("unverifiable");
+    expect(sent.filter((s) => s.tool === "click")).toHaveLength(1);
+    expect(sent.filter((s) => s.tool === "list_windows").length).toBeGreaterThanOrEqual(3);
+  }),
+);
+
+it.live("T44: a run_steps batch makes no per-input verify_state call", () => {
+  const { host, sent } = fixture({
+    run_steps: (args: { steps: ReadonlyArray<unknown> }) => ({
+      ok: true,
+      total: args.steps.length,
+      executed: args.steps.length,
+      failed_step: null,
+      steps: args.steps.map((_, index) => ({
+        index,
+        tool: "click",
+        ok: true,
+        effect: "unverifiable",
+      })),
+    }),
+  });
+  return Effect.gen(function* () {
+    yield* runCell(
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
+        "await Promise.all([app.click('Apply'), app.click('Apply'), app.click('Apply')]);",
+    );
+    expect(sent.filter((s) => s.tool === "click")).toHaveLength(3);
+    expect(sent.filter((s) => s.tool === "verify_state")).toHaveLength(0);
+    expect(sent.filter((s) => s.tool === "list_windows").length).toBeGreaterThanOrEqual(2);
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.live(
+  "T45/T45b/T45c/T45e/T45f/T45g/T45h/T51: windows opened are reported on inputs and on cell results/errors within budget",
+  () => {
+    let mode: "normal" | "many" | "emptyStart" | "emptyEnd" | "exactFit" = "normal";
+    let step = 0;
+    const { host } = fixture({
+      get_window_state: (args: Record<string, unknown>) => goat2WindowState(args),
+      list_windows: () => {
+        step++;
+        if (mode === "emptyStart" && step === 2) return { windows: [] };
+        if (mode === "emptyEnd" && step >= 3) return { windows: [] };
+        if (mode === "many" && step >= 3) {
+          return {
+            windows: [
+              win(7),
+              ...Array.from({ length: 20 }, (_, i) =>
+                win(8000 + i, { title: "Sheet-" + i + "-" + "x".repeat(90) }),
+              ),
+            ],
+          };
+        }
+        return step <= 2
+          ? { windows: [win(7)] }
+          : { windows: [win(7), win(82779, { title: "Go to Folder" })] };
+      },
+      click: () =>
+        mode === "exactFit"
+          ? { effect: "unverifiable", pad: "p".repeat(430) }
+          : { effect: "unverifiable" },
+    });
+    return Effect.gen(function* () {
+      const failedCell = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "const c = await app.click([10, 10]); await app.menu([]); return c;",
+      ).pipe(Effect.result);
+      expect(failedCell._tag).toBe("Failure");
+      if (failedCell._tag === "Failure") {
+        expect(failedCell.failure.windowsOpened?.map((w) => w.window_id)).toEqual([82779]);
+      }
+
+      mode = "many";
+      step = 0;
+      const manyRes = (yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "const c = await app.click([10, 10]); return c.result.windows;",
+      )) as ScreenRunResult;
+      expect(manyRes.windowsOpened).toHaveLength(16);
+      expect(manyRes.windowsOpenedTruncated).toBe(true);
+      expect(manyRes.windowsOpened?.[0]?.title.length).toBeLessThanOrEqual(80);
+      const inputWins = manyRes.value as { opened: Array<{ title: string }>; truncated?: boolean };
+      expect(inputWins.opened).toHaveLength(8);
+      expect(inputWins.truncated).toBe(true);
+
+      step = 0;
+      const smallBudget = (yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "const c = await app.click([10, 10]); return c.result;",
+        { returnBytes: 900 },
+      )) as ScreenRunResult;
+      expect((smallBudget.value as { windowsTruncated?: boolean })?.windowsTruncated).toBe(true);
+      expect((smallBudget.value as { windows?: unknown })?.windows).toBeUndefined();
+
+      mode = "exactFit";
+      step = 0;
+      const exactBudget = (yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "const c = await app.click([10, 10]); return Boolean(c.result.pad);",
+        { returnBytes: 540 },
+      )) as ScreenRunResult;
+      expect(exactBudget.value).toBe(true);
+      expect(exactBudget.windowsOpened?.map((w) => w.window_id)).toEqual([82779]);
+
+      mode = "emptyStart";
+      step = 0;
+      const unvStart = (yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "await app.click([10, 10]); return 1;",
+      )) as ScreenRunResult;
+      expect(unvStart.windowsOpenedUnverified).toBe(true);
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
+it.live(
+  "T49/T49b/T49c/T49d/T49e: sheet rebinds to parent with a new generation, waitFor hidden checks offscreen, and click({action}) validates and forwards",
+  () => {
+    let shotWindow = 82779;
+    const { host, sent } = fixture({
+      list_windows: {
+        windows: [
+          win(72907, { title: "Recents" }),
+          win(82779, { title: "Go to Folder", is_on_screen: false, on_current_space: true }),
+        ],
+      },
+      get_window_state: (args: Record<string, unknown>) => {
+        if (args.include_accessibility_tree === false) {
+          return goat2WindowState(args, {
+            window_id: shotWindow,
+            snapshot_id: shotWindow === 82779 ? "s_sheet" : "s_parent",
+          });
+        }
+        if (args.window_id === 82779) {
+          return {
+            pid: 42,
+            window_id: 82779,
+            degraded: true,
+            degraded_reason: "window_is_sheet: window_id 82779 is a sheet attached to window 72907",
+            sheet_of_window_id: 72907,
+            next_call: {
+              tool: "get_window_state",
+              arguments: { pid: 42, window_id: 72907 },
+            },
+            elements_complete: false,
+            tree_markdown: "",
+            elements: [],
+          };
+        }
+        shotWindow = 72907;
+        return {
+          pid: 42,
+          window_id: 72907,
+          snapshot_id: "s_parent",
+          elements_complete: false,
+          tree_markdown:
+            '- [0] AXWindow "Recents"\n  - [1] AXSheet\n    - [2] AXButton "Go" [actions=[press,showmenu]]',
+          elements: [
+            { role: "AXWindow", element_index: 0, element_token: "sp:0", label: "Recents" },
+            { role: "AXSheet", element_index: 1, element_token: "sp:1" },
+            {
+              role: "AXButton",
+              element_index: 2,
+              element_token: "sp:2",
+              label: "Go",
+              actions: ["AXPress", "AXShowMenu"],
+            },
+          ],
+        };
+      },
+      click: { effect: "unverifiable" },
+    });
+    return Effect.gen(function* () {
+      const res = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 82779}); " +
+          "const oldGen = app.generation; const oldRef = app.targetRef; " +
+          "await app.screenshot(); " +
+          "const obs = await app.observe(); " +
+          "const genMoved = app.generation > oldGen && app.targetRef.generation === obs.targetRef.generation && app.targetRef.id === oldRef.id; " +
+          "const oldPointCode = await (async () => app.click([10, 10]))().then(() => 'ok', (e) => e.code); " +
+          "const badAction = await (async () => app.click(2, {action: 'open'}))().then(() => 'ok', (e) => e.code); " +
+          "await app.click(2, {action: 'show_menu'}); " +
+          "await app.screenshot(); " +
+          "await app.click([10, 10]); " +
+          "const hiddenWait = await app.waitFor({window: 'hidden'}); " +
+          "return { genMoved, oldPointCode, badAction, buttons: obs.elements.length, hiddenMet: hiddenWait.met };",
+      );
+      expect(res.value).toMatchObject({
+        genMoved: true,
+        oldPointCode: "stale_reference",
+        badAction: "invalid_argument",
+        buttons: 3,
+        hiddenMet: false,
+      });
+      const clicks = sent.filter((s) => s.tool === "click");
+      expect(clicks).toHaveLength(2);
+      expect(clicks[0]?.args).toMatchObject({
+        element_token: "sp:2",
+        action: "show_menu",
+      });
+      expect(clicks[1]?.args).toMatchObject({
+        target: { kind: "window", pid: 42, window_id: 72907 },
+        x: 5,
+        y: 5,
+      });
+
+      const hiddenRes = yield* runCell(
+        "const sheet = await screen.app({bundle_id: 'org.example.Editor', window_id: 82779}); " +
+          "return await sheet.waitFor({window: 'hidden'});",
+      );
+      expect(hiddenRes.value).toMatchObject({ met: true, on_current_space: true });
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
+it.effect(
+  "T41 same-frame replacement and T41c paged lifted row: replacement stays observed-only, and paged lifted row emits no element_state",
+  () =>
+    Effect.gen(function* () {
+      // 1. Same-frame replacement: same role/label/frame, different value -> observed:element_state, never confirmed.
+      let vStep = 0;
+      const { host } = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          tree_markdown: [
+            '- [0] AXWindow "List"',
+            '  - [1] AXButton "Delete" = "item-a" [actions=[press]]',
+          ].join(String.fromCharCode(10)),
+          elements_complete: false,
+          elements: [
+            { role: "AXWindow", element_index: 0, element_token: "s1:0", label: "List" },
+            {
+              role: "AXButton",
+              element_index: 1,
+              element_token: "s1:1",
+              label: "Delete",
+              value: "item-a",
+              frame: { x: 10, y: 20, w: 80, h: 24 },
+              actions: ["AXPress"],
+            },
+          ],
+        },
+        verify_state: () => {
+          vStep++;
+          return {
+            status: "satisfied",
+            predicates: [
+              verifyOutcome(0, {
+                role: "AXButton",
+                label: "Delete",
+                value: vStep === 1 ? "item-a" : "item-b",
+                frame: { x: 10, y: 20, w: 80, h: 24 },
+              }),
+            ],
+          };
+        },
+        click: { effect: "unverifiable" },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const obs = (yield* host.observe(call("get_window_state", {}, ref), context))
+        .value as ScreenObservation;
+      const delBtn = obs.elements.find((e) => e.index === 1);
+      if (!delBtn) throw new Error("Missing Delete button");
+      const clicked = yield* host.invoke(evCall("click", { elementRef: delBtn.ref }, ref), context);
+      expect(clicked.category).toBe("unverifiable");
+      expect(clicked.evidence).toContain('observed:element_state:value "item-a"→"item-b"');
+
+      // 2. Paged lifted row: over-budget read puts lifted row on the second page, while a native row with the same label exists.
+      const rows = 500;
+      const nodes: Array<{
+        index: number;
+        role: string;
+        depth: number;
+        label?: string;
+        text?: string;
+        parent?: number;
+      }> = [
+        { index: 0, role: "AXWindow", depth: 0, label: "Monitor" },
+        { index: 1, role: "AXOutline", depth: 1, parent: 0 },
+      ];
+      let next = 2;
+      for (let r = 0; r < rows; r++) {
+        const rIdx = next++;
+        nodes.push({ index: rIdx, role: "AXRow", depth: 2, parent: 1 });
+        nodes.push({ index: next++, role: "AXCell", depth: 3, parent: rIdx, text: "row-" + r });
+      }
+      const lastCellIdx = next - 1;
+      const lastRowIdx = next - 2;
+      const toolbar = next++;
+      nodes.push({ index: toolbar, role: "AXToolbar", depth: 1, parent: 0 });
+      nodes.push({ index: next++, role: "AXButton", depth: 2, parent: toolbar, label: "row-499" });
+      const md = nodes
+        .map(
+          (n) =>
+            "  ".repeat(n.depth) +
+            "- " +
+            (n.index === lastCellIdx ? "" : "[" + n.index + "] ") +
+            (n.index === lastCellIdx ? "AXStaticText" : n.role) +
+            (n.label ? ' "' + n.label + '"' : "") +
+            (n.text ? ' = "' + n.text + '"' : ""),
+        )
+        .join(String.fromCharCode(10));
+      const pagedFixture = fixture({
+        get_window_state: {
+          pid: 42,
+          window_id: 7,
+          tree_markdown: md,
+          elements_complete: false,
+          elements: nodes
+            .filter((n) => n.index !== lastCellIdx)
+            .map((n) => ({
+              role: n.role,
+              depth: n.depth,
+              element_index: n.index,
+              element_token: "s1:" + n.index,
+              ...(n.label ? { label: n.label } : {}),
+              ...(n.text ? { label: n.text, value: n.text } : {}),
+              ...(n.parent !== undefined ? { parent_index: n.parent } : {}),
+              actions: ["AXPress"],
+            })),
+        },
+        verify_state: {
+          status: "satisfied",
+          predicates: [verifyOutcome(0, { role: "AXRow", label: "row-0", value: "changed" })],
+        },
+        click: { effect: "unverifiable" },
+      });
+      const pBound = yield* pagedFixture.host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const pRef = pBound.value as ScreenTargetRef;
+      yield* pagedFixture.host.observe(call("get_window_state", {}, pRef), context);
+      const page2 = (yield* pagedFixture.host.observe(
+        call("get_window_state", { after: lastRowIdx }, pRef),
+        context,
+      )).value as ScreenObservation;
+      const liftedRow2 = page2.elements.find((e) => e.index === lastRowIdx);
+      if (!liftedRow2) throw new Error("Missing paged row");
+      expect(liftedRow2.name).toBe("row-499");
+      const pClicked = yield* pagedFixture.host.invoke(
+        evCall("click", { elementRef: liftedRow2.ref }, pRef),
+        context,
+      );
+      expect((pClicked.evidence ?? []).some((e) => e.startsWith("observed:element_state"))).toBe(
+        false,
+      );
+    }),
+);
+
+it.live(
+  "T45b/T45c/T45f/T51': batches, tight-budget inputs, empty end reads, opened-then-closed windows, and deadline/stop cells report windowsOpened accurately",
+  () => {
+    let scenario: "batch" | "openedClosed" | "emptyEnd" | "deadline" = "batch";
+    let step = 0;
+    let fireDeadline: (() => void) | undefined;
+    const { host } = fixture({
+      get_window_state: (args: Record<string, unknown>) => {
+        if (scenario === "deadline" && step >= 3) fireDeadline?.();
+        return goat2WindowState(args);
+      },
+      list_windows: () => {
+        step++;
+        if (scenario === "batch") {
+          return step <= 1
+            ? { windows: [win(7)] }
+            : { windows: [win(7), win(82871, { title: "Batch Opened" })] };
+        }
+        if (scenario === "openedClosed") {
+          // step 1: bind; step 2: pre input 1; step 3: post input 1 (82779 opened); step 4: pre input 2; step 5+: 82779 closed again
+          if (step <= 2) return { windows: [win(7)] };
+          if (step <= 4) return { windows: [win(7), win(82779, { title: "Temp Sheet" })] };
+          return { windows: [win(7)] };
+        }
+        if (scenario === "emptyEnd") {
+          if (step <= 2) return { windows: [win(7)] };
+          if (step === 3) return { windows: [win(7), win(82779, { title: "Kept From Input" })] };
+          return { windows: [] };
+        }
+
+        return step <= 2
+          ? { windows: [win(7)] }
+          : { windows: [win(7), win(82900, { title: "Before Deadline" })] };
+      },
+      run_steps: (args: { steps: ReadonlyArray<unknown> }) => ({
+        ok: true,
+        total: args.steps.length,
+        executed: args.steps.length,
+        failed_step: null,
+        steps: args.steps.map((_, index) => ({
+          index,
+          tool: "click",
+          ok: true,
+          effect: "unverifiable",
+        })),
+      }),
+      click: () => {
+        if (scenario === "deadline" && step >= 5 && fireDeadline) {
+          fireDeadline();
+        }
+        return { effect: "unverifiable" };
+      },
+    });
+    return Effect.gen(function* () {
+      // T45b: batch opens window 82871 -> listed from cell end read
+      const batchRes = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
+          "await Promise.all([app.click('Apply'), app.click('Apply')]);",
+      );
+      expect(batchRes.windowsOpened?.map((w) => w.window_id)).toEqual([82871]);
+
+      // Window opened and closed during the same cell -> left out of windowsOpened
+      scenario = "openedClosed";
+      step = 0;
+      const ocRes = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "await app.click([10, 10]); await app.screenshot(); await app.click([10, 10]);",
+      );
+      expect(ocRes.windowsOpened).toBeUndefined();
+
+      // T45f: empty end snapshot -> windowsOpenedUnverified:true and per-input window 82779 kept
+      scenario = "emptyEnd";
+      step = 0;
+      const eeRes = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "await app.click([10, 10]);",
+      );
+      expect(eeRes.windowsOpenedUnverified).toBe(true);
+      expect(eeRes.windowsOpened?.map((w) => w.window_id)).toEqual([82779]);
+
+      // T51': supervisor deadline after an input opened 82900 -> error carries 82900 and windowsOpenedUnverified:true
+      scenario = "deadline";
+      step = 0;
+      const dlRes = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
+          "await app.click([10, 10]); await app.screenshot(); await new Promise(() => {});",
+      ).pipe(Effect.result);
+      expect(dlRes._tag).toBe("Failure");
+      if (dlRes._tag === "Failure") {
+        expect(dlRes.failure.windowsOpened?.map((w) => w.window_id)).toEqual([82900]);
+        expect(dlRes.failure.windowsOpenedUnverified).toBe(true);
+      }
+    }).pipe(
+      Effect.provide(
+        cellService(host, (run) => {
+          fireDeadline = run;
+          return () => {
+            fireDeadline = undefined;
+          };
+        }),
+      ),
+    );
+  },
+);

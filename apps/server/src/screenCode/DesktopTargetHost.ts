@@ -1,5 +1,4 @@
-// @effect-diagnostics preferSchemaOverJson:off nodeBuiltinImport:off - Driver replies are bounded by the primitive channel; target IDs are opaque UUIDs.
-import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -32,7 +31,6 @@ import { driverError, driverResult, driverValue, fail } from "./DesktopDriverRep
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
 import {
-  admitDesktopInput,
   BATCH_FAILED_CATEGORIES,
   buildGuardInput,
   inspectTreeElements,
@@ -54,6 +52,21 @@ import {
   treeWindowBasis,
   type ScreenshotBasis,
 } from "./DesktopTargetPoints.ts";
+import { finishCellTracker, runInputWithEvidence } from "./DesktopEvidence.ts";
+import {
+  buildWaitExpectation,
+  INPUT_METHODS,
+  prepareDesktopInput,
+  validateMenuInput,
+} from "./DesktopInputPlan.ts";
+import {
+  CellWindowTracker,
+  type CellWindowsOutcome,
+  hiddenWindowStatus,
+  parseWindowList,
+  sheetParentId,
+  type WindowEntry,
+} from "./DesktopWindows.ts";
 import { isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
 import {
   boundedReadDetail,
@@ -70,6 +83,7 @@ import {
   READ_BOUNDS,
   viewportOf,
   type DesktopPages,
+  type DesktopRow,
 } from "./DesktopObserveRead.ts";
 
 const isJson = Schema.is(Schema.Json);
@@ -96,19 +110,22 @@ const natural = (value: unknown): number | undefined =>
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
 const RESTARTED_ELEMENTS = "The driver restarted; observe again to get current element numbers.";
 export interface BoundWindow {
-  readonly ref: ScreenTargetRef;
+  ref: ScreenTargetRef;
   readonly pid: number;
-  readonly windowId: number;
+  windowId: number;
   readonly appId: string;
   /** The bundle id list_apps gave the app; a run_steps app_scope names the app by it. */
   readonly bundleId?: string;
   readonly controlId: string;
-  readonly epoch: number;
+  epoch: number;
   /** The driver generation the window was bound under; a rebind after a replacement moves it. */
   connectionGeneration: string;
   observationId?: string;
   /** The rest of the read behind observationId, when its budget cut it; see DesktopPages. */
   pages?: DesktopPages;
+  /** Rows of the current observation and its pages, for watched-element evidence and action checks. */
+  rows?: ReadonlyArray<DesktopRow>;
+  boundWindows?: ReadonlyArray<WindowEntry> | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
@@ -150,6 +167,10 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
     lookup: (ref: ScreenTargetRef, callKey?: string) => number,
   ) => void;
   readonly finishTurn: (runId: string, turnId: string) => void;
+  readonly finishCell?: (
+    context: ScreenHostContext,
+    options?: { readonly skipEndRead?: boolean },
+  ) => Effect.Effect<CellWindowsOutcome>;
 }
 
 export const createDesktopTargetHost = (deps: {
@@ -159,13 +180,29 @@ export const createDesktopTargetHost = (deps: {
   readonly platform?: NodeJS.Platform;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
-  /** The platform the driver runs on, which picks launch_app's arguments; this host's by default. */
-  readonly platform?: NodeJS.Platform;
   readonly cursorGeneration?: (ref: ScreenTargetRef, callKey?: string) => number;
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
   const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
   const targets = new Map<string, BoundWindow>();
+  const cellTrackers = new Map<
+    string,
+    { tracker: CellWindowTracker; connectionGeneration: string }
+  >();
+  const cellKey = (c: {
+    readonly runId: string;
+    readonly turnId: string;
+    readonly cellId: string;
+  }) => `${c.runId}\u0000${c.turnId}\u0000${c.cellId}`;
+  const trackerFor = (context: ScreenHostContext, connectionGeneration: string) => {
+    const key = cellKey(context);
+    let entry = cellTrackers.get(key);
+    if (!entry) {
+      entry = { tracker: new CellWindowTracker(), connectionGeneration };
+      cellTrackers.set(key, entry);
+    }
+    return entry.tracker;
+  };
   let epoch = 0;
   let cursorGeneration = deps.cursorGeneration;
   /** One driver call and its reply as the driver gave it; GOAT's own refusals come back as replies. */
@@ -384,6 +421,8 @@ export const createDesktopTargetHost = (deps: {
         },
         context,
       );
+      const created = targets.get(ref.id);
+      if (created) created.boundWindows = parseWindowList(driverValue(windowsReply), pid);
       return { value: ref, category: "unverifiable" };
     },
   );
@@ -456,14 +495,14 @@ export const createDesktopTargetHost = (deps: {
       const search = query && driverQuery(query);
       // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
       // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
-      const read = (limit: number, filter?: string) =>
+      const read = (limit: number, filter?: string, windowId = bound.windowId) =>
         boundRequest(
           bound,
           "nothing",
           "get_window_state",
           {
             pid: bound.pid,
-            window_id: bound.windowId,
+            window_id: windowId,
             include_accessibility_tree: !capture,
             include_screenshot: capture,
             max_elements: limit,
@@ -481,6 +520,7 @@ export const createDesktopTargetHost = (deps: {
         delete bound.snapshotId;
         delete bound.pages;
         delete bound.elementsByToken;
+        delete bound.rows;
       };
       let limit: number = READ_BOUNDS[0];
       let reply = yield* read(limit);
@@ -499,7 +539,25 @@ export const createDesktopTargetHost = (deps: {
         limit = smaller;
         reply = yield* read(limit);
       }
-      const state = object(driverValue(reply));
+      let state = object(driverValue(reply));
+      const parentId = !capture && state ? sheetParentId(state) : undefined;
+      if (
+        parentId !== undefined &&
+        parentId !== bound.windowId &&
+        (yield* Clock.currentTimeMillis) < call.deadlineMillis
+      ) {
+        retire();
+        bound.windowId = parentId;
+        bound.epoch = ++epoch;
+        bound.ref = { ...bound.ref, generation: bound.epoch };
+        bound.pointsStale = "restart";
+        bound.screenshots?.clear();
+        delete bound.latestScreenshot;
+        delete bound.frames;
+        delete bound.framesBasis;
+        reply = yield* read(limit, filtered ? search : undefined, parentId);
+        state = object(driverValue(reply));
+      }
       if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) {
         retire();
         return yield* Effect.fail(fail("tree_limit", tooLargeStep(capture, query !== undefined)));
@@ -559,6 +617,7 @@ export const createDesktopTargetHost = (deps: {
         observations.evictTarget(bound.ref.id);
         delete bound.observationId;
         delete bound.snapshotId;
+        bound.rows = shown;
         // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
         bound.elementsByToken = inspectTreeElements(elements, rows);
@@ -647,222 +706,185 @@ export const createDesktopTargetHost = (deps: {
       return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
     },
   );
-  const invoke: DesktopTargetHost["invoke"] = Effect.fn("DesktopTargetHost.invoke")(
-    function* (call, context) {
-      if (call.method === "select_text")
-        return yield* Effect.fail(
-          fail(
-            "unsupported",
-            "Desktop select_text is unsupported by this runtime; nothing was sent. To replace an editable field's whole value, use setValue({ elementRef, value }).",
-          ),
-        );
-      if (call.method === "launch_app" && !call.targetRef)
-        return yield* launch(call, callArgs(call.args), context);
-      const bound = resolve(call, context);
-      if (!bound) return yield* Effect.fail(fail("stale_reference"));
-      if (call.method === "invoke_menu") {
-        const menuArgs = callArgs(call.args);
-        const path = array(menuArgs.path);
-        if (
-          path.length === 0 ||
-          path.length > 16 ||
-          !path.every((label) => typeof label === "string" && label.trim().length > 0)
-        )
-          return yield* Effect.fail(
-            fail("invalid_argument", "Name the menu path, such as ['File', 'Open…']."),
-          );
-        const menuAdmission = admitDesktopInput({
-          method: "invoke_menu",
-          args: menuArgs,
-          appId: bound.appId,
-          ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
-        });
-        if (menuAdmission.refused !== undefined) return yield* Effect.fail(menuAdmission.refused);
-        bound.pointsStale ??= "input";
-        if (!isMac) {
-          bound.screenshots?.clear();
-          delete bound.latestScreenshot;
-        }
-        const reply = yield* boundRequest(
-          bound,
-          "nothing",
-          "invoke_menu",
-          { pid: bound.pid, window_id: bound.windowId, path },
-          call,
-          context,
-          { bound },
-        );
-        return driverResult("invoke_menu", reply);
-      }
-      if (call.method === "wait_for") {
-        const args = callArgs(call.args);
-        const window = args.window === "exists" || args.window === "gone" ? args.window : undefined;
-        const role = string(args.role);
-        const name = string(args.name);
-        const value = typeof args.value === "string" ? args.value : undefined;
-        if (window === undefined && role === undefined && name === undefined)
-          return yield* Effect.fail(
-            fail(
-              "invalid_argument",
-              "Wait for {role, name, value?, enabled?, selected?} or {window}.",
-            ),
-          );
-        const expectation =
-          window === undefined
-            ? {
-                element: {
-                  selector: {
-                    ...(role === undefined ? {} : { role }),
-                    ...(name === undefined ? {} : { label_contains: name }),
-                  },
-                  exists: true,
-                  ...(value === undefined ? {} : { value_equals: value }),
-                  ...(typeof args.enabled === "boolean" ? { enabled: args.enabled } : {}),
-                  ...(typeof args.selected === "boolean" ? { selected: args.selected } : {}),
-                },
-              }
-            : { window: { exists: window === "exists" } };
-        const now = yield* Clock.currentTimeMillis;
-        const requested = typeof args.timeoutMs === "number" ? args.timeoutMs : 10_000;
-        const reply = yield* boundRequest(
-          bound,
-          "nothing",
-          "verify_state",
-          {
-            pid: bound.pid,
-            window_id: bound.windowId,
-            expect: [expectation],
-            // The driver call's own cap is this wait plus 2 s, within the cell's reserve.
-            timeout_ms: Math.max(
-              0,
-              Math.min(requested, 10_000, call.deadlineMillis - now - CELL_RESERVE_MS - 2_000),
-            ),
-          },
-          call,
-          context,
-        );
-        const status = string(object(driverValue(reply))?.status) ?? "unknown";
-        return {
-          value: { met: status === "satisfied", status },
-          category: status === "satisfied" ? "confirmed" : "unverifiable",
-          evidence: [`verify_state:${status}`],
-        };
-      }
-      if (call.method === "end_foreground") {
-        const current = Option.getOrUndefined(
-          yield* deps.leases.currentControl(context.invocation.thread.threadId),
-        );
-        if (
-          !current ||
-          current.controlId !== bound.controlId ||
-          !deps.leases.releaseForeground ||
-          !(yield* deps.leases.releaseForeground({
-            threadId: context.invocation.thread.threadId,
-            controlId: current.controlId,
-          }))
-        )
-          return yield* Effect.fail(fail("unavailable"));
-        return { value: { released: true }, category: "confirmed" as const };
-      }
-      const methods = new Set([
-        "click",
-        "right_click",
-        "drag",
-        "scroll",
-        "type_text",
-        "press_key",
-        "set_value",
-        "bring_to_front",
-        "launch_app",
-      ]);
-      if (!methods.has(call.method)) return yield* Effect.fail(fail("unsupported"));
-      const args = callArgs(call.args);
-      const element = object(args.elementRef);
-      if (call.method === "set_value" && !element)
-        return yield* Effect.fail(fail("invalid_argument"));
-      let elementToken: string | undefined;
-      if (element) {
-        elementToken = tokenOf(element, bound);
-        if (!elementToken) return yield* Effect.fail(fail("stale_reference"));
-      }
-      const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
-      const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
-      const guardInput = buildGuardInput(call.method, args, bound, elementToken, (el) =>
-        tokenOf(el, bound),
+  const invoke = Effect.fn("DesktopTargetHost.invoke")(function* (
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+    inBatch = false,
+  ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
+    if (call.method === "select_text")
+      return yield* Effect.fail(
+        fail(
+          "unsupported",
+          "Desktop select_text is unsupported by this runtime; nothing was sent. To replace an editable field's whole value, use setValue({ elementRef, value }).",
+        ),
       );
-      if (!guardInput.ok) return yield* Effect.fail(guardInput.error);
-      const admission = admitDesktopInput(guardInput.input);
-      if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
-      delete forwarded.elementRef;
-      delete forwarded.send;
-      delete forwarded.replace;
-      // The guest names its target in the call; the driver gets the window below instead.
-      delete forwarded.targetRef;
-      delete forwarded.element_token;
-      delete forwarded.pid;
-      delete forwarded.window_id;
-      if (elementToken) forwarded.element_token = elementToken;
-      if (call.method === "bring_to_front") {
-        delete forwarded.delivery_mode;
-        forwarded.pid = bound.pid;
-        forwarded.window_id = bound.windowId;
-      }
-      if (call.method === "launch_app") {
-        delete forwarded.delivery_mode;
-        delete forwarded.target;
-        forwarded.bundle_id = bound.appId;
-      }
-      // The driver takes a per-call target only for pointer and key input; these name the window
-      // by pid, and by window_id unless an element token already carries it.
-      if (call.method === "set_value" || call.method === "right_click") {
-        delete forwarded.target;
-        if (call.method === "set_value") delete forwarded.delivery_mode;
-        forwarded.pid = bound.pid;
-        if (elementToken === undefined) forwarded.window_id = bound.windowId;
-      }
-      const tool = call.method === "right_click" ? "right_click" : call.method;
-      const pointerState = {
-        ...(deps.platform === undefined ? {} : { platform: deps.platform }),
-        ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
-        ...(bound.frames === undefined ? {} : { frames: bound.frames }),
-        ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
-        ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
-        ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
-        ...(bound.latestScreenshot === undefined
-          ? {}
-          : { latestScreenshot: bound.latestScreenshot }),
-        resolveToken: (el: Record<string, unknown>) => tokenOf(el, bound),
-      };
-      const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, pointerState);
-      if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
+    if (call.method === "launch_app" && !call.targetRef)
+      return yield* launch(call, callArgs(call.args), context);
+    const bound = resolve(call, context);
+    if (!bound) return yield* Effect.fail(fail("stale_reference"));
+    const withInputEvidence = (
+      acted: DesktopRow | undefined,
+      runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
+    ) =>
+      inBatch
+        ? runInput
+        : runInputWithEvidence({
+            send,
+            call,
+            context,
+            pid: bound.pid,
+            windowId: bound.windowId,
+            connectionGeneration: bound.connectionGeneration,
+            tracker: trackerFor(context, bound.connectionGeneration),
+            acted,
+            rows: bound.rows ?? [],
+            runInput,
+          });
+    if (call.method === "invoke_menu") {
+      const checkedMenu = validateMenuInput(callArgs(call.args), bound);
+      if (checkedMenu.error || !checkedMenu.path)
+        return yield* Effect.fail(checkedMenu.error ?? fail("invalid_argument"));
+      const path = checkedMenu.path;
       bound.pointsStale ??= "input";
       if (!isMac) {
         bound.screenshots?.clear();
         delete bound.latestScreenshot;
       }
-      if (admission.clickedTableCell !== undefined)
-        bound.lastClickedTableCell = admission.clickedTableCell;
-      const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
-      const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
-        bound,
-        point:
-          elementToken === undefined
-            ? undefined
-            : aimOf(bound.frames?.get(elementToken), bound.framesBasis),
-      }).pipe(
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            if (error.code === "stale_reference") delete bound.pages;
-          }),
+      return yield* withInputEvidence(
+        undefined,
+        Effect.map(
+          boundRequest(
+            bound,
+            "nothing",
+            "invoke_menu",
+            { pid: bound.pid, window_id: bound.windowId, path },
+            call,
+            context,
+            { bound },
+          ),
+          (reply) => driverResult("invoke_menu", reply),
         ),
       );
-      const result = annotatePointerResult(driverResult(tool, reply), pointerResolved.windowPoint);
-      const replyData = object(driverValue(reply));
-      const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
-      if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;
-      return result;
-    },
-  );
+    }
+    if (call.method === "wait_for") {
+      const args = callArgs(call.args);
+      if (args.window === "hidden") {
+        const reply = yield* boundRequest(
+          bound,
+          "nothing",
+          "list_windows",
+          { pid: bound.pid },
+          call,
+          context,
+        );
+        const hidden = hiddenWindowStatus(driverValue(reply), bound.pid, bound.windowId);
+        return {
+          value: hidden,
+          category: hidden.met ? ("confirmed" as const) : ("unverifiable" as const),
+          evidence: [`window_hidden:${hidden.status}`],
+        };
+      }
+      const waited = buildWaitExpectation(args);
+      if (waited.error || !waited.expectation)
+        return yield* Effect.fail(waited.error ?? fail("invalid_argument"));
+      const expectation = waited.expectation;
+      const now = yield* Clock.currentTimeMillis;
+      const requested = typeof args.timeoutMs === "number" ? args.timeoutMs : 10_000;
+      const reply = yield* boundRequest(
+        bound,
+        "nothing",
+        "verify_state",
+        {
+          pid: bound.pid,
+          window_id: bound.windowId,
+          expect: [expectation],
+          // The driver call's own cap is this wait plus 2 s, within the cell's reserve.
+          timeout_ms: Math.max(
+            0,
+            Math.min(requested, 10_000, call.deadlineMillis - now - CELL_RESERVE_MS - 2_000),
+          ),
+        },
+        call,
+        context,
+      );
+      const status = string(object(driverValue(reply))?.status) ?? "unknown";
+      return {
+        value: { met: status === "satisfied", status },
+        category: status === "satisfied" ? "confirmed" : "unverifiable",
+        evidence: [`verify_state:${status}`],
+      };
+    }
+    if (call.method === "end_foreground") {
+      const current = Option.getOrUndefined(
+        yield* deps.leases.currentControl(context.invocation.thread.threadId),
+      );
+      if (
+        !current ||
+        current.controlId !== bound.controlId ||
+        !deps.leases.releaseForeground ||
+        !(yield* deps.leases.releaseForeground({
+          threadId: context.invocation.thread.threadId,
+          controlId: current.controlId,
+        }))
+      )
+        return yield* Effect.fail(fail("unavailable"));
+      return { value: { released: true }, category: "confirmed" as const };
+    }
+    const args = callArgs(call.args);
+    const prepared = prepareDesktopInput(call.method, args, bound, (el) => tokenOf(el, bound));
+    if (prepared.error || !prepared.forwarded || !prepared.admission)
+      return yield* Effect.fail(prepared.error ?? fail("invalid_argument"));
+    const { forwarded, elementToken, actedRow, admission } = prepared;
+    const tool = call.method === "right_click" ? "right_click" : call.method;
+    const pointerState = {
+      ...(deps.platform === undefined ? {} : { platform: deps.platform }),
+      ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
+      ...(bound.frames === undefined ? {} : { frames: bound.frames }),
+      ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
+      ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
+      ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
+      ...(bound.latestScreenshot === undefined ? {} : { latestScreenshot: bound.latestScreenshot }),
+      resolveToken: (el: Record<string, unknown>) => tokenOf(el, bound),
+    };
+    const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, pointerState);
+    if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
+    bound.pointsStale ??= "input";
+    if (!isMac) {
+      bound.screenshots?.clear();
+      delete bound.latestScreenshot;
+    }
+    if (admission.clickedTableCell !== undefined)
+      bound.lastClickedTableCell = admission.clickedTableCell;
+    const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
+    return yield* withInputEvidence(
+      actedRow,
+      Effect.map(
+        boundRequest(bound, needs, tool, forwarded, call, context, {
+          bound,
+          point:
+            elementToken === undefined
+              ? undefined
+              : aimOf(bound.frames?.get(elementToken), bound.framesBasis),
+        }).pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              if (error.code === "stale_reference") delete bound.pages;
+            }),
+          ),
+        ),
+        (reply) => {
+          const result = annotatePointerResult(
+            driverResult(tool, reply),
+            pointerResolved.windowPoint,
+          );
+          const replyData = object(driverValue(reply));
+          const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
+          if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;
+          return result;
+        },
+      ),
+    );
+  });
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
     call.method === "tab_status" || call.method === "read_page"
       ? Effect.fail(fail("unsupported"))
@@ -891,12 +913,20 @@ export const createDesktopTargetHost = (deps: {
       return guardInput.ok ? { ok: true, ...guardInput.input } : guardInput;
     });
     if (refused !== undefined) return refused;
+    const firstBound = calls[0] && resolve(calls[0], context);
+    if (firstBound) {
+      const tracker = trackerFor(context, firstBound.connectionGeneration);
+      if (!tracker.hasPid(firstBound.pid))
+        tracker.recordBefore(firstBound.pid, firstBound.boundWindows);
+    }
     return yield* dispatchInTurn(
       calls,
       (each, index) =>
         Effect.suspend(() => {
           markDispatched(index);
-          return dispatch(each, context);
+          return INPUT_METHODS.has(each.method)
+            ? invoke(each, context, true)
+            : dispatch(each, context);
         }),
       BATCH_FAILED_CATEGORIES,
     );
@@ -923,6 +953,12 @@ export const createDesktopTargetHost = (deps: {
       return target && { pid: target.pid, windowId: target.windowId };
     },
     setCursorGeneration: (lookup) => void (cursorGeneration = lookup),
+    finishCell: (context, options) => {
+      const key = cellKey(context);
+      const entry = cellTrackers.get(key);
+      cellTrackers.delete(key);
+      return finishCellTracker(entry, context, options?.skipEndRead === true, send);
+    },
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)
         if (bound.ref.runId === runId && bound.ref.turnId === turnId) {

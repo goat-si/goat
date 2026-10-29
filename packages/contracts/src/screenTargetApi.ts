@@ -14,7 +14,7 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
-type Done = { verdict: "confirmed" | "unverifiable"; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: unknown };
+type Done = { verdict: "confirmed" | "unverifiable"; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // confirmed: done. unverifiable: may have landed. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
 // after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
@@ -34,7 +34,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean }): Promise<Done>;
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>;
   type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
@@ -49,7 +49,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
-const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" }.
+const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
@@ -75,7 +75,7 @@ const SCREEN_APP = `  // app() without window_id: a running app with one window 
 
 const FOOTER = `// Batch decided steps in one cell and observe once at the end. A failed cell still returns its
 // receipts; an uncaught host failure is reported as that call's receipt, and a cell that fails in its own
-// code also returns value.partial: what each call returned before the failure.`;
+// code also returns value.partial: what each call returned before the failure. The cell outcome (result or error) also carries windowsOpened (plus windowsOpenedTruncated, windowsOpenedUnverified): windows listed as newly opened for the apps the cell used.`;
 
 /** The bundle for the surfaces a turn has now; an absent surface is named as unavailable. */
 export const screenTargetApi = (surfaces: {

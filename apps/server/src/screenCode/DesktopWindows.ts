@@ -1,0 +1,254 @@
+// @effect-diagnostics preferSchemaOverJson:off - Window lists and return budgets are measured against driver JSON.
+/**
+ * Desktop window tracking for wp4: before/after window diffs on each non-batch input, cell-level
+ * accumulation of newly opened windows, sheet-to-parent rebinding checks, and hidden-window waits.
+ */
+import type { ScreenWindowSummary } from "@goat/contracts";
+
+export interface WindowEntry {
+  readonly window_id: number;
+  readonly pid: number;
+  readonly title: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly sheetOf?: number;
+  readonly is_on_screen: boolean;
+  readonly on_current_space?: boolean | null;
+}
+
+export interface InputWindowsReport {
+  readonly opened: ReadonlyArray<ScreenWindowSummary>;
+  readonly notListed: ReadonlyArray<ScreenWindowSummary>;
+  readonly bound: "present" | "offscreen" | "not_listed" | "unverified";
+  readonly truncated?: boolean;
+}
+
+const object = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+const natural = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+const finite = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+const clipTitle = (value: unknown): string => (typeof value === "string" ? value.slice(0, 80) : "");
+
+const toSummary = (entry: WindowEntry): ScreenWindowSummary => ({
+  window_id: entry.window_id,
+  title: entry.title,
+  ...(entry.width === undefined ? {} : { width: entry.width }),
+  ...(entry.height === undefined ? {} : { height: entry.height }),
+  ...(entry.sheetOf === undefined ? {} : { sheetOf: entry.sheetOf }),
+});
+
+export const parseWindowList = (
+  value: unknown,
+  pid: number,
+): ReadonlyArray<WindowEntry> | undefined => {
+  const raw = object(value)?.windows;
+  if (!Array.isArray(raw)) return undefined;
+  const entries: WindowEntry[] = [];
+  for (const item of raw) {
+    const rec = object(item);
+    const wid = natural(rec?.window_id);
+    const wpid = natural(rec?.pid) ?? pid;
+    if (!rec || wid === undefined || wid <= 0 || wpid !== pid) continue;
+    const bounds = object(rec.bounds);
+    const width = finite(bounds?.width) ?? finite(rec.width);
+    const height = finite(bounds?.height) ?? finite(rec.height);
+    const sheetOf = natural(rec.sheet_of_window_id) ?? natural(rec.sheetOf);
+    entries.push({
+      window_id: wid,
+      pid: wpid,
+      title: clipTitle(rec.title),
+      ...(width === undefined ? {} : { width }),
+      ...(height === undefined ? {} : { height }),
+      ...(sheetOf === undefined || sheetOf <= 0 ? {} : { sheetOf }),
+      is_on_screen: rec.is_on_screen !== false,
+      ...(typeof rec.on_current_space === "boolean" || rec.on_current_space === null
+        ? { on_current_space: rec.on_current_space }
+        : {}),
+    });
+  }
+  return entries;
+};
+
+export const diffInputWindows = (
+  before: ReadonlyArray<WindowEntry> | undefined,
+  after: ReadonlyArray<WindowEntry> | undefined,
+  boundWindowId: number,
+): { readonly report: InputWindowsReport; readonly evidence: ReadonlyArray<string> } => {
+  if (!before || !after) {
+    return {
+      report: { opened: [], notListed: [], bound: "unverified" },
+      evidence: ["observed:window_list_unverified"],
+    };
+  }
+  const beforeById = new Map(before.map((w) => [w.window_id, w]));
+  const afterById = new Map(after.map((w) => [w.window_id, w]));
+  const openedAll = after.filter((w) => !beforeById.has(w.window_id)).map(toSummary);
+  const notListedAll = before.filter((w) => !afterById.has(w.window_id)).map(toSummary);
+  const witness = before.some((w) => w.window_id !== boundWindowId && afterById.has(w.window_id));
+  const boundBefore = beforeById.get(boundWindowId);
+  const boundAfter = afterById.get(boundWindowId);
+  const evidence: string[] = [];
+  let bound: InputWindowsReport["bound"] = "present";
+  if (!boundAfter) {
+    if (witness) {
+      bound = "not_listed";
+      evidence.push("observed:window_not_listed");
+    } else {
+      bound = "unverified";
+      evidence.push("observed:window_list_unverified");
+    }
+  } else if (!boundAfter.is_on_screen) {
+    bound = "offscreen";
+    const space =
+      typeof boundAfter.on_current_space === "boolean"
+        ? `:on_current_space=${boundAfter.on_current_space}`
+        : "";
+    evidence.push(`observed:window_offscreen${space}`);
+  }
+  if (boundBefore && boundAfter && boundBefore.title !== boundAfter.title) {
+    evidence.push(
+      `observed:window_title:${JSON.stringify(boundBefore.title.slice(0, 40))}→${JSON.stringify(boundAfter.title.slice(0, 40))}`,
+    );
+  }
+  for (const w of openedAll.slice(0, 4)) {
+    evidence.push(`observed:window_opened:${w.window_id}`);
+  }
+  const truncated = openedAll.length > 8 || notListedAll.length > 8;
+  return {
+    report: {
+      opened: openedAll.slice(0, 8),
+      notListed: notListedAll.slice(0, 8),
+      bound,
+      ...(truncated ? { truncated: true } : {}),
+    },
+    evidence,
+  };
+};
+
+export const fitInputWindows = (
+  driverVal: unknown,
+  report: InputWindowsReport,
+  returnBytes: number,
+): unknown => {
+  const base = object(driverVal) ?? {};
+  const withWindows = { ...base, windows: report };
+  if (Buffer.byteLength(JSON.stringify(withWindows)) <= returnBytes) return withWindows;
+  const withFlag = { ...base, windowsTruncated: true };
+  if (Buffer.byteLength(JSON.stringify(withFlag)) <= returnBytes) return withFlag;
+  return driverVal;
+};
+
+export const sheetParentId = (state: Record<string, unknown>): number | undefined => {
+  const reason = typeof state.degraded_reason === "string" ? state.degraded_reason : "";
+  if (state.degraded !== true && !reason.includes("window_is_sheet")) return undefined;
+  const parent =
+    natural(state.sheet_of_window_id) ??
+    natural(object(object(state.next_call)?.arguments)?.window_id);
+  return parent !== undefined && parent > 0 ? parent : undefined;
+};
+
+export const hiddenWindowStatus = (
+  listVal: unknown,
+  pid: number,
+  windowId: number,
+): {
+  readonly met: boolean;
+  readonly status: "satisfied" | "unsatisfied";
+  readonly on_current_space?: boolean;
+} => {
+  const list = parseWindowList(listVal, pid) ?? [];
+  const found = list.find((w) => w.window_id === windowId);
+  const met = found !== undefined && !found.is_on_screen;
+  return {
+    met,
+    status: met ? "satisfied" : "unsatisfied",
+    ...(typeof found?.on_current_space === "boolean"
+      ? { on_current_space: found.on_current_space }
+      : {}),
+  };
+};
+
+export interface CellWindowsOutcome {
+  readonly windowsOpened?: ReadonlyArray<ScreenWindowSummary>;
+  readonly windowsOpenedTruncated?: boolean;
+  readonly windowsOpenedUnverified?: boolean;
+}
+
+export class CellWindowTracker {
+  private readonly startByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
+  private readonly latestByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
+  private readonly seenOpened = new Map<number, Map<number, ScreenWindowSummary>>();
+
+  hasPid(pid: number): boolean {
+    return this.startByPid.has(pid);
+  }
+
+  pids(): ReadonlyArray<number> {
+    return [...this.startByPid.keys()];
+  }
+
+  recordBefore(pid: number, list: ReadonlyArray<WindowEntry> | undefined): void {
+    if (!this.startByPid.has(pid)) {
+      this.startByPid.set(pid, list && list.length > 0 ? list : undefined);
+    }
+  }
+
+  recordAfter(
+    pid: number,
+    before: ReadonlyArray<WindowEntry> | undefined,
+    after: ReadonlyArray<WindowEntry> | undefined,
+  ): void {
+    if (after && after.length > 0) this.latestByPid.set(pid, after);
+    if (!before || !after) return;
+    const beforeIds = new Set(before.map((w) => w.window_id));
+    const afterIds = new Set(after.map((w) => w.window_id));
+    let map = this.seenOpened.get(pid);
+    if (!map) {
+      map = new Map();
+      this.seenOpened.set(pid, map);
+    }
+    for (const w of after) {
+      if (!beforeIds.has(w.window_id)) map.set(w.window_id, toSummary(w));
+    }
+    for (const wid of map.keys()) {
+      if (!afterIds.has(wid)) map.delete(wid);
+    }
+  }
+
+  finish(
+    endByPid?: ReadonlyMap<number, ReadonlyArray<WindowEntry> | undefined>,
+  ): CellWindowsOutcome {
+    if (this.startByPid.size === 0) return {};
+    const opened: ScreenWindowSummary[] = [];
+    let unverified = false;
+    for (const [pid, start] of this.startByPid) {
+      const end = endByPid?.get(pid);
+      const startIds = start ? new Set(start.map((w) => w.window_id)) : undefined;
+      const witness =
+        startIds !== undefined &&
+        startIds.size > 0 &&
+        end !== undefined &&
+        end.some((w) => startIds.has(w.window_id));
+      if (witness && end && startIds) {
+        for (const w of end) {
+          if (!startIds.has(w.window_id)) opened.push(toSummary(w));
+        }
+      } else {
+        unverified = true;
+        const fallback = this.seenOpened.get(pid);
+        if (fallback) opened.push(...fallback.values());
+      }
+    }
+    const truncated = opened.length > 16;
+    return {
+      ...(opened.length > 0 ? { windowsOpened: opened.slice(0, 16) } : {}),
+      ...(truncated ? { windowsOpenedTruncated: true } : {}),
+      ...(unverified ? { windowsOpenedUnverified: true } : {}),
+    };
+  }
+}

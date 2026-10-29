@@ -249,17 +249,12 @@ it.live(
         value: true,
         contractVersion: "screen-target/3",
       });
-      expect(sent.map((entry) => entry.tool)).toEqual([
-        "list_apps",
-        "list_windows",
-        "get_window_state",
-        "press_key",
-        "press_key",
-      ]);
-      expect(sent[3]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });
-      expect(sent[3]?.args).not.toHaveProperty("send");
-      expect(sent[4]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });
-      expect(sent[4]?.args).not.toHaveProperty("send");
+      const presses = sent.filter((entry) => entry.tool === "press_key");
+      expect(presses).toHaveLength(2);
+      expect(presses[0]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });
+      expect(presses[0]?.args).not.toHaveProperty("send");
+      expect(presses[1]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });
+      expect(presses[1]?.args).not.toHaveProperty("send");
       expect(hostArgs).toHaveLength(2);
       expect((hostArgs[0] as Array<Record<string, unknown>>)[0]).not.toHaveProperty("send");
       expect((hostArgs[1] as Array<Record<string, unknown>>)[0]).toMatchObject({ send: true });
