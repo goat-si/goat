@@ -18,6 +18,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
 import {
   botMessages,
   defaultScript,
@@ -62,6 +63,7 @@ const routingScript = (input: ChannelReceptionInput) => {
 const harnessWith = (options: { readonly workspaceRoot?: string } = {}) => {
   const harness = makeHarness({
     botWorkspace: true,
+    channelsLayer: receptionDecisionChannels,
     ...options,
     settingsLayer: ServerSettings.layerTest({
       textGenerationModelSelection: modelSelection,
@@ -74,7 +76,7 @@ const harnessWith = (options: { readonly workspaceRoot?: string } = {}) => {
   return harness;
 };
 
-describe("GOAT Bot routing", () => {
+describe("GOAT Bot reception routing", () => {
   it.effect("answers a direct question without starting work", () => {
     const harness = harnessWith();
     return Effect.gen(function* () {

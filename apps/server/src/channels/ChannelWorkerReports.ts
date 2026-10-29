@@ -54,6 +54,7 @@ import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
+import { sessionFinalText } from "./channelSessionReceipt.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   completionHoldCount,
@@ -224,18 +225,26 @@ const make = Effect.gen(function* () {
       Effect.orElseSucceed(() => noNeeds),
     );
 
-  const lastAssistantText = (threadId: ThreadId, run: OrchestrationV2Run) =>
+  const lastAssistantText = (
+    threadId: ThreadId,
+    run: OrchestrationV2Run,
+    taskId: ChannelTask["taskId"],
+  ) =>
     threads
-      .getThreadRecords(threadId, ["messages"], {
+      .getThreadRecords(threadId, ["messages", "turnItems"], {
         messageRoles: ["assistant"],
         messageRunIds: [run.id],
       })
       .pipe(
-        Effect.map((records) => {
-          const texts = records.messages
+        Effect.flatMap((records) => {
+          const message = records.messages
             .filter((message) => !message.streaming && message.text.trim() !== "")
-            .map((message) => message.text.trim());
-          return texts.at(-1);
+            .at(-1);
+          if (message === undefined) return Effect.void;
+          const item = records.turnItems.find(
+            (item) => item.type === "assistant_message" && item.messageId === message.id,
+          );
+          return sessionFinalText(sql, taskId, item?.id, message.text);
         }),
         Effect.orElseSucceed(() => undefined),
       );
@@ -545,7 +554,7 @@ const make = Effect.gen(function* () {
               }
             : undefined;
         const fallbackSummary =
-          (yield* lastAssistantText(worker.threadId, current)) ??
+          (yield* lastAssistantText(worker.threadId, current, task.taskId)) ??
           (latest.task.proposedCompletion?.runId === current.id
             ? latest.task.proposedCompletion.summary
             : "Finished.");
@@ -555,7 +564,10 @@ const make = Effect.gen(function* () {
           settleCompletedRun({
             task: latest.task,
             runId: current.id,
-            reported,
+            reported:
+              fallbackSummary === "" && reported?.outcome === "succeeded"
+                ? { outcome: "succeeded" }
+                : reported,
             fallbackSummary,
             now: DateTime.formatIso(yield* DateTime.now),
           }),

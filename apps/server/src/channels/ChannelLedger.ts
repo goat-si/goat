@@ -1,3 +1,5 @@
+import { deliveryLedger } from "./channelDeliveryLedger.ts";
+import { receptionLedger } from "./channelReceptionLedger.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
  *
@@ -47,23 +49,8 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import { channelTaskExportLine, type ChannelTaskExportSqlRow } from "./channelTaskExportLine.ts";
 
-export class ChannelLedgerError extends Schema.TaggedError<ChannelLedgerError>()(
-  "ChannelLedgerError",
-  {
-    reason: Schema.Literals([
-      "persistence",
-      "version_conflict",
-      "idempotency_conflict",
-      "ownership_lost",
-    ]),
-    detail: Schema.String,
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return "Channel ledger " + this.reason + ": " + this.detail;
-  }
-}
+import { ChannelLedgerError } from "./channelLedgerError.ts";
+export { ChannelLedgerError } from "./channelLedgerError.ts";
 
 /** A delivery to commit alongside a ledger change. `causeKey` makes a re-commit a no-op. */
 export interface ChannelOutboxInsert {
@@ -98,6 +85,7 @@ export interface ChannelStoredDelivery {
   readonly deliveryId: ChannelDeliveryId;
   readonly message: ChannelOutboundMessage;
   readonly attempts: number;
+  readonly receiptDeadline?: number | undefined;
 }
 
 export type ChannelDeliveryOutcome =
@@ -177,6 +165,31 @@ export class ChannelLedger extends Context.Service<
       readonly receptionId: ChannelReceptionId;
       readonly readAt: string;
     }) => Effect.Effect<ChannelStoredInput | undefined, ChannelLedgerError>;
+    readonly claimForSession: (input: {
+      readonly owner: string;
+      readonly inputId: ChannelInputId;
+      readonly receptionId: ChannelReceptionId;
+      readonly createdTask: CreatedTask;
+      readonly now: string;
+    }) => Effect.Effect<boolean, ChannelLedgerError>;
+    readonly takeSessionAcknowledgment: (input: {
+      readonly owner: string;
+      readonly inputId: ChannelInputId;
+      readonly expectedReceptionId: ChannelReceptionId;
+      readonly receptionId: ChannelReceptionId;
+    }) => Effect.Effect<boolean, ChannelLedgerError>;
+    readonly commitSessionReceipt: (input: {
+      readonly owner: string;
+      readonly inputId: ChannelInputId;
+      readonly expectedReceptionId: ChannelReceptionId;
+      readonly taskId: ChannelTaskId;
+      readonly source: "session" | "fallback" | "fixed";
+      readonly runId?: string | undefined;
+      readonly turnItemId?: string | undefined;
+      readonly text: string;
+      readonly deliveries: ReadonlyArray<ChannelOutboxInsert>;
+      readonly now: string;
+    }) => Effect.Effect<boolean, ChannelLedgerError>;
     /** Commits a reception's reply and decision. False when another pass owns the input. */
     readonly completeReception: (input: {
       readonly owner: string;
@@ -418,11 +431,17 @@ export class ChannelLedger extends Context.Service<
       readonly owner: string;
       readonly now: string;
       readonly limit: number;
+      readonly receiptsOnly?: boolean | undefined;
     }) => Effect.Effect<ReadonlyArray<ChannelStoredDelivery>, ChannelLedgerError>;
     readonly recordDelivery: (input: {
       readonly owner: string;
       readonly deliveryId: ChannelDeliveryId;
       readonly outcome: ChannelDeliveryOutcome;
+      readonly now: string;
+      readonly attempt?: number | undefined;
+    }) => Effect.Effect<void, ChannelLedgerError>;
+    readonly expireReceipts: (input: {
+      readonly owner: string;
       readonly now: string;
     }) => Effect.Effect<void, ChannelLedgerError>;
     /** After a restart: GOAT bot and MCP deliveries retry, external ones in flight become ambiguous. */
@@ -553,7 +572,6 @@ const encodeInbound = Schema.encodeSync(Schema.fromJsonString(ChannelInboundMess
 const decodeInbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelInboundMessage));
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
 const decodeRequester = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelRequester));
-const encodeDecision = Schema.encodeSync(Schema.fromJsonString(ChannelReceptionResult));
 const decodeDecision = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelReceptionResult));
 const encodeTask = Schema.encodeSync(Schema.fromJsonString(ChannelTask));
 const encodeWorkerRun = Schema.encodeSync(Schema.fromJsonString(ChannelWorkerRun));
@@ -562,12 +580,10 @@ const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
 const encodeEvent = Schema.encodeSync(Schema.fromJsonString(ChannelTaskEvent));
 const decodeEvent = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskEvent));
 const encodeOutbound = Schema.encodeSync(Schema.fromJsonString(ChannelOutboundMessage));
-const decodeOutbound = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelOutboundMessage));
 const encodeBot = Schema.encodeSync(Schema.fromJsonString(BotState));
 const decodeBot = Schema.decodeUnknownSync(Schema.fromJsonString(BotState));
 const encodeScopes = Schema.encodeSync(Schema.fromJsonString(AuthEnvironmentScopes));
 const decodeScopes = Schema.decodeUnknownSync(Schema.fromJsonString(AuthEnvironmentScopes));
-const encodeStrings = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 const ApprovalCodeCount = Schema.fromJsonString(Schema.Struct({ n: Schema.Number }));
 const ApprovalCodeOf = Schema.fromJsonString(Schema.Struct({ code: Schema.String }));
 const ApprovalCodeTarget = Schema.fromJsonString(Schema.Struct({ requestId: Schema.String }));
@@ -578,9 +594,7 @@ const decodeApprovalOf = Schema.decodeUnknownSync(ApprovalCodeOf);
 const encodeApprovalTarget = Schema.encodeSync(ApprovalCodeTarget);
 const decodeApprovalTarget = Schema.decodeUnknownSync(ApprovalCodeTarget);
 const decodeStrings = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Schema.String)));
-const encodeReply = Schema.encodeSync(Schema.fromJsonString(ReplyState));
 const decodeReply = Schema.decodeUnknownSync(Schema.fromJsonString(ReplyState));
-const encodeFailure = Schema.encodeSync(Schema.fromJsonString(FailureState));
 const decodeFailure = Schema.decodeUnknownSync(Schema.fromJsonString(FailureState));
 const decodeRuntimeMode = Schema.decodeUnknownSync(RuntimeMode);
 const CursorState = Schema.Struct({ cursor: Schema.Number });
@@ -967,85 +981,20 @@ const make = Effect.gen(function* () {
     listReceivableInputs: (limit) =>
       sql<{ readonly input_id: ChannelInputId }>`
         SELECT input_id FROM (
-          SELECT input_id, accepted_at, rowid AS arrival, ROW_NUMBER() OVER (
+          SELECT input_id, reception_id, accepted_at, rowid AS arrival, ROW_NUMBER() OVER (
             PARTITION BY conversation_id ORDER BY accepted_at, rowid
           ) AS position
           FROM channel_inbox WHERE state IN ('accepted', 'processing')
         )
-        WHERE position = 1
+        WHERE position = 1 AND (reception_id IS NULL OR
+          (reception_id NOT LIKE 'channel-session:%' AND reception_id NOT LIKE 'channel-session-ack:%'))
         ORDER BY accepted_at, arrival LIMIT ${limit}
       `.pipe(
         Effect.map((rows) => rows.map((row) => row.input_id)),
         Effect.mapError(toLedgerError("listReceivableInputs")),
       ),
 
-    beginReception: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const rows = yield* sql<{ readonly input_id: string }>`
-              UPDATE channel_inbox SET
-                state = 'processing',
-                reception_id = ${input.receptionId},
-                read_at = COALESCE(read_at, ${input.readAt})
-              WHERE input_id = ${input.inputId} AND state IN ('accepted', 'processing')
-              RETURNING input_id
-            `;
-            return rows.length === 0 ? undefined : yield* readInbox(input.inputId);
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("beginReception"))),
-
-    completeReception: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const created =
-              input.createdTasks ?? (input.createdTask === undefined ? [] : [input.createdTask]);
-            const taskIds = [
-              ...created.map(({ task }) => task.taskId),
-              ...(input.taskEvents ?? []).map((write) => write.next.taskId),
-            ];
-            const rows = yield* sql<{ readonly owner_id: string }>`
-              UPDATE channel_inbox SET
-                state = 'replied',
-                decision_json = ${encodeDecision(input.decision)},
-                reply_json = ${encodeReply({ text: input.replyText })},
-                task_ids_json = ${encodeStrings(taskIds)}
-              WHERE input_id = ${input.inputId} AND state = 'processing'
-                AND reception_id = ${input.receptionId}
-              RETURNING owner_id
-            `;
-            const row = rows[0];
-            if (row === undefined) return false;
-            for (const item of created) yield* insertTask(item.task, row.owner_id, item.event);
-            for (const write of input.taskEvents ?? []) yield* writeTaskEvent(write);
-            yield* insertDeliveries(input.deliveries, input.now);
-            return true;
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("completeReception"))),
-
-    failReception: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const rows = yield* sql<{ readonly input_id: string }>`
-              UPDATE channel_inbox SET state = 'failed',
-                failure_json = ${encodeFailure(input.failure)}
-              WHERE input_id = ${input.inputId} AND state = 'processing'
-                AND reception_id = ${input.receptionId}
-              RETURNING input_id
-            `;
-            if (rows.length === 0) return false;
-            yield* insertDeliveries(input.deliveries, input.now);
-            return true;
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("failReception"))),
+    ...receptionLedger(sql, { fence, readInbox, insertTask, writeTaskEvent, insertDeliveries }),
 
     readConversationTail: (conversationId, limit) =>
       sql<{
@@ -1445,6 +1394,10 @@ const make = Effect.gen(function* () {
         JOIN channel_task_events AS outcome ON outcome.task_id = task.task_id
         LEFT JOIN channel_outbox AS delivery
           ON delivery.cause_key = 'narration:' || outcome.event_id || ':origin'
+        LEFT JOIN channel_session_receipts AS receipt
+          ON receipt.task_id = task.task_id AND receipt.source = 'session'
+        LEFT JOIN channel_outbox AS receipt_delivery
+          ON receipt_delivery.cause_key = 'reply:' || receipt.input_id
         WHERE task.owner_id = ${ownerId}
           AND task.status IN ('completed', 'failed', 'cancelled')
           AND outcome.sequence = (
@@ -1452,7 +1405,8 @@ const make = Effect.gen(function* () {
             WHERE latest.task_id = task.task_id
               AND latest.type IN ('task.completed', 'task.failed', 'task.cancelled')
           )
-          AND (delivery.state IS NULL OR delivery.state != 'delivered')
+          AND COALESCE(delivery.state, CASE WHEN json_extract(outcome.event_json, '$.payload.summary') = ''
+            THEN receipt_delivery.state END, 'pending') != 'delivered'
       `.pipe(
         Effect.map((rows) => rows.map((row) => storedTask(row).task)),
         Effect.mapError(toLedgerError("listUndeliveredOutcomes")),
@@ -1603,9 +1557,15 @@ const make = Effect.gen(function* () {
       taskIds.length === 0
         ? Effect.succeed(new Map())
         : sql<{ readonly task_id: string; readonly state: string | null }>`
-            SELECT outcome.task_id, delivery.state FROM channel_task_events AS outcome
+            SELECT outcome.task_id, COALESCE(delivery.state,
+              CASE WHEN json_extract(outcome.event_json, '$.payload.summary') = ''
+                THEN receipt_delivery.state END) AS state FROM channel_task_events AS outcome
             LEFT JOIN channel_outbox AS delivery
               ON delivery.cause_key = 'narration:' || outcome.event_id || ':origin'
+            LEFT JOIN channel_session_receipts AS receipt
+              ON receipt.task_id = outcome.task_id AND receipt.source = 'session'
+            LEFT JOIN channel_outbox AS receipt_delivery
+              ON receipt_delivery.cause_key = 'reply:' || receipt.input_id
             WHERE outcome.task_id IN ${sql.in(taskIds)}
               AND outcome.type IN ('task.completed', 'task.failed', 'task.cancelled')
               AND outcome.sequence = (
@@ -1657,80 +1617,7 @@ const make = Effect.gen(function* () {
     enqueueDeliveries: (deliveries, now) =>
       insertDeliveries(deliveries, now).pipe(Effect.mapError(toLedgerError("enqueueDeliveries"))),
 
-    claimDueDeliveries: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const rows = yield* sql<{
-              readonly row_order: number;
-              readonly delivery_id: ChannelDeliveryId;
-              readonly message_json: string;
-              readonly attempts: number;
-            }>`
-              UPDATE channel_outbox SET state = 'delivering', attempts = attempts + 1,
-                updated_at = ${input.now}
-              WHERE delivery_id IN (
-                SELECT due.delivery_id FROM channel_outbox AS due
-                -- The IN term lets SQLite use the partial due index; = 'pending' is the real filter.
-                WHERE due.state IN ('pending', 'delivering') AND due.state = 'pending'
-                  AND due.next_attempt_at <= ${input.now}
-                  AND NOT EXISTS (
-                    SELECT 1 FROM channel_outbox AS earlier
-                    WHERE earlier.task_id = due.task_id
-                      AND earlier.destination_kind = due.destination_kind
-                      AND earlier.state IN ('pending', 'delivering')
-                      AND earlier.rowid < due.rowid
-                  )
-                ORDER BY due.created_at, due.rowid LIMIT ${input.limit}
-              )
-              RETURNING rowid AS row_order, delivery_id, message_json, attempts
-            `;
-            return rows
-              .toSorted((left, right) => left.row_order - right.row_order)
-              .map((row) => ({
-                deliveryId: row.delivery_id,
-                message: decodeOutbound(row.message_json),
-                attempts: row.attempts,
-              }));
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("claimDueDeliveries"))),
-
-    recordDelivery: (input) =>
-      sql
-        .withTransaction(
-          Effect.gen(function* () {
-            yield* fence(input.owner);
-            const outcome = input.outcome;
-            switch (outcome.type) {
-              case "delivered":
-                yield* sql`
-                  UPDATE channel_outbox SET state = 'delivered',
-                    external_message_id = ${outcome.externalMessageId ?? null},
-                    updated_at = ${input.now}
-                  WHERE delivery_id = ${input.deliveryId}
-                `;
-                return;
-              case "retry":
-                yield* sql`
-                  UPDATE channel_outbox SET state = 'pending', next_attempt_at = ${outcome.at},
-                    last_error_code = ${outcome.errorCode}, updated_at = ${input.now}
-                  WHERE delivery_id = ${input.deliveryId}
-                `;
-                return;
-              case "ambiguous":
-              case "failed":
-                yield* sql`
-                  UPDATE channel_outbox SET state = ${outcome.type},
-                    last_error_code = ${outcome.errorCode}, updated_at = ${input.now}
-                  WHERE delivery_id = ${input.deliveryId}
-                `;
-                return;
-            }
-          }),
-        )
-        .pipe(Effect.mapError(toLedgerError("recordDelivery"))),
+    ...deliveryLedger(sql, fence),
 
     settleInterruptedDeliveries: (input) =>
       sql

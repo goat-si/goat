@@ -98,7 +98,10 @@ const ask = (text: string, key: string, context: typeof rpcContext = rpcContext)
     const runtime = yield* ChannelRuntime.ChannelRuntime;
     const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
     const ledger = yield* ChannelLedger.ChannelLedger;
+    const reception = yield* ChannelReceptionService.ChannelReceptionService;
+    yield* runtime.drain;
     const ingested = yield* gateway.ingest(goatInput(text, key), context);
+    yield* reception.receive(ingested.inputId, runtime.ownerToken);
     yield* runtime.drain;
     yield* reports.reconcile(runtime.ownerToken);
     // A stop or follow-up creates no task; callers that started one read it.

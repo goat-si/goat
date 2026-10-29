@@ -30,6 +30,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -102,7 +103,7 @@ export const makeLayerServices = <E, R>(
         ChannelBotTimeline.layerGoatTransport,
         ChannelGateway.layerMcpMailbox,
         layerImessage,
-      ).pipe(Layer.provideMerge(layerWorkers)),
+      ).pipe(Layer.provideMerge(ChannelSessionFirst.layer.pipe(Layer.provideMerge(layerWorkers)))),
     ),
   );
 };

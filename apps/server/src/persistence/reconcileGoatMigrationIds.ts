@@ -55,6 +55,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "HubConnectAccess",
   "ChannelBotSessions",
   "MemoryGenerationReportBacklog",
+  "ChannelSessionReceipts",
 ]);
 
 type MigrationEntry<E> = readonly [
