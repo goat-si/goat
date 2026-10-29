@@ -363,3 +363,65 @@ it("a diff carries every current tab element with the role, name, text and state
     { role: "button", name: 'Submit "order"', text: undefined, selected: undefined },
   ]);
 });
+it("a long element text keeps its start and its newest end within the same budget", () => {
+  const observations = new ScreenObservations();
+  const text = "start-" + "x".repeat(6000) + "-newest";
+  const shown = observations.renderObservation({
+    draft: {
+      targetRef: {
+        id: "target",
+        kind: "app" as const,
+        environmentId: "env",
+        runId: "run",
+        turnId: "turn",
+        generation: 1,
+      },
+      targetGeneration: 1,
+      surfaceGeneration: 1,
+      indexedText: "- [0] AXTextArea",
+      complete: true,
+      truncated: false,
+      loading: false,
+      elements: [{ role: "AXTextArea", name: "", text, driverToken: "token" }],
+    },
+    mode: "full",
+    limits: { treeBytes: 64 * 1024 },
+  }).elements[0]?.text;
+  expect(shown?.length).toBeLessThanOrEqual(4096);
+  expect(shown?.startsWith("start-x")).toBe(true);
+  expect(shown?.endsWith("x-newest")).toBe(true);
+  expect(shown).toMatch(/…\[\d+ characters omitted\]…/);
+});
+it("a clipped text never splits a character and counts the characters it omits", () => {
+  const observations = new ScreenObservations();
+  for (const text of ["😀".repeat(6000), "a" + "😀".repeat(6000)]) {
+    const shown =
+      observations.renderObservation({
+        draft: {
+          targetRef: {
+            id: "target",
+            kind: "app" as const,
+            environmentId: "env",
+            runId: "run",
+            turnId: "turn",
+            generation: 1,
+          },
+          targetGeneration: 1,
+          surfaceGeneration: 1,
+          indexedText: "- [0] AXTextArea",
+          complete: true,
+          truncated: false,
+          loading: false,
+          elements: [{ role: "AXTextArea", name: "", text, driverToken: "token" }],
+        },
+        mode: "full",
+        limits: { treeBytes: 64 * 1024 },
+      }).elements[0]?.text ?? "";
+    const marker = /…\[(\d+) characters omitted\]…/.exec(shown);
+    expect(shown.length).toBeLessThanOrEqual(4096);
+    expect(shown.isWellFormed()).toBe(true);
+    expect(Number(marker?.[1]) + [...shown].length - [...(marker?.[0] ?? "")].length).toBe(
+      [...text].length,
+    );
+  }
+});

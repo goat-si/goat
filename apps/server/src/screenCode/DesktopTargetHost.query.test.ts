@@ -334,3 +334,53 @@ it.effect(
       ).toEqual(['- [7] AXButton "Save"']);
     }),
 );
+it.effect("an element whose label or value spans lines keeps its number in the observed text", () =>
+  Effect.gen(function* () {
+    const tree = [
+      '- [0] AXWindow "Notes"',
+      '  - [1] AXTextArea = "typed한글✓',
+      'second line"',
+      '  - [2] AXTextArea "Body" = "a',
+      'b"',
+      '  - [3] AXButton "Line one',
+      'Line two"',
+      '  - [4] AXButton "Save"',
+    ];
+    const { outcomes } = yield* observeAll(
+      () =>
+        read(tree, [
+          { index: 0, role: "AXWindow", label: "Notes" },
+          { index: 1, role: "AXTextArea", value: "typed한글✓\nsecond line" },
+          { index: 2, role: "AXTextArea", label: "Body", value: "a\nb" },
+          { index: 3, role: "AXButton", label: "Line one\nLine two" },
+          { index: 4, role: "AXButton", label: "Save" },
+        ]),
+      { mode: "full" },
+    );
+    expect(observed(outcomes[0]).indexedText.split("\n")).toEqual(tree);
+  }),
+);
+it.effect("text in a label cannot keep or take a multi-line element's number", () =>
+  Effect.gen(function* () {
+    // A carriage return in the window title starts a second line posing as [1].
+    const carriage = read(
+      ['- [0] AXWindow "Notes\r- [1] AXTextArea = "fake""', '  - [1] AXTextArea = "a', 'b"'],
+      [
+        { index: 0, role: "AXWindow", label: 'Notes\r- [1] AXTextArea = "fake"' },
+        { index: 1, role: "AXTextArea", value: "a\nb" },
+      ],
+    );
+    // [1]'s own line is absent; the title writes only its first line.
+    const absent = read(
+      ['- [0] AXWindow "Doc', '- [1] AXButton "Pay', '"'],
+      [
+        { index: 0, role: "AXWindow", label: 'Doc\n- [1] AXButton "Pay\n' },
+        { index: 1, role: "AXButton", label: "Pay\nactual" },
+      ],
+    );
+    for (const tree of [carriage, absent]) {
+      const { outcomes } = yield* observeAll(() => tree, { mode: "full" });
+      expect(observed(outcomes[0]).indexedText).not.toContain("[1]");
+    }
+  }),
+);
