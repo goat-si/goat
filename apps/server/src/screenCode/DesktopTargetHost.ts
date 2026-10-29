@@ -27,9 +27,17 @@ import type {
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
 import { observationReplyBudget } from "./ScreenHostBridge.ts";
+import { dispatchInTurn } from "./ScreenBatchGroups.ts";
 import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
+import {
+  admitDesktopInput,
+  BATCH_FAILED_CATEGORIES,
+  inspectTreeElements,
+  preflightDesktopBatch,
+  type GuardElement,
+} from "./DesktopInputGuards.ts";
 import {
   aimOf,
   boundsOf,
@@ -104,6 +112,10 @@ interface BoundWindow {
   pointsStale?: "input" | "restart";
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
+  /** Element roles, labels and table-cell ancestry from the tree behind observationId. */
+  elementsByToken?: ReadonlyMap<string, GuardElement>;
+  /** Set when the previous input on this window clicked a table cell. */
+  lastClickedTableCell?: number | string;
   /** The window bounds held when those frames were read, until a screenshot shows them wrong. */
   framesBasis?: Rect;
   /**
@@ -250,6 +262,7 @@ export const createDesktopTargetHost = (deps: {
     delete bound.observationId;
     delete bound.snapshotId;
     delete bound.pages;
+    delete bound.elementsByToken;
     bound.pointsStale = "restart";
     return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
   });
@@ -316,7 +329,9 @@ export const createDesktopTargetHost = (deps: {
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const named = array(object(driverValue(windowsReply))?.windows)
+      const listedWindows = object(driverValue(windowsReply))?.windows;
+      if (!Array.isArray(listedWindows)) return yield* Effect.fail(fail("downstream_failure"));
+      const named = listedWindows
         .map(object)
         .filter((window) => window !== undefined)
         .filter(
@@ -330,6 +345,11 @@ export const createDesktopTargetHost = (deps: {
         );
       const pid = integer(named[0]?.pid);
       if (!Array.isArray(listed) && !pid) return yield* Effect.fail(fail("target_missing"));
+      if (named.length === 0)
+        return yield* Effect.fail({
+          ...fail("target_missing", "That window is closed; pick one from screen.discover()."),
+          detail: "window_gone",
+        });
       if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
       const app = matches.find((candidate) => candidate.pid === pid);
       const listedBundle = string(app?.bundle_id);
@@ -337,6 +357,7 @@ export const createDesktopTargetHost = (deps: {
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
       if (!current) return yield* Effect.fail(fail("unavailable"));
+      let lastClickedTableCell: number | string | undefined;
       for (const [id, previous] of targets)
         if (
           previous.pid === pid &&
@@ -344,6 +365,7 @@ export const createDesktopTargetHost = (deps: {
           previous.ref.runId === context.runId &&
           previous.ref.turnId === context.turnId
         ) {
+          lastClickedTableCell ??= previous.lastClickedTableCell;
           observations.evictTarget(id);
           targets.delete(id);
         }
@@ -366,6 +388,7 @@ export const createDesktopTargetHost = (deps: {
         connectionGeneration: windowsReply.connectionGeneration,
         controlId: current.controlId,
         ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
+        ...(lastClickedTableCell === undefined ? {} : { lastClickedTableCell }),
       };
       targets.set(ref.id, bound);
       // Only what the driver reported names the app on its row. The call's bundle id found the
@@ -464,6 +487,7 @@ export const createDesktopTargetHost = (deps: {
         delete bound.observationId;
         delete bound.snapshotId;
         delete bound.pages;
+        delete bound.elementsByToken;
       };
       let limit: number = READ_BOUNDS[0];
       let reply = yield* read(limit);
@@ -544,6 +568,7 @@ export const createDesktopTargetHost = (deps: {
         delete bound.snapshotId;
         // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
+        bound.elementsByToken = inspectTreeElements(elements, rows);
         if (bound.windowBounds === undefined) delete bound.framesBasis;
         else bound.framesBasis = bound.windowBounds;
       }
@@ -669,7 +694,8 @@ export const createDesktopTargetHost = (deps: {
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
       if (call.method === "invoke_menu") {
-        const path = array(callArgs(call.args).path);
+        const menuArgs = callArgs(call.args);
+        const path = array(menuArgs.path);
         if (
           path.length === 0 ||
           path.length > 16 ||
@@ -678,6 +704,13 @@ export const createDesktopTargetHost = (deps: {
           return yield* Effect.fail(
             fail("invalid_argument", "Name the menu path, such as ['File', 'Open…']."),
           );
+        const menuAdmission = admitDesktopInput({
+          method: "invoke_menu",
+          args: menuArgs,
+          appId: bound.appId,
+          ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+        });
+        if (menuAdmission.refused !== undefined) return yield* Effect.fail(menuAdmission.refused);
         bound.pointsStale = "input";
         const reply = yield* boundRequest(
           bound,
@@ -783,7 +816,26 @@ export const createDesktopTargetHost = (deps: {
       }
       const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
       const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
+      const guardElement =
+        elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
+      const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
+      const windowBounds = bound.framesBasis ?? bound.windowBounds;
+      const admission = admitDesktopInput({
+        method: call.method,
+        args,
+        appId: bound.appId,
+        ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+        ...(elementToken === undefined ? {} : { elementToken }),
+        ...(guardElement === undefined ? {} : { element: guardElement }),
+        ...(placed === undefined ? {} : { placed }),
+        ...(windowBounds === undefined ? {} : { windowBounds }),
+        ...(bound.lastClickedTableCell === undefined
+          ? {}
+          : { lastClickedTableCell: bound.lastClickedTableCell }),
+      });
+      if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
       delete forwarded.elementRef;
+      delete forwarded.send;
       // The guest names its target in the call; the driver gets the window below instead.
       delete forwarded.targetRef;
       delete forwarded.element_token;
@@ -821,6 +873,8 @@ export const createDesktopTargetHost = (deps: {
         );
       // Any input, even one that fails, may change what is under a pixel.
       bound.pointsStale = "input";
+      if (admission.clickedTableCell !== undefined)
+        bound.lastClickedTableCell = admission.clickedTableCell;
       const needs = elementToken !== undefined ? "element" : aimed ? "points" : "nothing";
       const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
         bound,
@@ -836,7 +890,11 @@ export const createDesktopTargetHost = (deps: {
           }),
         ),
       );
-      return driverResult(tool, reply);
+      const result = driverResult(tool, reply);
+      const replyData = object(driverValue(reply));
+      const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
+      if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;
+      return result;
     },
   );
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
@@ -851,11 +909,51 @@ export const createDesktopTargetHost = (deps: {
               )
             ? observe(call, context)
             : invoke(call, context);
+  const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
+    "DesktopTargetHost.dispatchBatch",
+  )(function* (calls, context, markDispatched) {
+    const refused = preflightDesktopBatch(calls, (call) => {
+      const bound = resolve(call, context);
+      if (!bound) return { ok: false, error: fail("stale_reference") };
+      const args = callArgs(call.args);
+      const element = object(args.elementRef);
+      const elementToken = element ? tokenOf(element, bound) : undefined;
+      if (element && !elementToken) return { ok: false, error: fail("stale_reference") };
+      const guardElement =
+        elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
+      const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
+      const windowBounds = bound.framesBasis ?? bound.windowBounds;
+      return {
+        ok: true,
+        args,
+        appId: bound.appId,
+        ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+        ...(elementToken === undefined ? {} : { elementToken }),
+        ...(guardElement === undefined ? {} : { element: guardElement }),
+        ...(placed === undefined ? {} : { placed }),
+        ...(windowBounds === undefined ? {} : { windowBounds }),
+        ...(bound.lastClickedTableCell === undefined
+          ? {}
+          : { lastClickedTableCell: bound.lastClickedTableCell }),
+      };
+    });
+    if (refused !== undefined) return refused;
+    return yield* dispatchInTurn(
+      calls,
+      (each, index) =>
+        Effect.suspend(() => {
+          markDispatched(index);
+          return dispatch(each, context);
+        }),
+      BATCH_FAILED_CATEGORIES,
+    );
+  });
   return {
     discover,
     bindApp,
     observe,
     invoke,
+    dispatchBatch,
     invalidateTarget: (targetId) => {
       observations.evictTarget(targetId);
       targets.delete(targetId);

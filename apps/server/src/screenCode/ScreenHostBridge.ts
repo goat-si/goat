@@ -26,6 +26,7 @@ import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
+import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
@@ -75,6 +76,7 @@ export interface ScreenHostDispatcher {
 interface CellState {
   closed: boolean;
   cutoffReason?: ScreenRunError["code"];
+  paused?: boolean;
   readonly cutoff: AbortController;
   calls: number;
   pending: number;
@@ -293,7 +295,10 @@ export class ScreenHostBridge {
       call.turnId !== context.turnId ||
       call.cellId !== context.cellId
     )
-      return deny(failure("stopped", call.callId));
+      return deny({
+        ...failure(state.cutoffReason ?? "stopped", call.callId),
+        ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
+      });
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
     if (joined !== undefined && "late" in joined) return deny(notRun(call.callId, joined.late));
@@ -605,6 +610,9 @@ export class ScreenHostBridge {
         ...failure(dispatched ? "unknown_outcome" : (state.cutoffReason ?? "stopped"), call.callId),
         effectStarted: dispatched,
         safety,
+        nextStep: state.paused
+          ? outcomeSentence(dispatched ? "paused_dispatched" : "paused_unsent")
+          : outcomeSentence(dispatched ? "unknown_outcome" : "refused"),
       });
     }
     if (result._tag === "Failure") {
@@ -779,6 +787,8 @@ export class ScreenHostBridge {
     if (state) {
       state.closed = true;
       if (reason === "permission_denied") state.cutoffReason = reason;
+      if (reason === "pause" || reason === "takeover" || reason === "waiting_for_human")
+        state.paused = true;
       state.cutoff.abort();
     }
     const turn = `${runId}\u0000${turnId}`;
