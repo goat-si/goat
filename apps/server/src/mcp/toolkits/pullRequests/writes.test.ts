@@ -57,8 +57,8 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
   options: {
     profile?: string;
     plan?: boolean;
-    partial?: "comment" | "submitReview";
-    refuse?: "comment" | "runAction" | "queued";
+    partial?: "comment" | "submitReview" | "runAction";
+    refuse?: "comment" | "runAction" | "queued" | "head-mismatch" | "unsupported-pin";
     hang?: "comment";
   } = {},
 ) {
@@ -82,17 +82,23 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
                 }),
               }),
             )
-          : options.refuse === "queued" && method === "runAction"
+          : ["queued", "head-mismatch", "unsupported-pin"].includes(options.refuse ?? "") &&
+              method === "runAction"
             ? Effect.fail(
                 new PullRequestOperationError({
                   operation: method,
                   detail:
-                    "A pinned head cannot be guaranteed for a queued merge. Merge directly or omit headSha.",
+                    options.refuse === "head-mismatch"
+                      ? "The reviewed head differs from the merge message head."
+                      : options.refuse === "unsupported-pin"
+                        ? "An expected head is supported only for a single pull request merge."
+                        : "A pinned head cannot be guaranteed for a queued merge. Merge directly or omit headSha.",
                   cause: new PullRequestProviderError({
                     provider: SourceControlProviderKind.make("github"),
                     operation: method,
-                    reason: "pinned-auto-merge",
-                    detail: "A pinned head cannot be guaranteed for a queued merge.",
+                    reason:
+                      options.refuse === "queued" ? "pinned-auto-merge" : "pinned-head-refused",
+                    detail: "The pinned merge was refused before any host write.",
                   }),
                 }),
               )
@@ -311,6 +317,51 @@ it.effect("returns a host's pinned queue refusal as a clear precondition error",
         status: "error",
         error: { code: "failed_precondition", message: expect.stringMatching(/queued merge/i) },
       });
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect.each([
+  ["head-mismatch", /reviewed head differs from the merge message head/i],
+  ["unsupported-pin", /expected head.*single pull request merge/i],
+] as const)("reports a pre-write %s pin refusal through goat_call", ([refuse, message]) =>
+  Effect.gen(function* () {
+    const h = yield* harness({ refuse });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: {
+            ...target,
+            headSha: "reviewed-head",
+            clientRequestId: refuse,
+          },
+        }),
+      ).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", message: expect.stringMatching(message) },
+      });
+      expect(yield* reservations).not.toContainEqual(expect.objectContaining({ state: "unknown" }));
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect("keeps a genuine merge host failure as an unknown outcome", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({ partial: "runAction" });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: {
+            ...target,
+            headSha: "reviewed-head",
+            clientRequestId: "host-failure",
+          },
+        }),
+      ).toMatchObject({ status: "error", error: { code: "unknown_outcome", retryable: false } });
     }).pipe(Effect.provide(h.registered));
   }),
 );

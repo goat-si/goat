@@ -51,6 +51,7 @@ export class PullRequestProviderError extends Schema.TaggedError<PullRequestProv
       "not-found",
       // This refusal must happen before any host write; MCP releases its retry key.
       "pinned-auto-merge",
+      "pinned-head-refused",
       "failed",
     ]),
     detail: Schema.String,

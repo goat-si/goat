@@ -291,6 +291,42 @@ layer("GitHub pinned merge", (it) => {
       );
       expect(result._tag).toBe("Failure");
       expect(variablesOf("mergePullRequest(")).toEqual([]);
+      const provider = yield* GitHubPullRequestProvider.make;
+      const error = yield* Effect.flip(
+        provider.runAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          action: "merge",
+          headSha: "reviewed-head",
+          removeAgentCreditsOnMerge: true,
+        }),
+      );
+      expect(error).toMatchObject({
+        reason: "pinned-head-refused",
+        detail: expect.stringMatching(/merge message head/i),
+      });
+      expect(variablesOf("mergePullRequest(")).toEqual([]);
+    }),
+  );
+
+  it.effect("classifies a pinned stack refusal before a host write", () =>
+    Effect.gen(function* () {
+      const provider = yield* GitHubPullRequestProvider.make;
+      const error = yield* Effect.flip(
+        provider.runAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          action: "merge",
+          headSha: "reviewed-head",
+          stackNumber: 1,
+        }),
+      );
+      expect(error).toMatchObject({ reason: "pinned-head-refused" });
+      expect(variablesOf("mergePullRequest(")).toEqual([]);
     }),
   );
 
@@ -324,6 +360,18 @@ layer("GitHub pinned merge", (it) => {
       expect(variablesOf("mergePullRequest(")[0]).toMatchObject({
         input: { expectedHeadOid: "reviewed-head" },
       });
+      const provider = yield* GitHubPullRequestProvider.make;
+      const error = yield* Effect.flip(
+        provider.runAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          action: "merge",
+          headSha: "reviewed-head",
+        }),
+      );
+      expect(error).toMatchObject({ reason: "failed" });
     }),
   );
 });

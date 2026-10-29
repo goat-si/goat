@@ -21,12 +21,13 @@ import { PullRequestWriteFailedError, PullRequestWriteRefusedError } from "./wri
 const isPullRequestProviderError = Schema.is(PullRequestProviderError);
 
 /**
- * A typed pinned-auto refusal happens before a host write. Other host errors can follow a partial
+ * Typed pin refusals happen before a host write. Other host errors can follow a partial
  * write (GitLab posts a review in several), so their outcome remains unknown.
  */
 const classified = (error: PullRequests.PullRequestError) =>
   error.cause === undefined ||
-  (isPullRequestProviderError(error.cause) && error.cause.reason === "pinned-auto-merge")
+  (isPullRequestProviderError(error.cause) &&
+    (error.cause.reason === "pinned-auto-merge" || error.cause.reason === "pinned-head-refused"))
     ? new PullRequestWriteRefusedError({ detail: error.message })
     : new PullRequestWriteFailedError({ cause: error });
 

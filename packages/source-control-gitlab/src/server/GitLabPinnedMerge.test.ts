@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
 import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
+import * as GitLabPullRequestProvider from "./GitLabPullRequestProvider.ts";
 
 const mockedExecute = vi.fn<GitLabCli.GitLabCli["Service"]["execute"]>();
 const layer = it.layer(
@@ -52,6 +53,18 @@ layer("GitLab pinned merge", (it) => {
         }),
       );
       expect(result).toMatchObject({ _tag: "Failure" });
+      const provider = yield* GitLabPullRequestProvider.make;
+      const error = yield* Effect.flip(
+        provider.runAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "gitlab.com",
+          number: 7,
+          action: "enable-auto-merge",
+          headSha: "reviewed-head",
+        }),
+      );
+      expect(error).toMatchObject({ reason: "pinned-auto-merge" });
       expect(mockedExecute).not.toHaveBeenCalled();
     }),
   );
@@ -120,6 +133,19 @@ layer("GitLab pinned merge", (it) => {
         _tag: "Failure",
         failure: { _tag: "GitLabPinnedRebaseError" },
       });
+      const provider = yield* GitLabPullRequestProvider.make;
+      const error = yield* Effect.flip(
+        provider.runAction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "gitlab.com",
+          number: 7,
+          action: "merge",
+          mergeMethod: "rebase",
+          headSha: "reviewed-head",
+        }),
+      );
+      expect(error).toMatchObject({ reason: "pinned-head-refused" });
       expect(mockedExecute).not.toHaveBeenCalled();
     }),
   );

@@ -114,6 +114,9 @@ function gitHubProviderFailure(
   switch (error._tag) {
     case "GitHubPinnedAutoMergeError":
       return { reason: "pinned-auto-merge" };
+    case "GitHubMergeHeadChangedError":
+    case "GitHubMergeHeadUnsupportedError":
+      return { reason: "pinned-head-refused" };
     case "GitHubCliMissingError":
       return { reason: "missing-tool" };
     case "GitHubNotSignedInError":

@@ -77,6 +77,7 @@ function gitLabProviderFailure(
   error: GitLabPullRequestCli.GitLabPullRequestCliError,
 ): PullRequestProviderFailure {
   if (error._tag === "GitLabPinnedAutoMergeError") return { reason: "pinned-auto-merge" };
+  if (error._tag === "GitLabPinnedRebaseError") return { reason: "pinned-head-refused" };
   if (error._tag === "GitLabCliUnavailableError") return { reason: "missing-tool" };
   if (error._tag === "GitLabCliAuthenticationError") return { reason: "unauthenticated" };
   if (error._tag === "GitLabCliRateLimitError") return { reason: "rate-limited" };
