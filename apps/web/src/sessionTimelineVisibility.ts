@@ -3,7 +3,7 @@ import { turnItemIsWorkspacePreparation } from "@goat/client-runtime/state/turn-
 
 export function hideTimelineItem(item: OrchestrationV2TurnItem): boolean {
   return (
-    turnItemIsWorkspacePreparation(item) ||
+    (turnItemIsWorkspacePreparation(item) && !item.deferredWork) ||
     item.type === "todo_list" ||
     item.type === "checkpoint" ||
     (item.type === "user_message" &&

@@ -180,7 +180,7 @@ export const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(func
     getAgentActivitySnapshot: unexpected,
   });
   const layer = RemoteEnvironmentAuthorization.layer.pipe(
-    Layer.provide(
+    Layer.provideMerge(
       Layer.mergeAll(
         RpcHttp.layerRemoteHttpClient(fetch.fetchFn),
         Layer.succeed(ManagedRelay.ManagedRelayDpopSigner, signer),
