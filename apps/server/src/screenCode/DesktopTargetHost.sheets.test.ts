@@ -22,6 +22,14 @@ import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 500000 });
 
+const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
+  Effect.gen(function* () {
+    const fiber = yield* host.invoke(c, context).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust("60 millis");
+    return yield* Fiber.join(fiber);
+  });
+
 const win = (windowId: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   pid: 42,
   window_id: windowId,
@@ -225,7 +233,7 @@ it.effect(
         .value as ScreenObservation;
       const delBtn = obs.elements.find((e) => e.index === 1);
       if (!delBtn) throw new Error("Missing Delete button");
-      const clicked = yield* host.invoke(evCall("click", { elementRef: delBtn.ref }, ref), context);
+      const clicked = yield* invokeEv(host, evCall("click", { elementRef: delBtn.ref }, ref));
       expect(clicked.category).toBe("unverifiable");
       expect(clicked.evidence).toContain('observed:element_state:value "item-a"→"item-b"');
 
@@ -302,9 +310,9 @@ it.effect(
       const liftedRow2 = page2.elements.find((e) => e.index === lastRowIdx);
       if (!liftedRow2) throw new Error("Missing paged row");
       expect(liftedRow2.name).toBe("row-499");
-      const pClicked = yield* pagedFixture.host.invoke(
+      const pClicked = yield* invokeEv(
+        pagedFixture.host,
         evCall("click", { elementRef: liftedRow2.ref }, pRef),
-        context,
       );
       expect((pClicked.evidence ?? []).some((e) => e.startsWith("observed:element_state"))).toBe(
         false,
@@ -720,9 +728,9 @@ it.effect(
         context,
       )).value as ScreenObservation;
       expect(gObs.title).toBe("Parent Doc");
-      yield* geom.host.invoke(
+      yield* invokeEv(
+        geom.host,
         evCall("click", { x: 50, y: 60, coordinate_space: "window_points" }, gObs.targetRef),
-        context,
       );
       expect(geom.sent.find((s) => s.tool === "click")?.args).toMatchObject({
         window_basis: { x: 10, y: 20, w: 800, h: 600 },

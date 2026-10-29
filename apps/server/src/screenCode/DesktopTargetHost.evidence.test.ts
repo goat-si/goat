@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -13,11 +14,20 @@ import {
   fixture,
   goat2WindowState,
 } from "./DesktopTargetHost.testkit.ts";
+import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 10000 });
+
+const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
+  Effect.gen(function* () {
+    const fiber = yield* host.invoke(c, context).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust("60 millis");
+    return yield* Fiber.join(fiber);
+  });
 
 const win = (windowId: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   pid: 42,
@@ -87,9 +97,9 @@ it.effect(
         context,
       );
       const ref = bound.value as ScreenTargetRef;
-      const closedWithWitness = yield* host.invoke(
+      const closedWithWitness = yield* invokeEv(
+        host,
         evCall("press_key", { key: "w", modifiers: ["command"] }, ref),
-        context,
       );
       expect(closedWithWitness.category).toBe("unverifiable");
       expect(closedWithWitness.evidence).toContain("observed:window_not_listed");
@@ -113,9 +123,9 @@ it.effect(
         call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       );
-      const fRes = yield* filteredHost.invoke(
+      const fRes = yield* invokeEv(
+        filteredHost,
         evCall("click", { x: 10, y: 10 }, fBound.value as ScreenTargetRef),
-        context,
       );
       expect(fRes.category).toBe("unverifiable");
       expect(fRes.evidence).toContain("observed:window_not_listed");
@@ -133,9 +143,9 @@ it.effect(
         call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       );
-      const uRes = yield* unverifiedHost.invoke(
+      const uRes = yield* invokeEv(
+        unverifiedHost,
         evCall("press_key", { key: "w", modifiers: ["command"] }, uBound.value as ScreenTargetRef),
-        context,
       );
       expect(uRes.category).toBe("unverifiable");
       expect(uRes.evidence).toContain("observed:window_list_unverified");
@@ -155,9 +165,9 @@ it.effect(
         call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       );
-      const oRes = yield* offHost.invoke(
+      const oRes = yield* invokeEv(
+        offHost,
         evCall("click", { x: 10, y: 10 }, oBound.value as ScreenTargetRef),
-        context,
       );
       expect(oRes.category).toBe("unverifiable");
       expect(oRes.evidence).toContain("observed:window_offscreen:on_current_space=false");
@@ -236,16 +246,13 @@ it.effect(
       const liftedRow = obs.elements.find((e) => e.index === 2);
       if (!bold || !liftedRow) throw new Error("Missing elements");
 
-      const clickedBold = yield* host.invoke(
-        evCall("click", { elementRef: bold.ref }, ref),
-        context,
-      );
+      const clickedBold = yield* invokeEv(host, evCall("click", { elementRef: bold.ref }, ref));
       expect(clickedBold.category).toBe("unverifiable");
       expect(clickedBold.evidence).toContain('observed:element_state:value "0"→"1"');
 
-      const clickedLifted = yield* host.invoke(
+      const clickedLifted = yield* invokeEv(
+        host,
         evCall("click", { elementRef: liftedRow.ref }, ref),
-        context,
       );
       expect(
         (clickedLifted.evidence ?? []).some((e) => e.startsWith("observed:element_state")),
@@ -296,9 +303,9 @@ it.effect(
         .value as ScreenObservation;
       const search = mObs.elements.find((e) => e.index === 1);
       if (!search) throw new Error("Missing search field");
-      const clickedSearch = yield* mismatchHost.invoke(
+      const clickedSearch = yield* invokeEv(
+        mismatchHost,
         evCall("click", { elementRef: search.ref }, mRef),
-        context,
       );
       expect(
         (clickedSearch.evidence ?? []).some((e) => e.startsWith("observed:element_state")),
@@ -370,7 +377,7 @@ it.effect(
         .value as ScreenObservation;
       const btn = obs.elements.find((e) => e.index === 2);
       if (!btn) throw new Error("Missing button");
-      const res = yield* host.invoke(evCall("click", { elementRef: btn.ref }, ref), context);
+      const res = yield* invokeEv(host, evCall("click", { elementRef: btn.ref }, ref));
       expect(res.category).toBe("unverifiable");
       expect(res.evidence).toContain('observed:window_change:Display "0"→"702"');
       expect(res.evidence).toContain("observed:window_opened:82871");
@@ -395,7 +402,7 @@ it.effect("T43: evidence read errors never resend and never fail the input", () 
       context,
     );
     const ref = bound.value as ScreenTargetRef;
-    const res = yield* host.invoke(evCall("click", { x: 10, y: 10 }, ref), context);
+    const res = yield* invokeEv(host, evCall("click", { x: 10, y: 10 }, ref));
     expect(res.category).toBe("unverifiable");
     expect(sent.filter((s) => s.tool === "click")).toHaveLength(1);
     expect(sent.filter((s) => s.tool === "list_windows").length).toBeGreaterThanOrEqual(3);
@@ -599,8 +606,7 @@ it.live(
   "T63a: 60 ms post-input settle sleep observes delayed main-runloop updates onto Done.observed within guestDoneBytes budget",
   () =>
     Effect.gen(function* () {
-      let inPostReads = false;
-      let postReadsForClick = 0;
+      let inPostRead = false;
       let bigHit: unknown;
       const { host } = fixture({
         list_windows: { windows: [win(7, { bounds: { x: 0, y: 0, width: 674, height: 408 } })] },
@@ -643,22 +649,21 @@ it.live(
           };
         },
         click: () => {
-          inPostReads = true;
-          postReadsForClick = 0;
+          inPostRead = true;
           return {
             effect: "unverifiable",
             ...(bigHit === undefined ? {} : { hit: bigHit }),
           };
         },
         verify_state: () => {
-          const settledAfterRetry = inPostReads && ++postReadsForClick >= 2;
-          if (settledAfterRetry) inPostReads = false;
+          const post = inPostRead;
+          if (post) inPostRead = false;
           return {
             status: "satisfied",
             predicates: [
               verifyOutcome(
                 0,
-                settledAfterRetry
+                post
                   ? {
                       role: "AXCheckBox",
                       label: "Secondary Functions",
@@ -709,22 +714,114 @@ it.live(
 );
 
 it.effect(
-  "T63b: tight-budget screenshot preserves needsSettleBeforeCapture until a screenshot with sufficient budget completes the 60 ms settle sleep",
+  "T63b: 60 ms post-input settle sleep waits before post-input verify_state to catch a 40 ms delayed transition, and tight-budget screenshot preserves needsSettleBeforeCapture",
   () =>
     Effect.gen(function* () {
-      const { host, sent } = fixture({
+      let clickedAt: number | undefined;
+      let currentNow = 0;
+      const base = fixture({
         list_windows: { windows: [win(7, { bounds: { x: 0, y: 0, width: 674, height: 408 } })] },
         get_window_state: (args: Record<string, unknown>) =>
-          goat2WindowState(args, {
-            snapshot_id: "s1",
-            window_bounds: { x: 0, y: 0, width: 674, height: 408 },
-          }),
+          args.include_accessibility_tree === false
+            ? goat2WindowState(args, {
+                snapshot_id: "s1",
+                window_bounds: { x: 0, y: 0, width: 674, height: 408 },
+              })
+            : {
+                pid: 42,
+                window_id: 7,
+                snapshot_id: "s1",
+                elements_complete: false,
+                tree_markdown: [
+                  '- [0] AXWindow "Calculator"',
+                  '  - AXStaticText = "5,335" (Edit field)',
+                  '  - [11] AXCheckBox "Secondary Functions" = "0" [id=Shift actions=[press]]',
+                ].join("\n"),
+                elements: [
+                  {
+                    role: "AXWindow",
+                    element_index: 0,
+                    element_token: "s1:0",
+                    label: "Calculator",
+                    frame: { x: 0, y: 0, w: 674, h: 408 },
+                  },
+                  {
+                    role: "AXCheckBox",
+                    element_index: 11,
+                    element_token: "s1:11",
+                    label: "Secondary Functions",
+                    value: "0",
+                    selected: false,
+                    actions: ["AXPress"],
+                  },
+                ],
+                window_bounds: { x: 0, y: 0, width: 674, height: 408 },
+              },
         click: { effect: "unverifiable" },
+        verify_state: () => {
+          const settledAfter40ms = clickedAt !== undefined && currentNow - clickedAt >= 40;
+          return {
+            status: "satisfied",
+            predicates: [
+              verifyOutcome(
+                0,
+                settledAfter40ms
+                  ? {
+                      role: "AXCheckBox",
+                      label: "Secondary Functions",
+                      value: "1",
+                      selected: true,
+                      element_index: 18,
+                    }
+                  : {
+                      role: "AXCheckBox",
+                      label: "Secondary Functions",
+                      value: "0",
+                      selected: false,
+                      element_index: 18,
+                    },
+              ),
+            ],
+          };
+        },
       });
+      const host = createDesktopTargetHost({
+        primitiveChannel: {
+          request: (req: { tool: string }) =>
+            Effect.gen(function* () {
+              currentNow = yield* Clock.currentTimeMillis;
+              if (req.tool === "click") clickedAt = currentNow;
+              return yield* base.channel.request(req as never);
+            }),
+        } as never,
+        leases: base.leases,
+        platform: "darwin",
+      });
+      const { sent } = base;
       const bound = (yield* host.bindApp(
         evCall("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       )).value as ScreenTargetRef;
+      yield* host.observe(call("get_window_state", {}, bound), context);
+
+      // 1. Prove on TestClock that post-input verify_state waits for the 60 ms settle sleep (not sent at +30 ms)
+      // and therefore observes the 40 ms delayed transition ("0" -> "1") at +60 ms.
+      const clickFiber = yield* host
+        .invoke(
+          evCall("click", { x: 10, y: 10, coordinate_space: "window_points" }, bound),
+          context,
+        )
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("30 millis");
+      // Only pre-input verify_state has run so far; post-input verify_state is still waiting on the 60 ms settle sleep.
+      expect(sent.filter((s) => s.tool === "verify_state")).toHaveLength(1);
+      yield* TestClock.adjust("30 millis");
+      const clickOut = yield* Fiber.join(clickFiber);
+      expect(sent.filter((s) => s.tool === "verify_state")).toHaveLength(2);
+      expect(clickOut.evidence).toContain('observed:window_change:Secondary Functions "0"→"1"');
+
+      // 2. Tight-budget input (< 1,560 ms after reserve) skips the 60 ms post-input sleep and leaves needsSettleBeforeCapture = true.
       yield* host.invoke(
         {
           ...call("click", { x: 10, y: 10, coordinate_space: "window_points" }, bound),
