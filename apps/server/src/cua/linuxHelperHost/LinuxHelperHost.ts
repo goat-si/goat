@@ -303,8 +303,10 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     return env;
   };
 
-  /** A packaged helper that fails its check is never run; readiness says why instead. */
-  /** The driver session whose start a failed check refused; its report ends with that session. */
+  /**
+   * A packaged helper that fails its check is never run; readiness says why instead. refusedFor
+   * is the driver session whose start was refused, and that report ends with the session.
+   */
   let refusedFor: string | undefined;
   const refused = Effect.fnUntraced(function* (launch: number, owner?: string) {
     const reason = deps.verify === undefined ? undefined : yield* deps.verify;
