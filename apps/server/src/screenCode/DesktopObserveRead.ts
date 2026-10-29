@@ -290,3 +290,18 @@ const listedOf = (elements: ReadonlyArray<Record<string, unknown>>) =>
           },
         ];
   });
+
+export const observeScope = (
+  followedSheet: boolean,
+  fromSheetId: number,
+  windowId: number,
+  query: boolean,
+  interactive: boolean,
+): string | undefined => {
+  const base = followedSheet ? `sheet ${fromSheetId} of window ${windowId}` : undefined;
+  return query
+    ? `${base ?? "window"} query`
+    : interactive
+      ? `${base ?? "window"} interactive`
+      : base;
+};

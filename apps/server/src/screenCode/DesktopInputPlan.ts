@@ -197,3 +197,19 @@ export const prepareDesktopInput = (
     admission,
   };
 };
+
+export const availabilityFromControlState = (state: {
+  readonly _tag: string;
+  readonly idle?: boolean;
+  readonly reason?: string;
+}) => {
+  if (state._tag === "active" && state.idle !== true)
+    return [{ kind: "app" as const, available: true }];
+  const reason =
+    state._tag === "paused"
+      ? state.reason === "private"
+        ? ("private" as const)
+        : ("paused" as const)
+      : ("no_lease" as const);
+  return [{ kind: "app" as const, available: false, reason }];
+};

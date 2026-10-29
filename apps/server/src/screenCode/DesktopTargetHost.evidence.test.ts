@@ -1,4 +1,9 @@
+import * as Fiber from "effect/Fiber";
 import { expect, it } from "@effect/vitest";
+import * as Clock from "effect/Clock";
+import * as TestClock from "effect/testing/TestClock";
+import { driverCallDeadline, MIN_CALL_MS } from "../cua/ComputerUseCallCaps.ts";
+import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -525,7 +530,7 @@ it.live(
           "await app.click(2, {action: 'show_menu'}); " +
           "await app.screenshot(); " +
           "await app.click([10, 10]); " +
-          "const hiddenWait = await app.waitFor({window: 'hidden'}); " +
+          "const hiddenWait = await app.waitFor({window: 'hidden'}, 0); " +
           "return { genMoved, oldPointCode, badAction, buttons: obs.elements.length, hiddenMet: hiddenWait.met };",
       );
       expect(res.value).toMatchObject({
@@ -799,4 +804,177 @@ it.live(
       ),
     );
   },
+);
+
+it.live(
+  "audit r1 P1 #1 & P2 #5: auxiliary and end-of-cell reads pass the primitive channel reserve, and a batch in a later cell captures a fresh window baseline",
+  () => {
+    let step = 0;
+    const base = fixture({
+      get_window_state: (args: Record<string, unknown>) => goat2WindowState(args),
+      list_windows: () => {
+        step++;
+        // Steps 1-4: cell 1 bind, click pre/post, finishCell; step 5: cell 2 batch baseline; step 6: cell 2 finishCell.
+        if (step <= 2) return { windows: [win(7)] };
+        if (step <= 4) return { windows: [win(7), win(8100, { title: "Cell1" })] };
+        if (step === 5)
+          return {
+            windows: [win(7), win(8100, { title: "Cell1" }), win(9001, { title: "External" })],
+          };
+        return {
+          windows: [
+            win(7),
+            win(8100, { title: "Cell1" }),
+            win(9001, { title: "External" }),
+            win(9002, { title: "BatchCell2" }),
+          ],
+        };
+      },
+      click: { effect: "unverifiable" },
+    });
+    // Wrap primitiveChannel so it enforces driverCallDeadline and MIN_CALL_MS like production ComputerUsePrimitiveChannel.
+    const channelWithReserve = {
+      request: (req: { tool: string; args: unknown; deadlineMillis: number }) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const deadline = driverCallDeadline(req.tool, req.args, req.deadlineMillis, now);
+          if (deadline - now < MIN_CALL_MS) {
+            return yield* Effect.fail({
+              code: "deadline" as const,
+              effectStarted: false,
+              nextStep: "Too little time left.",
+            });
+          }
+          return yield* base.channel.request(req as never);
+        }),
+    };
+    const host = createDesktopTargetHost({
+      primitiveChannel: channelWithReserve as never,
+      leases: base.leases,
+    });
+    return Effect.gen(function* () {
+      const cell1 = yield* runCell(
+        "globalThis.savedApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "await savedApp.observe(); const c = await savedApp.click('Apply'); return c.result.windows;",
+      );
+      expect(
+        (cell1.value as { opened?: Array<{ window_id: number }> })?.opened?.map((w) => w.window_id),
+      ).toEqual([8100]);
+      expect(cell1.windowsOpened?.map((w) => w.window_id)).toEqual([8100]);
+      expect(cell1.windowsOpenedUnverified).toBeUndefined();
+
+      const cell2 = yield* runCell(
+        "await Promise.all([savedApp.click('Apply'), savedApp.click('Apply')]); return 1;",
+      );
+      // 9001 opened before cell 2 started, so only 9002 was opened during cell 2.
+      expect(cell2.windowsOpened?.map((w) => w.window_id)).toEqual([9002]);
+      expect(cell2.windowsOpenedUnverified).toBeUndefined();
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
+it.live(
+  "audit r1 P1 #2 & P2 #3: sheet follow updates app.windowId and note, and a failed parent read does not strand the binding",
+  () => {
+    let failParent = true;
+    const { host } = fixture({
+      list_windows: {
+        windows: [win(72907, { title: "Recents" }), win(82779, { title: "Go to Folder" })],
+      },
+      get_window_state: (args: Record<string, unknown>) => {
+        if (args.window_id === 82779) {
+          return {
+            pid: 42,
+            window_id: 82779,
+            degraded: true,
+            degraded_reason: "window_is_sheet: window_id 82779 is a sheet attached to window 72907",
+            sheet_of_window_id: 72907,
+            elements_complete: false,
+            tree_markdown: "",
+            elements: [],
+          };
+        }
+        if (failParent) {
+          return new DriverError({ status: "failed" }, "Parent AX walk timed out");
+        }
+        return {
+          pid: 42,
+          window_id: 72907,
+          snapshot_id: "s_parent",
+          elements_complete: false,
+          tree_markdown:
+            '- [0] AXWindow "Recents"\n  - [1] AXSheet\n    - [2] AXButton "Go" [actions=[press]]',
+          elements: [
+            { role: "AXWindow", element_index: 0, element_token: "sp:0", label: "Recents" },
+            { role: "AXSheet", element_index: 1, element_token: "sp:1" },
+            {
+              role: "AXButton",
+              element_index: 2,
+              element_token: "sp:2",
+              label: "Go",
+              actions: ["AXPress"],
+            },
+          ],
+        };
+      },
+    });
+    return Effect.gen(function* () {
+      const res = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 82779}); " +
+          "const firstErr = await app.observe().then(() => 'ok', (e) => e.code); " +
+          "globalThis.sheetApp = app; return { firstErr, winBefore: app.windowId, genBefore: app.generation };",
+      );
+      expect(res.value).toMatchObject({ firstErr: "downstream_failure", winBefore: 82779 });
+
+      // Now parent read succeeds: the same bound target recovers and updates windowId + note.
+      failParent = false;
+      const recovered = yield* runCell(
+        "const obs = await sheetApp.observe(); " +
+          "return { winAfter: sheetApp.windowId, note: sheetApp.note, scope: obs.scope, count: obs.elements.length };",
+      );
+      expect(recovered.value).toEqual({
+        winAfter: 72907,
+        note: expect.stringContaining("sheet of window 72907"),
+        scope: "sheet 82779 of window 72907",
+        count: 3,
+      });
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
+it.effect(
+  "audit r1 P2 #4: waitFor({window:'hidden'}) polls until the window becomes offscreen",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const { host } = fixture({
+        list_windows: () => {
+          reads++;
+          return {
+            windows: [
+              win(7, {
+                is_on_screen: reads < 4,
+                on_current_space: true,
+              }),
+            ],
+          };
+        },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const fiber = yield* host
+        .invoke(
+          { ...call("wait_for", { window: "hidden", timeoutMs: 1000 }, ref), deadlineMillis: 5000 },
+          context,
+        )
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust("500 millis");
+      const out = yield* Fiber.join(fiber);
+      expect(out.category).toBe("confirmed");
+      expect(out.value).toMatchObject({ met: true, status: "satisfied", on_current_space: true });
+      expect(reads).toBeGreaterThanOrEqual(4);
+    }),
 );

@@ -52,8 +52,14 @@ import {
   treeWindowBasis,
   type ScreenshotBasis,
 } from "./DesktopTargetPoints.ts";
-import { finishCellTracker, runInputWithEvidence } from "./DesktopEvidence.ts";
 import {
+  finishCellTracker,
+  pollHiddenWindow,
+  runInputWithEvidence,
+  seedBatchBaseline,
+} from "./DesktopEvidence.ts";
+import {
+  availabilityFromControlState,
   buildWaitExpectation,
   INPUT_METHODS,
   prepareDesktopInput,
@@ -62,7 +68,7 @@ import {
 import {
   CellWindowTracker,
   type CellWindowsOutcome,
-  hiddenWindowStatus,
+  matchBindWindow,
   parseWindowList,
   sheetParentId,
   type WindowEntry,
@@ -74,6 +80,7 @@ import {
   desktopRows,
   driverQuery,
   matchesQuery,
+  observeScope,
   pageDraft,
   queryOmission,
   renderFailure,
@@ -126,6 +133,7 @@ export interface BoundWindow {
   /** Rows of the current observation and its pages, for watched-element evidence and action checks. */
   rows?: ReadonlyArray<DesktopRow>;
   boundWindows?: ReadonlyArray<WindowEntry> | undefined;
+  boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
@@ -380,29 +388,18 @@ export const createDesktopTargetHost = (deps: {
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const listedWindows = object(driverValue(windowsReply))?.windows;
-      if (!Array.isArray(listedWindows)) return yield* Effect.fail(fail("downstream_failure"));
-      const named = listedWindows
-        .map(object)
-        .filter((window) => window !== undefined)
-        .filter(
-          (window) =>
-            window.window_id === requestedWindow &&
-            (Array.isArray(listed)
-              ? pids.has(integer(window.pid))
-              : bundleId !== undefined ||
-                window.app_name === undefined ||
-                window.app_name === name),
-        );
-      const pid = integer(named[0]?.pid);
-      if (!Array.isArray(listed) && !pid) return yield* Effect.fail(fail("target_missing"));
-      if (named.length === 0)
-        return yield* Effect.fail({
-          ...fail("target_missing", "That window is closed; pick one from screen.discover()."),
-          detail: "window_gone",
-        });
-      if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
-      const app = matches.find((candidate) => candidate.pid === pid);
+      const matched = matchBindWindow(
+        listed,
+        object(driverValue(windowsReply))?.windows,
+        bundleId,
+        name,
+        requestedWindow,
+        matches,
+        pids,
+      );
+      if (matched.error || !matched.pid || !matched.window)
+        return yield* Effect.fail(matched.error ?? fail("target_missing"));
+      const { pid, app, window: foundWin } = matched;
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
@@ -412,17 +409,20 @@ export const createDesktopTargetHost = (deps: {
           pid,
           windowId: requestedWindow,
           bundleId: string(app?.bundle_id),
-          name: string(app?.name) ?? string(named[0]?.app_name),
+          name: string(app?.name) ?? string(foundWin.app_name),
           appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
           iconBundleId: bundleId,
-          bounds: named[0]?.bounds,
+          bounds: foundWin.bounds,
           connectionGeneration: windowsReply.connectionGeneration,
           controlId: current.controlId,
         },
         context,
       );
       const created = targets.get(ref.id);
-      if (created) created.boundWindows = parseWindowList(driverValue(windowsReply), pid);
+      if (created) {
+        created.boundWindows = parseWindowList(driverValue(windowsReply), pid);
+        created.boundInCellId = context.cellId;
+      }
       return { value: ref, category: "unverifiable" };
     },
   );
@@ -540,24 +540,18 @@ export const createDesktopTargetHost = (deps: {
         reply = yield* read(limit);
       }
       let state = object(driverValue(reply));
+      const fromSheetId = bound.windowId;
       const parentId = !capture && state ? sheetParentId(state) : undefined;
-      if (
+      const followedSheet =
         parentId !== undefined &&
-        parentId !== bound.windowId &&
-        (yield* Clock.currentTimeMillis) < call.deadlineMillis
-      ) {
+        parentId !== fromSheetId &&
+        (yield* Clock.currentTimeMillis) < call.deadlineMillis;
+      if (followedSheet && parentId !== undefined) {
         retire();
-        bound.windowId = parentId;
-        bound.epoch = ++epoch;
-        bound.ref = { ...bound.ref, generation: bound.epoch };
-        bound.pointsStale = "restart";
-        bound.screenshots?.clear();
-        delete bound.latestScreenshot;
-        delete bound.frames;
-        delete bound.framesBasis;
         reply = yield* read(limit, filtered ? search : undefined, parentId);
         state = object(driverValue(reply));
       }
+      const expectedWindowId = followedSheet && parentId !== undefined ? parentId : bound.windowId;
       if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) {
         retire();
         return yield* Effect.fail(fail("tree_limit", tooLargeStep(capture, query !== undefined)));
@@ -571,7 +565,7 @@ export const createDesktopTargetHost = (deps: {
           ),
         );
       }
-      if (state.pid !== bound.pid || state.window_id !== bound.windowId) {
+      if (state.pid !== bound.pid || state.window_id !== expectedWindowId) {
         observations.evictTarget(bound.ref.id);
         targets.delete(bound.ref.id);
         return yield* Effect.fail(fail("stale_reference"));
@@ -625,13 +619,22 @@ export const createDesktopTargetHost = (deps: {
         if (basis === undefined) delete bound.framesBasis;
         else bound.framesBasis = basis;
       }
+      const nextEpoch = followedSheet ? epoch + 1 : bound.epoch;
+      const nextRef = followedSheet ? { ...bound.ref, generation: nextEpoch } : bound.ref;
+      const scope = observeScope(
+        followedSheet,
+        fromSheetId,
+        expectedWindowId,
+        query !== undefined,
+        interactive,
+      );
       const render = Effect.try({
         try: () =>
           observations.renderObservation({
             draft: observations.normalizeAppTree({
-              targetRef: bound.ref,
-              targetGeneration: bound.epoch,
-              surfaceGeneration: bound.epoch,
+              targetRef: nextRef,
+              targetGeneration: nextEpoch,
+              surfaceGeneration: nextEpoch,
               indexedText: shownText,
               complete: state.elements_complete === true && !filtered,
               truncated: state.truncated === true || limit < READ_BOUNDS[0],
@@ -641,11 +644,7 @@ export const createDesktopTargetHost = (deps: {
               ...viewportOf(bound.windowBounds),
             }),
             mode: query ? "query" : "full",
-            ...(query
-              ? { scope: "window query" }
-              : interactive
-                ? { scope: "window interactive" }
-                : {}),
+            ...(scope === undefined ? {} : { scope }),
             ...(!capture && args.mode === "diff" ? { resetReason: "desktop_reads_full" } : {}),
             limits: { treeBytes: observationReplyBudget(call, context.limits) },
           }),
@@ -653,6 +652,16 @@ export const createDesktopTargetHost = (deps: {
       });
       if (!capture) {
         const observation = yield* render;
+        if (followedSheet && parentId !== undefined) {
+          Object.assign(bound, {
+            windowId: parentId,
+            epoch: (epoch = nextEpoch),
+            ref: nextRef,
+            pointsStale: "restart" as const,
+          });
+          bound.screenshots?.clear();
+          delete bound.latestScreenshot;
+        }
         bound.observationId = observation.observationId;
         const snapshotId = string(state.snapshot_id);
         if (snapshotId !== undefined) bound.snapshotId = snapshotId;
@@ -768,22 +777,15 @@ export const createDesktopTargetHost = (deps: {
     }
     if (call.method === "wait_for") {
       const args = callArgs(call.args);
-      if (args.window === "hidden") {
-        const reply = yield* boundRequest(
-          bound,
-          "nothing",
-          "list_windows",
-          { pid: bound.pid },
-          call,
-          context,
-        );
-        const hidden = hiddenWindowStatus(driverValue(reply), bound.pid, bound.windowId);
-        return {
-          value: hidden,
-          category: hidden.met ? ("confirmed" as const) : ("unverifiable" as const),
-          evidence: [`window_hidden:${hidden.status}`],
-        };
-      }
+      if (args.window === "hidden")
+        return yield* pollHiddenWindow({
+          list: () =>
+            boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context),
+          pid: bound.pid,
+          windowId: bound.windowId,
+          timeoutMs: args.timeoutMs,
+          cellDeadlineMillis: call.deadlineMillis,
+        });
       const waited = buildWaitExpectation(args);
       if (waited.error || !waited.expectation)
         return yield* Effect.fail(waited.error ?? fail("invalid_argument"));
@@ -913,12 +915,19 @@ export const createDesktopTargetHost = (deps: {
       return guardInput.ok ? { ok: true, ...guardInput.input } : guardInput;
     });
     if (refused !== undefined) return refused;
-    const firstBound = calls[0] && resolve(calls[0], context);
-    if (firstBound) {
-      const tracker = trackerFor(context, firstBound.connectionGeneration);
-      if (!tracker.hasPid(firstBound.pid))
-        tracker.recordBefore(firstBound.pid, firstBound.boundWindows);
-    }
+    const first = calls[0];
+    const firstBound = first && resolve(first, context);
+    if (first && firstBound)
+      yield* seedBatchBaseline({
+        send,
+        call: first,
+        context,
+        pid: firstBound.pid,
+        connectionGeneration: firstBound.connectionGeneration,
+        boundInCellId: firstBound.boundInCellId,
+        boundWindows: firstBound.boundWindows,
+        tracker: trackerFor(context, firstBound.connectionGeneration),
+      });
     return yield* dispatchInTurn(
       calls,
       (each, index) =>
@@ -975,15 +984,7 @@ export const createDesktopTargetHost = (deps: {
       const state = yield* deps.leases
         .controlState(context.invocation.thread.threadId, current.controlId)
         .pipe(Effect.orElseSucceed(() => ({ _tag: "ended" as const })));
-      if (state._tag === "active" && state.idle !== true)
-        return [{ kind: "app" as const, available: true }];
-      const reason =
-        state._tag === "paused"
-          ? state.reason === "private"
-            ? ("private" as const)
-            : ("paused" as const)
-          : ("no_lease" as const);
-      return [{ kind: "app" as const, available: false, reason }];
+      return availabilityFromControlState(state);
     }),
     dispatch,
   };

@@ -1,3 +1,4 @@
+import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 // @effect-diagnostics preferSchemaOverJson:off - verify_state observed_json payloads are bounded by the driver.
 /**
  * Observation-only evidence around a non-batch desktop input: watched element state before and
@@ -14,6 +15,7 @@ import {
   type CellWindowsOutcome,
   diffInputWindows,
   fitInputWindows,
+  hiddenWindowStatus,
   parseWindowList,
   type WindowEntry,
 } from "./DesktopWindows.ts";
@@ -169,8 +171,8 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
   budgetMs = 1500,
 ) {
   const now = yield* Clock.currentTimeMillis;
-  if (call.deadlineMillis - now <= 1000) return undefined;
-  const deadlineMillis = Math.min(call.deadlineMillis, now + budgetMs);
+  if (call.deadlineMillis - now <= CELL_RESERVE_MS + 1000) return undefined;
+  const deadlineMillis = Math.min(call.deadlineMillis, now + CELL_RESERVE_MS + budgetMs);
   const sent = yield* send(
     tool,
     args,
@@ -286,7 +288,7 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
         callId: 0,
         method: "list_windows",
         args: { pid },
-        deadlineMillis: now + 1500,
+        deadlineMillis: now + CELL_RESERVE_MS + 1500,
       },
       context,
       entry.connectionGeneration,
@@ -299,4 +301,61 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
     );
   }
   return entry.tracker.finish(endByPid);
+});
+
+export const seedBatchBaseline = Effect.fn("DesktopEvidence.seedBatchBaseline")(function* (deps: {
+  readonly send: (
+    tool: string,
+    args: Record<string, unknown>,
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+    expectedConnectionGeneration?: string,
+  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly call: ScreenHostCall;
+  readonly context: ScreenHostContext;
+  readonly pid: number;
+  readonly connectionGeneration: string;
+  readonly boundInCellId?: string | undefined;
+  readonly boundWindows?: ReadonlyArray<WindowEntry> | undefined;
+  readonly tracker: CellWindowTracker;
+}) {
+  const { send, call, context, pid, connectionGeneration, boundInCellId, boundWindows, tracker } =
+    deps;
+  if (tracker.hasPid(pid)) return;
+  if (boundInCellId === context.cellId && boundWindows !== undefined) {
+    tracker.recordBefore(pid, boundWindows);
+    return;
+  }
+  const raw = yield* quietRead(send, call, context, connectionGeneration, "list_windows", { pid });
+  tracker.recordBefore(pid, parseWindowList(raw, pid));
+});
+
+export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(function* (deps: {
+  readonly list: () => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly pid: number;
+  readonly windowId: number;
+  readonly timeoutMs: unknown;
+  readonly cellDeadlineMillis: number;
+}) {
+  const { list, pid, windowId, timeoutMs, cellDeadlineMillis } = deps;
+  const started = yield* Clock.currentTimeMillis;
+  const requested = typeof timeoutMs === "number" ? timeoutMs : 10_000;
+  const waitCap = Math.max(
+    0,
+    Math.min(requested, 10_000, cellDeadlineMillis - started - CELL_RESERVE_MS - 250),
+  );
+  const deadline = started + waitCap;
+  let hidden = hiddenWindowStatus(driverValue(yield* list()), pid, windowId);
+  while (!hidden.met) {
+    const now = yield* Clock.currentTimeMillis;
+    if (now >= deadline) break;
+    yield* Effect.sleep(Math.min(100, deadline - now));
+    if ((yield* Clock.currentTimeMillis) > deadline) break;
+    hidden = hiddenWindowStatus(driverValue(yield* list()), pid, windowId);
+  }
+  return {
+    value: hidden,
+    category: hidden.met ? ("confirmed" as const) : ("unverifiable" as const),
+    evidence: [`window_hidden:${hidden.status}`],
+  };
 });

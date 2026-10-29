@@ -121,6 +121,8 @@ const __inputs = new Set(['click', 'right_click', 'drag', 'scroll', 'select_text
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
 const __target = (binding, note, owner, extraProps = {}) => {
   let ref = binding.targetRef ?? binding;
+  let currentWindowId = extraProps.windowId;
+  let currentNote = note;
   const tab = ref.kind === 'tab';
   const seen = { observation: undefined, image: undefined, replaced: false };
   // Older call forms reach the host directly; tab input ends the tab screenshot, app points stay usable.
@@ -237,6 +239,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
     if (observation && observation.targetRef && observation.targetRef.id === ref.id && observation.targetRef.generation > ref.generation) {
       ref = observation.targetRef;
       if (seen.image) { seen.image = undefined; seen.replaced = true; }
+      const sheetMatch = typeof observation.scope === 'string' ? /^sheet \d+ of window (\d+)/.exec(observation.scope) : null;
+      if (sheetMatch) {
+        currentWindowId = Number(sheetMatch[1]);
+        currentNote = (note ? note + '; ' : '') + 'sheet of window ' + sheetMatch[1];
+      }
     }
     if (observation && Array.isArray(observation.elements)) seen.observation = observation;
     if (observation && observation.image) { seen.image = observation.image; seen.replaced = false; }
@@ -433,6 +440,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
   Object.defineProperties(surface, {
     generation: { get: () => ref.generation, enumerable: true },
     targetRef: { get: () => ref, enumerable: true },
+    note: { get: () => currentNote, enumerable: true },
+    ...(!tab ? { windowId: { get: () => currentWindowId, enumerable: true } } : {}),
   });
   return Object.freeze(surface);
 };

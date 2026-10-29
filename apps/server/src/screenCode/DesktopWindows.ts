@@ -1,9 +1,10 @@
+import type { ScreenRunError, ScreenWindowSummary } from "@goat/contracts";
+import { fail } from "./DesktopDriverReplies.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Window lists and return budgets are measured against driver JSON.
 /**
  * Desktop window tracking for wp4: before/after window diffs on each non-batch input, cell-level
  * accumulation of newly opened windows, sheet-to-parent rebinding checks, and hidden-window waits.
  */
-import type { ScreenWindowSummary } from "@goat/contracts";
 
 export interface WindowEntry {
   readonly window_id: number;
@@ -252,3 +253,42 @@ export class CellWindowTracker {
     };
   }
 }
+
+export const matchBindWindow = (
+  listedApps: unknown,
+  listedWindows: unknown,
+  bundleId: string | undefined,
+  name: string | undefined,
+  requestedWindow: number,
+  matches: ReadonlyArray<Record<string, unknown>>,
+  pids: ReadonlySet<number | undefined>,
+): {
+  readonly pid?: number;
+  readonly app?: Record<string, unknown> | undefined;
+  readonly window?: Record<string, unknown>;
+  readonly error?: ScreenRunError;
+} => {
+  if (!Array.isArray(listedWindows)) return { error: fail("downstream_failure") };
+  const named = listedWindows
+    .map(object)
+    .filter((window): window is Record<string, unknown> => window !== undefined)
+    .filter(
+      (window) =>
+        window.window_id === requestedWindow &&
+        (Array.isArray(listedApps)
+          ? pids.has(natural(window.pid))
+          : bundleId !== undefined || window.app_name === undefined || window.app_name === name),
+    );
+  const first = named[0];
+  const pid = first ? natural(first.pid) : undefined;
+  if (!Array.isArray(listedApps) && (!pid || pid <= 0)) return { error: fail("target_missing") };
+  if (named.length === 0)
+    return {
+      error: {
+        ...fail("target_missing", "That window is closed; pick one from screen.discover()."),
+        detail: "window_gone",
+      },
+    };
+  if (named.length !== 1 || !pid || pid <= 0 || !first) return { error: fail("target_ambiguous") };
+  return { pid, app: matches.find((candidate) => candidate.pid === pid), window: first };
+};
