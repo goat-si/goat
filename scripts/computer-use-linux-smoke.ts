@@ -220,8 +220,12 @@ try {
   };
   start("/usr/libexec/at-spi-bus-launcher", ["--launch-immediately"], env);
   await sleep(800);
-  const app = start("python3", [fixture], env, ["ignore", "pipe", "ignore"]);
-  await sleep(2000);
+  // The fixture's errors go to this run's log; its first line says its window is mapped.
+  const app = start("python3", [fixture], env, ["ignore", "pipe", "inherit"]);
+  const fixtureOutput = app.stdout;
+  if (!fixtureOutput) throw new Error("The fixture has no stdout.");
+  const mapped = await firstLine(app, fixtureOutput, "The fixture");
+  if (mapped !== "ready") throw new Error("The fixture said " + JSON.stringify(mapped) + ".");
   log("environment", { xvfb: xvfb.pid, dbus: dbus.pid, fixture: app.pid, display });
 
   const helper = NodeChildProcess.spawn(values.helper, [], {
@@ -310,11 +314,19 @@ try {
     COMPUTER_USE_METHODS.every((method) => method in capabilities.result.methods),
     capabilities.result,
   );
-  const windows = await request("listWindows");
-  const window = windows.result.windows.find((entry: any) => entry.title === "GOAT CU Fixture");
+  // A mapped window reaches the driver's listing a moment later on a slow machine.
+  let windows = await request("listWindows");
+  const fixtureWindow = () =>
+    windows.result.windows?.find((entry: any) => entry.title === "GOAT CU Fixture");
+  for (let tries = 0; fixtureWindow() === undefined && tries < 20; tries++) {
+    await sleep(500);
+    windows = await request("listWindows");
+  }
+  const window = fixtureWindow();
   check("listWindows finds the fixture by its own pid", window?.pid === app.pid, {
     windows: windows.result.windows,
   });
+  if (window === undefined) throw new Error("The fixture's window never appeared.");
   const target = { pid: window.pid, windowId: window.windowId };
 
   const uncomposited = await request("observe", { target, screenshot: true });
