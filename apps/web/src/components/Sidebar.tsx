@@ -2047,8 +2047,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       const snoozePresets =
         snoozeEnvironmentId === null
           ? []
-          : // oxlint-disable-next-line react/purity -- runs in an event handler
-            resolveSnoozePresets(new Date(), timestampFormat, snoozeEnvironmentId);
+          : resolveSnoozePresets(new Date(), timestampFormat, snoozeEnvironmentId);
       const clicked = await settlePromise(() =>
         api.contextMenu.show(
           [

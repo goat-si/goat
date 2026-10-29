@@ -24,6 +24,7 @@ import {
   OrchestrationV2LimitRecovery,
   OrchestrationV2LimitRecoveryUpdate,
   OrchestrationV2LatestAnswerExcerpt,
+  OrchestrationV2WorkflowAgentTranscriptFields,
 } from "./orchestrationV2ThreadFields.ts";
 export * from "./orchestrationV2ThreadFields.ts";
 
@@ -844,10 +845,7 @@ export const OrchestrationV2WorkflowAgent = Schema.Struct({
   state: Schema.Literals(["queued", "running", "completed", "failed"]),
   phaseIndex: Schema.optional(NonNegativeInt),
   phaseTitle: Schema.optional(TrimmedNonEmptyString),
-  model: Schema.optional(TrimmedNonEmptyString),
-  effort: Schema.optional(TrimmedNonEmptyString),
-  speed: Schema.optional(TrimmedNonEmptyString),
-  attempt: Schema.optional(NonNegativeInt),
+  ...OrchestrationV2WorkflowAgentTranscriptFields,
   totalTokens: Schema.optional(NonNegativeInt),
   toolCalls: Schema.optional(NonNegativeInt),
   durationMs: Schema.optional(NonNegativeInt),
