@@ -10,10 +10,12 @@ import QuartzCore
 final class AgentOverlayView: NSView {
   var windowRect = NSRect.zero
   var acting = false
+  var showsBorder = true
 
   private let accent = NSColor(srgbRed: 0.27, green: 0.52, blue: 1.0, alpha: 1)
 
   override func draw(_ dirtyRect: NSRect) {
+    guard showsBorder else { return }
     let glow = NSBezierPath(roundedRect: windowRect.insetBy(dx: -3, dy: -3), xRadius: 12, yRadius: 12)
     glow.lineWidth = acting ? 4 : 2
     accent.withAlphaComponent(acting ? 0.9 : 0.45).setStroke()
@@ -64,7 +66,17 @@ final class AgentOverlay {
   private let cursorLayer = CAShapeLayer()
   private let thinkLayer = CAShapeLayer()
   private var target: (windowId: CGWindowID, point: CGPoint?)?
-  private var follow: Timer?
+  private lazy var follow = OverlayFollowController(
+    scheduler: OverlayTimerScheduler(),
+    frame: { overlayWindowFrame($0) },
+    onFrame: { [weak self] frame in
+      self?.place(animate: false, frame: frame)
+    },
+    onBorder: { [weak self] visible in
+      guard let self else { return }
+      self.view.showsBorder = visible
+      self.view.needsDisplay = true
+    })
   private var settledPoint: CGPoint?
   private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
   private var currentPhase = "resting"
@@ -146,6 +158,7 @@ final class AgentOverlay {
     currentPhase = phase
     view.acting = phase == "acting" || phase == "moving"
     target = (CGWindowID(windowId), point)
+    follow.show(windowId: CGWindowID(windowId), phase: phase == "resting" ? .resting : .active)
     place(animate: phase == "moving" || phase == "acting")
     thinkLayer.removeAllAnimations()
     thinkLayer.isHidden = phase != "thinking" || reducedMotion || point == nil
@@ -159,24 +172,11 @@ final class AgentOverlay {
       thinkLayer.opacity = 0.15
       thinkLayer.add(pulse, forKey: "boundedThink")
     }
-    // External windows have no NSWindow notifications here. Sample geometry only briefly after
-    // activity; static idle leaves no timer or display link running.
-    follow?.invalidate()
-    if phase == "moving" || phase == "acting" {
-      var remaining = 4
-      follow = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] timer in
-        guard let self else { timer.invalidate(); return }
-        self.place(animate: false)
-        remaining -= 1
-        if remaining == 0 { timer.invalidate(); self.follow = nil }
-      }
-    }
   }
 
   func hide() {
     currentPhase = "resting"
-    follow?.invalidate()
-    follow = nil
+    follow.hide()
     target = nil
     cursorLayer.removeAllAnimations()
     thinkLayer.removeAllAnimations()
@@ -187,7 +187,15 @@ final class AgentOverlay {
   }
 
   private func place(animate: Bool) {
-    guard let target, let frame = overlayWindowFrame(target.windowId) else {
+    guard let target else {
+      panel.orderOut(nil)
+      return
+    }
+    place(animate: animate, frame: overlayWindowFrame(target.windowId))
+  }
+
+  private func place(animate: Bool, frame: NSRect?) {
+    guard let target, let frame else {
       panel.orderOut(nil)
       return
     }

@@ -10,4 +10,12 @@ describe("computer use helper's overlay order (Swift)", () => {
       assert.isTrue(result.ok, result.output);
     },
   );
+
+  it.skipIf(!macWithSwift)(
+    "follows the target while its border is visible and retires only the border when resting",
+    () => {
+      const result = runSwiftChecks(["OverlayOrder.swift"], "OverlayFollowTests.swift");
+      assert.isTrue(result.ok, result.output);
+    },
+  );
 });

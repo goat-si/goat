@@ -6,6 +6,7 @@
 // cursor overlay (trycua/cua, MIT: platform-macos/src/cursor/overlay.rs, dispatch_pin_above).
 
 import CoreGraphics
+import Foundation
 
 /// One on-screen window as CGWindowListCopyWindowInfo reports it, front to back.
 struct OverlayListedWindow: Equatable {
@@ -39,4 +40,99 @@ enum OverlayOrder {
     }
     return false
   }
+}
+
+protocol OverlaySchedule: AnyObject {
+  func cancel()
+}
+
+protocol OverlayScheduling {
+  func schedule(every: TimeInterval, repeats: Bool, handler: @escaping () -> Void)
+    -> OverlaySchedule
+}
+
+private final class OverlayTimerSchedule: OverlaySchedule {
+  private var timer: Timer?
+
+  init(timer: Timer) { self.timer = timer }
+
+  func cancel() {
+    timer?.invalidate()
+    timer = nil
+  }
+
+  deinit { cancel() }
+}
+
+final class OverlayTimerScheduler: OverlayScheduling {
+  func schedule(every: TimeInterval, repeats: Bool, handler: @escaping () -> Void)
+    -> OverlaySchedule
+  {
+    OverlayTimerSchedule(
+      timer: Timer.scheduledTimer(withTimeInterval: every, repeats: repeats) { _ in handler() })
+  }
+}
+
+enum OverlayFollowPhase {
+  case active
+  case resting
+}
+
+final class OverlayFollowController {
+  private let scheduler: OverlayScheduling
+  private let frame: (CGWindowID) -> CGRect?
+  private let onFrame: (CGRect?) -> Void
+  private let onBorder: (Bool) -> Void
+  private var generation = 0
+  private var target: CGWindowID?
+  private var follow: OverlaySchedule?
+  private var idle: OverlaySchedule?
+
+  init(
+    scheduler: OverlayScheduling,
+    frame: @escaping (CGWindowID) -> CGRect?,
+    onFrame: @escaping (CGRect?) -> Void,
+    onBorder: @escaping (Bool) -> Void
+  ) {
+    self.scheduler = scheduler
+    self.frame = frame
+    self.onFrame = onFrame
+    self.onBorder = onBorder
+  }
+
+  func show(windowId: CGWindowID, phase: OverlayFollowPhase) {
+    generation += 1
+    cancelSchedules()
+    target = windowId
+    onBorder(true)
+    let owner = generation
+    follow = scheduler.schedule(every: 0.25, repeats: true) { [weak self] in
+      guard let self, self.generation == owner, self.target == windowId else { return }
+      self.onFrame(self.frame(windowId))
+    }
+    if phase == .resting {
+      idle = scheduler.schedule(every: 2, repeats: false) { [weak self] in
+        guard let self, self.generation == owner, self.target == windowId else { return }
+        self.target = nil
+        self.onBorder(false)
+        self.cancelSchedules()
+      }
+    }
+  }
+
+  func hide() {
+    generation += 1
+    cancelSchedules()
+    target = nil
+    onBorder(false)
+  }
+
+  private func cancelSchedules() {
+    follow?.cancel()
+    follow = nil
+    idle?.cancel()
+    idle = nil
+  }
+
+  deinit { cancelSchedules() }
 }
