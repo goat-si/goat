@@ -25,7 +25,7 @@ export const botModel = {
 } as const;
 
 /** "look:" starts a GOAT Bot turn, "stop:<task>" stops one, "more:<task> text" follows one up. */
-export const script = (input: ChannelReceptionInput) => {
+const script = (input: ChannelReceptionInput) => {
   const text = input.inputText ?? "";
   if (input.mode === "input" && text.startsWith("look:"))
     return Effect.succeed({
