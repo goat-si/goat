@@ -8,4 +8,11 @@ import CoreGraphics
 enum WindowServer {
   /// Opens the connection; cheap, and safe to call again.
   static func connect() { _ = CGMainDisplayID() }
+
+  /// The disclaimed service's start. It connects before any capture, window listing or overlay:
+  /// without it the first live-picture capture aborted the service (CGS_REQUIRE_INIT).
+  static func startService(_ run: () -> Never) -> Never {
+    connect()
+    run()
+  }
 }
