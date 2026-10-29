@@ -40,6 +40,7 @@ class SettlementProbe extends Context.Service<
     readonly shellPresent: Ref.Ref<boolean>;
     readonly runtimeMode: Ref.Ref<RuntimeMode>;
     readonly customCorrelationId: Ref.Ref<string | null>;
+    readonly failUncertain: Ref.Ref<boolean>;
     readonly gateAllowed: Ref.Ref<boolean>;
   }
 >()("goat/mcp/ToolAdmissionSettlement.test/SettlementProbe") {}
@@ -104,6 +105,14 @@ const runWrite = McpToolAccess.writesWithCapability(() =>
       }
     }
     const run = yield* Ref.updateAndGet(probe.runs, (n) => n + 1);
+    if (yield* Ref.get(probe.failUncertain)) {
+      return yield* new OrchestratorMcpFailure({
+        code: "host_unavailable",
+        reason: "ssh_failed",
+        message: "Connection dropped after dispatch.",
+        mayHaveStarted: true,
+      });
+    }
     return { run, commandId };
   }),
 );
@@ -142,6 +151,7 @@ const probeLayer = Layer.effect(
     shellPresent: Ref.make(true),
     runtimeMode: Ref.make<RuntimeMode>("full-access"),
     customCorrelationId: Ref.make<string | null>(null),
+    failUncertain: Ref.make(false),
     gateAllowed: Ref.make(true),
   }),
 );
@@ -160,25 +170,33 @@ const threadsLayer = Layer.unwrap(
 );
 
 const gateLayer = Layer.unwrap(
-  Effect.map(SettlementProbe, (probe) =>
-    Layer.succeed(
+  Effect.gen(function* () {
+    const probe = yield* SettlementProbe;
+    const sql = yield* SqlClient.SqlClient;
+    const check = () =>
+      sql`SELECT 1`.pipe(
+        Effect.orDie,
+        Effect.andThen(Ref.get(probe.gateAllowed)),
+        Effect.flatMap((allowed) =>
+          allowed
+            ? Effect.void
+            : Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "provider_unavailable",
+                  reason: "session_receipt_pending",
+                  message: "Session receipt pending.",
+                }),
+              ),
+        ),
+      );
+    return Layer.succeed(
       ChannelSessionReceiptGate.ChannelSessionReceiptGate,
       ChannelSessionReceiptGate.ChannelSessionReceiptGate.of({
-        require: () =>
-          Effect.flatMap(Ref.get(probe.gateAllowed), (allowed) =>
-            allowed
-              ? Effect.void
-              : Effect.fail(
-                  new OrchestratorMcpFailure({
-                    code: "provider_unavailable",
-                    reason: "session_receipt_pending",
-                    message: "Session receipt pending.",
-                  }),
-                ),
-          ),
+        require: check,
+        requireSettled: check,
       }),
-    ),
-  ),
+    );
+  }),
 );
 
 const served = Layer.mergeAll(
@@ -453,11 +471,26 @@ it.effect(
       // A channel-owned SSH launch that records a custom correlationId releases when that id is fenced.
       const probe = yield* SettlementProbe;
       yield* Ref.set(probe.customCorrelationId, "rr-channel-child-1");
-      yield* sql`CREATE TRIGGER block_chan_ssh_settle BEFORE UPDATE ON mcp_request_reservations
-        BEGIN SELECT RAISE(ABORT, 'refused'); END`;
-      yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-1" });
-      yield* sql`DROP TRIGGER block_chan_ssh_settle`;
+      yield* Ref.set(probe.failUncertain, true);
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-1" }),
+      ).toMatchObject({ reason: "ssh_failed", mayHaveStarted: true });
+      yield* Ref.set(probe.failUncertain, false);
       yield* Ref.set(probe.customCorrelationId, null);
+      const [chanRow] = yield* sql<{
+        readonly state: string;
+        readonly outcome_code: string | null;
+        readonly cid: string | null;
+      }>`SELECT state, outcome_code, json_extract(grant_json, '$.correlationId') AS cid
+        FROM mcp_request_reservations WHERE client_request_id = 'ssh-chan-1'`;
+      expect(chanRow).toEqual({
+        state: "unknown",
+        outcome_code: "unknown_outcome",
+        cid: "rr-channel-child-1",
+      });
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-1" }),
+      ).toMatchObject({ reason: "outcome_unknown" });
       yield* sql`INSERT INTO remote_dispatches
         (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, last_error, created_at, updated_at, memory_grant_ceiling)
         VALUES ('rr-channel-child-1', 'thread', ${caller}, 'box', 'key', 'wake', 'cancelled',

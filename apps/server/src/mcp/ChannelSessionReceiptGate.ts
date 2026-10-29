@@ -21,6 +21,9 @@ export class ChannelSessionReceiptGate extends Context.Service<
     readonly require: (
       caller: McpInvocationContext.McpThreadCaller,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
+    readonly requireSettled?: (
+      caller: McpInvocationContext.McpThreadCaller,
+    ) => Effect.Effect<void, OrchestratorMcpFailure>;
   }
 >()("goat/mcp/ChannelSessionReceiptGate") {}
 
@@ -37,24 +40,39 @@ export const requireSessionReceipt = Effect.fn("ChannelSessionReceiptGate.requir
   },
 );
 
+export const requireSettledSessionReceipt = Effect.fn(
+  "ChannelSessionReceiptGate.requireSettledSessionReceipt",
+)(function* () {
+  const scope = yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext);
+  const caller = Option.getOrUndefined(scope)?.thread;
+  if (caller === undefined || !isGoatBotSessionThreadId(caller.threadId)) return;
+  const gate = yield* Effect.serviceOption(ChannelSessionReceiptGate);
+  if (Option.isNone(gate)) return yield* refused();
+  yield* (gate.value.requireSettled ?? gate.value.require)(caller);
+  if (Option.isSome(scope) && scope.value.reauthorize !== undefined)
+    yield* scope.value.reauthorize([]).pipe(Effect.mapError(() => refused()));
+});
+
 export const layer = Layer.effect(
   ChannelSessionReceiptGate,
   Effect.gen(function* () {
     const gate = yield* SessionReceiptGate.SessionReceiptGate;
+    const inspectReady = Effect.fn("ChannelSessionReceiptGate.inspectReady")(function* (
+      caller: McpInvocationContext.McpThreadCaller,
+    ) {
+      if (caller.runId === undefined) return yield* refused();
+      const state = yield* gate.inspect(caller.threadId, caller.runId);
+      if (
+        state.state === "invalid" ||
+        state.state === "absent" ||
+        (state.status !== "running" && state.status !== "waiting")
+      )
+        return yield* refused();
+      return state.state === "settled";
+    });
     return ChannelSessionReceiptGate.of({
       require: Effect.fn("ChannelSessionReceiptGate.require")(function* (caller) {
-        if (caller.runId === undefined) return yield* refused();
-        const runId = caller.runId;
-        const ready = Effect.gen(function* () {
-          const state = yield* gate.inspect(caller.threadId, runId);
-          if (
-            state.state === "invalid" ||
-            state.state === "absent" ||
-            (state.status !== "running" && state.status !== "waiting")
-          )
-            return yield* refused();
-          return state.state === "settled";
-        });
+        const ready = inspectReady(caller);
         const waited = yield* Effect.scoped(
           Effect.gen(function* () {
             const changes = yield* gate.subscribe;
@@ -69,6 +87,9 @@ export const layer = Layer.effect(
           }),
         ).pipe(Effect.timeoutOption("10 seconds"));
         if (Option.isNone(waited) || !(yield* ready)) return yield* refused();
+      }),
+      requireSettled: Effect.fn("ChannelSessionReceiptGate.requireSettled")(function* (caller) {
+        if (!(yield* inspectReady(caller))) return yield* refused();
       }),
     });
   }),
