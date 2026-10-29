@@ -1,19 +1,34 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { ProviderDriverKind } from "@goat/contracts";
 
-vi.hoisted(() => Object.assign(globalThis, { __DEV__: true, expo: { EventEmitter: class {} } }));
+vi.hoisted(() =>
+  Object.assign(globalThis, {
+    __DEV__: true,
+    expo: {
+      EventEmitter: class {
+        static readonly native = true;
+      },
+    },
+  }),
+);
 
 vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
 vi.mock("expo", () => ({ requireNativeModule: vi.fn(), requireOptionalNativeModule: vi.fn() }));
 vi.mock("expo-crypto", () => ({
-  EncryptionKey: class {},
+  EncryptionKey: class {
+    static readonly native = true;
+  },
   getRandomBytes: (length: number) => new Uint8Array(length),
   digest: async () => new Uint8Array(32),
   CryptoDigestAlgorithm: { SHA1: "SHA-1", SHA256: "SHA-256", SHA384: "SHA-384", SHA512: "SHA-512" },
 }));
 vi.mock("expo-secure-store", () => ({ AFTER_FIRST_UNLOCK: "afterFirstUnlock" }));
 vi.mock("expo-constants", () => ({ default: {} }));
-vi.mock("expo-modules-core", () => ({ EventEmitter: class {} }));
+vi.mock("expo-modules-core", () => ({
+  EventEmitter: class {
+    static readonly native = true;
+  },
+}));
 vi.mock("@react-navigation/native", () => ({ useNavigation: vi.fn() }));
 
 vi.mock("../../state/queries", () => ({
