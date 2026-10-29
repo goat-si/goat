@@ -462,6 +462,7 @@ it.live(
     const host = createDesktopTargetHost({
       primitiveChannel: channelWithReserve as never,
       leases: base.leases,
+      platform: "darwin",
     });
     return Effect.gen(function* () {
       const cell1 = yield* runCell(
@@ -626,6 +627,7 @@ it.effect(
       const host = createDesktopTargetHost({
         primitiveChannel: channel as never,
         leases: base.leases,
+        platform: "darwin",
       });
       const bound = yield* host.bindApp(
         {
@@ -741,6 +743,7 @@ it.effect(
               : slowBase.channel.request(req as never),
         } as never,
         leases: slowBase.leases,
+        platform: "darwin",
       });
       const sBound = (yield* slowHost.bindApp(
         evCall("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
@@ -805,6 +808,7 @@ it.effect(
       const rebindHost = createDesktopTargetHost({
         primitiveChannel: rebindChannel as never,
         leases: rebindBase.leases,
+        platform: "darwin",
       });
       const rBound = (yield* rebindHost.bindApp(
         {
