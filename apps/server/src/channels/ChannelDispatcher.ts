@@ -481,6 +481,8 @@ const make = Effect.gen(function* () {
   const launch = (initial: ChannelLedger.ChannelStoredTask, owner: string) =>
     Effect.gen(function* () {
       if (initial.task.target === undefined) return;
+      // A session turn checks its requester itself, after binding any run a pass already sent.
+      if (initial.task.kind === "turn") return yield* Effect.asVoid(session.serve(initial, owner));
       if (
         (yield* requesterForDispatch(initial.task).pipe(
           Effect.provideService(ChannelLedger.ChannelLedger, ledger),
@@ -502,7 +504,6 @@ const make = Effect.gen(function* () {
         );
         return;
       }
-      if (initial.task.kind === "turn") return yield* Effect.asVoid(session.serve(initial, owner));
       const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
       // The project's standing instructions go in front, as goat_thread_launch puts them, so a
       // channel worker follows the rules every thread in that project follows.

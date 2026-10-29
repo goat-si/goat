@@ -1,21 +1,18 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { ChannelReceptionInput, ChannelTask, ChannelTaskId, RunId } from "@goat/contracts";
+import type { ChannelTask, RunId } from "@goat/contracts";
 import {
   isGoatBotSessionThreadId,
   MessageId,
   NodeId,
   ProjectId,
-  ProviderInstanceId,
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import { SESSION_PREFIX_HEADINGS } from "./channelBotSessionBrief.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
@@ -25,101 +22,18 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
-import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
+import { turnSteerIdsFor } from "./channelIds.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlClient from "effect/sql/SqlClient";
+import { botMessages, goatInput, owner, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
 import {
-  botMessages,
-  defaultScript,
-  goatInput,
-  makeHarness,
-  modelSelection,
-  owner,
-  rpcContext,
-  setupBot,
-} from "./testkit/ChannelHarness.ts";
-
-const botModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" } as const;
-
-/** "look:" starts a GOAT Bot turn, "stop:<task>" stops one, "more:<task> text" follows one up. */
-const script = (input: ChannelReceptionInput) => {
-  const text = input.inputText ?? "";
-  if (input.mode === "input" && text.startsWith("look:"))
-    return Effect.succeed({
-      replyText: "Looking now.",
-      action: {
-        type: "run_turn" as const,
-        title: text.slice(5).trim(),
-        instruction: text.slice(5).trim(),
-      },
-    });
-  if (input.mode === "input" && text.startsWith("stop:"))
-    return Effect.succeed({
-      replyText: "Stopping.",
-      action: { type: "stop_work" as const, taskId: text.slice(5).trim() as ChannelTaskId },
-    });
-  if (input.mode === "input" && text.startsWith("answer:")) {
-    const [taskId, questionId, ...answer] = text.slice(7).split(" ");
-    return Effect.succeed({
-      replyText: "Passing that on.",
-      action: {
-        type: "answer_question" as const,
-        taskId: taskId as ChannelTaskId,
-        questionId: questionId as never,
-        answer: answer.join(" "),
-      },
-    });
-  }
-  if (input.mode === "input" && text.startsWith("more:"))
-    return Effect.succeed({
-      replyText: "Passing that on.",
-      action: { type: "follow_up" as const, taskId: text.slice(5).split(" ")[0] as ChannelTaskId },
-    });
-  return defaultScript(input);
-};
-
-const sessionHarness = () => {
-  const harness = makeHarness({
-    botWorkspace: true,
-    settingsLayer: ServerSettings.layerTest({
-      textGenerationModelSelection: modelSelection,
-      defaultRuntimeMode: "full-access",
-      goatBotModelSelection: botModel,
-    }).pipe(Layer.orDie),
-  });
-  harness.script.current = script;
-  return harness;
-};
-
-/** One message from the person, read and dispatched, with worker runs reconciled. */
-const ask = (text: string, key: string, context: typeof rpcContext = rpcContext) =>
-  Effect.gen(function* () {
-    const gateway = yield* ChannelGateway.ChannelGateway;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const reception = yield* ChannelReceptionService.ChannelReceptionService;
-    yield* runtime.drain;
-    const ingested = yield* gateway.ingest(goatInput(text, key), context);
-    yield* reception.receive(ingested.inputId, runtime.ownerToken);
-    yield* runtime.drain;
-    yield* reports.reconcile(runtime.ownerToken);
-    // A stop or follow-up creates no task; callers that started one read it.
-    return (yield* ledger.getTask(taskIdFor(ingested.inputId, 0)))?.task as ChannelTask;
-  });
-
-const settle = Effect.gen(function* () {
-  const runtime = yield* ChannelRuntime.ChannelRuntime;
-  const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
-  yield* reports.reconcile(runtime.ownerToken);
-  yield* runtime.drain;
-});
-
-const current = (taskId: ChannelTaskId) =>
-  ChannelLedger.ChannelLedger.pipe(
-    Effect.flatMap((ledger) => ledger.getTask(taskId)),
-    Effect.map((stored) => stored!.task),
-  );
+  ask,
+  botModel,
+  current,
+  runsOf,
+  sessionHarness,
+  settle,
+} from "./ChannelBotSession.testkit.ts";
 
 const usage = (fields: Record<string, unknown>) => [
   {
@@ -131,10 +45,6 @@ const usage = (fields: Record<string, unknown>) => [
     },
   },
 ];
-
-/** The thread's run ids in order, and whether a send steered into them. */
-const runsOf = (harness: ReturnType<typeof sessionHarness>, threadId: ThreadId) =>
-  harness.world.runs.get(threadId) ?? [];
 
 /** A report as the session run with this server-issued run id would make it. */
 const reportFrom = (
