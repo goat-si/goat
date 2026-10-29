@@ -107,6 +107,10 @@ const notSent = (retryAfterSeconds: number, rateLimited = false) =>
     retryAfterSeconds,
   });
 
+/** A wake signal that only counts, so a test can see when the channel loop would run. */
+const countingWake = (count: () => void) =>
+  Layer.succeed(ChannelWake.ChannelWake)({ wake: Effect.sync(count), next: Effect.never });
+
 describe("absolute receipt delivery deadlines", () => {
   it.effect("a settled receipt wakes the channel loop to send the rows it held back", () => {
     let wakes = 0;
@@ -124,11 +128,8 @@ describe("absolute receipt delivery deadlines", () => {
               deliveryId: message.deliveryId,
               acceptedAt: "1970-01-01T00:00:00.000Z",
             }),
-          Layer.succeed(ChannelWake.ChannelWake)({
-            wake: Effect.sync(() => {
-              wakes += 1;
-            }),
-            next: Effect.never,
+          countingWake(() => {
+            wakes += 1;
           }),
         ),
       ),
@@ -208,25 +209,33 @@ describe("absolute receipt delivery deadlines", () => {
   );
 
   it.effect.each([false, true])(
-    "expires definitely-unsent receipts at 60 seconds (rate-limited=%s)",
+    "expires definitely-unsent receipts at 60 seconds and wakes the loop (rate-limited=%s)",
     (rateLimited) => {
       let sends = 0;
+      let wakes = 0;
       return Effect.gen(function* () {
         const ledger = yield* ChannelLedger.ChannelLedger;
         const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
         const id = yield* receipt("retry");
         yield* worker.deliverDue(owner);
+        assert.strictEqual(wakes, 0);
         yield* TestClock.adjust("60 seconds");
         assert.strictEqual(yield* ledger.getDeliveryState(id), "failed");
+        assert.strictEqual(wakes, 1);
         yield* worker.deliverDue(owner);
         assert.strictEqual(yield* ledger.getDeliveryState(id), "failed");
         assert.strictEqual(sends, 1);
       }).pipe(
         Effect.provide(
-          layer(() => {
-            sends += 1;
-            return Effect.fail(notSent(120, rateLimited));
-          }),
+          layer(
+            () => {
+              sends += 1;
+              return Effect.fail(notSent(120, rateLimited));
+            },
+            countingWake(() => {
+              wakes += 1;
+            }),
+          ),
         ),
       );
     },

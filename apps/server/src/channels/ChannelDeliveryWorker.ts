@@ -92,6 +92,7 @@ const make = Effect.gen(function* () {
           ledger.expireReceipts({ owner, now: DateTime.formatIso(now) }),
         ),
       ),
+      Effect.andThen(wake.wake),
       Effect.ignore,
       Effect.forkIn(scope),
     );
