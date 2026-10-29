@@ -366,7 +366,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
     ...(note === undefined ? {} : { note }),
     observe,
     click: (target = {}, options = {}) => {
-      if (__legacy(target)) return call('click', target);
+      if (__legacy(target)) {
+        if (options !== null && typeof options === 'object' && Object.keys(options).length > 0)
+          throw new ScreenError('invalid_argument', 'click({selector, ...}) takes its options inside that object; nothing was sent.', true);
+        return call('click', target);
+      }
       options = __only('click options', options, ['button', 'count', 'send', 'timeoutMs', 'action']);
       if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
         throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);

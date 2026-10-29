@@ -683,6 +683,8 @@ it.live(
           () => tab.type('hi', '#name', { submit: true }),
           () => screen.openTab({ url: 'http://127.0.0.1:1/', reuse: true }),
           () => tab.press('Enter', { sned: true }),
+          () => tab.click({ selector: '#cv' }, { count: 2 }),
+          () => tab.click({ selector: '#cv', clickCount: 2 }),
         ])
           try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent, error.message]); }
         screen.state.refused = refused;
@@ -699,7 +701,7 @@ it.live(
           ? (result.success.value as Array<[string, boolean, string]>)
           : [];
       expect(refused.map(([code, nothingSent]) => [code, nothingSent])).toEqual(
-        Array.from({ length: 8 }, () => ["invalid_argument", true]),
+        Array.from({ length: 10 }, () => ["invalid_argument", true]),
       );
       expect(refused[0]?.[2]).toContain("did you mean count?");
       expect(refused[2]?.[2]).toContain("did you mean timeoutMs?");

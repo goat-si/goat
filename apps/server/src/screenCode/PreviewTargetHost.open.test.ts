@@ -3,6 +3,7 @@ import {
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationControlInterruptedError,
+  PreviewAutomationTabNotFoundError,
   PreviewTabId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -31,11 +32,22 @@ const refused = () =>
   });
 
 /** A browser whose open leaves an error-page tab, closed by a close it accepts or refuses. */
-const refusingBrowser = (close: "accept" | "refuse" | "ignore", failure = refused()) => {
+const refusingBrowser = (
+  close: "accept" | "refuse" | "ignore",
+  failure = refused(),
+  options: { readonly unlisted?: boolean } = {},
+) => {
   const state = { tabs: [errorPage], operations: [] as string[] };
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
-    listBoundTabs: () => Effect.succeed(state.tabs),
+    // A tab whose status the list could not read is left out of it while it stays live.
+    listBoundTabs: () => Effect.succeed(options.unlisted ? [] : state.tabs),
     invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "status")
+        return state.tabs.length > 0
+          ? Effect.succeed({ tabId: errorPage.tabId } as A)
+          : Effect.fail(
+              new PreviewAutomationTabNotFoundError({ ...actionErrorContext, operation: "status" }),
+            );
       state.operations.push(request.operation);
       if (request.operation === "open") return Effect.fail(failure);
       if (request.operation === "close" && close === "refuse")
@@ -86,6 +98,19 @@ it.effect.each(["refuse", "ignore"] as const)(
       expect(result.nextStep).toContain('tabId: "refused"');
       expect(state.tabs).toHaveLength(1);
     }),
+);
+
+it.effect("an error-page tab the list left out is not reported closed while it stays live", () =>
+  Effect.gen(function* () {
+    const { state, broker } = refusingBrowser("ignore", refused(), { unlisted: true });
+    const host = yield* makePreviewTargetHost(broker);
+    const result = yield* host
+      .dispatch(call("open_tab", 1, { url: "http://127.0.0.1:4719/" }), context)
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({ code: "downstream_failure", effectStarted: true });
+    expect(result.message).toContain("refused is still open");
+    expect(state.operations).toEqual(["open", "close"]);
+  }),
 );
 
 it.effect("an open failure that names no tab stays an unknown outcome", () =>

@@ -269,14 +269,17 @@ it("hovers the first of several rows a CSS class names, and a click there still 
   fixture(async (page) => {
     await page.setContent(
       "<style>.row .act{visibility:hidden}.row:hover .act{visibility:visible}</style>" +
-        '<div class="row">Row A <button class="act" onclick="window.hit = this.parentNode.textContent">Archive</button></div>' +
+        '<div class="row">Row A <button class="act" onclick="window.hit = 1">Archive</button></div>' +
         '<div class="row">Row B <button class="act">Archive</button></div>',
     );
     await ServerBrowserPage.hover(page, { selector: ".row" });
     expect(await page.locator(".act").first().isVisible()).toBe(true);
-    await expect(
-      ServerBrowserPage.click(page, { selector: ".row", timeoutMs: 1_000 }),
-    ).rejects.toMatchObject({
+    // The browser request turns Playwright's strict refusal into the error the agent reads.
+    const refused = await ServerBrowserPage.click(page, {
+      selector: ".row",
+      timeoutMs: 1_000,
+    }).catch((cause: unknown) => cause);
+    expect(ServerBrowserPage.toOperationError(refused)).toMatchObject({
       tag: "PreviewAutomationInvalidSelectorError",
       detail: { matchCount: 2 },
     });
@@ -287,12 +290,13 @@ it("refuses a selector it cannot parse before the pointer moves", () =>
   fixture(async (page) => {
     await page.setContent('<div class="row">Row A</div>');
     const moves: Array<string> = [];
-    await expect(
-      ServerBrowserPage.hover(
-        page,
-        { selector: "div[" },
-        async (_point, phase) => void moves.push(phase),
-      ),
-    ).rejects.toMatchObject({ tag: "PreviewAutomationInvalidSelectorError" });
+    const refused = await ServerBrowserPage.hover(
+      page,
+      { selector: "div[" },
+      async (_point, phase) => void moves.push(phase),
+    ).catch((cause: unknown) => cause);
+    expect(ServerBrowserPage.toOperationError(refused)).toMatchObject({
+      tag: "PreviewAutomationInvalidSelectorError",
+    });
     expect(moves).toEqual([]);
   }));

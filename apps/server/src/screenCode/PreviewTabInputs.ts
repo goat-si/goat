@@ -88,6 +88,8 @@ export const pointerInput = (
 ): { readonly fields: Record<string, unknown> } | { readonly error: ScreenRunError } => {
   if (target === undefined)
     return { error: fail("invalid_argument", "Use a current element or image point.") };
+  if (arg.clickCount !== undefined)
+    return { error: fail("invalid_argument", "A tab click's count is count, not clickCount.") };
   const count = method === "hover" ? undefined : arg.count;
   if (count !== undefined && !(Number.isInteger(count) && Number(count) >= 1 && Number(count) <= 3))
     return { error: fail("invalid_argument", "A tab click count is 1, 2 or 3.") };

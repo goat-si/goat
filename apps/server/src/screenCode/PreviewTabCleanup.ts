@@ -129,8 +129,26 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
         })
         .pipe(Effect.ignore);
     }
-    const after = yield* input.list;
-    const gone = Option.isSome(after) && !after.value.some((entry) => entry.tabId === input.tabId);
+    if (!tab)
+      yield* input.broker
+        .invoke({ scope: input.invocation, operation: "close", input: {}, tabId: input.tabId })
+        .pipe(Effect.ignore);
+    // The list leaves out a tab whose status it could not read, so only the browser saying it
+    // has no such tab counts as closed.
+    const gone = yield* input.broker
+      .invoke<PreviewAutomationStatus>({
+        scope: input.invocation,
+        operation: "status",
+        input: {},
+        tabId: input.tabId,
+        updateCurrentTab: false,
+      })
+      .pipe(
+        Effect.match({
+          onFailure: (error) => error._tag === "PreviewAutomationTabNotFoundError",
+          onSuccess: (status) => status.tabId !== input.tabId,
+        }),
+      );
     const reason = `Could not connect (${input.loadError})`;
     if (!gone)
       return {

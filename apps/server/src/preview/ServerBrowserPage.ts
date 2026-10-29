@@ -868,9 +868,8 @@ export const hover = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
-  const named = targetLocator(page, input);
   // Hovering only shows things, so a selector naming several rows hovers the first of them.
-  const locator = named !== null && (await named.count()) > 1 ? named.first() : named;
+  const locator = targetLocator(page, input)?.first() ?? null;
   await pointer(await targetPoint(page, locator, input, deadline), "move");
   if (locator === null) {
     remaining(deadline);
