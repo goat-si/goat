@@ -18,7 +18,9 @@ import * as McpHttpServer from "./McpHttpServer.ts";
 import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
-import { ChannelDeliveryId, EnvironmentAuthorizationError } from "@goat/contracts";
+import { ChannelDeliveryId, EnvironmentAuthorizationError, NoteError } from "@goat/contracts";
+import * as Notes from "../notes/NotesService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Fixture from "../orchestration-v2/goat/SessionReceipt.testkit.ts";
@@ -339,4 +341,59 @@ it.effect("restart settlement to ambiguous wakes a waiting write without reservi
     expect((yield* Fiber.join(pending))._tag).toBe("Success");
     expect(yield* sql`SELECT * FROM mcp_request_reservations`).toHaveLength(0);
   }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
+  "the served MCP layer holds a session write until its receipt settles, then runs it once",
+  () => {
+    let writes = 0;
+    const call = Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      return yield* server
+        .callTool({
+          name: "goat_note_write",
+          arguments: { path: "receipt.md", body: "held", baseRevision: null },
+        })
+        .pipe(
+          Effect.provideService(McpSchema.McpServerClient, mcpClient),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, sessionScope()),
+        );
+    });
+    return Effect.gen(function* () {
+      yield* Fixture.seed;
+      const held = yield* call.pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      expect((yield* Fiber.join(held)).isError).toBe(true);
+      expect(writes).toBe(0);
+      yield* Fixture.settle;
+      yield* call;
+      expect(writes).toBe(1);
+    }).pipe(
+      Effect.provide(
+        // Only what McpHttpServer.layer provides: the test supplies no receipt gate.
+        McpHttpServer.provideAdmission(McpHttpServer.catalogRegistrations.note).pipe(
+          Layer.provide(
+            Layer.mock(Notes.NotesService)({
+              write: () =>
+                Effect.suspend(() => {
+                  writes += 1;
+                  return Effect.fail(new NoteError({ reason: "exists", message: "counted" }));
+                }),
+            }),
+          ),
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provideMerge(
+            Layer.mergeAll(
+              ChannelLedger.layer,
+              Layer.mock(ThreadManagement.ThreadManagementService)({
+                getThreadShell: (id) =>
+                  Effect.succeed(liveThreadShell(id, { activeRunId: Fixture.runId })),
+              }),
+            ).pipe(Layer.provideMerge(Fixture.layer)),
+          ),
+        ),
+      ),
+    );
+  },
 );

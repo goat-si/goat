@@ -28,6 +28,7 @@ import { McpSchema } from "effect/ai";
 
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
 import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -435,6 +436,8 @@ const makeGrants = (
  */
 export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = PROCESS_BOOT_ID) {
   const permissions = yield* Profiles.PermissionProfiles;
+  // Admission runs on the request fiber, so the receipt gate is captured where tools register.
+  const receipts = yield* Effect.serviceOption(ChannelSessionReceiptGate.ChannelSessionReceiptGate);
   // goatclaw itself reads these settings; a role launch's profile cannot resolve without them.
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
@@ -648,6 +651,14 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
     handle: (payload: unknown) => Effect.Effect<Outcome, E, R>,
   ) =>
     McpToolAccess.requireDeclaredCapability(permissions, tool, effect, payload).pipe(
+      (check) =>
+        Option.isSome(receipts)
+          ? Effect.provideService(
+              check,
+              ChannelSessionReceiptGate.ChannelSessionReceiptGate,
+              receipts.value,
+            )
+          : check,
       Effect.matchEffect({
         onFailure: (refused) => Effect.succeed<Outcome>(refusalResult(refused)),
         onSuccess: () => admitted(tool, payload, handle),
