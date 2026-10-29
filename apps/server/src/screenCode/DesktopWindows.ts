@@ -444,7 +444,7 @@ const sameApp = (a: string | undefined, b: string | undefined) =>
  * Marks rows another thread uses: its processes, and every row of an app id it names. A row whose
  * app id is unknown while a holder names one might be that app, so the answer is partial.
  */
-export const markHeldRows = (
+const markHeldRows = (
   rows: ReadonlyArray<unknown>,
   holders: ReadonlyArray<AppHolder>,
   appOf: (row: Record<string, unknown>) => string | undefined,

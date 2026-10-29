@@ -58,7 +58,7 @@ const ANSWER_RESERVE_MS = 500;
 const MIN_POINTER_MS = 250;
 
 /** How long a tab click or hover may wait for its target: 5 s unless asked, never past the cell. */
-export const pointerTimeout = (
+const pointerTimeout = (
   requested: unknown,
   deadlineMillis: number,
   now: number,
