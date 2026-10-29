@@ -20,6 +20,7 @@ import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 import * as LogRedaction from "./LogRedaction.ts";
 import * as Metrics from "./Metrics.ts";
 import { keepLocalSqlSpan } from "./tracePolicy.ts";
+import * as HeapAttribution from "./HeapAttribution.ts";
 
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
@@ -85,8 +86,11 @@ export const layer = Layer.unwrap(
               : keepLocalSqlSpan,
         });
 
+        const heapAttribution = yield* HeapAttribution.make(tracer);
+        yield* heapAttribution.run;
+
         return Layer.mergeAll(
-          Layer.succeed(Tracer.Tracer, tracer),
+          Layer.succeed(Tracer.Tracer, heapAttribution.tracer),
           BrowserTraceCollector.layer(sink),
         );
       }),
