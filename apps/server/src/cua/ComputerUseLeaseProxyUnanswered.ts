@@ -1,4 +1,4 @@
-import { driverBoolArg, driverCallCapMs, driverIntegerArg } from "./ComputerUseCallCaps.ts";
+import { driverCallCapMs } from "./ComputerUseCallCaps.ts";
 /**
  * A server call its driver leaves unanswered past the call's deadline: the server already failed
  * it and later calls would queue behind the stuck child, so the child is replaced. The cut-off
@@ -12,6 +12,7 @@ import type * as Scope from "effect/Scope";
 import type * as Semaphore from "effect/Semaphore";
 
 import { type Interruption, targetClosedInterruption } from "./ComputerUseLeaseMessages.ts";
+import { driverBoolArg, driverIntegerArg } from "./ComputerUseCallCaps.ts";
 
 /** Lets a reply already on its way land before the child is judged stuck. */
 const UNANSWERED_GRACE_MS = 1_000;

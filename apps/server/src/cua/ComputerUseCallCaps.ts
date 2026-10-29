@@ -8,8 +8,10 @@ const CAP_MS: Readonly<Record<string, number>> = {
   list_apps: 2_000,
   list_windows: 2_000,
   click: 3_000,
+  double_click: 3_000,
   right_click: 3_000,
   press_key: 3_000,
+  hotkey: 3_000,
   set_value: 3_000,
   bring_to_front: 3_000,
   drag: 3_000,
@@ -66,8 +68,16 @@ export const driverCallCapMs = (tool: string, args: unknown): number => {
     const raw = driverIntegerArg(given.timeout_ms);
     return (raw ?? 0) + 2_000;
   }
-  if (tool === "type_text")
-    return 4_000 + 40 * (typeof given.text === "string" ? [...given.text].length : 0);
+  if (tool === "drag") {
+    const raw = driverIntegerArg(given.duration_ms);
+    const dur = raw !== undefined ? Math.min(10_000, raw) : 500;
+    return Math.max(3_000, dur + 2_500);
+  }
+  if (tool === "type_text" || tool === "type_text_chars") {
+    const rawDelay = driverIntegerArg(given.delay_ms);
+    const perChar = rawDelay !== undefined ? Math.min(200, Math.max(8, rawDelay)) + 24 : 40;
+    return 4_000 + perChar * (typeof given.text === "string" ? [...given.text].length : 0);
+  }
   return CAP_MS[tool] ?? DEFAULT_CAP_MS;
 };
 
