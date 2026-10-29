@@ -86,26 +86,37 @@ export async function runJourney(
       );
   };
 
-  /** Screenshot and check the settled screen, and record it as a step. */
+  /**
+   * Records a step's snapshot checks at once, before any device I/O or video analysis can fail:
+   * a pool failure must not erase what the app showed, or the attempt reads as clean and its
+   * retry replaces the evidence. The returned function adds later results, such as the
+   * screenshot once it exists.
+   */
+  const record = (step: StepResult) => {
+    const index = steps.length;
+    let current = step;
+    steps.push(current);
+    return (change: Partial<StepResult>) => {
+      current = { ...current, ...change, checks: [...current.checks, ...(change.checks ?? [])] };
+      steps[index] = current;
+    };
+  };
+
+  /** Check the settled screen, record it as a step, and screenshot it. */
   const capture = async (
     name: string,
     snapshot: Snapshot,
     expectations: ReadonlyArray<Check> = [],
     extra: Partial<StepResult> = {},
   ) => {
-    // Record what was seen before any device I/O: a pool failure in the screenshot must not
-    // erase it, or the attempt reads as clean and its retry replaces the evidence.
-    const index = steps.length;
-    const step = {
+    const screenshot = NodePath.join(directory, `${steps.length + 1}-${name}.png`);
+    const amend = record({
       name,
       checks: [...layoutChecks(snapshot, BUNDLE_ID), ...expectations],
       ...extra,
-    };
-    steps.push(step);
-    const screenshot = NodePath.join(directory, `${index + 1}-${name}.png`);
+    });
     await device.screenshot(screenshot);
-    steps[index] = { ...step, screenshot };
-    return steps[index];
+    amend({ screenshot });
   };
 
   // The app ignores the pairing link until its JS has loaded and shown the workspace. An
@@ -185,24 +196,9 @@ export async function runJourney(
     "the thread screen",
   );
   const threadShot = NodePath.join(directory, `${steps.length + 1}-thread.png`);
-  await device.screenshot(threadShot);
-  const openLag = bottomTabs
-    ? await lagCheck(
-        "no tabs over the entering thread (video)",
-        {
-          video: opening,
-          nav: topBand(threads),
-          chrome: bottomTabs,
-          viewportWidth: threads.viewport.width,
-        },
-        NodePath.join(directory, "open-thread-lag.png"),
-      )
-    : null;
-  steps.push({
+  const amendThread = record({
     name: "thread",
-    screenshot: threadShot,
     video: opening,
-    ...(openLag?.frame ? { lagFrame: openLag.frame } : {}),
     checks: [
       ...layoutChecks(thread, BUNDLE_ID),
       check(
@@ -220,9 +216,26 @@ export async function runJourney(
             ),
           ]
         : []),
-      ...(openLag ? [openLag.check] : []),
     ],
   });
+  await device.screenshot(threadShot);
+  amendThread({ screenshot: threadShot });
+  if (bottomTabs) {
+    const openLag = await lagCheck(
+      "no tabs over the entering thread (video)",
+      {
+        video: opening,
+        nav: topBand(threads),
+        chrome: bottomTabs,
+        viewportWidth: threads.viewport.width,
+      },
+      NodePath.join(directory, "open-thread-lag.png"),
+    );
+    amendThread({
+      checks: [openLag.check],
+      ...(openLag.frame ? { lagFrame: openLag.frame } : {}),
+    });
+  }
 
   await device.agent(["scroll", "up"]).catch(() => undefined);
   await delay(800);
@@ -262,30 +275,32 @@ export async function runJourney(
       "the thread list",
     );
     const listShot = NodePath.join(directory, `${steps.length + 1}-back.png`);
-    await device.screenshot(listShot);
-    const backLag = bottomTabs
-      ? await lagCheck(
-          "tabs return with the list (video)",
-          {
-            video: back,
-            nav: topBand(list),
-            chrome: bottomTabs,
-            viewportWidth: list.viewport.width,
-          },
-          NodePath.join(directory, "back-lag.png"),
-        )
-      : null;
-    steps.push({
+    const amendBack = record({
       name: "back",
-      screenshot: listShot,
       video: back,
-      ...(backLag?.frame ? { lagFrame: backLag.frame } : {}),
       checks: [
         ...layoutChecks(list, BUNDLE_ID),
         check("tab bar back", inside(tabBarRect(list), list), describeRect(tabBarRect(list))),
-        ...(backLag ? [backLag.check] : []),
       ],
     });
+    await device.screenshot(listShot);
+    amendBack({ screenshot: listShot });
+    if (bottomTabs) {
+      const backLag = await lagCheck(
+        "tabs return with the list (video)",
+        {
+          video: back,
+          nav: topBand(list),
+          chrome: bottomTabs,
+          viewportWidth: list.viewport.width,
+        },
+        NodePath.join(directory, "back-lag.png"),
+      );
+      amendBack({
+        checks: [backLag.check],
+        ...(backLag.frame ? { lagFrame: backLag.frame } : {}),
+      });
+    }
   }
 
   // The labelled tab is not always the hittable node; agent-device resolves the press.

@@ -200,3 +200,102 @@ it("an error dialog seen before the pool fails its screenshot stays recorded", a
   ]);
   expect(steps[0]?.screenshot).toBeUndefined();
 });
+
+/** A phone screen with the fixture thread row, optionally a tab bar, composer and back button. */
+const phoneScreen = (options: { tabs?: Rect; thread?: boolean; back?: boolean }): Snapshot => ({
+  viewport: { width: 400, height: 800 },
+  nodes: [
+    { index: 0, label: "New thread", kind: "text", rect: { x: 60, y: 60, width: 300, height: 30 } },
+    {
+      index: 1,
+      label: "Make remote coding feel local",
+      ref: "row",
+      kind: "text",
+      rect: { x: 60, y: 100, width: 300, height: 40 },
+    },
+    ...(options.tabs ? [{ index: 2, kind: "tab-bar", rect: options.tabs }] : []),
+    ...(options.thread
+      ? [
+          {
+            index: 3,
+            kind: "text-field",
+            ref: "composer",
+            rect: { x: 60, y: 650, width: 300, height: 40 },
+          },
+        ]
+      : []),
+    ...(options.back
+      ? [
+          {
+            index: 4,
+            identifier: "BackButton",
+            ref: "back",
+            kind: "button",
+            rect: { x: 60, y: 20, width: 50, height: 40 },
+          },
+        ]
+      : []),
+  ],
+});
+
+/** Walks a phone journey whose screenshot named `failing` is lost to the pool. */
+const poolLosesScreenshot = async (waits: Snapshot[], current: Snapshot, failing: string) => {
+  const device = {
+    pose: { form: "phone", platform: "ios" },
+    agent: async () => {},
+    openUrl: async () => {},
+    screenshot: async (path: string) => {
+      if (path.endsWith(failing))
+        throw new AgentDeviceError("agent-device screenshot: Daemon connection closed");
+    },
+    snapshot: async () => current,
+    orient: async () => waits[0],
+    recorded: async (_directory: string, _name: string, action: () => Promise<unknown>) => {
+      await action();
+      return "fixture.mp4";
+    },
+    waitFor: async () => {
+      const value = waits.shift();
+      if (!value) throw new Error("Unexpected device wait");
+      return value;
+    },
+  } as unknown as Device;
+  const steps: StepResult[] = [];
+  const error = await runJourney(device, "/tmp/journey-fixture", async () => "", steps)
+    .then(() => undefined)
+    .catch((failure: unknown) => failure);
+  return { error, steps };
+};
+
+it("a thread screen failure seen before the pool fails its screenshot stays recorded", async () => {
+  const list = phoneScreen({ tabs: bottom });
+  const thread = phoneScreen({ thread: true });
+
+  const { error, steps } = await poolLosesScreenshot([list, list, thread], thread, "-thread.png");
+
+  expect(error instanceof Error && poolError(error.message)).toBe(true);
+  const step = steps.find((item) => item.name === "thread");
+  expect(step?.checks.filter((item) => !item.pass).map((item) => item.name)).toEqual([
+    "back button visible",
+  ]);
+  expect(step?.screenshot).toBeUndefined();
+});
+
+it("a back screen failure seen before the pool fails its screenshot stays recorded", async () => {
+  const list = phoneScreen({ tabs: bottom });
+  const thread = phoneScreen({ thread: true, back: true });
+  const backList = phoneScreen({});
+
+  const { error, steps } = await poolLosesScreenshot(
+    [list, list, thread, backList],
+    thread,
+    "-back.png",
+  );
+
+  expect(error instanceof Error && poolError(error.message)).toBe(true);
+  const step = steps.find((item) => item.name === "back");
+  expect(step?.checks.filter((item) => !item.pass).map((item) => item.name)).toEqual([
+    "tab bar back",
+  ]);
+  expect(step?.screenshot).toBeUndefined();
+});
