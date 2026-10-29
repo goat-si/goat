@@ -1242,6 +1242,29 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
   ).pipe(Effect.provide(layer)),
 );
 
+it.effect("a tab the desktop does not draw is server rendered, so the desktop streams it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* ServerBrowser.ServerBrowser;
+      const manager = yield* Manager.PreviewManager;
+      const { threadId } = scope.thread;
+      yield* Effect.yieldNow;
+      const fallback = yield* manager.open({ threadId, runtime: "server" });
+      yield* browser.attachViewer(viewerInput(fallback.tabId, false));
+      desktopRendersNext = true;
+      const drawn = yield* manager.open({ threadId, runtime: "server" });
+      yield* browser.attachViewer(viewerInput(drawn.tabId, false));
+      const { sessions } = yield* manager.list({ threadId });
+      const serverRenderedOf = (tabId: string) =>
+        sessions.find((session) => session.tabId === tabId)?.serverRendered;
+
+      expect(serverRenderedOf(fallback.tabId)).toBe(true);
+      expect(serverRenderedOf(drawn.tabId)).toBeUndefined();
+      expect(desktopConnections).toHaveLength(1);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live("a tab opened to a file the browser cannot show reports the file to download", () =>
   Effect.scoped(
     Effect.gen(function* () {

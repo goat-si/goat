@@ -49,6 +49,10 @@ export class PreviewManager extends Context.Service<
     readonly reportStatus: (
       input: PreviewReportStatusInput & { readonly serverControlled?: boolean },
     ) => Effect.Effect<void, PreviewError>;
+    /** Records that the server renders an open tab itself. It stays so until it closes. */
+    readonly markServerRendered: (
+      input: PreviewCloseInput & { readonly tabId: string },
+    ) => Effect.Effect<void, PreviewError>;
     readonly requestReveal: (
       input: PreviewCloseInput & { readonly tabId: string; readonly force: boolean },
     ) => Effect.Effect<void, PreviewError>;
@@ -310,6 +314,35 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     );
   });
 
+  const markServerRendered: PreviewManager["Service"]["markServerRendered"] = Effect.fn(
+    "PreviewManager.markServerRendered",
+  )(function* (input) {
+    return yield* mutateExistingSession(
+      input.threadId,
+      input.tabId,
+      Effect.fn("PreviewManager.markSessionServerRendered")(function* (session) {
+        if (session.snapshot.serverRendered)
+          return { next: session, emit: null, result: undefined };
+        const snapshot: PreviewSessionSnapshot = {
+          ...session.snapshot,
+          serverRendered: true,
+          updatedAt: yield* currentIsoTimestamp,
+        };
+        return {
+          next: { ...session, snapshot },
+          emit: {
+            type: "resized",
+            threadId: session.threadId,
+            tabId: session.tabId,
+            createdAt: snapshot.updatedAt,
+            snapshot,
+          },
+          result: undefined,
+        };
+      }),
+    );
+  });
+
   const resize: PreviewManager["Service"]["resize"] = Effect.fn("PreviewManager.resize")(
     function* (input) {
       return yield* mutateExistingSession(
@@ -472,6 +505,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     requestReveal,
     navigate,
     reportStatus,
+    markServerRendered,
     resize,
     adjust,
     refresh,

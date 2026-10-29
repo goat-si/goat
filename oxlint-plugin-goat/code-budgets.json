@@ -394,7 +394,7 @@
   "apps/server/src/persistence/reconcileGoatMigrationIds.ts": { "nonNull": 1 },
   "apps/server/src/preview/PortScanner.ts": { "nonNull": 1 },
   "apps/server/src/preview/PreviewBrowserHost.ts": { "nonNull": 1 },
-  "apps/server/src/preview/ServerBrowser.test.ts": { "lines": 1726 },
+  "apps/server/src/preview/ServerBrowser.test.ts": { "lines": 1749 },
   "apps/server/src/preview/ServerBrowser.ts": { "lines": 2568, "nonNull": 6 },
   "apps/server/src/preview/ServerBrowserDiagnostics.ts": { "nonNull": 3 },
   "apps/server/src/preview/ServerBrowserPage.ts": { "lines": 1236, "nonNull": 6 },
