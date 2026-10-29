@@ -33,6 +33,7 @@ import {
   closeFinishedUpdateRun,
   collectServerUpdateTargets,
   collectUpdateEverythingResult,
+  countUpdateTab,
   runWhenIdle,
   type SkippedMachine,
   type SshRuntimeUpdateTarget,
@@ -209,6 +210,9 @@ export function useUpdateEverything(
             version: localUpdateVersion,
             channel: localChannel,
           },
+    localMachines: machines
+      .filter((machine) => machine.hostedByThisApp)
+      .map(({ environmentId, label }) => ({ environmentId, label })),
     servers: servers.map((server) => ({ ...server, fromVersion: versionOf(server.environmentId) })),
     sshRuntimes,
     skipped,
@@ -234,6 +238,7 @@ export function useUpdateEverything(
       ids.has(`ssh-runtime:${runtime.environmentId}`),
     );
     const includesLocal = ids.has("local");
+    // oxlint-disable-next-line react/purity -- This callback runs when the user confirms the update.
     const startedAt = Date.now();
     const localVersion = includesLocal && local.installLocal ? localUpdateVersion : null;
     setUpdateEverythingRun(() => ({
@@ -436,7 +441,7 @@ export function useUpdateEverything(
     hasUpdates: remoteCount > 0 || providerMachines.length > 0,
     /** Which kinds of remote work are behind, so the button can name them. */
     remote: { providers: providerMachines.length > 0, servers: remoteCount > 0 },
-    counts: { app: appTab.rows.length, runtimes: providerMachines.length },
+    counts: { app: countUpdateTab(appTab), runtimes: providerMachines.length },
     appTab,
     providerMachines,
     localEnvironmentId,

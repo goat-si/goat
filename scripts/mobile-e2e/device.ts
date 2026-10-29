@@ -67,6 +67,13 @@ export class AgentDeviceError extends Error {}
 const TRANSIENT =
   /Remote daemon is unavailable|not connected to the gateway|still finishing a previous command|Invalid daemon response|Daemon request timed out|no worker connected/i;
 
+/** Failures that say the pool could not serve the pose, not that the app misbehaved. */
+export const poolError = (message: string) =>
+  TRANSIENT.test(message) ||
+  /Daemon connection closed|Failed to read daemon response|WORKER_UNREACHABLE|xcrun timed out|refused by simlock|is not available on this simlock/i.test(
+    message,
+  );
+
 export class Device {
   readonly pose: Pose;
   readonly session: string;
@@ -208,11 +215,26 @@ export class Device {
 
   async waitFor(predicate: (snapshot: Snapshot) => boolean, label: string, timeoutMs = 60_000) {
     const deadline = Date.now() + timeoutMs;
+    // When the last read failed, the timeout is that failure's, so the pool can be told apart.
+    let failure: unknown;
     while (Date.now() < deadline) {
-      const snapshot = await this.snapshot().catch(() => null);
+      const snapshot = await this.snapshot().then(
+        (value) => {
+          failure = undefined;
+          return value;
+        },
+        (error: unknown) => {
+          failure = error;
+          return null;
+        },
+      );
       if (snapshot && predicate(snapshot)) return snapshot;
       await delay(750);
     }
+    if (failure instanceof Error)
+      throw new AgentDeviceError(`timed out waiting for ${label}: ${failure.message}`, {
+        cause: failure,
+      });
     throw new Error(`timed out waiting for ${label}`);
   }
 

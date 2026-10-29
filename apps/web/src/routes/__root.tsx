@@ -22,6 +22,7 @@ import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
+import { DevReplayHost } from "../components/DevReplayHost";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { KeybindingsConfigWarning } from "../components/KeybindingsConfigWarning";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
@@ -169,6 +170,8 @@ function RootRouteBranch() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  // A sync IPC read; the setting only changes across a relaunch.
+  const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
   // Once true, stays true: a visit to /welcome means the bootstrap already chose a route.
   const [returningFromWelcome, setReturningFromWelcome] = useState(pathname === "/welcome");
   if (pathname === "/welcome" && !returningFromWelcome) setReturningFromWelcome(true);
@@ -204,6 +207,11 @@ function RootRouteBranch() {
         <EnvironmentThemeSync />
         <DesktopWindowMaterialSync />
         <LiquidGlassBackdrop />
+        {/* A pair link opened during setup must still reach its confirmation. */}
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopWebLinkCoordinator />
+        ) : null}
+        <ConfirmDialogHost />
         <CustomSnoozeDialogHost />
         <GuestShareDialogHost />
         <CommandPalette>
@@ -246,7 +254,9 @@ function RootRouteBranch() {
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <HubNodesImportCoordinator /> : null}
-        {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopWebLinkCoordinator />
+        ) : null}
         {isElectron ? <DesktopTrayNewThread /> : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
         {hasCloudPublicConfig() ? <RelayClientInstallDialog /> : null}
@@ -262,6 +272,7 @@ function RootRouteBranch() {
         {isElectron ? <ConnectionCatalogUnreadableToast /> : null}
         <ProjectCloneToastCoordinator />
         <AddProjectToMachineDialogHost />
+        {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
         <HostedStaticEnvironmentBootstrap />
         {primaryEnvironmentAuthenticated ? (
           <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />

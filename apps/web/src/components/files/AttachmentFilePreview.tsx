@@ -29,7 +29,7 @@ import { MediaVideoPlayer } from "~/components/media/MediaVideoPlayer";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { toastManager } from "~/components/ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
+import { useClientSettings } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 
 import { BinaryFilePreview } from "./BinaryFilePreview";
@@ -62,7 +62,7 @@ const SourcePreview = lazy(() => import("./ReadOnlySourcePreview"));
 
 const STALE_URL_MS = 5 * 60_000;
 
-export function ReadOnlySourcePreview(props: { name: string; text: string }) {
+export function ReadOnlySourcePreview(props: { name: string; text: string; wordWrap?: boolean }) {
   return (
     <Suspense fallback={<FileSurfaceLoading className="p-4" />}>
       <SourcePreview {...props} />
@@ -218,7 +218,9 @@ export function AttachmentFilePreview(props: {
     return () => controller.abort();
   }, [url, needsText, streamsText, revision, props.sizeBytes, props.file, refresh]);
   const failure = error ?? (needsText ? contentError : null);
-  const wordWrap = useClientSettings((settings) => settings.wordWrap);
+  const defaultWordWrap = useClientSettings((settings) => settings.wordWrap);
+  const [wordWrapOverride, setWordWrapOverride] = useState<boolean | null>(null);
+  const wordWrap = wordWrapOverride ?? defaultWordWrap;
   const showsRawText =
     failure === null &&
     needsText &&
@@ -286,6 +288,7 @@ export function AttachmentFilePreview(props: {
         onRetry={() => setRevision((value) => value + 1)}
         delimiter={rendered ? delimiter : null}
         copyContents={copyContents}
+        wordWrap={wordWrap}
       />
     </Suspense>
   ) : !url || (needsText && !content) ? (
@@ -306,7 +309,7 @@ export function AttachmentFilePreview(props: {
         />
       </ScrollArea>
     ) : (
-      <ReadOnlySourcePreview name={props.name} text={content.text} />
+      <ReadOnlySourcePreview name={props.name} text={content.text} wordWrap={wordWrap} />
     )
   ) : kind === "archive" || kind === "sqlite" ? (
     <BinaryFilePreview
@@ -396,7 +399,7 @@ export function AttachmentFilePreview(props: {
           <FileSurfaceAction
             label={wordWrap ? "Disable word wrap" : "Enable word wrap"}
             pressed={wordWrap}
-            onPress={() => updateClientSettings({ wordWrap: !wordWrap })}
+            onPress={() => setWordWrapOverride(!wordWrap)}
           >
             <WrapTextIcon className="size-3.5" />
           </FileSurfaceAction>

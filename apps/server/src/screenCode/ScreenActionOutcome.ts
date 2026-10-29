@@ -10,6 +10,7 @@ import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 const reads = new Set<ScreenHostCall["method"]>([
   "list_apps",
   "list_windows",
+  "list_menu_bar_extras",
   "list_tabs",
   "bind_app",
   "select_tab",

@@ -28,6 +28,7 @@ import { type DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { getUploadedAttachments, useAttachmentUploadStore } from "../../lib/attachmentUploadQueue";
 import { settleThreadContextsForAgent } from "../../lib/threadContextRoute";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import {
   buildPendingUserInputAnswers,
   carryDisplacedCustomAnswerIntoPrompt,
@@ -135,6 +136,7 @@ export function usePendingThreadRequests(input: {
     composerRef,
     setThreadError,
   } = input;
+  const verifiedThreadHosts = useThreadContextHosts(environmentId);
   const respondToThreadApproval = useOrchestrationCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -327,6 +329,7 @@ export function usePendingThreadRequests(input: {
           agentEnvironmentId: environmentId,
           entries,
           isDesktopRenderer: window.desktopBridge !== undefined,
+          verifiedHosts: verifiedThreadHosts,
         });
         const strandedThread = threadContextsOutsideEnvironment({
           text: answer,

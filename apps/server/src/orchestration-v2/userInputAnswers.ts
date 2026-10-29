@@ -8,10 +8,14 @@
  *
  * @module userInputAnswers
  */
-import type { OrchestrationV2UserInputQuestion } from "@goat/contracts";
+import { TrimmedNonEmptyString, type OrchestrationV2UserInputQuestion } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 
 type UserInputOption = OrchestrationV2UserInputQuestion["options"][number];
 export type UserInputAnswer = string | ReadonlyArray<string>;
+const isMessageAnswer = Schema.is(
+  Schema.Union([TrimmedNonEmptyString, Schema.NonEmptyArray(TrimmedNonEmptyString)]),
+);
 
 const optionValue = (option: UserInputOption) => option.value ?? option.label;
 const loose = (text: string) => text.normalize("NFC").trim().toLocaleLowerCase();
@@ -62,7 +66,7 @@ export function canonicalUserInputAnswers(
 }
 
 /** An answer as an agent reads it back: option labels, comma-joined for several picks. */
-export function userInputAnswerText(
+function userInputAnswerText(
   question: Pick<OrchestrationV2UserInputQuestion, "options" | "allowCustomAnswer">,
   answer: UserInputAnswer | undefined,
 ): string {
@@ -71,4 +75,28 @@ export function userInputAnswerText(
     .map((value) => (matchUserInputOption(question, value)?.label ?? value).trim())
     .filter((text) => text.length > 0)
     .join(", ");
+}
+
+export function messageQuestionReplies(
+  questions: ReadonlyArray<OrchestrationV2UserInputQuestion>,
+  answers: Readonly<Record<string, unknown>> | undefined,
+): { replies: string[]; error?: string } {
+  const questionIds = new Set(questions.map((question) => question.id));
+  if (
+    !Object.entries(answers ?? {}).every(
+      ([id, answer]) => questionIds.has(id) || isMessageAnswer(answer),
+    )
+  ) {
+    return { replies: [], error: "Answer each question before sending." };
+  }
+  const replies: string[] = [];
+  for (const question of questions) {
+    const answer = answers?.[question.id];
+    if (!isMessageAnswer(answer)) {
+      if (question.required === false) continue;
+      return { replies: [], error: "Answer each question before sending." };
+    }
+    replies.push(`${question.question}\n${userInputAnswerText(question, answer)}`);
+  }
+  return replies.length === 0 ? { replies, error: "Enter an answer before sending." } : { replies };
 }

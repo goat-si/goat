@@ -1,4 +1,13 @@
-import type { ThreadPullRequestLink } from "@goat/contracts";
+import type {
+  ComposerContextClipboardFragment,
+  ScopedThreadRef,
+  ThreadPullRequestLink,
+} from "@goat/contracts";
+import {
+  formatComposerContextReference,
+  sanitizeComposerContextLabel,
+  toKindScopedComposerContextId,
+} from "@goat/shared/composerContextReferences";
 
 import { resolveThreadCurrentPullRequestLink } from "./threadPullRequests.ts";
 
@@ -8,6 +17,30 @@ export interface ThreadReferenceCopyTarget {
   readonly clipboardTarget: string;
   readonly successTitle: string;
   readonly failureTitle: string;
+  readonly fragment?: ComposerContextClipboardFragment;
+}
+
+export function threadChipCopyTarget(
+  ref: ScopedThreadRef,
+  title: string,
+): ThreadReferenceCopyTarget {
+  const label = sanitizeComposerContextLabel(title, "thread");
+  const record = {
+    version: 1 as const,
+    kind: "thread" as const,
+    contextId: toKindScopedComposerContextId("thread", ref.threadId),
+    label,
+    title: label,
+    ...ref,
+  };
+  return {
+    kind: "thread",
+    value: formatComposerContextReference(record),
+    fragment: { version: 1, source: { environmentId: ref.environmentId }, records: [record] },
+    clipboardTarget: "thread",
+    successTitle: "Thread copied",
+    failureTitle: "Failed to copy thread",
+  };
 }
 
 export function resolveThreadReferenceCopyTarget(input: {

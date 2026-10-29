@@ -311,6 +311,18 @@ describe("threadContextsOutsideEnvironment", () => {
     expect(
       threadContextsOutsideEnvironment({ ...input, hostRoutingEnvironmentId: environmentId }),
     ).toEqual([]);
+    expect(
+      threadContextsOutsideEnvironment({
+        ...input,
+        verifiedHosts: new Map([[record.environmentId, "build-box"]]),
+      }),
+    ).toEqual([]);
+    expect(
+      threadContextsOutsideEnvironment({
+        ...input,
+        verifiedHosts: new Map([[record.environmentId, "other"]]),
+      }),
+    ).toEqual([record]);
     for (const hostRoutingEnvironmentId of [undefined, record.environmentId]) {
       expect(threadContextsOutsideEnvironment({ ...input, hostRoutingEnvironmentId })).toEqual([
         record,

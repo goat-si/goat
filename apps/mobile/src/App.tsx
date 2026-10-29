@@ -31,7 +31,12 @@ import { subscribeComposerDraftModelReconciliation } from "./state/use-composer-
 import { environmentThreadShells } from "./state/threads";
 import { environmentShell } from "./state/shell";
 import { OverlayPortalHost } from "./components/ui/OverlayPortal";
-import { shouldHandleAppLink, restoreDraftLinkState } from "./lib/appLinking";
+import {
+  shouldHandleAppLink,
+  restoreDraftLinkState,
+  withoutPairingTarget,
+  pairingFormLinkAction,
+} from "./lib/appLinking";
 import { APP_SCHEMES } from "@goat/shared/mobileAppIdentity";
 import { hasCloudPublicConfig } from "./features/cloud/publicConfig";
 import { takeScheduledTaskNewLink } from "./features/settings/scheduled-task-editor-state";
@@ -78,11 +83,15 @@ const appLinking = {
   ): ReturnType<typeof getActionFromState> =>
     // Our router handles the selection; React Navigation's type only lists its own actions.
     (workspaceDetailLinkAction(state) as ReturnType<typeof getActionFromState>) ??
+    pairingFormLinkAction(
+      state,
+      navigationRef.isReady() ? navigationRef.getRootState() : undefined,
+    ) ??
     getActionFromState(state, options),
   getStateFromPath: (path: string, options: Parameters<typeof getStateFromPath>[1]) =>
     takeScheduledTaskNewLink(
       restoreSettingsLinkState(
-        restoreDraftLinkState(getStateFromPath(path, options), path),
+        restoreDraftLinkState(withoutPairingTarget(getStateFromPath(path, options)), path),
         settingsLinkPage(),
       ),
     ),

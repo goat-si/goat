@@ -13,10 +13,13 @@
  */
 import {
   AuthEnvironmentScopes,
+  resolveSlackAccess,
   RuntimeMode,
   SlackChannelConnectionId,
   SlackChannelDefaultTarget,
+  SlackChannelScope,
   SlackChannelSettingsError,
+  SlackUserAccess,
   TrimmedNonEmptyString,
   type SlackChannelConfigureInput,
   type SlackChannelSettings as SlackChannelSettingsSnapshot,
@@ -40,6 +43,7 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { isGoatBotHome } from "../ChannelBotHome.ts";
+import { unlinkedIdentity } from "../ChannelGateway.ts";
 import * as SlackChannelSettings from "../SlackChannelSettings.ts";
 import type { ChannelConnectionOwner } from "../ChannelIngressContext.ts";
 import * as SlackChannelRuntime from "./SlackChannelRuntime.ts";
@@ -63,6 +67,10 @@ const StoredConnection = Schema.Struct({
   botTokenSavedAt: Schema.optional(Schema.Number),
   revoked: Schema.optional(Schema.Literals(["bot_revoked", "app_uninstalled"])),
   allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
+  // Absent in files saved before these existed; resolveSlackAccess supplies the defaults.
+  channelScope: Schema.optional(SlackChannelScope),
+  userAccess: Schema.optional(SlackUserAccess),
+  unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
   owner: Schema.optional(StoredOwner),
 });
@@ -192,10 +200,15 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const appToken = yield* readSecret(appTokenSecretName(connection.connectionId));
       const botToken = yield* readSecret(botTokenSecretName(connection.connectionId));
+      const access = resolveSlackAccess(connection);
       return {
         connectionId: connection.connectionId,
         enabled: connection.enabled,
+        channelScope: access.channelScope,
         allowedChannelIds: connection.allowedChannelIds,
+        ...(access.userAccess === "workspace"
+          ? { unlinkedRuntimeModeCeiling: access.unlinkedRuntimeModeCeiling }
+          : {}),
         appToken: Option.getOrUndefined(appToken),
         botToken: Option.getOrUndefined(botToken),
         expectedTeamId: connection.teamId,
@@ -226,6 +239,7 @@ export const make = Effect.gen(function* () {
     runtime.apply({
       connectionId: connection.connectionId,
       enabled: false,
+      channelScope: resolveSlackAccess(connection).channelScope,
       allowedChannelIds: connection.allowedChannelIds,
       appToken: undefined,
       botToken: undefined,
@@ -255,6 +269,7 @@ export const make = Effect.gen(function* () {
         ...(connection.teamId === undefined ? {} : { teamId: connection.teamId }),
         ...(connection.botUserId === undefined ? {} : { botUserId: connection.botUserId }),
         allowedChannelIds: connection.allowedChannelIds,
+        ...resolveSlackAccess(connection),
         ...(connection.defaultTarget === undefined
           ? {}
           : { defaultTarget: connection.defaultTarget }),
@@ -385,6 +400,15 @@ export const make = Effect.gen(function* () {
           input.connectionId === undefined ? undefined : yield* findConnection(input.connectionId);
         const resolvedOwner = owner ?? existing?.owner;
         if (resolvedOwner === undefined) return yield* fail("invalid_input");
+        const storedAccess = resolveSlackAccess(existing ?? { allowedChannelIds: [] });
+        const allowedChannelIds = input.allowedChannelIds ?? existing?.allowedChannelIds ?? [];
+        const channelScope =
+          input.channelScope ??
+          (input.allowedChannelIds === undefined
+            ? storedAccess.channelScope
+            : resolveSlackAccess({ allowedChannelIds }).channelScope);
+        if (channelScope === "listed" && allowedChannelIds.length === 0)
+          return yield* fail("invalid_input");
         const connectionId = existing?.connectionId ?? (yield* newConnectionId);
         let base: StoredConnection = existing ?? {
           connectionId,
@@ -465,7 +489,11 @@ export const make = Effect.gen(function* () {
           ...(identity === undefined
             ? {}
             : { teamId: identity.teamId, botUserId: identity.botUserId }),
-          allowedChannelIds: input.allowedChannelIds ?? base.allowedChannelIds,
+          allowedChannelIds,
+          channelScope,
+          userAccess: input.userAccess ?? storedAccess.userAccess,
+          unlinkedRuntimeModeCeiling:
+            input.unlinkedRuntimeModeCeiling ?? storedAccess.unlinkedRuntimeModeCeiling,
           ...(input.defaultTarget === undefined ? {} : { defaultTarget: input.defaultTarget }),
           owner: resolvedOwner,
         };
@@ -496,6 +524,20 @@ export const make = Effect.gen(function* () {
           connections.find((connection) => connection.connectionId === connectionId)?.defaultTarget,
         ),
       ),
+    unlinkedIdentity: (connectionId, externalActorId) =>
+      Effect.map(Ref.get(state), (current) => {
+        const connection = current.connections.find((c) => c.connectionId === connectionId);
+        if (connection?.owner === undefined) return Option.none();
+        const access = resolveSlackAccess(connection);
+        if (access.userAccess !== "workspace") return Option.none();
+        return Option.some(
+          unlinkedIdentity(connection.owner, {
+            connectionId,
+            externalActorId,
+            runtimeModeCeiling: access.unlinkedRuntimeModeCeiling,
+          }),
+        );
+      }),
   });
 
   /**

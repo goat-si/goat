@@ -130,6 +130,7 @@ type Verb = string | "observe" | null;
 const VERBS: Readonly<Record<ScreenMethod, Verb>> = {
   list_apps: "observe",
   list_windows: "observe",
+  list_menu_bar_extras: "observe",
   bind_app: null,
   get_window_state: "observe",
   get_accessibility_tree: "observe",

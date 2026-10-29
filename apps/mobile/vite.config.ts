@@ -4,7 +4,10 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/components/ui/SplitButton.android.test.tsx",
+  "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
+  "src/features/files/ZipArchiveView.test.tsx",
   "src/lib/clock.test.ts",
   "src/lib/useNotificationPermissionStatus.test.tsx",
   "src/components/VideoPreviewModal.ios.test.tsx",
@@ -53,6 +56,7 @@ const reactTests = [
   "src/features/pull-requests/guide/useReviewGuide.test.tsx",
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
   "src/features/settings/components/BranchNamingSettings.test.tsx",
+  "src/features/settings/components/SettingsDragHandle.test.tsx",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/features/threads/UsageLimitRecoveryCard.test.tsx",
   "src/native/NativeHeaderToolbar.test.tsx",

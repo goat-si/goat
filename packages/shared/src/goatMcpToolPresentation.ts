@@ -328,6 +328,11 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_sign_in_state: tool(
+    ["Read", "Reading", "Read", "the sign-in state"],
+    "browser",
+    "browser",
+  ),
   goat_preview_scroll_collect: tool(
     ["Collect", "Collecting", "Collected", "from the scrolling preview page"],
     "browser",

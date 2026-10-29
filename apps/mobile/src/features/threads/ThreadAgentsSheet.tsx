@@ -1,4 +1,8 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  deriveWorkflowGroups,
+  projectedSubagentsToRuntime,
+} from "@goat/client-runtime/state/subagentRuntime";
 import type { ThreadTurnSubagents } from "@goat/client-runtime/state/thread-subagents";
 import {
   isOrchestrationV2WorkActive,
@@ -11,6 +15,7 @@ import { StackActions, useNavigation, type StaticScreenProps } from "@react-navi
 import * as DateTime from "effect/DateTime";
 import { Atom } from "effect/reactivity";
 import * as Haptics from "expo-haptics";
+import { useMemo } from "react";
 import { Platform, Pressable, ScrollView, View } from "react-native";
 import { ScreenStack } from "react-native-screens";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -22,6 +27,8 @@ import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../n
 import { NativeHeader, NativeScreen } from "../../native/ThemedScreenStack";
 import { SubagentRow } from "./SubagentRow";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
+import { SubagentStopButton } from "./SubagentStopButton";
+import { ThreadWorkflowGroup } from "./ThreadWorkflowGroup";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 
@@ -52,6 +59,16 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
   const turn = useThreadTurnSubagents(target);
   const subagents = turn?.subagents ?? [];
   const hasLiveAgent = (turn?.liveCount ?? 0) > 0;
+  const workflowGroups = useMemo(
+    () =>
+      new Map(
+        deriveWorkflowGroups(projectedSubagentsToRuntime(subagents)).map((group) => [
+          group.workflow.id,
+          group,
+        ]),
+      ),
+    [subagents],
+  );
 
   const openChildThread = (childThreadId: ThreadId) => {
     void Haptics.selectionAsync();
@@ -86,15 +103,27 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
           No agents in this turn.
         </Text>
       ) : (
-        subagents.map((subagent) => (
-          <AgentRow
-            key={subagent.id}
-            subagent={subagent}
-            environmentId={target.environmentId}
-            tickSeconds={hasLiveAgent}
-            onOpen={openChildThread}
-          />
-        ))
+        subagents.map((subagent) => {
+          const group = workflowGroups.get(subagent.id);
+          return group === undefined ? (
+            <View key={subagent.id} className="border-b border-border">
+              <AgentRow
+                subagent={subagent}
+                environmentId={target.environmentId}
+                tickSeconds={hasLiveAgent}
+                onOpen={openChildThread}
+              />
+            </View>
+          ) : (
+            <ThreadWorkflowGroup
+              key={subagent.id}
+              environmentId={target.environmentId}
+              subagent={subagent}
+              group={group}
+              onOpen={openChildThread}
+            />
+          );
+        })
       )}
     </ScrollView>
   );
@@ -149,7 +178,7 @@ function AgentRow(props: {
   const childThreadId = subagent.childThreadId;
 
   const row = (
-    <View className="border-b border-border py-3.5">
+    <View className="py-3.5">
       <SubagentRow
         environmentId={props.environmentId}
         subagent={subagent}
@@ -158,26 +187,31 @@ function AgentRow(props: {
     </View>
   );
 
-  if (childThreadId === null) {
-    return (
+  const content =
+    childThreadId === null ? (
       <View
         accessible
+        className="min-w-0 flex-1"
         accessibilityHint="Provider-managed agent. Its work appears in the transcript."
       >
         {row}
       </View>
+    ) : (
+      <Pressable
+        accessibilityRole="link"
+        accessibilityHint="Opens this agent's thread"
+        onPress={() => props.onOpen(childThreadId)}
+        className="min-w-0 flex-1 active:opacity-70"
+      >
+        {row}
+      </Pressable>
     );
-  }
 
   return (
-    <Pressable
-      accessibilityRole="link"
-      accessibilityHint="Opens this agent's thread"
-      onPress={() => props.onOpen(childThreadId)}
-      className="active:opacity-70"
-    >
-      {row}
-    </Pressable>
+    <View className="flex-row items-center">
+      {content}
+      <SubagentStopButton environmentId={props.environmentId} subagent={subagent} />
+    </View>
   );
 }
 

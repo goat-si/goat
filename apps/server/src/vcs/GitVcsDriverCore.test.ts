@@ -45,6 +45,15 @@ import * as GitVcsDriver from "./GitVcsDriver.ts";
 import { defaultCheckoutWorkers } from "./worktreeCheckout.ts";
 import { gitConfigEnv } from "./VcsProcess.ts";
 import {
+  makeFailedHandle,
+  makeNonRepositoryHandle,
+  makeSuccessfulHandle,
+  parallelWorktreeRegression,
+  pushLockRegression,
+  remoteLockRegression,
+  trackingWorktreeLockRegression,
+} from "./testing/configLockRegression.ts";
+import {
   layerServerConfig,
   layerTest,
   makeTmpDir,
@@ -112,43 +121,6 @@ describe("worktreeListLinesToFields", () => {
 const encodeGitCommandError = Schema.encodeEffect(Schema.fromJsonString(GitCommandError));
 const decodeVcsRef = Schema.decodeUnknownSync(VcsRef);
 const decodeVcsListRefsResult = Schema.decodeUnknownSync(VcsListRefsResult);
-
-const makeNonRepositoryHandle = () =>
-  ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(128)),
-    isRunning: Effect.succeed(false),
-    kill: () => Effect.void,
-    unref: Effect.succeed(Effect.void),
-    stdin: Sink.drain,
-    stdout: Stream.empty,
-    stderr: Stream.encodeText(Stream.make("fatal: not a git repository")),
-    all: Stream.empty,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-  });
-
-const makeSuccessfulHandle = (stdout: string) =>
-  ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
-    isRunning: Effect.succeed(false),
-    kill: () => Effect.void,
-    unref: Effect.succeed(Effect.void),
-    stdin: Sink.drain,
-    stdout: Stream.encodeText(Stream.make(stdout)),
-    stderr: Stream.empty,
-    all: Stream.empty,
-    getInputFd: () => Sink.drain,
-    getOutputFd: () => Stream.empty,
-  });
-
-const makeFailedHandle = (stderr: string) =>
-  ChildProcessSpawner.makeHandle({
-    ...makeNonRepositoryHandle(),
-    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
-    stderr: Stream.encodeText(Stream.make(stderr)),
-  });
 
 describe("Git output collection", () => {
   // Git writes in arbitrary chunk sizes; one byte per chunk splits every
@@ -3913,6 +3885,23 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect(
+      "creates a tracking worktree after another process releases the config lock",
+      () => trackingWorktreeLockRegression,
+    );
+    it.effect(
+      "adds a remote after another process releases the config lock",
+      () => remoteLockRegression,
+    );
+    it.effect(
+      "parallel worktrees retain tracking and comparison bases",
+      () => parallelWorktreeRegression,
+    );
+    it.effect(
+      "reports a pushed branch whose upstream config stays locked",
+      () => pushLockRegression,
+    );
+
     it.effect("still creates the worktree when the base-ref config is locked", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -3923,13 +3912,15 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         yield* writeTextFile(cwd, ".git/config.lock", "");
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
-        const created = yield* driver.createWorktree({
-          cwd,
-          path: worktreePath,
-          refName: initialBranch,
-          newRefName: "feature/locked-config",
-          baseRefName: initialBranch,
-        });
+        const created = yield* TestClock.withLive(
+          driver.createWorktree({
+            cwd,
+            path: worktreePath,
+            refName: initialBranch,
+            newRefName: "feature/locked-config",
+            baseRefName: initialBranch,
+          }),
+        );
 
         assert.deepEqual(created.worktree, {
           path: worktreePath,

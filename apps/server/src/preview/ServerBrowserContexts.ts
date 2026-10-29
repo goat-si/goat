@@ -2,6 +2,7 @@
 import * as HostProcess from "@goat/shared/HostProcess";
 import { INCOGNITO_BROWSER_PROFILE_ID, type PreviewSessionStore } from "@goat/contracts";
 import { constVoid } from "effect/Function";
+import * as NodeAsyncHooks from "node:async_hooks";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
@@ -122,7 +123,9 @@ export class ServerBrowserContexts {
   private readonly options: Options;
   private readonly contexts = new Map<string, Promise<BrowserContext>>();
   private readonly clearing = new Map<string, Promise<void>>();
+  private readonly queuedClears = new Map<string, Promise<void>>();
   private readonly profileTurns = new Map<string, Promise<void>>();
+  private readonly profileTurnScope = new NodeAsyncHooks.AsyncLocalStorage<ReadonlySet<string>>();
   private pinDrafts = 0;
   private browser: Promise<Browser> | undefined;
   private closing: Promise<void> | undefined;
@@ -182,9 +185,19 @@ export class ServerBrowserContexts {
     return this.browser;
   }
 
-  contextFor(profileId: string, isolationKey?: string): Promise<BrowserContext> {
+  async contextFor(profileId: string, isolationKey?: string): Promise<BrowserContext> {
     if (this.closing) return Promise.reject(new Error("The preview browser is closed."));
     const key = JSON.stringify([profileId, isolationKey ?? null]);
+    // A running profile turn must not wait for a clear queued behind itself.
+    if (!this.profileTurnScope.getStore()?.has(profileId)) {
+      for (;;) {
+        const queued = this.queuedClears.get(key);
+        const running = this.clearing.get(key);
+        if (!queued && !running) break;
+        await Promise.all([queued, running].map((pending) => pending?.catch(constVoid)));
+      }
+    }
+    if (this.closing) throw new Error("The preview browser is closed.");
     const cached = this.contexts.get(key);
     if (cached) return cached;
     const cleared = this.clearing.get(key)?.catch(constVoid) ?? Promise.resolve();
@@ -289,7 +302,14 @@ export class ServerBrowserContexts {
 
   async clearProfile(profileId: string) {
     if (profileId === INCOGNITO_BROWSER_PROFILE_ID) return;
-    await this.withProfile(profileId, () => this.clearUnlocked(profileId));
+    const key = JSON.stringify([profileId, null]);
+    const pending = this.withProfile(profileId, () => this.clearUnlocked(profileId));
+    this.queuedClears.set(key, pending);
+    try {
+      await pending;
+    } finally {
+      if (this.queuedClears.get(key) === pending) this.queuedClears.delete(key);
+    }
   }
 
   /**
@@ -297,7 +317,16 @@ export class ServerBrowserContexts {
    * and two opens of one profile pin the same store.
    */
   withProfile<A>(profileId: string, run: () => Promise<A>): Promise<A> {
-    const result = (this.profileTurns.get(profileId) ?? Promise.resolve()).then(run);
+    const result = (this.profileTurns.get(profileId) ?? Promise.resolve()).then(() => {
+      const scope = new Set([...(this.profileTurnScope.getStore() ?? []), profileId]);
+      return this.profileTurnScope.run(scope, async () => {
+        try {
+          return await run();
+        } finally {
+          scope.clear();
+        }
+      });
+    });
     const settled = result.then(constVoid, constVoid);
     this.profileTurns.set(profileId, settled);
     void settled.then(() => {

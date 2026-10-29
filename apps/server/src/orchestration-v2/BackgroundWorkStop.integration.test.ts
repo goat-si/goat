@@ -20,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -30,11 +29,14 @@ import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
+import { makeBackgroundStopAdapter } from "./BackgroundWorkStop.adapter.testkit.ts";
+
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
 
 const stopEarlierBackgroundWork = ({
+  wakeAfterStop = false,
   failedStart = false,
   stopWithQueue,
   olderStart = false,
@@ -42,6 +44,7 @@ const stopEarlierBackgroundWork = ({
   stalledRun,
   workflowMember = false,
 }: {
+  readonly wakeAfterStop?: boolean;
   readonly failedStart?: boolean;
   readonly backgroundWorkAfterStop?: "running" | "unknown";
   readonly stopWithQueue?: "thread.stop" | "run.interrupt";
@@ -55,101 +58,14 @@ const stopEarlierBackgroundWork = ({
       const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
       const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
       const interrupts: ProviderAdapter.ProviderAdapterV2InterruptInput[] = [];
-      const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
-        instanceId,
-        driver,
-        getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-        planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-        openSession: (input) =>
-          Effect.gen(function* () {
-            const now = yield* DateTime.now;
-            return {
-              instanceId,
-              driver,
-              providerSessionId: input.providerSessionId,
-              providerSession: {
-                id: input.providerSessionId,
-                driver,
-                providerInstanceId: instanceId,
-                status: "ready",
-                cwd,
-                model: modelSelection.model,
-                capabilities: CodexProviderCapabilitiesV2,
-                createdAt: now,
-                updatedAt: now,
-                lastError: null,
-              },
-              events: Stream.fromQueue(events),
-              ...(failedStart
-                ? {
-                    hasPendingBackgroundWorkForThread: (providerThread) =>
-                      Effect.gen(function* () {
-                        if (
-                          !interrupts.some((input) => input.providerThread.id === providerThread.id)
-                        ) {
-                          return false;
-                        }
-                        if (backgroundWorkAfterStop === "unknown") {
-                          return yield* Effect.die("Background work probe failed");
-                        }
-                        return backgroundWorkAfterStop === "running";
-                      }),
-                  }
-                : {}),
-              ensureThread: ({ threadId }) =>
-                Effect.succeed({
-                  id: ProviderThreadId.make(`provider-thread:codex:${threadId}`),
-                  driver,
-                  providerInstanceId: instanceId,
-                  providerSessionId: input.providerSessionId,
-                  appThreadId: threadId,
-                  ownerNodeId: null,
-                  nativeThreadRef: { driver, nativeId: "native-thread", strength: "strong" },
-                  nativeConversationHeadRef: null,
-                  status: "idle",
-                  firstRunOrdinal: null,
-                  lastRunOrdinal: null,
-                  handoffIds: [],
-                  forkedFrom: null,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
-              startTurn: (turn) =>
-                Effect.gen(function* () {
-                  started.push(turn);
-                  yield* Queue.offer(events, {
-                    type: "provider_turn.updated",
-                    driver,
-                    providerTurn: {
-                      id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
-                      providerThreadId: turn.providerThread.id,
-                      nodeId: turn.rootNodeId,
-                      runAttemptId: turn.attemptId,
-                      nativeTurnRef: {
-                        driver,
-                        nativeId: `native:${turn.attemptId}`,
-                        strength: "strong",
-                      },
-                      ordinal: turn.providerTurnOrdinal,
-                      status: "running",
-                      startedAt: now,
-                      completedAt: null,
-                    },
-                  });
-                }),
-              steerTurn: () => Effect.die("unused"),
-              interruptTurn: (interrupt) =>
-                Effect.sync(() => {
-                  interrupts.push(interrupt);
-                }),
-              respondToRuntimeRequest: () => Effect.die("unused"),
-              readThreadSnapshot: () => Effect.die("unused"),
-              rollbackThread: () => Effect.die("unused"),
-              forkThread: () => Effect.die("unused"),
-            };
-          }),
-      };
+      const adapter = makeBackgroundStopAdapter({
+        cwd,
+        events,
+        started,
+        interrupts,
+        failedStart,
+        backgroundWorkAfterStop,
+      });
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
@@ -198,6 +114,46 @@ const stopEarlierBackgroundWork = ({
         });
         yield* worker.drain();
         yield* Fiber.join(running);
+        if (wakeAfterStop) {
+          const send = (id: string, provider = false) =>
+            orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make(id),
+              threadId,
+              messageId: MessageId.make(`message:${id}`),
+              text: id,
+              attachments: [],
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: provider ? "agent" : "user",
+              creationSource: provider ? "provider" : "web",
+            });
+          yield* send("follow-up");
+          yield* orchestrator.dispatch({
+            type: "thread.stop",
+            commandId: CommandId.make("stop"),
+            threadId,
+          });
+          // Stop is committed, but its provider interrupt has not run yet.
+          yield* send("Background task completed.", true);
+          const [stopped, followUp, wake] = (yield* orchestrator.getThreadProjection(threadId))
+            .runs;
+          assert.equal(stopped?.status, "running");
+          assert.isTrue(followUp?.queueHeld);
+          assert.isTrue(wake?.queueHeld);
+
+          yield* worker.drain();
+          yield* orchestrator.resumeQueuedRuns;
+          yield* worker.drain();
+          const after = yield* orchestrator.getThreadProjection(threadId);
+          assert.deepEqual(
+            after.runs.map((run) => run.status),
+            ["interrupted", "queued", "queued"],
+          );
+          assert.isTrue(after.runs.find((run) => run.id === followUp?.id)?.queueHeld);
+          assert.isTrue(after.runs.find((run) => run.id === wake?.id)?.queueHeld);
+          assert.lengthOf(started, 1);
+          return;
+        }
         const first = started[0]!;
         const codexTurn = (yield* orchestrator.getThreadProjection(threadId)).providerTurns[0]!;
         const devServerId = TurnItemId.make("turn-item:dev-server");
@@ -1024,4 +980,8 @@ it.effect.each(["thread.stop", "run.interrupt"] as const)(
 it.effect.each(["missing-session-terminal", "returned-interrupt", "superseded-attempt"] as const)(
   "Stop recovers a stalled run after %s without changing a newer attempt",
   (stalledRun) => stopEarlierBackgroundWork({ stalledRun }),
+);
+
+it.effect("Stop holds a provider wake that queues before the stopped turn ends", () =>
+  stopEarlierBackgroundWork({ wakeAfterStop: true }),
 );

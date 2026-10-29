@@ -77,6 +77,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ServerConfig from "../config.ts";
@@ -98,6 +99,7 @@ import { createTerminalSpawnEnv } from "./spawnEnvironment.ts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { withThreadMcpEnvironment } from "@goat/provider-core/server/mcpSession";
 import { ThreadId } from "@goat/contracts";
+import { terminalOutputStream } from "./OutputProtocol.ts";
 
 export {
   TerminalCwdError,
@@ -176,11 +178,26 @@ export class TerminalManager extends Context.Service<
       input: TerminalOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
 
+    /**
+     * Attached viewers share one PTY sized to the smallest of them, so a narrow client
+     * still sees the whole TUI. Streams and resizes with the same `viewerId` (one client
+     * connection) count as one viewer; streams without one are each their own viewer.
+     */
     readonly attachStream: (
       input: TerminalAttachInput,
       listener: (event: TerminalAttachStreamEvent) => Effect.Effect<void>,
       registerCleanup?: (stop: () => void) => void,
+      viewerId?: string,
     ) => Effect.Effect<() => void, TerminalError>;
+
+    /**
+     * The `terminal.attach` RPC stream. Overflow recovery swaps the inner subscription, so
+     * `viewerId` and the size it reported stay attached until the whole stream ends.
+     */
+    readonly attachOutputStream: (
+      input: TerminalAttachInput,
+      viewerId: string,
+    ) => Stream.Stream<TerminalAttachStreamEvent, TerminalError>;
 
     readonly observeStream: (
       input: TerminalObserveInput,
@@ -196,7 +213,10 @@ export class TerminalManager extends Context.Service<
 
     readonly write: (input: TerminalWriteInput) => Effect.Effect<void, TerminalError>;
 
-    readonly resize: (input: TerminalResizeInput) => Effect.Effect<void, TerminalError>;
+    readonly resize: (
+      input: TerminalResizeInput,
+      viewerId?: string,
+    ) => Effect.Effect<void, TerminalError>;
 
     readonly clear: (input: TerminalClearInput) => Effect.Effect<void, TerminalError>;
 
@@ -292,6 +312,17 @@ interface TerminalSessionState extends AgentTerminalSession {
   runtimeEnv: Record<string, string> | null;
 }
 
+interface TerminalGrid {
+  readonly cols: number;
+  readonly rows: number;
+}
+
+/** One client connection attached to a terminal, possibly through several streams. */
+interface TerminalViewer {
+  streams: number;
+  grid: TerminalGrid | null;
+}
+
 interface PersistHistoryRequest {
   history: BoundedTerminalHistory;
   immediate: boolean;
@@ -373,6 +404,8 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     label: terminalWireLabel(session),
     updatedAt: session.updatedAt,
     sequence: session.eventSequence,
+    cols: session.cols,
+    rows: session.rows,
   };
 }
 
@@ -1125,6 +1158,104 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     threadId: string,
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> => threadLocks.withLock(threadId, effect);
+
+  const terminalViewers = new Map<string, Map<string, TerminalViewer>>();
+  let anonymousViewerCount = 0;
+
+  const retainViewer = (sessionKey: string, viewerId: string, grid: TerminalGrid | null) => {
+    let viewers = terminalViewers.get(sessionKey);
+    if (!viewers) {
+      viewers = new Map();
+      terminalViewers.set(sessionKey, viewers);
+    }
+    const viewer = viewers.get(viewerId);
+    if (viewer) {
+      viewer.streams += 1;
+      // After a viewer's first size, resizes own it; attach retries resend the original size.
+      viewer.grid ??= grid;
+    } else {
+      viewers.set(viewerId, { streams: 1, grid });
+    }
+  };
+
+  /** Returns whether the viewer left, which can grow the shared grid. */
+  const releaseViewer = (sessionKey: string, viewerId: string) => {
+    const viewers = terminalViewers.get(sessionKey);
+    const viewer = viewers?.get(viewerId);
+    if (!viewers || !viewer) return false;
+    viewer.streams -= 1;
+    if (viewer.streams > 0) return false;
+    viewers.delete(viewerId);
+    if (viewers.size === 0) terminalViewers.delete(sessionKey);
+    return true;
+  };
+
+  // The smallest attached viewer bounds each axis, so every viewer can draw the whole grid.
+  const sharedViewerGrid = (sessionKey: string): TerminalGrid | null => {
+    let shared: TerminalGrid | null = null;
+    for (const viewer of terminalViewers.get(sessionKey)?.values() ?? []) {
+      if (!viewer.grid) continue;
+      shared = shared
+        ? {
+            cols: Math.min(shared.cols, viewer.grid.cols),
+            rows: Math.min(shared.rows, viewer.grid.rows),
+          }
+        : viewer.grid;
+    }
+    return shared;
+  };
+
+  /** Attached viewers own the size; a caller's own size only applies when none has reported one. */
+  const withSharedGrid = <
+    A extends { readonly cols?: number | undefined; readonly rows?: number | undefined },
+  >(
+    sessionKey: string,
+    input: A,
+  ): A => {
+    const shared = sharedViewerGrid(sessionKey);
+    return shared ? { ...input, cols: shared.cols, rows: shared.rows } : input;
+  };
+
+  // Renderers draw the PTY grid, so every size change reaches them. It rides on activity
+  // because older clients reject unknown event types.
+  const resizeSession = Effect.fnUntraced(function* (
+    session: TerminalSessionState,
+    process: PtyAdapter.PtyProcess,
+    cols: number,
+    rows: number,
+  ) {
+    yield* resizePtyProcess(session, process, cols, rows);
+    session.cols = cols;
+    session.rows = rows;
+    session.updatedAt = yield* nowIso;
+    const eventStamp = advanceEventSequence(session);
+    yield* publishEvent({
+      type: "activity",
+      threadId: session.threadId,
+      terminalId: session.terminalId,
+      sequence: eventStamp.sequence,
+      hasRunningSubprocess: session.hasRunningSubprocess,
+      label: terminalWireLabel(session),
+      cols,
+      rows,
+    });
+  });
+
+  const applySharedGrid = Effect.fnUntraced(function* (threadId: string, terminalId: string) {
+    const session = yield* getSession(threadId, terminalId);
+    if (Option.isNone(session)) return;
+    const process = session.value.process;
+    const shared = sharedViewerGrid(toSessionKey(threadId, terminalId));
+    if (
+      !process ||
+      session.value.status !== "running" ||
+      !shared ||
+      (shared.cols === session.value.cols && shared.rows === session.value.rows)
+    ) {
+      return;
+    }
+    yield* resizeSession(session.value, process, shared.cols, shared.rows);
+  });
 
   const clearKillFiber = Effect.fn("terminal.clearKillFiber")(function* (
     process: PtyAdapter.PtyProcess | null,
@@ -2224,14 +2355,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const openWithWorkspaceLease = Effect.fn("terminal.openLocked")(function* <
     E extends OrchestratorMcpFailure = never,
   >(
-    input: TerminalOpenInput,
+    requestedInput: TerminalOpenInput,
     owner: string | null = null,
     authorize: Effect.Effect<void, E> = Effect.void,
   ): Effect.fn.Return<TerminalSessionState, TerminalError | E> {
-    const terminalId = input.terminalId;
-    yield* assertValidCwd(input.cwd);
+    const terminalId = requestedInput.terminalId;
+    yield* assertValidCwd(requestedInput.cwd);
 
-    const sessionKey = toSessionKey(input.threadId, terminalId);
+    const sessionKey = toSessionKey(requestedInput.threadId, terminalId);
+    const input = withSharedGrid(sessionKey, requestedInput);
     const existing = yield* getSession(input.threadId, terminalId);
     if (Option.isNone(existing)) {
       yield* flushPersist(input.threadId, terminalId);
@@ -2360,10 +2492,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
     if (liveSession.cols !== targetCols || liveSession.rows !== targetRows) {
       yield* authorize;
-      yield* resizePtyProcess(liveSession, liveSession.process, targetCols, targetRows);
-      liveSession.cols = targetCols;
-      liveSession.rows = targetRows;
-      liveSession.updatedAt = yield* nowIso;
+      yield* resizeSession(liveSession, liveSession.process, targetCols, targetRows);
     }
 
     return liveSession;
@@ -2380,8 +2509,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       resolveLaunchInputEnvironment(input).pipe(Effect.flatMap(openLocked)),
     );
 
-  const openOrAttachForStream = Effect.fnUntraced(function* (input: TerminalAttachInput) {
-    const terminalId = input.terminalId;
+  const openOrAttachForStream = Effect.fnUntraced(function* (requestedInput: TerminalAttachInput) {
+    const terminalId = requestedInput.terminalId;
+    const input = withSharedGrid(toSessionKey(requestedInput.threadId, terminalId), requestedInput);
     const existing = yield* getSession(input.threadId, terminalId);
 
     if (Option.isNone(existing)) {
@@ -2421,11 +2551,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       session.status === "running" &&
       (session.cols !== targetCols || session.rows !== targetRows)
     ) {
-      const process = session.process;
-      yield* resizePtyProcess(session, process, targetCols, targetRows);
-      session.cols = targetCols;
-      session.rows = targetRows;
-      session.updatedAt = yield* nowIso;
+      yield* resizeSession(session, session.process, targetCols, targetRows);
     }
 
     return snapshot(session);
@@ -2548,11 +2674,60 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
   };
 
+  /** Retains `viewer` and returns its release, which runs at most once. */
+  const retainViewerOnce = (
+    input: TerminalObserveInput,
+    viewer: string,
+    grid: TerminalGrid | null,
+  ) => {
+    const sessionKey = toSessionKey(input.threadId, input.terminalId);
+    retainViewer(sessionKey, viewer, grid);
+    let retained = true;
+    return () => {
+      if (!retained) return;
+      retained = false;
+      if (releaseViewer(sessionKey, viewer)) {
+        runFork(withThreadLock(input.threadId, applySharedGrid(input.threadId, input.terminalId)));
+      }
+    };
+  };
+
   const attachStream: TerminalManager["Service"]["attachStream"] = (
     input,
     listener,
     registerCleanup,
-  ) => streamSession(input, openOrAttachForStream(input), listener, registerCleanup);
+    viewerId,
+  ) => {
+    const viewer = viewerId ?? `stream:${++anonymousViewerCount}`;
+    let detach = () => {};
+    const initial = Effect.suspend(() => {
+      detach = retainViewerOnce(
+        input,
+        viewer,
+        input.cols !== undefined && input.rows !== undefined
+          ? { cols: input.cols, rows: input.rows }
+          : null,
+      );
+      return openOrAttachForStream(input);
+    });
+    return streamSession(
+      input,
+      initial,
+      listener,
+      registerCleanup &&
+        ((stop) =>
+          registerCleanup(() => {
+            stop();
+            detach();
+          })),
+    ).pipe(
+      Effect.map((stop) => () => {
+        stop();
+        detach();
+      }),
+      Effect.onError(() => Effect.sync(detach)),
+    );
+  };
 
   const observeStream: TerminalManager["Service"]["observeStream"] = (
     input,
@@ -2578,6 +2753,21 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       ),
       listener,
       registerCleanup,
+    );
+
+  const attachOutputStream: TerminalManager["Service"]["attachOutputStream"] = (input, viewerId) =>
+    Stream.unwrap(
+      Effect.acquireRelease(
+        Effect.sync(() => retainViewerOnce(input, viewerId, null)),
+        (release) => Effect.sync(release),
+      ).pipe(
+        Effect.as(
+          terminalOutputStream(
+            (listener, registerCleanup) => attachStream(input, listener, registerCleanup, viewerId),
+            (listener, registerCleanup) => resyncStream(input, listener, registerCleanup),
+          ),
+        ),
+      ),
     );
 
   const metadataEventFromTerminalEvent = (
@@ -2699,23 +2889,36 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const write: TerminalManager["Service"]["write"] = (input) =>
     withThreadLock(input.threadId, writeLocked<never>(input, Effect.void));
 
-  const resizeLocked = Effect.fn("terminal.resize")(function* (input: TerminalResizeInput) {
+  const resizeLocked = Effect.fn("terminal.resize")(function* (
+    input: TerminalResizeInput,
+    viewerId: string | undefined,
+  ) {
+    const sessionKey = toSessionKey(input.threadId, input.terminalId);
+    const viewer =
+      viewerId === undefined ? undefined : terminalViewers.get(sessionKey)?.get(viewerId);
+    if (viewer) {
+      viewer.grid = { cols: input.cols, rows: input.rows };
+      return yield* applySharedGrid(input.threadId, input.terminalId);
+    }
+    // A caller that is not attached cannot override the viewers that are.
+    if (sharedViewerGrid(sessionKey)) return;
     const session = yield* getSession(input.threadId, input.terminalId);
     if (Option.isNone(session)) {
       return;
     }
     const process = session.value.process;
-    if (!process || session.value.status !== "running") {
+    if (
+      !process ||
+      session.value.status !== "running" ||
+      (session.value.cols === input.cols && session.value.rows === input.rows)
+    ) {
       return;
     }
-    yield* resizePtyProcess(session.value, process, input.cols, input.rows);
-    session.value.cols = input.cols;
-    session.value.rows = input.rows;
-    session.value.updatedAt = yield* nowIso;
+    yield* resizeSession(session.value, process, input.cols, input.rows);
   });
 
-  const resize: TerminalManager["Service"]["resize"] = (input) =>
-    withThreadLock(input.threadId, resizeLocked(input));
+  const resize: TerminalManager["Service"]["resize"] = (input, viewerId) =>
+    withThreadLock(input.threadId, resizeLocked(input, viewerId));
 
   const clearLocked = Effect.fn("terminal.clear")(function* <
     E extends OrchestratorMcpFailure = never,
@@ -2980,6 +3183,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     ...agentOperations,
     open,
     attachStream,
+    attachOutputStream,
     observeStream,
     resyncStream,
     write,

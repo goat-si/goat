@@ -362,7 +362,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "word-wrap",
     title: "Word wrap",
     to: "/settings/appearance",
-    searchTerms: ["long lines code blocks tables diffs file previews"],
+    searchTerms: ["long lines code blocks diffs file previews"],
   },
   {
     id: "composer-context",
@@ -386,6 +386,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Snooze until limits reset",
     to: "/settings/general",
     searchTerms: ["usage quota rate limit reset wake recover continue"],
+  },
+  {
+    id: "snooze-options",
+    title: "Snooze options",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["snooze presets times later tonight tomorrow next week remind"],
   },
   {
     id: "auto-resume-limited-threads",

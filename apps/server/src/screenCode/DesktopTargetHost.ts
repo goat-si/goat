@@ -183,7 +183,6 @@ export const createDesktopTargetHost = (deps: {
   readonly primitiveChannel: ComputerUsePrimitiveChannel["Service"];
   readonly leases: ComputerUseLeases["Service"];
   readonly observations?: ScreenObservations;
-  readonly platform?: NodeJS.Platform;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
   readonly cursorGeneration?: (ref: ScreenTargetRef, callKey?: string) => number;
@@ -887,15 +886,22 @@ export const createDesktopTargetHost = (deps: {
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
     call.method === "tab_status" || call.method === "read_page"
       ? Effect.fail(fail("unsupported"))
-      : call.method === "bind_app"
-        ? bindApp(call, context)
-        : call.method === "list_apps" || call.method === "list_windows"
-          ? discover(call, context)
-          : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                call.method,
-              )
-            ? observe(call, context)
-            : invoke(call, context);
+      : call.method === "list_menu_bar_extras"
+        ? Effect.fail(
+            fail(
+              "unsupported",
+              "Menu bar extras are unavailable until the 030 §3.13 driver update is pinned; bind an app window with screen.app() or hand the status item to the person.",
+            ),
+          )
+        : call.method === "bind_app"
+          ? bindApp(call, context)
+          : call.method === "list_apps" || call.method === "list_windows"
+            ? discover(call, context)
+            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
+                  call.method,
+                )
+              ? observe(call, context)
+              : invoke(call, context);
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {

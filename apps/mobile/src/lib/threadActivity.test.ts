@@ -268,7 +268,7 @@ it("binds a persisted resume answer only to the next compaction in its run", () 
     expect(compactRows).toHaveLength(2);
     expect(labels.get(compactRows[0]!.id)).toEqual({
       title: "Context compacted after 2h 10m idle",
-      compacting: "Compacting after 2h 10m idle…",
+      compacting: "Compacting…",
     });
     expect(labels.get(compactRows[1]!.id)).toBeUndefined();
   }
@@ -797,6 +797,21 @@ describe("buildThreadFeed", () => {
       "message",
       "message",
     ]);
+    const anchor = {
+      ...command(),
+      deferredWork: { cursor: "old-work", itemCount: 100, lastOrdinal: 100 },
+    };
+    const deferredFeed = buildThreadFeed([projected(userMessage(), 0), projected(anchor, 1)]);
+    const running = { ...latestRun, status: "running" as const, completedAt: null };
+    const deferredRows = deriveThreadFeedPresentation(deferredFeed, running, new Set());
+    const disclosure = deferredRows.find((entry) => entry.type === "run-fold");
+    expect(disclosure).toMatchObject({ deferredWorkItemIds: [anchor.id], expanded: false });
+    if (disclosure?.type !== "run-fold") throw new Error("Expected deferred work disclosure");
+    expect(
+      deriveThreadFeedPresentation(deferredFeed, running, new Set([disclosure.runId])).some(
+        (entry) => entry.type === "activity-group",
+      ),
+    ).toBe(true);
     expect(expanded[4]).toMatchObject({ message: { id: middle.messageId, text: middle.text } });
 
     const active = deriveThreadFeedPresentation(

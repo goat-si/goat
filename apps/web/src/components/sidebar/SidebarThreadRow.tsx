@@ -1,7 +1,6 @@
 import { ThreadHoverCard, ThreadHoverCardPopup } from "../ThreadHoverCard";
 import { ThreadTerminalStatusButton } from "../ThreadStatusIndicators";
 import { discardComposerDraft } from "../../lib/discardComposerDraft";
-import { requestCustomSnooze } from "../CustomSnoozeDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { useDeadlinePassed } from "~/hooks/useDeadline";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
@@ -32,7 +31,6 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   CircleDotIcon,
-  ClockIcon,
   GitBranchIcon,
   GlobeIcon,
   MessageCircleQuestionIcon,
@@ -110,7 +108,8 @@ import {
   useLinkedThreadPullRequest,
   ThreadSearchPullRequestNumber,
 } from "../ThreadStatusIndicators";
-import { resolveSnoozePresets, type SnoozePreset } from "../Sidebar.snooze";
+import type { SnoozePreset } from "../Sidebar.snooze";
+import { SnoozeMenuButton } from "./SidebarSnoozeMenuButton";
 import { useThreadShell } from "../../state/entities";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { ThreadSearchMatchExcerpt } from "../ThreadSearchMatch";
@@ -120,7 +119,6 @@ import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuShortcut, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { useThreadHasUnsentDraft } from "../../composerDraftStore";
@@ -309,65 +307,6 @@ function SidebarThreadTooltip({
   );
 }
 
-function SnoozeMenuButton(props: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSnooze: (preset: Pick<SnoozePreset, "snoozedUntil">) => void;
-  timestampFormat: TimestampFormat;
-}) {
-  const { open, onOpenChange, onSnooze, timestampFormat } = props;
-  // oxlint-disable-next-line react/purity -- Presets are resolved only while the menu is open, so each opening reads a fresh time.
-  const presets = open ? resolveSnoozePresets(new Date(), timestampFormat) : [];
-  return (
-    <Menu open={open} onOpenChange={onOpenChange}>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <MenuTrigger
-              render={
-                <button
-                  type="button"
-                  aria-label="Snooze thread"
-                  onClick={(event) => event.stopPropagation()}
-                  onDoubleClick={(event) => event.stopPropagation()}
-                  className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md bg-transparent text-muted-foreground hover:text-foreground"
-                />
-              }
-            />
-          }
-        >
-          <ClockIcon className="size-3.5" />
-        </TooltipTrigger>
-        <TooltipPopup>Snooze thread</TooltipPopup>
-      </Tooltip>
-      <MenuPopup side="bottom" align="end">
-        {presets.map((preset) => (
-          <MenuItem
-            key={preset.id}
-            onClick={(event) => {
-              event.stopPropagation();
-              onSnooze(preset);
-            }}
-          >
-            {preset.label}
-            <MenuShortcut>{preset.whenLabel}</MenuShortcut>
-          </MenuItem>
-        ))}
-        <MenuSeparator />
-        <MenuItem
-          onClick={async (event) => {
-            event.stopPropagation();
-            const choice = await requestCustomSnooze();
-            if (choice) onSnooze(choice);
-          }}
-        >
-          Custom…
-        </MenuItem>
-      </MenuPopup>
-    </Menu>
-  );
-}
-
 type SortableThreadRowBag = Pick<
   ReturnType<typeof useSortable>,
   "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
@@ -488,6 +427,7 @@ type SidebarThreadRowProps = {
   ) => void;
   isStoppingOpenSubagent: boolean;
   variant: "card" | "slim";
+  navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
   snoozeSupported: boolean;
@@ -794,6 +734,15 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
   };
   const handleKeyDown = (event: ReactKeyboardEvent) => {
     if (event.target !== event.currentTarget) return;
+    if (
+      event.key === "F2" &&
+      !isRenaming &&
+      readEnvironmentScope(threadRef.environmentId, AuthOrchestrationOperateScope)
+    ) {
+      event.preventDefault();
+      onStartRename(threadRef, thread.title);
+      return;
+    }
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     onThreadActivate(threadRef);
@@ -1101,8 +1050,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             render={
               <div
                 ref={rowRef}
-                role="button"
-                tabIndex={0}
+                role="treeitem"
+                tabIndex={-1}
+                data-sidebar-row={threadKey}
+                data-sidebar-parent={props.navigationParent}
                 aria-label={accessibility.label}
                 aria-current={accessibility.current}
                 data-testid="sidebar-row-slim"
@@ -1270,8 +1221,10 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
           render={
             <div
               ref={rowRef}
-              role="button"
-              tabIndex={0}
+              role="treeitem"
+              tabIndex={-1}
+              data-sidebar-row={threadKey}
+              data-sidebar-parent={props.navigationParent}
               aria-label={accessibility.label}
               aria-current={accessibility.current}
               data-testid="sidebar-row-card"
@@ -1452,6 +1405,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                           onOpenChange={setSnoozeMenuOpen}
                           onSnooze={handleSnoozePreset}
                           timestampFormat={props.timestampFormat}
+                          environmentId={thread.environmentId}
                         />
                       ) : null}
                       {props.settlementSupported ? (

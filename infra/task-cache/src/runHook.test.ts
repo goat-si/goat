@@ -1,28 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off - exercises the real native runner and local HTTP collector.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeDiagnosticsChannel from "node:diagnostics_channel";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
+import startRunHook from "./runHook.ts";
 
 it("uses one machine hook across fresh worktrees without modifying Vite+", async () => {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "task-cache-hook-"));
   const unrelated = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "unrelated-project-"));
   const reports: { authorization: string | undefined; body: string }[] = [];
-  let firstExit!: () => void;
-  const firstExited = new Promise<void>((resolve) => {
-    firstExit = resolve;
-  });
-  let completedReports = 0;
-  let notified: (() => void) | undefined;
-  let firstDisconnected = false;
-  const report = (count: number) =>
-    completedReports >= count
-      ? Promise.resolve()
-      : new Promise<void>((resolve) => {
-          notified = resolve;
-        });
   const server = NodeHttp.createServer(async (request, response) => {
     if (!request.url?.endsWith("/telemetry")) {
       response.writeHead(404).end();
@@ -31,14 +20,7 @@ it("uses one machine hook across fresh worktrees without modifying Vite+", async
     let body = "";
     for await (const chunk of request) body += chunk;
     reports.push({ authorization: request.headers.authorization, body });
-    if (reports.length === 1) {
-      await firstExited;
-      firstDisconnected = response.destroyed;
-    }
     response.writeHead(204).end();
-    completedReports++;
-    notified?.();
-    notified = undefined;
   });
   try {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -110,7 +92,7 @@ it("uses one machine hook across fresh worktrees without modifying Vite+", async
       }),
     );
     const originalEntrypoint = await NodeFSP.readFile(entrypoint, "utf8");
-    const run = (task: string, cwd = root, ci = false, cache = "--cache") =>
+    const run = (task: string, cwd = root, cache = "--cache") =>
       new Promise<number | null>((resolve, reject) => {
         const child = NodeChildProcess.spawn(
           process.execPath,
@@ -120,7 +102,9 @@ it("uses one machine hook across fresh worktrees without modifying Vite+", async
             env: {
               ...process.env,
               HOME: root,
-              GITHUB_ACTIONS: ci ? "true" : undefined,
+              USERPROFILE: root,
+              // Flush inline so no detached flusher can write under root while it is removed.
+              GITHUB_ACTIONS: "true",
               T3_TASK_CACHE_TELEMETRY: undefined,
               T3_TASK_CACHE_HOST: undefined,
               VITE_CACHE_PATH: undefined,
@@ -139,32 +123,30 @@ it("uses one machine hook across fresh worktrees without modifying Vite+", async
         });
         child.once("error", reject);
         child.once("close", (code) => {
-          firstExit();
           if (code !== 0 && task !== "fail") reject(new Error(stderr));
           else resolve(code);
         });
       });
     expect(await run("build")).toBe(0);
-    await report(1);
+    expect(reports).toHaveLength(1);
     expect(await run("--last-details")).toBe(0);
     expect(
       JSON.parse(await NodeFSP.readFile(NodePath.join(root, "environment.json"), "utf8")),
     ).toMatchObject({ url: null });
-    expect(firstDisconnected).toBe(false);
     expect(await run("build")).toBe(0);
-    await report(2);
+    expect(reports).toHaveLength(2);
     expect(await run("fail")).toBe(7);
-    await report(3);
+    expect(reports).toHaveLength(3);
     const secondWorktree = NodePath.join(root, "second-worktree");
     await NodeFSP.mkdir(secondWorktree);
     for (const file of ["package.json", ".task-cache.json", "vite.config.ts", "build.cjs"])
       await NodeFSP.copyFile(NodePath.join(root, file), NodePath.join(secondWorktree, file));
     expect(await run("build", secondWorktree)).toBe(0);
-    await report(4);
-    expect(await run("build", secondWorktree, true)).toBe(0);
-    await report(5);
+    expect(reports).toHaveLength(4);
+    expect(await run("build", secondWorktree)).toBe(0);
+    expect(reports).toHaveLength(5);
     expect(await NodeFSP.readFile(entrypoint, "utf8")).toBe(originalEntrypoint);
-    expect(await run("nested", root, false, "--no-cache")).toBe(0);
+    expect(await run("nested", root, "--no-cache")).toBe(0);
     expect(await run("build", nested)).toBe(0);
     expect(reports).toHaveLength(5);
     expect(
@@ -187,6 +169,85 @@ it("uses one machine hook across fresh worktrees without modifying Vite+", async
   }
 });
 
+it("sends telemetry from a detached flusher that the task runner does not wait for", async () => {
+  const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "task-cache-flusher-"));
+  const reports: string[] = [];
+  let finishReturned!: () => void;
+  const returned = new Promise<void>((resolve) => {
+    finishReturned = resolve;
+  });
+  let disconnected = false;
+  const server = NodeHttp.createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    reports.push(body);
+    await returned;
+    disconnected = response.destroyed;
+    response.writeHead(204).end();
+  });
+  // The hook detaches and unrefs its flusher, so only this channel lets cleanup wait for it.
+  const flushers: Promise<void>[] = [];
+  const onSpawn = (message: unknown) => {
+    const { process: flusher } = message as { process: NodeChildProcess.ChildProcess };
+    flushers.push(new Promise((resolve) => flusher.once("close", () => resolve())));
+  };
+  NodeDiagnosticsChannel.subscribe("child_process", onSpawn);
+  try {
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing HTTP address");
+    const endpoint = `http://127.0.0.1:${address.port}/projects/test`;
+    await NodeFSP.writeFile(NodePath.join(root, ".task-cache.json"), JSON.stringify({ endpoint }));
+    await NodeFSP.mkdir(NodePath.join(root, ".config/t3-task-cache"), { recursive: true });
+    await NodeFSP.writeFile(
+      NodePath.join(root, ".config/t3-task-cache/credentials.json"),
+      JSON.stringify({ [endpoint]: { name: "maria", token: "secret" } }),
+    );
+    // os.homedir() reads USERPROFILE on Windows; both keep the hook away from the real profile.
+    vi.stubEnv("HOME", root);
+    vi.stubEnv("USERPROFILE", root);
+    for (const name of [
+      "GITHUB_ACTIONS",
+      "GITHUB_RUN_ID",
+      "ACTIONS_ID_TOKEN_REQUEST_URL",
+      "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+      "T3_TASK_CACHE_TELEMETRY",
+      "T3_TASK_CACHE_HOST",
+      "VITE_CACHE_PATH",
+      "VP_REMOTE_CACHE",
+      "VP_REMOTE_CACHE_URL",
+      "VP_T3_TASK_CACHE_MODE",
+    ])
+      vi.stubEnv(name, undefined);
+    const finish = startRunHook({ root });
+    const summary = NodePath.join(root, "node_modules/.vite/task-cache/run/last-summary.json");
+    await NodeFSP.mkdir(NodePath.dirname(summary), { recursive: true });
+    await NodeFSP.writeFile(
+      summary,
+      JSON.stringify({
+        tasks: [{ package_name: "fixture", task_name: "build", result: { Spawned: {} } }],
+      }),
+    );
+    await finish?.();
+    finishReturned();
+    await Promise.all(flushers);
+    expect(flushers).toHaveLength(1);
+    expect(reports.map((report) => JSON.parse(report).tasks)).toEqual([
+      [{ package: "fixture", task: "build", source: "executed", savedMs: 0 }],
+    ]);
+    expect(disconnected).toBe(false);
+  } finally {
+    finishReturned();
+    await Promise.all(flushers);
+    NodeDiagnosticsChannel.unsubscribe("child_process", onSpawn);
+    vi.unstubAllEnvs();
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    await NodeFSP.rm(root, { recursive: true, force: true });
+  }
+});
+
 it("rejects invalid setup credentials before installing anything and never prints the token", async () => {
   const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "task-cache-setup-"));
   const token = "private-credential-that-must-not-appear-in-output";
@@ -203,6 +264,7 @@ it("rejects invalid setup credentials before installing anything and never print
           env: {
             ...process.env,
             HOME: home,
+            USERPROFILE: home,
             T3_CACHE_SETUP_URL: `http://127.0.0.1:${address.port}/projects/test`,
             T3_CACHE_SETUP_NAME: "maria",
             T3_CACHE_SETUP_TOKEN: token,
@@ -250,7 +312,7 @@ it("does not start telemetry or create local state without cache credentials", a
         ],
         {
           cwd: root,
-          env: { ...process.env, HOME: root, VP_REMOTE_CACHE_URL: "" },
+          env: { ...process.env, HOME: root, USERPROFILE: root, VP_REMOTE_CACHE_URL: "" },
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
@@ -279,7 +341,7 @@ it("installs without masking .profile and configures CI through bash", async () 
   const run = (args: string[], env: NodeJS.ProcessEnv) =>
     new Promise<string>((resolve, reject) => {
       const child = NodeChildProcess.spawn(args[0]!, args.slice(1), {
-        env: { ...process.env, ...env, HOME: home, NODE_OPTIONS: "" },
+        env: { ...process.env, ...env, HOME: home, USERPROFILE: home, NODE_OPTIONS: "" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let output = "";
@@ -429,6 +491,7 @@ it("does not send an old endpoint's token after changing the URL interactively",
           env: {
             ...process.env,
             HOME: root,
+            USERPROFILE: root,
             NODE_OPTIONS: "",
             T3_CACHE_SETUP_URL: "https://old.example",
             T3_CACHE_SETUP_NAME: "maria",
@@ -479,6 +542,7 @@ it("rejects non-loopback HTTP before transmitting a setup credential", async () 
           env: {
             ...process.env,
             HOME: home,
+            USERPROFILE: home,
             NODE_OPTIONS: "",
             T3_CACHE_SETUP_URL: "http://cache.invalid/projects/test",
             T3_CACHE_SETUP_NAME: "maria",

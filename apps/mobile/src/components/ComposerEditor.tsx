@@ -23,6 +23,7 @@ import {
   useComposerDraft,
 } from "../state/use-composer-drafts";
 import { importComposerContextClipboard } from "../lib/composerContextClipboard";
+import { useThreadContextHosts } from "../lib/useThreadContextHosts";
 import { startComposerDraftOperation } from "../state/composerDraftOperations";
 import { appAtomRegistry } from "../state/atom-registry";
 import { mobilePreferencesAtom } from "../state/preferences";
@@ -56,6 +57,7 @@ export function ComposerEditor({
   ...props
 }: ComposerEditorProps) {
   const draft = useComposerDraft(draftKey ?? null);
+  const verifiedHosts = useThreadContextHosts(environmentId ?? null);
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const preferredEnterBehavior = AsyncResult.isSuccess(preferencesResult)
     ? preferencesResult.value.composerEnterBehavior
@@ -100,6 +102,7 @@ export function ComposerEditor({
         signal,
         retained.context?.records.length ?? 0,
         environmentId,
+        verifiedHosts,
       );
       if (signal.aborted) return;
       if (!result) {

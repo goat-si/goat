@@ -41,4 +41,6 @@ export interface ChannelConnectionOwner {
 
 export interface ChannelIngressContext extends ChannelConnectionOwner {
   readonly caller: ChannelIngressCaller;
+  /** Set when the transport connection lets accounts without a link start work, at this ceiling. */
+  readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
 }
