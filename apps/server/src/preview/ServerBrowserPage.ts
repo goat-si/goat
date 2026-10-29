@@ -92,9 +92,12 @@ export const toOperationError = (
       ...(pointerInterception(message) ? { interceptedBy: pointerInterception(message) } : {}),
     });
   }
-  if (
-    /while parsing selector|Unknown engine|Unexpected token|strict mode violation/i.test(message)
-  ) {
+  const matched = /strict mode violation:.*resolved to (\d+) elements/i.exec(message)?.[1];
+  if (matched !== undefined)
+    return new ServerBrowserOperationError("PreviewAutomationInvalidSelectorError", firstLine, {
+      matchCount: Number(matched),
+    });
+  if (/while parsing selector|Unknown engine|Unexpected token/i.test(message)) {
     return new ServerBrowserOperationError("PreviewAutomationInvalidSelectorError", firstLine);
   }
   if (/not an <input>|not editable|not an editable/i.test(message)) {
@@ -865,7 +868,9 @@ export const hover = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
-  const locator = targetLocator(page, input);
+  const named = targetLocator(page, input);
+  // Hovering only shows things, so a selector naming several rows hovers the first of them.
+  const locator = named !== null && (await named.count()) > 1 ? named.first() : named;
   await pointer(await targetPoint(page, locator, input, deadline), "move");
   if (locator === null) {
     remaining(deadline);

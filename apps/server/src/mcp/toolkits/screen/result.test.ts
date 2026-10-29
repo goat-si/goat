@@ -52,6 +52,8 @@ describe("screen run MCP result", () => {
     "a result carrying the cell API for %o is delivered with its API, summary and image",
     (surfaces) => {
       const api = screenTargetApi(surfaces);
+      // The bundle must fit the result's api field (SCREEN_TARGET_API_MAX_CHARS).
+      expect(api.length).toBeLessThanOrEqual(16 * 1024);
       const result = screenRunMcpResult({
         runId: "run-1",
         turnId: "turn-1",

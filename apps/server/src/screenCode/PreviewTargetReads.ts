@@ -10,8 +10,10 @@ import {
   type ScreenTargetRef,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { buildObserveTiming, withObserveTiming } from "./DesktopObserveLatency.ts";
 import { observationReplyBudget, type ScreenHostContext } from "./ScreenHostBridge.ts";
 import type { ScreenObservations } from "./ScreenObservations.ts";
 
@@ -84,6 +86,9 @@ const scopeIdentity = (arg: Record<string, unknown>): string => {
   return arg.interactiveOnly === true ? `${where} interactive` : where;
 };
 
+// Room the tree leaves for { ms, phases }, so timing fits whenever the tree does.
+const TIMING_RESERVE_BYTES = 160;
+
 export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(function* (input: {
   readonly call: ScreenHostCall;
   readonly context: ScreenHostContext;
@@ -94,9 +99,13 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
   readonly snapshot: PreviewAutomationSnapshot;
   readonly observations: ScreenObservations;
   readonly arg: Record<string, unknown>;
+  /** When the host took the call, and how long the browser's snapshot call took. */
+  readonly startedAt: number;
+  readonly driverMs: number;
 }) {
   const { call, context, targetRef, connectionId, controlGeneration, snapshot, observations, arg } =
     input;
+  const parseAt = yield* Clock.currentTimeMillis;
   const draft = observations.normalizeTabSnapshot({
     targetRef,
     targetGeneration: targetRef.generation,
@@ -107,6 +116,7 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
       : { documentGeneration: input.documentGeneration }),
     snapshot,
   });
+  const renderAt = yield* Clock.currentTimeMillis;
   const mode = arg.mode === "diff" || arg.mode === "query" ? arg.mode : "full";
   const query =
     arg.query && typeof arg.query === "object"
@@ -145,7 +155,12 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
     ? // @effect-diagnostics-next-line preferSchemaOverJson:off -- measures the bytes the reply will carry.
       Buffer.byteLength(JSON.stringify({ image: { ...reserved, omitted: true } }))
     : 0;
-  const observation = yield* Effect.try({
+  const treeBudget = observationReplyBudget(
+    call,
+    context.limits,
+    imageReserve + TIMING_RESERVE_BYTES,
+  );
+  const rendered = yield* Effect.try({
     try: () =>
       observations.renderObservation({
         draft,
@@ -153,7 +168,7 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
         ...(baseObservationId ? { baseObservationId } : {}),
         ...(query ? { query } : {}),
         scope: scopeIdentity(arg),
-        limits: { treeBytes: observationReplyBudget(call, context.limits, imageReserve) },
+        limits: { treeBytes: treeBudget },
       }),
     catch: (cause) =>
       fail(
@@ -164,6 +179,15 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
         "Observe a smaller tab region and retry.",
       ),
   });
+  const renderedAt = yield* Clock.currentTimeMillis;
+  const timing = buildObserveTiming({
+    startedAt: input.startedAt,
+    endedAt: renderedAt,
+    driverMs: input.driverMs,
+    parseMs: renderAt - parseAt,
+    renderMs: renderedAt - renderAt,
+  });
+  const observation = withObserveTiming(rendered, timing, treeBudget + TIMING_RESERVE_BYTES);
   const metadata = imageMetadata(observation.observationId);
   if (!shot || !metadata) {
     return {

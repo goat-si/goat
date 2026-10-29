@@ -252,6 +252,19 @@ const secretFailureOf = (detail: unknown): { readonly secretFailure?: SecretFail
   return isSecretFailure(value) ? { secretFailure: value } : {};
 };
 
+/** The server browser names the tab an open made whose page never connected. */
+const openFailureOf = (detail: unknown) => {
+  if (typeof detail !== "object" || detail === null) return {};
+  const tabId = "openedTabId" in detail ? detail.openedTabId : undefined;
+  const loadError = "loadError" in detail ? detail.loadError : undefined;
+  return typeof tabId === "string" &&
+    tabId.length > 0 &&
+    typeof loadError === "string" &&
+    /^ERR_[A-Z0-9_]{1,76}$/.test(loadError)
+    ? { unloadedTab: { tabId: PreviewTabId.make(tabId), loadError } }
+    : {};
+};
+
 const classifyResponseError = (
   context: PreviewAutomationRequestErrorContext,
   error: NonNullable<PreviewAutomationResponse["error"]>,
@@ -360,10 +373,17 @@ const classifyResponseError = (
         error.detail !== null &&
         "staleRef" in error.detail &&
         error.detail.staleRef === true;
+      const matchCount =
+        typeof error.detail === "object" && error.detail !== null && "matchCount" in error.detail
+          ? error.detail.matchCount
+          : undefined;
       return new PreviewAutomationInvalidSelectorError({
         ...context,
         ...remoteDiagnostics,
         ...(staleRef ? { staleRef } : {}),
+        ...(Number.isSafeInteger(matchCount) && Number(matchCount) >= 2
+          ? { matchCount: Number(matchCount) }
+          : {}),
       });
     }
     case "PreviewAutomationTargetNotEditableError": {
@@ -427,6 +447,7 @@ const classifyResponseError = (
           ? {
               reason: error.message.slice(0, MAX_REASON_CHARS),
               ...secretFailureOf(hostDetail),
+              ...openFailureOf(hostDetail),
             }
           : {}),
       });

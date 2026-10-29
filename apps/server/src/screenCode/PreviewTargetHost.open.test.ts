@@ -1,0 +1,139 @@
+import { expect, it } from "@effect/vitest";
+import {
+  PreviewAutomationExecutionError,
+  PreviewAutomationInvalidSelectorError,
+  PreviewAutomationControlInterruptedError,
+  PreviewTabId,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
+import { actionErrorContext, browserFixture, call, context } from "./PreviewTargetHost.testkit.ts";
+
+const errorPage = {
+  environmentId: "env",
+  browserInstanceId: "server-browser",
+  connectionId: "connection",
+  threadId: "thread",
+  tabId: PreviewTabId.make("refused"),
+  title: "localhost",
+  url: "chrome-error://chromewebdata/",
+  owner: "agent" as const,
+  ownedByCaller: true,
+  controlGeneration: 1,
+};
+const refused = () =>
+  new PreviewAutomationExecutionError({
+    ...actionErrorContext,
+    operation: "open",
+    reason: "The page did not load (ERR_CONNECTION_REFUSED).",
+    unloadedTab: { tabId: errorPage.tabId, loadError: "ERR_CONNECTION_REFUSED" },
+  });
+
+/** A browser whose open leaves an error-page tab, closed by a close it accepts or refuses. */
+const refusingBrowser = (close: "accept" | "refuse" | "ignore", failure = refused()) => {
+  const state = { tabs: [errorPage], operations: [] as string[] };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed(state.tabs),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      state.operations.push(request.operation);
+      if (request.operation === "open") return Effect.fail(failure);
+      if (request.operation === "close" && close === "refuse")
+        return Effect.fail(
+          new PreviewAutomationControlInterruptedError({
+            ...actionErrorContext,
+            operation: "close",
+            reason: "humanControl",
+          }),
+        );
+      if (request.operation === "close" && close === "accept") state.tabs = [];
+      return Effect.succeed({} as A);
+    },
+  };
+  return { state, broker };
+};
+
+it.effect(
+  "an open whose page refused the connection closes the tab it left and fails as a connection failure",
+  () =>
+    Effect.gen(function* () {
+      const { state, broker } = refusingBrowser("accept");
+      const host = yield* makePreviewTargetHost(broker);
+      const result = yield* host
+        .dispatch(call("open_tab", 1, { url: "http://127.0.0.1:4719/" }), context)
+        .pipe(Effect.flip);
+      expect(result).toMatchObject({ code: "downstream_failure", effectStarted: false });
+      expect(result.message).toContain("ERR_CONNECTION_REFUSED");
+      expect(result.message).toContain("closed");
+      expect(state.operations).toEqual(["open", "close"]);
+      expect(state.tabs).toEqual([]);
+      // Nothing of it is left for turn cleanup.
+      expect(yield* host.finishTurn({ runId: "run", turnId: "turn" })).toEqual([]);
+    }),
+);
+
+it.effect.each(["refuse", "ignore"] as const)(
+  "an error-page tab that could not be closed (%s) is named by id and left to turn cleanup",
+  (close) =>
+    Effect.gen(function* () {
+      const { state, broker } = refusingBrowser(close);
+      const host = yield* makePreviewTargetHost(broker);
+      const result = yield* host
+        .dispatch(call("open_tab", 1, { url: "http://127.0.0.1:4719/" }), context)
+        .pipe(Effect.flip);
+      expect(result).toMatchObject({ code: "downstream_failure", effectStarted: true });
+      expect(result.message).toContain("refused is still open");
+      expect(result.nextStep).toContain('tabId: "refused"');
+      expect(state.tabs).toHaveLength(1);
+    }),
+);
+
+it.effect("an open failure that names no tab stays an unknown outcome", () =>
+  Effect.gen(function* () {
+    const failure = new PreviewAutomationExecutionError({
+      ...actionErrorContext,
+      operation: "open",
+    });
+    const { state, broker } = refusingBrowser("accept", failure);
+    const host = yield* makePreviewTargetHost(broker);
+    const result = yield* host
+      .dispatch(call("open_tab", 1, { url: "http://127.0.0.1:4719/" }), context)
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({ code: "unknown_outcome", effectStarted: true });
+    expect(state.operations).toEqual(["open"]);
+  }),
+);
+
+it.effect(
+  "a selector that matched several elements fails unsent as ambiguous, saying how many",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      fixture.state.failure = new PreviewAutomationInvalidSelectorError({
+        ...actionErrorContext,
+        operation: "click",
+        remoteTag: "PreviewAutomationInvalidSelectorError",
+        matchCount: 2,
+      });
+      const reply = yield* fixture.dispatch("click", { selector: ".row" });
+      expect(reply?.error).toMatchObject({ code: "target_ambiguous", effectStarted: false });
+      expect(reply?.error?.message).toContain("matches 2 elements");
+    }),
+);
+
+it.effect("a tab observe carries its host time, with and without a screenshot", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    for (const args of [{}, { screenshot: true }]) {
+      const observed = yield* fixture.observe(args);
+      expect(observed.ms).toBeTypeOf("number");
+      expect(Object.keys(observed.phases ?? {})).toEqual([
+        "driverMs",
+        "parseMs",
+        "renderMs",
+        "bridgeMs",
+      ]);
+    }
+  }),
+);

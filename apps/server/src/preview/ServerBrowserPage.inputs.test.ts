@@ -253,3 +253,46 @@ it("hovers a row so its hover-only button shows", () =>
     await ServerBrowserPage.hover(page, { selector: ".row" });
     expect(await page.locator(".act").isVisible()).toBe(true);
   }));
+
+it("a click with clickCount 2 lands two clicks and one double click, as the cell API's count 2 sends", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      '<canvas id="cv" width="300" height="120"></canvas><script>window.seen = [];' +
+        'cv.addEventListener("click", () => seen.push("click"));' +
+        'cv.addEventListener("dblclick", () => seen.push("dblclick"));</script>',
+    );
+    await ServerBrowserPage.click(page, { selector: "#cv", clickCount: 2 });
+    expect(await page.evaluate("seen")).toEqual(["click", "click", "dblclick"]);
+  }));
+
+it("hovers the first of several rows a CSS class names, and a click there still needs one", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      "<style>.row .act{visibility:hidden}.row:hover .act{visibility:visible}</style>" +
+        '<div class="row">Row A <button class="act" onclick="window.hit = this.parentNode.textContent">Archive</button></div>' +
+        '<div class="row">Row B <button class="act">Archive</button></div>',
+    );
+    await ServerBrowserPage.hover(page, { selector: ".row" });
+    expect(await page.locator(".act").first().isVisible()).toBe(true);
+    await expect(
+      ServerBrowserPage.click(page, { selector: ".row", timeoutMs: 1_000 }),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationInvalidSelectorError",
+      detail: { matchCount: 2 },
+    });
+    expect(await page.evaluate("window.hit")).toBeUndefined();
+  }));
+
+it("refuses a selector it cannot parse before the pointer moves", () =>
+  fixture(async (page) => {
+    await page.setContent('<div class="row">Row A</div>');
+    const moves: Array<string> = [];
+    await expect(
+      ServerBrowserPage.hover(
+        page,
+        { selector: "div[" },
+        async (_point, phase) => void moves.push(phase),
+      ),
+    ).rejects.toMatchObject({ tag: "PreviewAutomationInvalidSelectorError" });
+    expect(moves).toEqual([]);
+  }));

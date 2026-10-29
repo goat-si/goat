@@ -489,7 +489,7 @@ it.live("one cell reads a tab and an app through one Target API", () => {
           ],
         },
         source:
-          "const tab = await screen.tab({mentionId: 'mention'}); const app = await screen.app({appId: 'app'}); const web = await tab.observe(); const desktop = await app.observe(); return [web.indexedText, desktop.text];",
+          "const tab = await screen.tab({mentionId: 'mention'}); const app = await screen.app({bundle_id: 'app', window_id: 1}); const web = await tab.observe(); const desktop = await app.observe(); return [web.indexedText, desktop.text];",
       });
       expect(result.value).toEqual(["- heading Page", "App text"]);
       expect(calls.slice(0, 5)).toEqual([
