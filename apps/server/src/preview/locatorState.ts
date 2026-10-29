@@ -19,9 +19,8 @@ export const stateConditions = (input: StateInput): ReadonlyArray<string> =>
 
 /**
  * Whether the one element a strict locator names holds every condition at once, with the wait's
- * visibility, page text and URL: all are read in one page task, so conditions that only hold at
- * different moments never match. A missing, mixed or indeterminate checked or selected state
- * matches neither true nor false.
+ * visibility (and page text and URL when it is in the main frame), read in one page task. A
+ * missing, mixed or indeterminate checked or selected state matches neither true nor false.
  */
 export const matchesState = async (locator: Locator, input: StateInput, budgetMs: number) => {
   const read = await locator
@@ -41,9 +40,13 @@ export const matchesState = async (locator: Locator, input: StateInput, budgetMs
           getBoundingClientRect(): { readonly width: number; readonly height: number };
         };
         const view = globalThis as unknown as {
-          getComputedStyle(node: unknown): { readonly visibility: string };
+          getComputedStyle(node: unknown): {
+            readonly visibility: string;
+            readonly display: string;
+          };
           readonly location: { readonly href: string };
           readonly document: { readonly body: { readonly innerText: string } | null };
+          readonly top: unknown;
         };
         const node = element as unknown as Node;
         const aria = (name: string) => {
@@ -59,17 +62,28 @@ export const matchesState = async (locator: Locator, input: StateInput, budgetMs
           : aria("aria-checked");
         const selected = node.tagName === "OPTION" ? node.selected === true : aria("aria-selected");
         const form = ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName);
-        const box = node.getBoundingClientRect();
+        // As Playwright judges it: a display: contents element shows through its children.
+        const visible = (each: Node): boolean => {
+          if (view.getComputedStyle(each).display === "contents")
+            return Array.from(
+              (each as unknown as { readonly children: ArrayLike<Node> }).children,
+            ).some(visible);
+          const box = each.getBoundingClientRect();
+          return (
+            box.width > 0 && box.height > 0 && view.getComputedStyle(each).visibility !== "hidden"
+          );
+        };
+        // Page text and URL belong to the main page; a target in a frame leaves them to that check.
+        const top = view.top === globalThis;
         return {
           enabled: !node.matches(":disabled") && node.closest('[aria-disabled="true"]') === null,
           checked,
           selected: selected ?? checked,
           value:
             form && typeof node.value === "string" ? node.value : (node.textContent ?? "").trim(),
-          visible:
-            box.width > 0 && box.height > 0 && view.getComputedStyle(node).visibility !== "hidden",
-          text: text === null || (view.document.body?.innerText ?? "").includes(text),
-          url: url === null || view.location.href.includes(url),
+          visible: visible(node),
+          text: text === null || !top || (view.document.body?.innerText ?? "").includes(text),
+          url: url === null || !top || view.location.href.includes(url),
         };
       },
       [input.text ?? null, input.urlIncludes ?? null] as const,

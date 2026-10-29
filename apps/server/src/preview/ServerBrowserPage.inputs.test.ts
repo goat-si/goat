@@ -112,6 +112,47 @@ it("never matches visibility and an element condition that hold at different mom
     ).rejects.toThrow("enabled=true");
   }));
 
+it("judges a display: contents target visible through its children, and reads page text and URL from the main page", () =>
+  fixture(async (page) => {
+    await page.route("https://lab.test/", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: '<p>Main ready</p><div id="c" style="display:contents"><button>Inner</button></div><iframe srcdoc="<button>Frame</button>"></iframe>',
+      }),
+    );
+    await page.goto("https://lab.test/");
+    await ServerBrowserPage.waitFor(page, {
+      selector: "#c",
+      state: "visible",
+      enabled: true,
+      timeoutMs: 2_000,
+    });
+    await page.frameLocator("iframe").getByRole("button").waitFor();
+    const tree = String(
+      (
+        await ServerBrowserPage.snapshot({
+          page,
+          cdp: await page.context().newCDPSession(page),
+          renderScale: 1,
+          consoleEntries: [],
+          networkEntries: [],
+          actionTimeline: [],
+          timeoutMs: 15_000,
+        })
+      ).accessibilityTree,
+    );
+    const ref = /button "Frame" \[ref=([^\]]+)\]/.exec(tree)?.[1];
+    expect(ref).toBeDefined();
+    // The button is in the frame; the text and URL are the main page's.
+    await ServerBrowserPage.waitFor(page, {
+      locator: `aria-ref=${ref}`,
+      enabled: true,
+      text: "Main ready",
+      urlIncludes: "lab.test",
+      timeoutMs: 2_000,
+    });
+  }));
+
 it("treats a mixed checkbox as neither checked nor unchecked", () =>
   fixture(async (page) => {
     await page.setContent(
