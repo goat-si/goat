@@ -685,15 +685,25 @@ it.effect("Space and Enter on a Send or unnamed button in KakaoTalk require { se
 );
 
 it.effect(
-  "clicking a table cell, observing or taking a screenshot, and then typing without a target is still refused until another input moves focus",
+  "clicking a table cell keeps unaddressed typing refused across reads, driver restarts, confirmed setValue and AX clicks without focus evidence, until focus is explicitly confirmed on a safe input",
   () =>
     Effect.gen(function* () {
-      const { host, sent } = fixture({
-        get_window_state: (args: Record<string, unknown>) =>
-          args.include_accessibility_tree === false
-            ? goat2WindowState(args, { snapshot_id: "s0000000f" })
-            : finderState,
-      });
+      const connection = { id: "driver:1" };
+      let focusConfirmed = false;
+      const { host, sent } = fixture(
+        {
+          get_window_state: (args: Record<string, unknown>) =>
+            args.include_accessibility_tree === false
+              ? goat2WindowState(args, { snapshot_id: "s0000000f" })
+              : finderState,
+          click: () => ({
+            effect: "confirmed",
+            evidence: ["driver:acted"],
+            ...(focusConfirmed ? { focus_confirmed: true } : {}),
+          }),
+        },
+        connection,
+      );
       const bound = yield* host.bindApp(
         call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
@@ -705,19 +715,39 @@ it.effect(
       yield* host.invoke(call("click", { elementRef: cellRef }, ref), context);
       yield* host.observe(call("get_window_state", {}, ref), context);
       yield* host.observe(call("screenshot", {}, ref), context);
-      const before = sent.length;
-      const refused = yield* host
-        .invoke(call("type_text", { text: "renamed" }, ref), context)
-        .pipe(Effect.flip);
-      expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
-      expect(refused.nextStep).toContain("setValue(41, value)");
-      expect(sent.slice(before)).toEqual([]);
-      // Clicking the search field moves focus away from the table cell, so unaddressed typing is allowed.
-      const reobserved = yield* host.observe(call("get_window_state", {}, ref), context);
+
+      // 1. Confirmed setValue on another element does not move keyboard focus away from the cell.
+      const reobs1 = yield* host.observe(call("get_window_state", {}, ref), context);
       yield* host.invoke(
-        call("click", { elementRef: byIndex(reobserved.value, 50) }, ref),
+        call("set_value", { value: "q", elementRef: byIndex(reobs1.value, 50) }, ref),
         context,
       );
+      const afterSetValue = yield* host
+        .invoke(call("type_text", { text: "blocked" }, ref), context)
+        .pipe(Effect.flip);
+      expect(afterSetValue.code).toBe("invalid_argument");
+
+      // 2. Confirmed AX click without focus_confirmed does not clear the guard.
+      yield* host.invoke(call("click", { elementRef: byIndex(reobs1.value, 50) }, ref), context);
+      const afterUnfocusedClick = yield* host
+        .invoke(call("type_text", { text: "blocked" }, ref), context)
+        .pipe(Effect.flip);
+      expect(afterUnfocusedClick.code).toBe("invalid_argument");
+
+      // 3. Driver replacement does not change the app's native focus, so unaddressed typing stays refused.
+      connection.id = "driver:2";
+      const beforeRestartType = sent.length;
+      const afterRestart = yield* host
+        .invoke(call("type_text", { text: "blocked" }, ref), context)
+        .pipe(Effect.flip);
+      expect(afterRestart.code).toBe("invalid_argument");
+      expect(sent.slice(beforeRestartType)).toEqual([]);
+
+      // 4. Addressed typing into the search field always works, and once an action reports explicit
+      // focus confirmation on a safe input, unaddressed typing is allowed.
+      const reobs2 = yield* host.observe(call("get_window_state", {}, ref), context);
+      focusConfirmed = true;
+      yield* host.invoke(call("click", { elementRef: byIndex(reobs2.value, 50) }, ref), context);
       const typed = yield* host.invoke(call("type_text", { text: "ok" }, ref), context);
       expect(typed.category).toBe("confirmed");
       expect(searchRef).toBeDefined();
@@ -814,44 +844,5 @@ it.effect(
         .invoke(call("click", { elementRef: zeroMenu }, ref), context)
         .pipe(Effect.flip);
       expect(refused.code).toBe("invalid_argument");
-    }),
-);
-
-it.effect(
-  "a refused stale-point click or an unverifiable click does not clear the table-cell typing guard; only a confirmed focus move to a safe element does",
-  () =>
-    Effect.gen(function* () {
-      let clickOutcome: "unverifiable" | "confirmed" = "unverifiable";
-      const { host } = fixture({
-        get_window_state: finderState,
-        click: () =>
-          clickOutcome === "confirmed"
-            ? { effect: "confirmed", evidence: ["driver:acted"] }
-            : { effect: "unverifiable" },
-      });
-      const bound = yield* host.bindApp(
-        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-        context,
-      );
-      const ref = bound.value as ScreenTargetRef;
-      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
-      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 41) }, ref), context);
-      // Stale point click (no screenshot after click): refused before dispatch, risk stays.
-      yield* host.invoke(call("click", { x: 10, y: 10 }, ref), context).pipe(Effect.flip);
-      const afterStalePoint = yield* host
-        .invoke(call("type_text", { text: "still blocked" }, ref), context)
-        .pipe(Effect.flip);
-      expect(afterStalePoint.code).toBe("invalid_argument");
-      // Unverifiable click on search field: focus move is not confirmed, so risk stays.
-      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 50) }, ref), context);
-      const afterUnverifiable = yield* host
-        .invoke(call("type_text", { text: "still blocked" }, ref), context)
-        .pipe(Effect.flip);
-      expect(afterUnverifiable.code).toBe("invalid_argument");
-      // Confirmed click on search field moves focus away from the table cell, so unaddressed typing is allowed.
-      clickOutcome = "confirmed";
-      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 50) }, ref), context);
-      const typed = yield* host.invoke(call("type_text", { text: "ok" }, ref), context);
-      expect(typed.category).toBe("confirmed");
     }),
 );

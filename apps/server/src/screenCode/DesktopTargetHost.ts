@@ -263,7 +263,6 @@ export const createDesktopTargetHost = (deps: {
     delete bound.snapshotId;
     delete bound.pages;
     delete bound.elementsByToken;
-    delete bound.lastClickedTableCell;
     bound.pointsStale = "restart";
     return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
   });
@@ -889,7 +888,9 @@ export const createDesktopTargetHost = (deps: {
         ),
       );
       const result = driverResult(tool, reply);
-      if (admission.clearClickedTableCell && result.category === "confirmed")
+      const replyData = object(driverValue(reply));
+      const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
+      if (admission.clearClickedTableCell && result.category === "confirmed" && focusConfirmed)
         delete bound.lastClickedTableCell;
       return result;
     },
