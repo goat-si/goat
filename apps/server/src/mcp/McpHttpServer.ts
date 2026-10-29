@@ -121,6 +121,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ToolAdmission from "./ToolAdmission.ts";
+import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -1120,6 +1121,7 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),
+  Layer.provide(ChannelSessionReceiptGate.layer),
   Layer.provide(ThreadResultService.layer),
   // Its own pressure rides on this machine's entry; the nudger reads the same monitor.
   Layer.provideMerge(HostPressureMonitor.layer),

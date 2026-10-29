@@ -1,4 +1,5 @@
 import { deliveryLedger } from "./channelDeliveryLedger.ts";
+import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import { receptionLedger } from "./channelReceptionLedger.ts";
 /**
  * ChannelLedger - durable state for channel input, tasks, and deliveries.
@@ -755,6 +756,7 @@ const toIngestResult = (stored: ChannelStoredInput, duplicate: boolean): Channel
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const receiptGate = yield* SessionReceiptGate.SessionReceiptGate;
 
   const fence = (owner: string | undefined) =>
     owner === undefined
@@ -1617,7 +1619,7 @@ const make = Effect.gen(function* () {
     enqueueDeliveries: (deliveries, now) =>
       insertDeliveries(deliveries, now).pipe(Effect.mapError(toLedgerError("enqueueDeliveries"))),
 
-    ...deliveryLedger(sql, fence),
+    ...deliveryLedger(sql, fence, receiptGate.changed),
 
     settleInterruptedDeliveries: (input) =>
       sql
@@ -1962,4 +1964,6 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ChannelLedger, make);
+export const layer = Layer.effect(ChannelLedger, make).pipe(
+  Layer.provide(SessionReceiptGate.layer),
+);

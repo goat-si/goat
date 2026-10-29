@@ -52,6 +52,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as McpHttpServer from "../mcp/McpHttpServer.ts";
+import * as ChannelSessionReceiptGate from "../mcp/ChannelSessionReceiptGate.ts";
 import * as ProjectionStoreV2 from "../orchestration-v2/ProjectionStore.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -424,7 +425,7 @@ export const makeMemoryApplicationLayers = (deps: {
     McpHttpServer.layerMemoryToolkit,
     layerMemoryAdministrationToolkit,
     // The goatclaw capability gate on every MCP registration reads the caller's profile.
-  ).pipe(Layer.provide(PermissionProfiles.layer));
+  ).pipe(Layer.provide(PermissionProfiles.layer), Layer.provide(ChannelSessionReceiptGate.layer));
 
   return {
     layerMemorySourceReadBinding,

@@ -15,6 +15,7 @@ const mapError = (detail: string) => (cause: unknown) =>
 export const deliveryLedger = (
   sql: SqlClient.SqlClient,
   fence: (owner: string | undefined) => Effect.Effect<void, SqlError | ChannelLedgerError>,
+  changed: Effect.Effect<void>,
 ): Pick<ChannelLedger["Service"], "claimDueDeliveries" | "recordDelivery" | "expireReceipts"> => {
   const expire = (now: string) => sql`UPDATE channel_outbox SET
     state = CASE WHEN state = 'delivering' THEN 'ambiguous' ELSE 'failed' END,
@@ -116,10 +117,17 @@ export const deliveryLedger = (
         .pipe(Effect.mapError(mapError("recordDelivery"))),
   };
   return {
-    expireReceipts: Effect.fn("ChannelLedger.expireReceipts")(operations.expireReceipts),
+    expireReceipts: Effect.fn("ChannelLedger.expireReceipts")(
+      operations.expireReceipts,
+      Effect.tap(() => changed),
+    ),
     claimDueDeliveries: Effect.fn("ChannelLedger.claimDueDeliveries")(
       operations.claimDueDeliveries,
+      Effect.tap(() => changed),
     ),
-    recordDelivery: Effect.fn("ChannelLedger.recordDelivery")(operations.recordDelivery),
+    recordDelivery: Effect.fn("ChannelLedger.recordDelivery")(
+      operations.recordDelivery,
+      Effect.tap(() => changed),
+    ),
   };
 };

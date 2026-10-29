@@ -121,6 +121,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   not_home: before("conflict"),
   conflict: before("conflict"),
   provider_unavailable: before("unavailable"),
+  session_receipt_pending: before("unavailable"),
   model_unavailable: before("unavailable"),
   // A routed call may have reached the remote before it stopped answering.
   host_unavailable: c("unavailable"),
