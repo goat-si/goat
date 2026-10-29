@@ -58,6 +58,8 @@ class GoatTerminalView(context: Context, appContext: AppContext) : ExpoView(cont
   private var streamedOutput: TerminalOutputBuffer? = null
   private var cols = 0
   private var rows = 0
+  private var measuredCols = 0
+  private var measuredRows = 0
   private var clearingInput = false
   private var isCleanedUp = false
   private var backgroundColorValue = Color.parseColor("#24292E")
@@ -78,7 +80,15 @@ class GoatTerminalView(context: Context, appContext: AppContext) : ExpoView(cont
     set(value) {
       if (field == value) return
       field = value
-      feedPendingBuffer()
+      hasPendingBuffer = true
+    }
+  private var hasPendingBuffer = false
+
+  var sharedGrid: List<Int> = emptyList()
+    set(value) {
+      if (field == value) return
+      field = value
+      applyGrid()
     }
 
   var fontSize: Float = 10f
@@ -327,6 +337,19 @@ class GoatTerminalView(context: Context, appContext: AppContext) : ExpoView(cont
     val nextRows = (terminalCanvas.usableHeight() / terminalCanvas.cellHeightPx)
       .toInt()
       .coerceIn(2, 200)
+    if (nextCols != measuredCols || nextRows != measuredRows) {
+      measuredCols = nextCols
+      measuredRows = nextRows
+      onResize(mapOf("cols" to measuredCols, "rows" to measuredRows))
+    }
+    applyGrid()
+  }
+
+  private fun applyGrid() {
+    if (measuredCols <= 0 || measuredRows <= 0 || isCleanedUp) return
+    val shared = sharedGrid.takeIf { it.size == 2 && it[0] > 0 && it[1] > 0 }
+    val nextCols = shared?.get(0)?.coerceAtMost(measuredCols) ?: measuredCols
+    val nextRows = shared?.get(1)?.coerceAtMost(measuredRows) ?: measuredRows
     if (nextCols == cols && nextRows == rows && terminalHandle != 0L) return
     cols = nextCols
     rows = nextRows
@@ -343,8 +366,7 @@ class GoatTerminalView(context: Context, appContext: AppContext) : ExpoView(cont
       )
     }
     emitResponse(response)
-    onResize(mapOf("cols" to cols, "rows" to rows))
-    feedPendingBuffer()
+    if (!hasPendingBuffer) feedPendingBuffer()
     renderSnapshot()
   }
 
@@ -369,7 +391,7 @@ class GoatTerminalView(context: Context, appContext: AppContext) : ExpoView(cont
     if (terminalHandle == 0L) return
     destroyTerminal()
     createTerminal()
-    feedPendingBuffer()
+    if (!hasPendingBuffer) feedPendingBuffer()
     renderSnapshot()
   }
 
@@ -379,6 +401,12 @@ class GoatTerminalView(context: Context, appContext: AppContext) : ExpoView(cont
     terminalHandle = 0L
     fedBuffer = ""
     terminalCanvas.resetSelectionState()
+  }
+
+  fun applyPendingBuffer() {
+    if (!hasPendingBuffer) return
+    hasPendingBuffer = false
+    feedPendingBuffer()
   }
 
   private fun feedPendingBuffer() {

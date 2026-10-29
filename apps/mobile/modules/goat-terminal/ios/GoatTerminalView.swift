@@ -245,7 +245,15 @@ public final class GoatTerminalView: ExpoView, UITextFieldDelegate {
 
   var initialBuffer: String = "" {
     didSet {
-      applyRemoteBuffer(initialBuffer)
+      hasPendingBuffer = true
+    }
+  }
+  private var hasPendingBuffer = false
+
+  var sharedGrid: [Int] = [] {
+    didSet {
+      guard oldValue != sharedGrid else { return }
+      resizeSurface()
     }
   }
 
@@ -529,7 +537,7 @@ public final class GoatTerminalView: ExpoView, UITextFieldDelegate {
     resizeSurface()
     if let streamedOutput {
       feedData(streamedOutput.data)
-    } else {
+    } else if !hasPendingBuffer {
       feedBuffer(initialBuffer)
     }
   }
@@ -559,6 +567,16 @@ public final class GoatTerminalView: ExpoView, UITextFieldDelegate {
     }
     surface = nil
     app = nil
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    terminalViewport.layer.sublayers?.forEach { $0.removeFromSuperlayer() }
+    CATransaction.commit()
+  }
+
+  func applyPendingBuffer() {
+    guard hasPendingBuffer else { return }
+    hasPendingBuffer = false
+    applyRemoteBuffer(initialBuffer)
   }
 
   private func applyRemoteBuffer(_ buffer: String) {
@@ -647,10 +665,22 @@ public final class GoatTerminalView: ExpoView, UITextFieldDelegate {
     terminalViewport.contentScaleFactor = scale
     ghostty_surface_set_content_scale(surface, Double(scale), Double(scale))
     ghostty_surface_set_size(surface, width, height)
+    let fitted = ghostty_surface_size(surface)
+    let fittedCols = max(1, Int(fitted.columns))
+    let fittedRows = max(1, Int(fitted.rows))
+    var surfaceWidth = width
+    var surfaceHeight = height
+    if sharedGrid.count == 2, sharedGrid[0] > 0, sharedGrid[1] > 0 {
+      surfaceWidth -= UInt32(max(fittedCols - sharedGrid[0], 0)) * fitted.cell_width_px
+      surfaceHeight -= UInt32(max(fittedRows - sharedGrid[1], 0)) * fitted.cell_height_px
+      if surfaceWidth != width || surfaceHeight != height {
+        ghostty_surface_set_size(surface, surfaceWidth, surfaceHeight)
+      }
+    }
     ghostty_surface_set_occlusion(surface, window != nil)
-    configureIOSurfaceLayers()
+    configureIOSurfaceLayers(size: CGSize(width: CGFloat(surfaceWidth) / scale, height: CGFloat(surfaceHeight) / scale))
     redrawSurface()
-    emitGhosttyResize()
+    emitResize(cols: fittedCols, rows: fittedRows)
   }
 
   private func redrawSurface() {
@@ -658,19 +688,6 @@ public final class GoatTerminalView: ExpoView, UITextFieldDelegate {
     ghostty_surface_refresh(surface)
     ghostty_surface_draw(surface)
     markIOSurfaceLayersForDisplay()
-    emitGhosttyResize()
-  }
-
-  private func emitGhosttyResize() {
-    guard let surface else {
-      emitEstimatedResize()
-      return
-    }
-
-    let size = ghostty_surface_size(surface)
-    let cols = max(1, Int(size.columns))
-    let rows = max(1, Int(size.rows))
-    emitResize(cols: cols, rows: rows)
   }
 
   private func emitEstimatedResize() {
@@ -721,8 +738,8 @@ public final class GoatTerminalView: ExpoView, UITextFieldDelegate {
     ghostty_app_keyboard_changed(app)
   }
 
-  private func configureIOSurfaceLayers() {
-    let targetBounds = CGRect(origin: .zero, size: terminalViewport.bounds.size)
+  private func configureIOSurfaceLayers(size: CGSize) {
+    let targetBounds = CGRect(origin: .zero, size: size)
     CATransaction.begin()
     CATransaction.setDisableActions(true)
     terminalViewport.layer.sublayers?.forEach { sublayer in
