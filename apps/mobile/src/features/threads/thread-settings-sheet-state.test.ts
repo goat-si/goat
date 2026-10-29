@@ -21,7 +21,7 @@ vi.hoisted(() =>
     __DEV__: true,
     expo: {
       EventEmitter: class {
-        static readonly native = true;
+        readonly native = true;
       },
     },
   }),
@@ -96,7 +96,7 @@ vi.mock("react-native", async () => {
 vi.mock("expo", () => ({ requireNativeModule: vi.fn(), requireOptionalNativeModule: vi.fn() }));
 vi.mock("expo-crypto", () => ({
   EncryptionKey: class {
-    static readonly native = true;
+    readonly native = true;
   },
   getRandomBytes: (length: number) => new Uint8Array(length),
   digest: async () => new Uint8Array(32),
@@ -106,7 +106,7 @@ vi.mock("expo-secure-store", () => ({ AFTER_FIRST_UNLOCK: "afterFirstUnlock" }))
 vi.mock("expo-constants", () => ({ default: {} }));
 vi.mock("expo-modules-core", () => ({
   EventEmitter: class {
-    static readonly native = true;
+    readonly native = true;
   },
 }));
 vi.mock("react-native-reanimated", async () => {
