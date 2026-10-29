@@ -349,7 +349,9 @@ it.effect(
           context,
         )
         .pipe(Effect.flip);
-      expect(refusedSendDrag).toMatchObject({ code: "permission_denied", effectStarted: false });
+      expect(refusedSendDrag).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(refusedSendDrag.nextStep).toContain("Drag is unavailable in KakaoTalk");
+      expect(refusedSendDrag.nextStep).not.toContain("send: true");
 
       // Point drag in KakaoTalk is refused even with send: true.
       const refusedPointDrag = yield* host
@@ -586,34 +588,9 @@ it.effect(
         },
       });
       for (const platform of ["linux", "win32"] as const) {
-        let winBounds = { x: 10, y: 20, width: 50, height: 40 };
         const platFix = fixture({
-          list_windows: () => ({
-            windows: [{ pid: 42, window_id: 7, title: "Document", bounds: winBounds }],
-          }),
           get_window_state: (args: Record<string, unknown>) =>
-            args.include_accessibility_tree === false
-              ? goat2WindowState(args, { snapshot_id: "s0000000a", window_bounds: winBounds })
-              : {
-                  ...framedState,
-                  elements: [
-                    {
-                      element_index: 0,
-                      element_token: "s0000000a:0",
-                      role: "AXWindow",
-                      label: "Editor",
-                      frame: { x: 10, y: 20, w: 50, h: 40 },
-                    },
-                    {
-                      element_index: 1,
-                      element_token: "s0000000a:1",
-                      role: "AXButton",
-                      label: "Apply",
-                      parent_index: 0,
-                      frame: { x: 20, y: 30, w: 20, h: 10 },
-                    },
-                  ],
-                },
+            args.include_accessibility_tree === false ? goat2WindowState(args) : framedState,
         });
         const host = createDesktopTargetHost({
           primitiveChannel: platFix.channel as never,
@@ -632,66 +609,38 @@ it.effect(
         const shot = yield* host.observe(call("screenshot", {}, ref), context);
         const regionId = shot.imageMetadata?.regionId!;
 
-        // 1. Screenshot click keeps 2x screenshot pixel coordinates (20, 16) without coordinate_space.
+        // 1. Screenshot click before input keeps 2x screenshot pixel coordinates (20, 16) without coordinate_space.
         const clicked = yield* host.invoke(call("click", { x: 20, y: 16, regionId }, ref), context);
         expect(clicked.category).toBe("confirmed");
         expect(platFix.sent.at(-1)?.args).toMatchObject({ x: 20, y: 16 });
         expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
         expect(platFix.sent.at(-1)?.args).not.toHaveProperty("window_basis");
 
-        // 2. Mixed element-to-pixel drag on 2x screenshot converts element center (20, 15) pt -> (40, 30) px
-        // and keeps pixel endpoint (80, 60) px in screenshot pixels.
-        yield* host.invoke(
+        // 2. Reusing screenshot pixels after input on non-macOS is refused because the driver lacks
+        // dispatch-time window_basis validation.
+        const reusedAfterInput = yield* host
+          .invoke(call("click", { x: 20, y: 16, regionId }, ref), context)
+          .pipe(Effect.flip);
+        expect(reusedAfterInput.code).toBe("stale_reference");
+
+        // 3. { window: [x, y] }, element drag endpoints, and scrollCenter are refused as unsupported on non-macOS.
+        const freshShot = yield* host.observe(call("screenshot", {}, ref), context);
+        const freshRegion = freshShot.imageMetadata?.regionId!;
+        for (const unsupportedCall of [
+          call("click", { x: 10, y: 10, coordinate_space: "window_points" }, ref),
           call(
             "drag",
             {
               fromEnd: { elementRef: applyRef },
-              toEnd: { x: 80, y: 60, regionId },
+              toEnd: { x: 80, y: 60, regionId: freshRegion },
             },
             ref,
           ),
-          context,
-        );
-        expect(platFix.sent.at(-1)?.args).toMatchObject({
-          from_x: 40,
-          from_y: 30,
-          to_x: 80,
-          to_y: 60,
-        });
-        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
-
-        // 3. Center scroll on 2x screenshot (100x80 px) sends (50, 40) px without coordinate_space.
-        yield* host.invoke(
           call("scroll", { scrollCenter: true, direction: "down", amount: 3 }, ref),
-          context,
-        );
-        expect(platFix.sent.at(-1)?.args).toMatchObject({ x: 50, y: 40, direction: "down" });
-        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
-
-        // 4. { window: [x, y] } in a drag endpoint is refused as unsupported on non-macOS.
-        const unsupportedWinPtDrag = yield* host
-          .invoke(
-            call(
-              "drag",
-              {
-                fromEnd: { elementRef: applyRef },
-                toEnd: { x: 10, y: 10, coordinate_space: "window_points" },
-              },
-              ref,
-            ),
-            context,
-          )
-          .pipe(Effect.flip);
-        expect(unsupportedWinPtDrag.code).toBe("unsupported");
-
-        // 5. Window resize between capture and dispatch is caught via list_windows geometry check and refused.
-        winBounds = { x: 10, y: 20, width: 80, height: 40 };
-        const clicksBefore = platFix.sent.filter((entry) => entry.tool === "click").length;
-        const resizedClick = yield* host
-          .invoke(call("click", { x: 20, y: 16, regionId }, ref), context)
-          .pipe(Effect.flip);
-        expect(resizedClick.code).toBe("stale_reference");
-        expect(platFix.sent.filter((entry) => entry.tool === "click")).toHaveLength(clicksBefore);
+        ]) {
+          const refused = yield* host.invoke(unsupportedCall, context).pipe(Effect.flip);
+          expect(refused.code).toBe("unsupported");
+        }
       }
 
       // On macOS, legacy point-targeted type_text and press_key never acquire coordinate_space or window_basis.

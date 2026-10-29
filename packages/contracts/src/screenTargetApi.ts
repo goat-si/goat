@@ -12,8 +12,8 @@ const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_V
 const COMMON = `type Target = number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
-// { window: [x, y] }: app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
-// App points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page.
+// { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
+// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab and Linux/Windows [x, y] end on input or a new page.
 type Done = { verdict: "confirmed" | "unverifiable"; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: unknown };
 // confirmed: done. unverifiable: may have landed. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
@@ -35,7 +35,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
   click(t: Target, o?: { button?: "right"; count?: number; send?: boolean }): Promise<Done>;
-  type(text: string, t?: Target, o?: { replace?: boolean; send?: boolean }): Promise<Done>;
+  type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;

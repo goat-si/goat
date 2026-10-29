@@ -46,9 +46,9 @@ import {
   type Rect,
 } from "./DesktopFrames.ts";
 import {
+  annotatePointerResult,
   applyDesktopPointerArgs,
   buildScreenshotCapture,
-  runDesktopPointerOrReplace,
   treeWindowBasis,
   type ScreenshotBasis,
 } from "./DesktopTargetPoints.ts";
@@ -816,7 +816,6 @@ export const createDesktopTargetHost = (deps: {
       if (!guardInput.ok) return yield* Effect.fail(guardInput.error);
       const admission = admitDesktopInput(guardInput.input);
       if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
-      const replaceText = call.method === "type_text" && args.replace === true;
       delete forwarded.elementRef;
       delete forwarded.send;
       delete forwarded.replace;
@@ -859,45 +858,24 @@ export const createDesktopTargetHost = (deps: {
       };
       const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, pointerState);
       if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
+      bound.pointsStale = "input";
       if (admission.clickedTableCell !== undefined)
         bound.lastClickedTableCell = admission.clickedTableCell;
-      const cursor = {
+      const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
+      const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
         bound,
         point:
           elementToken === undefined
             ? undefined
             : aimOf(bound.frames?.get(elementToken), bound.framesBasis),
-      };
-      const { reply, result } = yield* runDesktopPointerOrReplace({
-        ...(pointerResolved.checkBasis === undefined
-          ? {}
-          : { checkBasis: pointerResolved.checkBasis }),
-        replaceText,
-        ...(elementToken === undefined ? {} : { elementToken }),
-        target,
-        needs: elementToken !== undefined ? "element" : pointerResolved.needs,
-        tool,
-        forwarded,
-        ...(pointerResolved.windowPoint === undefined
-          ? {}
-          : { windowPoint: pointerResolved.windowPoint }),
-        checkLiveBounds: () =>
-          boundRequest(bound, "points", "list_windows", { pid: bound.pid }, call, context).pipe(
-            Effect.map((listed) =>
-              boundsOf(
-                array(object(driverValue(listed))?.windows)
-                  .map(object)
-                  .find((w) => w?.window_id === bound.windowId && w.pid === bound.pid)?.bounds,
-              ),
-            ),
-          ),
-        sendAction: (n, t, a) => boundRequest(bound, n, t, a, call, context, cursor),
-        toResult: driverResult,
-        onStaleReference: () => {
-          delete bound.pages;
-        },
-        failedCategories: BATCH_FAILED_CATEGORIES,
-      });
+      }).pipe(
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            if (error.code === "stale_reference") delete bound.pages;
+          }),
+        ),
+      );
+      const result = annotatePointerResult(driverResult(tool, reply), pointerResolved.windowPoint);
       const replyData = object(driverValue(reply));
       const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
       if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;

@@ -459,18 +459,14 @@ const sendPolicy = (input: {
   readonly elementToken?: string;
   readonly element?: GuardElement;
   readonly aimed: boolean;
-  readonly dragEndpoints?: ReadonlyArray<DragEndpointGuard>;
 }): "allow" | "refuse_unaddressed" | "refuse_send" | "refuse_point" => {
-  const { method, args, elementToken, element, aimed, dragEndpoints } = input;
+  const { method, args, elementToken, element, aimed } = input;
   const send = args.send === true;
   if ((method === "click" || method === "right_click") && elementToken === undefined && aimed)
     return "refuse_point";
-  // Drag delivers coordinate pointer gestures rather than AX element actions: if an endpoint
-  // names or overlaps a Send button without send: true, report refuse_send; otherwise refuse_point.
-  if (method === "drag") {
-    if (!send && dragEndpoints?.some((end) => isSendButton(end.element))) return "refuse_send";
-    return "refuse_point";
-  }
+  // Drag delivers coordinate pointer gestures rather than AX element actions, so it is refused in
+  // send-on-Enter chat apps in every form.
+  if (method === "drag") return "refuse_point";
   const resolvedKey =
     method === "press_key" || method === "hotkey" ? resolveKeyPress(args) : undefined;
   const isEnter = resolvedKey?.key === "enter";
@@ -544,11 +540,11 @@ export const admitDesktopInput = (input: {
     lastClickedTableCell,
     dragEndpoints,
   } = input;
-  if (method === "type_text" && args.replace === true && elementToken === undefined)
+  if (method === "type_text" && args.replace === true)
     return {
       refused: fail(
-        "invalid_argument",
-        "replace: true requires a target element; name the field to replace.",
+        "unsupported",
+        "Use setValue(target, text) to replace a field's whole value; type() inserts at the cursor.",
       ),
     };
   if (
@@ -620,14 +616,15 @@ export const admitDesktopInput = (input: {
       args,
       ...(elementToken === undefined ? {} : { elementToken }),
       ...(element === undefined ? {} : { element }),
-      ...(dragEndpoints === undefined ? {} : { dragEndpoints }),
       aimed,
     });
     if (decision === "refuse_point")
       return {
         refused: fail(
           "invalid_argument",
-          `Use element numbers in ${chatApp}; a point cannot be checked for a send button.`,
+          method === "drag"
+            ? `Drag is unavailable in ${chatApp} because a pointer gesture cannot be checked for a send button; click or scroll an element by number instead.`
+            : `Use element numbers in ${chatApp}; a point cannot be checked for a send button.`,
         ),
       };
     if (decision === "refuse_unaddressed")
