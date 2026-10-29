@@ -298,7 +298,9 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     let postWins = parseWindowList(postRaw, pid);
     const preIds = new Set(preWins?.map((w) => w.window_id));
     for (let polls = 0; deps.opensWindow === true && polls < OPENING_POLLS; polls++) {
-      if (!preWins || !postWins || postWins.some((w) => !preIds.has(w.window_id))) break;
+      // A window listed off screen first is not yet one a sheet read can follow.
+      if (!preWins || !postWins || postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen))
+        break;
       const now = yield* Clock.currentTimeMillis;
       if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
       yield* Effect.sleep(OPENING_POLL_MS);

@@ -214,11 +214,26 @@ it.live(
 );
 
 it.live(
-  "a Go to Folder window that shows only after the key's first window read is still reported by the input and followed by observe(), also when the chord is one raw key string",
+  "a Go to Folder window that shows only after the key's first window read is still reported by the input and followed by observe(), also when the chord is one raw key string or the window is first listed off screen",
   () =>
     Effect.gen(function* () {
-      for (const press of ["app.press('cmd+shift+g')", "app.pressKey({ key: 'cmd+shift+g' })"]) {
-        const { host } = finder({ lateLists: 1 });
+      const cases = [
+        { press: "app.press('cmd+shift+g')", late: () => finder({ lateLists: 1 }) },
+        { press: "app.pressKey({ key: 'cmd+shift+g' })", late: () => finder({ lateLists: 1 }) },
+        // Listed off screen in the first read after the key, on screen in the next.
+        {
+          press: "app.press('cmd+shift+g')",
+          late: () => {
+            let lists = 0;
+            return finder({
+              lateLists: 0,
+              opened: () => [win(82779, { ...GOTO_WINDOW, is_on_screen: lists++ > 0 })],
+            });
+          },
+        },
+      ];
+      for (const { press, late } of cases) {
+        const { host } = late();
         const result = yield* cell(
           BIND +
             "const done = await " +
