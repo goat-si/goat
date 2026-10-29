@@ -214,14 +214,17 @@ export const makeUnansweredWatch = <E>(
           const afterCap = yield* Clock.currentTimeMillis;
           if (currentHead(call.connectionId, afterCap)?.key !== head.key) continue;
           overdue.set(key, call.connectionId);
-          const graceWoken = Deferred.await(settled);
-          if (currentHead(call.connectionId, afterCap)?.key === head.key) {
-            yield* graceWoken.pipe(Effect.timeoutOption(UNANSWERED_GRACE_MS));
+          const graceEnd = afterCap + UNANSWERED_GRACE_MS;
+          for (;;) {
+            const graceWoken = Deferred.await(settled);
+            const t = yield* Clock.currentTimeMillis;
+            if (currentHead(call.connectionId, t)?.key !== head.key || t >= graceEnd) break;
+            const step = yield* graceWoken.pipe(Effect.timeoutOption(graceEnd - t));
+            if (Option.isNone(step)) break;
           }
           const afterGrace = yield* Clock.currentTimeMillis;
           if (currentHead(call.connectionId, afterGrace)?.key === head.key) {
-            yield* replace(key);
-            return;
+            yield* replace(head.key);
           }
           settle(key);
         }

@@ -17,7 +17,6 @@ const CAP_MS: Readonly<Record<string, number>> = {
   scroll: 10_000,
   launch_app: 15_000,
   run_steps: 60_000,
-  run_script: 120_000,
 };
 const DEFAULT_CAP_MS = 4_000;
 
@@ -31,7 +30,21 @@ const record = (args: unknown): Readonly<Record<string, unknown>> =>
 
 export const driverCallCapMs = (tool: string, args: unknown): number => {
   const given = record(args);
-  if (tool === "get_window_state") return given.include_screenshot === true ? 7_000 : 4_000;
+  if (tool === "get_window_state") {
+    const base = given.include_screenshot === true ? 7_000 : 4_000;
+    const walk =
+      typeof given.timeout_ms === "number"
+        ? Math.min(120_000, Math.max(100, Math.trunc(given.timeout_ms)))
+        : 0;
+    return Math.max(base, walk + 2_000);
+  }
+  if (tool === "run_script") {
+    const ms =
+      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
+        ? Math.min(120_000, Math.max(100, given.timeout_ms))
+        : 30_000;
+    return ms + 1_500;
+  }
   if (tool === "verify_state")
     return (typeof given.timeout_ms === "number" ? Math.max(0, given.timeout_ms) : 0) + 2_000;
   if (tool === "type_text")
