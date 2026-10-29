@@ -13582,6 +13582,22 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           threadMessages(harness.events, secondThreadId).at(-1)?.message.text,
           "A2 from the transcript",
         );
+        // Both members have used their three running reads; the next snapshot rereads neither.
+        const coordinatorEventsBeforeSkip = workflowCoordinatorEvents(harness.events).length;
+        yield* harness.offerAndWait(
+          workflowSnapshot({ uuid: "00000000-0000-4000-8000-000000001017", state: "done" }),
+        );
+        yield* harness.awaitUntil(
+          () => workflowCoordinatorEvents(harness.events).length > coordinatorEventsBeforeSkip,
+          "workflow snapshot after the settled member stops rereading",
+        );
+        assert.include(
+          workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0],
+          {
+            effort: "xhigh",
+            speed: "standard",
+          },
+        );
         const previousStartedAt = workflowMemberEvents(harness.events, 1).at(-1)?.subagent
           .startedAt;
         yield* TestClock.adjust(1_000);

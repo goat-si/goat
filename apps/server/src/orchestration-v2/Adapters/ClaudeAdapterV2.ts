@@ -4599,7 +4599,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly transcriptReadAttempts: number;
               readonly agentId: string | undefined;
               readonly transcriptCursor: WorkflowAgentTranscriptCursor;
-              readonly transcriptMetadata: WorkflowAgentMetadata;
+              readonly transcriptMetadata: WorkflowAgentMetadata | undefined;
               readonly nextItemOrdinal: number;
               readonly toolCalls: Map<string, ActiveClaudeToolCall>;
               readonly textShown: boolean;
@@ -5886,6 +5886,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               previous?.prompt !== prompt ||
               previous?.model !== model;
             const agentId = member.agentId;
+            let metadata =
+              previous === undefined || restarted || previous.agentId !== agentId
+                ? undefined
+                : previous.transcriptMetadata;
+            if (metadata)
+              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata);
             // While the workflow runs, a settled member is read a few times. After it
             // ends, every notification reads again: the member may still be flushing
             // its transcript. The cursor keeps already projected lines from repeating.
@@ -6034,10 +6040,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               previous === undefined || restarted || previous.agentId !== agentId
                 ? initialWorkflowAgentTranscriptCursor
                 : previous.transcriptCursor;
-            let metadata =
-              previous === undefined || restarted || previous.agentId !== agentId
-                ? {}
-                : previous.transcriptMetadata;
             let textShown = !restarted && previous?.textShown === true;
             let resultShown = !restarted && previous?.resultShown === true;
             let turnEnded = !restarted && previous?.turnEnded === true;
@@ -6106,7 +6108,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               }
             }
             if (transcriptRead)
-              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata);
+              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata ?? {});
             if (settled) {
               // Open calls receive no results after their member settles.
               yield* endOpenToolCalls();
