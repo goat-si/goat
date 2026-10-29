@@ -21,6 +21,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase"],
+  expectedHeadMergeMethods: ["merge", "squash"],
   // GitLab has no merge-target-into-source operation.
   updateMethods: ["rebase"],
   search: true,
@@ -75,6 +76,8 @@ export function gitLabViewerPermissions(input: {
 function gitLabProviderFailure(
   error: GitLabPullRequestCli.GitLabPullRequestCliError,
 ): PullRequestProviderFailure {
+  if (error._tag === "GitLabPinnedAutoMergeError") return { reason: "pinned-auto-merge" };
+  if (error._tag === "GitLabPinnedRebaseError") return { reason: "pinned-head-refused" };
   if (error._tag === "GitLabCliUnavailableError") return { reason: "missing-tool" };
   if (error._tag === "GitLabCliAuthenticationError") return { reason: "unauthenticated" };
   if (error._tag === "GitLabCliRateLimitError") return { reason: "rate-limited" };
@@ -263,6 +266,7 @@ export const make = Effect.gen(function* () {
           repository: input.repository,
           number: input.number,
           action: input.action,
+          ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),

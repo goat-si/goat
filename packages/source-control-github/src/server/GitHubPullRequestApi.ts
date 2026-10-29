@@ -1,3 +1,9 @@
+import {
+  GitHubBranchDeletionRefusedError,
+  GitHubMergeHeadChangedError,
+  GitHubMergeHeadUnsupportedError,
+  GitHubPinnedAutoMergeError,
+} from "./gitHubPullRequestActionErrors.ts";
 import { removeAgentCredits } from "@goat/source-control-core/server/mergeMessage";
 import { KnownWorkflowRuns, makeChecksRevalidator } from "./gitHubConditionalChecks.ts";
 import { runGitHubStackAction, type GitHubStackActionError } from "./githubStackActions.ts";
@@ -273,37 +279,11 @@ export class GitHubWorkflowApprovalHeadChangedError extends Schema.TaggedError<G
   }
 }
 
-export class GitHubBranchDeletionRefusedError extends Schema.TaggedError<GitHubBranchDeletionRefusedError>()(
-  "GitHubBranchDeletionRefusedError",
-  {
-    number: Schema.Int,
-    reason: Schema.Literals([
-      "open-pr",
-      "stack",
-      "source-unavailable",
-      "unsafe-branch",
-      "head-changed",
-    ]),
-  },
-) {
-  override get message(): string {
-    switch (this.reason) {
-      case "open-pr":
-        return `Close or merge pull request #${this.number} before deleting its source branch.`;
-      case "stack":
-        return "Branch deletion is not supported for a stack.";
-      case "source-unavailable":
-        return `GitHub did not report a complete source branch for pull request #${this.number}.`;
-      case "unsafe-branch":
-        return "The source branch is a default or base branch and cannot be deleted here.";
-      case "head-changed":
-        return "The source branch has new commits and was not deleted.";
-    }
-  }
-}
-
 export type GitHubPullRequestApiError =
   | GitHubBranchDeletionRefusedError
+  | GitHubMergeHeadChangedError
+  | GitHubMergeHeadUnsupportedError
+  | GitHubPinnedAutoMergeError
   | GitHubStackActionError
   | GitHubRequestPolicy.GitHubApiError
   | GitHubPullRequestReadError
@@ -673,6 +653,7 @@ export class GitHubPullRequestApi extends Context.Service<
       readonly host: string;
       readonly number: number;
       readonly action: PullRequestAction;
+      readonly headSha?: string;
       readonly stackNumber?: number;
       readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
       readonly removeAgentCreditsOnMerge?: boolean;
@@ -2343,6 +2324,14 @@ export const make = Effect.gen(function* () {
     }),
 
     runPullRequestAction: Effect.fn("GitHubPullRequestApi.runPullRequestAction")(function (input) {
+      if (input.headSha !== undefined && input.action === "enable-auto-merge") {
+        return Effect.fail(new GitHubPinnedAutoMergeError());
+      }
+      if (
+        input.headSha !== undefined &&
+        (input.stackNumber !== undefined || !["merge", "enable-auto-merge"].includes(input.action))
+      )
+        return Effect.fail(new GitHubMergeHeadUnsupportedError());
       if (input.action === "delete-branch") {
         return Effect.gen(function* () {
           if (input.stackNumber !== undefined) {
@@ -2544,6 +2533,9 @@ export const make = Effect.gen(function* () {
             Effect.map((result) => result.repository?.pullRequest ?? null),
             Effect.flatMap(found(target)),
           );
+        if (input.headSha !== undefined && state.isMergeQueueEnabled === true) {
+          return yield* new GitHubPinnedAutoMergeError();
+        }
         if (action === "update-branch") {
           if (state.baseRef?.compare?.behindBy === 0) return;
           return yield* client
@@ -2555,7 +2547,7 @@ export const make = Effect.gen(function* () {
             .pipe(graphql(target), Effect.asVoid);
         }
         let body: string | undefined;
-        let expectedHead: string | undefined;
+        let expectedHead = input.headSha;
         if (input.removeAgentCreditsOnMerge === true && input.mergeMethod !== "rebase") {
           const message = yield* client
             .PullRequestMergeMessage({
@@ -2573,6 +2565,9 @@ export const make = Effect.gen(function* () {
           if (!message.isMergeQueueEnabled) {
             const cleaned = removeAgentCredits(message.viewerMergeBodyText);
             if (cleaned !== message.viewerMergeBodyText) {
+              if (expectedHead !== undefined && expectedHead !== message.headRefOid) {
+                return yield* new GitHubMergeHeadChangedError({ number: input.number });
+              }
               body = cleaned;
               expectedHead = message.headRefOid;
             }

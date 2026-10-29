@@ -127,6 +127,10 @@ export const makeWriteTools = (
     make("merge", {
       method: Schema.optional(PullRequestMergeMethod),
       auto: Schema.optional(Schema.Boolean),
+      headSha: PullRequestActionInput.fields.headSha.annotate({
+        description:
+          "Reviewed head SHA from pull_request.read; direct merges only, not auto:true or a merge queue.",
+      }),
     }),
     make("close", {}),
   ] as const;

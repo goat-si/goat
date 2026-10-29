@@ -57,8 +57,8 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
   options: {
     profile?: string;
     plan?: boolean;
-    partial?: "comment" | "submitReview";
-    refuse?: "comment";
+    partial?: "comment" | "submitReview" | "runAction";
+    refuse?: "comment" | "runAction" | "queued" | "head-mismatch" | "unsupported-pin";
     hang?: "comment";
   } = {},
 ) {
@@ -82,18 +82,40 @@ const harness = Effect.fn("prWritesTest.harness")(function* (
                 }),
               }),
             )
-          : options.refuse === method
-            ? // The service's own check, before any request to the host.
-              Effect.fail(
+          : ["queued", "head-mismatch", "unsupported-pin"].includes(options.refuse ?? "") &&
+              method === "runAction"
+            ? Effect.fail(
                 new PullRequestOperationError({
                   operation: method,
                   detail:
-                    "You need write access on this repository to comment on a change request.",
+                    options.refuse === "head-mismatch"
+                      ? "The reviewed head differs from the merge message head."
+                      : options.refuse === "unsupported-pin"
+                        ? "An expected head is supported only for a single pull request merge."
+                        : "A pinned head cannot be guaranteed for a queued merge. Merge directly or omit headSha.",
+                  cause: new PullRequestProviderError({
+                    provider: SourceControlProviderKind.make("github"),
+                    operation: method,
+                    reason:
+                      options.refuse === "queued" ? "pinned-auto-merge" : "pinned-head-refused",
+                    detail: "The pinned merge was refused before any host write.",
+                  }),
                 }),
               )
-            : options.hang === method
-              ? Effect.never
-              : Effect.void,
+            : options.refuse === method
+              ? // The service's own check, before any request to the host.
+                Effect.fail(
+                  new PullRequestOperationError({
+                    operation: method,
+                    detail:
+                      method === "runAction"
+                        ? "This host cannot enforce the expected head for this merge action and method."
+                        : "You need write access on this repository to comment on a change request.",
+                  }),
+                )
+              : options.hang === method
+                ? Effect.never
+                : Effect.void,
       ),
     );
   const project = makeProject();
@@ -235,6 +257,115 @@ it.effect.each(["worker", "merge-manager"])(
     }),
 );
 
+it.effect("returns the service's unsupported head-pin refusal through goat_call", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({ refuse: "runAction" });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: { ...target, headSha: "reviewed-head", clientRequestId: "pinned" },
+        }),
+      ).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", message: expect.stringContaining("expected head") },
+      });
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect("refuses auto merge with a reviewed head through goat_call before the service", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: {
+            ...target,
+            auto: true,
+            headSha: "reviewed-head",
+            clientRequestId: "pinned-auto",
+          },
+        }),
+      ).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", message: expect.stringMatching(/automatic|auto/i) },
+      });
+      expect(yield* Ref.get(h.calls)).toEqual([]);
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect("returns a host's pinned queue refusal as a clear precondition error", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({ refuse: "queued" });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: {
+            ...target,
+            headSha: "reviewed-head",
+            clientRequestId: "pinned-queue",
+          },
+        }),
+      ).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", message: expect.stringMatching(/queued merge/i) },
+      });
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect.each([
+  ["head-mismatch", /reviewed head differs from the merge message head/i],
+  ["unsupported-pin", /expected head.*single pull request merge/i],
+] as const)("reports a pre-write %s pin refusal through goat_call", ([refuse, message]) =>
+  Effect.gen(function* () {
+    const h = yield* harness({ refuse });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: {
+            ...target,
+            headSha: "reviewed-head",
+            clientRequestId: refuse,
+          },
+        }),
+      ).toMatchObject({
+        status: "error",
+        error: { code: "failed_precondition", message: expect.stringMatching(message) },
+      });
+      expect(yield* reservations).not.toContainEqual(expect.objectContaining({ state: "unknown" }));
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
+it.effect("keeps a genuine merge host failure as an unknown outcome", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({ partial: "runAction" });
+    yield* Effect.gen(function* () {
+      yield* seed;
+      expect(
+        yield* call("goat_call", {
+          path: "pull_request.merge",
+          args: {
+            ...target,
+            headSha: "reviewed-head",
+            clientRequestId: "host-failure",
+          },
+        }),
+      ).toMatchObject({ status: "error", error: { code: "unknown_outcome", retryable: false } });
+    }).pipe(Effect.provide(h.registered));
+  }),
+);
+
 it.effect.each(["plan", "readOnly"])(
   "refuses %s PR writes before the service or reservation",
   (restriction) =>
@@ -368,7 +499,12 @@ it.effect(
             "runAction",
             { action: "update-branch", updateMethod: "rebase" },
           ],
-          ["merge", { method: "squash" }, "runAction", { action: "merge", mergeMethod: "squash" }],
+          [
+            "merge",
+            { method: "squash", headSha: "abc123" },
+            "runAction",
+            { action: "merge", mergeMethod: "squash", headSha: "abc123" },
+          ],
           [
             "merge",
             { auto: true, method: "merge" },

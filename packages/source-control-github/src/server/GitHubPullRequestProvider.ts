@@ -41,6 +41,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase"],
+  expectedHeadMergeMethods: ["merge", "squash", "rebase"],
   deleteBranch: true,
   updateMethods: ["merge", "rebase"],
   search: true,
@@ -111,6 +112,11 @@ function gitHubProviderFailure(
   error: GitHubPullRequestApi.GitHubPullRequestApiError,
 ): PullRequestProviderFailure {
   switch (error._tag) {
+    case "GitHubPinnedAutoMergeError":
+      return { reason: "pinned-auto-merge" };
+    case "GitHubMergeHeadChangedError":
+    case "GitHubMergeHeadUnsupportedError":
+      return { reason: "pinned-head-refused" };
     case "GitHubCliMissingError":
       return { reason: "missing-tool" };
     case "GitHubNotSignedInError":
@@ -684,6 +690,7 @@ export const make = Effect.gen(function* () {
           host: input.host,
           number: input.number,
           action: input.action,
+          ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
           ...(input.removeAgentCreditsOnMerge === true ? { removeAgentCreditsOnMerge: true } : {}),
           ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
           ...(input.expectedStackHeads === undefined

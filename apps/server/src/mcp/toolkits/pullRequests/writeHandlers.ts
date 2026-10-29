@@ -1,26 +1,33 @@
 import {
   OrchestratorMcpFailure,
+  PullRequestOperationError,
   type PullRequestActionInput,
   type PullRequestRef,
   type ThreadPullRequestKey,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 
 import * as Sync from "../../../orchestration-v2/PullRequestSyncReactor.ts";
 import * as PullRequests from "../../../pullRequest/PullRequestService.ts";
+import { PINNED_AUTO_MERGE_REFUSAL } from "../../../pullRequest/pullRequestActionPolicy.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { loadCaller, reauthorizationFailure } from "../../threadAccess.ts";
 import type { PullRequestTargetInput, PullRequestToolError, PullRequestsToolkit } from "./tools.ts";
 import { PullRequestWriteFailedError, PullRequestWriteRefusedError } from "./writeTools.ts";
 
+const isPullRequestProviderError = Schema.is(PullRequestProviderError);
+
 /**
- * The service's own checks fail before any host request and carry no host cause. Any host error
- * may follow an earlier request of the same write (GitLab posts a review in several), so it stays
- * an unknown outcome.
+ * Typed pin refusals happen before a host write. Other host errors can follow a partial
+ * write (GitLab posts a review in several), so their outcome remains unknown.
  */
 const classified = (error: PullRequests.PullRequestError) =>
-  error.cause === undefined
+  error.cause === undefined ||
+  (isPullRequestProviderError(error.cause) &&
+    (error.cause.reason === "pinned-auto-merge" || error.cause.reason === "pinned-head-refused"))
     ? new PullRequestWriteRefusedError({ detail: error.message })
     : new PullRequestWriteFailedError({ cause: error });
 
@@ -125,11 +132,19 @@ export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandler
     goat_pull_request_action: write(({ action: requested, updateMethod }, ref) =>
       action(ref, { action: requested, ...(updateMethod === undefined ? {} : { updateMethod }) }),
     ),
-    goat_pull_request_merge: write(({ method, auto }, ref) =>
-      action(ref, {
-        action: auto ? "enable-auto-merge" : "merge",
-        ...(method === undefined ? {} : { mergeMethod: method }),
-      }),
+    goat_pull_request_merge: write(({ method, auto, headSha }, ref) =>
+      auto && headSha !== undefined
+        ? Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail: PINNED_AUTO_MERGE_REFUSAL,
+            }),
+          )
+        : action(ref, {
+            action: auto ? "enable-auto-merge" : "merge",
+            ...(method === undefined ? {} : { mergeMethod: method }),
+            ...(headSha === undefined ? {} : { headSha }),
+          }),
     ),
     goat_pull_request_close: write((_, ref) => action(ref, { action: "close" })),
   } satisfies WriteHandlers;

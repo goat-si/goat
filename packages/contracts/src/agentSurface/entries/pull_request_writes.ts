@@ -127,17 +127,23 @@ export const pullRequestWriteEntries = {
       guide: "delete-branch, revert and approve-workflows are not exposed here.",
     },
   ),
-  "pull_request.merge": write(
-    "merge",
-    "Request a pull request merge",
-    "Request merge or enable auto-merge with auto:true. Requires pr.merge. The receipt says accepted; it does not prove merged. Read pull_request.read for state and autoMerge.",
-    "pull_request.read",
-    {
-      capability: "pr.merge",
-      guide:
-        "Merge acts on the host's current head. For exact-head merges, use branch protection. The host may queue the merge; accepted never means merged.",
+  "pull_request.merge": {
+    ...write(
+      "merge",
+      "Request a pull request merge",
+      "Request merge or enable auto-merge with auto:true. Requires pr.merge. The receipt says accepted; it does not prove merged. Read pull_request.read for state and autoMerge.",
+      "pull_request.read",
+      {
+        capability: "pr.merge",
+        guide:
+          "Pass headSha from the pull_request.read result you reviewed. The host refuses if the head has moved. A pinned head cannot be used with auto:true or a merge queue; merge directly or omit the pin. Unsupported hosts and methods refuse the pin. Accepted never means merged.",
+      },
+    ),
+    parameters: {
+      headSha:
+        "Reviewed head SHA from pull_request.read; direct merges only, not auto:true or a merge queue.",
     },
-  ),
+  },
   "pull_request.close": write(
     "close",
     "Close a pull request",

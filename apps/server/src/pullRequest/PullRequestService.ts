@@ -1,3 +1,4 @@
+import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import { parseDiffFilePaths } from "@goat/source-control-core/server/diffFileRevisions";
 import * as Cache from "effect/Cache";
@@ -22,7 +23,6 @@ import {
   resolvePullRequestAuthorFilter,
   type OrchestrationProjectShell,
   type ProjectId,
-  type PullRequestAction,
   type PullRequestActionInput,
   type PullRequestActivity,
   type PullRequestCommentInput,
@@ -297,28 +297,6 @@ const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {
   comment: "review",
   approve: "approve",
   "request-changes": "request changes on",
-};
-
-const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
-  merge: "You need write access on this repository to merge.",
-  ready:
-    "You need write access on this repository, or to have opened this change request, to mark it ready for review.",
-  draft:
-    "You need write access on this repository, or to have opened this change request, to return it to a draft.",
-  close:
-    "You need write access on this repository, or to have opened this change request, to close it.",
-  "update-branch":
-    "You need write access on this repository, or to have opened this change request, to update its branch.",
-  reopen:
-    "You need write access on this repository, or to have opened this change request, to reopen it.",
-  "enable-auto-merge":
-    "Auto-merge needs write access on this repository, and the repository has to allow it.",
-  "disable-auto-merge":
-    "You need write access on this repository to stop it being merged for you once it is ready.",
-  revert: "You need write access on this repository to open a revert pull request.",
-  "delete-branch": "You need write access on the source repository to delete its branch.",
-  "approve-workflows":
-    "You need write access on this repository to approve workflows from a fork pull request.",
 };
 
 const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
@@ -1953,6 +1931,24 @@ export const make = Effect.gen(function* () {
   const runAction = (input: PullRequestActionInput): Effect.Effect<string, PullRequestError> =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<string, PullRequestError> => {
+        const pinnedAutoRefusal = pinnedAutoMergeRefusal(input);
+        if (pinnedAutoRefusal !== undefined) return Effect.fail(pinnedAutoRefusal);
+        if (
+          input.headSha !== undefined &&
+          (input.stackNumber !== undefined ||
+            !["merge", "enable-auto-merge"].includes(input.action) ||
+            !(project.api.capabilities.expectedHeadMergeMethods ?? []).includes(
+              input.mergeMethod ?? "merge",
+            ))
+        ) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail:
+                "This host cannot enforce the expected head for this merge action and method.",
+            }),
+          );
+        }
         if (input.action === "delete-branch" && project.api.capabilities.deleteBranch !== true) {
           return Effect.fail(
             new PullRequestOperationError({
@@ -2109,6 +2105,7 @@ export const make = Effect.gen(function* () {
                     host: project.host,
                     number: input.number,
                     action: input.action,
+                    ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
                     ...(removeAgentCreditsOnMerge ? { removeAgentCreditsOnMerge: true } : {}),
                     ...(input.stackNumber === undefined ? {} : { stackNumber: input.stackNumber }),
                     ...(input.expectedStackHeads === undefined

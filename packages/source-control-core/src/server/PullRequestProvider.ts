@@ -49,6 +49,9 @@ export class PullRequestProviderError extends Schema.TaggedError<PullRequestProv
       "unauthenticated",
       "rate-limited",
       "not-found",
+      // This refusal must happen before any host write; MCP releases its retry key.
+      "pinned-auto-merge",
+      "pinned-head-refused",
       "failed",
     ]),
     detail: Schema.String,
@@ -457,6 +460,7 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly action: PullRequestAction;
+      readonly headSha?: string;
       readonly stackNumber?: number;
       readonly expectedStackHeads?: ReadonlyArray<PullRequestStackHead>;
       readonly removeAgentCreditsOnMerge?: boolean;
