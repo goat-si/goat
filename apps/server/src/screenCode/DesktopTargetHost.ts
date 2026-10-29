@@ -32,7 +32,6 @@ import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
 import {
   BATCH_FAILED_CATEGORIES,
-  buildGuardInput,
   inspectTreeElements,
   preflightDesktopBatch,
   type GuardElement,
@@ -49,6 +48,7 @@ import {
   annotatePointerResult,
   applyDesktopPointerArgs,
   buildScreenshotCapture,
+  pointerStateFor,
   treeWindowBasis,
   type ScreenshotBasis,
 } from "./DesktopTargetPoints.ts";
@@ -57,10 +57,12 @@ import {
   pollHiddenWindow,
   runInputWithEvidence,
   seedBatchBaseline,
+  settleCaptureIfNeeded,
 } from "./DesktopEvidence.ts";
 import {
   availabilityFromControlState,
   buildWaitExpectation,
+  inspectBatchMember,
   INPUT_METHODS,
   prepareDesktopInput,
   validateMenuInput,
@@ -136,6 +138,8 @@ export interface BoundWindow {
   snapshotId?: string;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
   pointsStale?: "input" | "restart";
+  /** Input ran without a post-input 60 ms settle sleep; the next screenshot settles first. */
+  needsSettleBeforeCapture?: boolean;
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
   /** Element roles, labels and table-cell ancestry from the tree behind observationId. */
@@ -508,6 +512,7 @@ export const createDesktopTargetHost = (deps: {
         delete bound.rows;
       };
       let limit: number = READ_BOUNDS[0];
+      yield* settleCaptureIfNeeded(capture, bound, call.deadlineMillis);
       let reply = yield* read(limit);
       const oversized = () =>
         object(driverValue(reply))?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE;
@@ -640,6 +645,7 @@ export const createDesktopTargetHost = (deps: {
       });
       if (!capture) {
         const observation = yield* render;
+        delete bound.needsSettleBeforeCapture;
         if (followedSheet && parentId !== undefined) {
           Object.assign(bound, {
             windowId: parentId,
@@ -727,22 +733,27 @@ export const createDesktopTargetHost = (deps: {
       acted: DesktopRow | undefined,
       runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
     ) =>
-      inBatch
-        ? runInput
-        : runInputWithEvidence({
-            send,
-            call,
-            context,
-            pid: bound.pid,
-            windowId: bound.windowId,
-            connectionGeneration: bound.connectionGeneration,
-            tracker: trackerFor(context, bound.connectionGeneration),
-            tool,
-            forwarded,
-            acted,
-            rows: bound.rows ?? [],
-            runInput,
-          });
+      Effect.suspend(() => {
+        bound.needsSettleBeforeCapture = true;
+        if (inBatch) return runInput;
+        return runInputWithEvidence({
+          send,
+          call,
+          context,
+          pid: bound.pid,
+          windowId: bound.windowId,
+          connectionGeneration: bound.connectionGeneration,
+          tracker: trackerFor(context, bound.connectionGeneration),
+          tool,
+          forwarded,
+          acted,
+          rows: bound.rows ?? [],
+          runInput,
+          onSettled: () => {
+            delete bound.needsSettleBeforeCapture;
+          },
+        });
+      });
     if (call.method === "invoke_menu") {
       const checkedMenu = validateMenuInput(callArgs(call.args), bound);
       if (checkedMenu.error || !checkedMenu.path)
@@ -833,17 +844,12 @@ export const createDesktopTargetHost = (deps: {
       return yield* Effect.fail(prepared.error ?? fail("invalid_argument"));
     const { forwarded, elementToken, actedRow, admission } = prepared;
     const tool = call.method === "right_click" ? "right_click" : call.method;
-    const pointerState = {
-      ...(deps.platform === undefined ? {} : { platform: deps.platform }),
-      ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
-      ...(bound.frames === undefined ? {} : { frames: bound.frames }),
-      ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
-      ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
-      ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
-      ...(bound.latestScreenshot === undefined ? {} : { latestScreenshot: bound.latestScreenshot }),
-      resolveToken: (el: Record<string, unknown>) => tokenOf(el, bound),
-    };
-    const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, pointerState);
+    const pointerResolved = applyDesktopPointerArgs(
+      call.method,
+      args,
+      forwarded,
+      pointerStateFor(bound, deps.platform, (el) => tokenOf(el, bound)),
+    );
     if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
     bound.pointsStale ??= "input";
     if (!isMac) {
@@ -906,18 +912,15 @@ export const createDesktopTargetHost = (deps: {
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
-    const refused = preflightDesktopBatch(calls, (call) => {
-      const bound = resolve(call, context);
-      if (!bound) return { ok: false, error: fail("stale_reference") };
-      const args = callArgs(call.args);
-      const element = object(args.elementRef);
-      const elementToken = element ? tokenOf(element, bound) : undefined;
-      if (element && !elementToken) return { ok: false, error: fail("stale_reference") };
-      const guardInput = buildGuardInput(call.method, args, bound, elementToken, (el) =>
-        tokenOf(el, bound),
-      );
-      return guardInput.ok ? { ok: true, ...guardInput.input } : guardInput;
-    });
+    const refused = preflightDesktopBatch(calls, (call) =>
+      inspectBatchMember(
+        call.method,
+        callArgs(call.args),
+        resolve(call, context),
+        deps.platform,
+        tokenOf,
+      ),
+    );
     if (refused !== undefined) return refused;
     const first = calls[0];
     const firstBound = first && resolve(first, context);

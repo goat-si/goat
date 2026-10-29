@@ -1,5 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeURL from "node:url";
 import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import {
   call,
@@ -9,6 +12,42 @@ import {
   goat2WindowState,
 } from "./DesktopTargetHost.testkit.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { ScreenRunService } from "./ScreenRunService.ts";
+import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+
+const runCell = (host: ReturnType<typeof fixture>["host"], source: string) =>
+  Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const res = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source,
+    });
+    yield* service.finishTurn({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      reason: "test",
+    });
+    return res;
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        desktopHost: host,
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
 
 const framedState = {
   pid: 42,
@@ -750,5 +789,204 @@ it.effect(
         context,
       );
       expect(validMixedDrag.category).toBe("confirmed");
+    }),
+);
+
+it.live(
+  "T62a/T62b/T62c/T62d: screenshot keeping snapshot_id retains refs (guard), while an invalidating or failed screenshot or failed observe clears dead guest refs so named clicks re-observe",
+  () =>
+    Effect.gen(function* () {
+      let mode: "keep" | "invalidate" | "failObserve" | "failShot" = "keep";
+      let treeReads = 0;
+      const { host, sent } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          if (args.include_accessibility_tree === false) {
+            if (mode === "failShot") {
+              return new DriverError({ status: "failed" }, "Screenshot capture failed");
+            }
+            if (mode === "invalidate") {
+              return goat2WindowState(args, {
+                snapshot_id: "s0000000b",
+                invalidated_snapshot_ids: ["s0000000a"],
+              });
+            }
+            return goat2WindowState(args, { snapshot_id: "s0000000a" });
+          }
+          treeReads++;
+          if (mode === "failObserve" && treeReads === 2) {
+            return new DriverError({ status: "failed" }, "AX walk timed out");
+          }
+          const sid = treeReads === 1 ? "s0000000a" : "s0000000c";
+          return {
+            ...framedState,
+            snapshot_id: sid,
+            tree_markdown: [
+              '- [0] AXWindow "Editor"',
+              '  - [1] AXButton "Apply" [actions=[press]]',
+            ].join("\n"),
+            elements: [
+              {
+                element_index: 0,
+                element_token: `${sid}:0`,
+                role: "AXWindow",
+                label: "Editor",
+                frame: { x: 100, y: 200, w: 500, h: 400 },
+              },
+              {
+                element_index: 1,
+                element_token: `${sid}:1`,
+                role: "AXButton",
+                label: "Apply",
+                parent_index: 0,
+                frame: { x: 140, y: 260, w: 80, h: 30 },
+                actions: ["AXPress"],
+              },
+            ],
+          };
+        },
+      });
+
+      // T62a (guard): screenshot keeping snapshot_id retains refs for both number and name clicks.
+      const keptRes = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "await app.observe(); await app.screenshot(); " +
+          "const r1 = (await app.click(1)).verdict; const r2 = (await app.click('Apply')).verdict; return [r1, r2];",
+      );
+      expect(keptRes.value).toEqual(["confirmed", "confirmed"]);
+
+      // T62b: screenshot returning replacement capture snapshot s0000000b (invalidating s0000000a) clears guest seen.observation.
+      mode = "invalidate";
+      treeReads = 0;
+      sent.length = 0;
+      const invRes = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "await app.observe(); await app.screenshot(); " +
+          "let numErr = 'ok'; try { await app.click(1); } catch (e) { numErr = e.code; } " +
+          "const named = (await app.click('Apply')).verdict; return { numErr, named };",
+      );
+      expect(invRes.value).toEqual({ numErr: "stale_reference", named: "confirmed" });
+      expect(sent.find((s) => s.tool === "click")?.args).toMatchObject({
+        element_token: "s0000000c:1",
+      });
+
+      // T62c: failed second observe (modern and legacy) clears seen.observation so named click re-observes.
+      mode = "failObserve";
+      treeReads = 0;
+      const failObsRes = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "await app.observe(); " +
+          "const err = await app.observe().then(() => 'ok', (e) => e.code); " +
+          "let numErr = 'ok'; try { await app.click(1); } catch (e) { numErr = e.code; } " +
+          "const named = (await app.click('Apply')).verdict; return { err, numErr, named };",
+      );
+      expect(failObsRes.value).toEqual({
+        err: "downstream_failure",
+        numErr: "stale_reference",
+        named: "confirmed",
+      });
+
+      treeReads = 0;
+      const failLegacyObsRes = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "await app.observe(); " +
+          "const err = await app.observe({ mode: 'full' }).then(() => 'ok', (e) => e.code); " +
+          "let numErr = 'ok'; try { await app.click(1); } catch (e) { numErr = e.code; } " +
+          "const named = (await app.click('Apply')).verdict; return { err, numErr, named };",
+      );
+      expect(failLegacyObsRes.value).toEqual({
+        err: "downstream_failure",
+        numErr: "stale_reference",
+        named: "confirmed",
+      });
+
+      // T62d: failed screenshot clears seen.observation so number click fails stale_reference and named click re-observes.
+      mode = "failShot";
+      treeReads = 0;
+      const failShotRes = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "await app.observe(); " +
+          "const err = await app.screenshot().then(() => 'ok', (e) => e.code); " +
+          "let numErr = 'ok'; try { await app.click(1); } catch (e) { numErr = e.code; } " +
+          "const named = (await app.click('Apply')).verdict; return { err, numErr, named };",
+      );
+      expect(failShotRes.value).toEqual({
+        err: "downstream_failure",
+        numErr: "stale_reference",
+        named: "confirmed",
+      });
+    }),
+);
+
+it.effect(
+  "T65: out-of-bounds screenshot pixels (including far edge) and window points fail pre-dispatch with pixels, scale, and window points in the message",
+  () =>
+    Effect.gen(function* () {
+      const calcShot = {
+        window_id: 7,
+        pid: 42,
+        snapshot_id: "s0000000a",
+        elements_complete: false,
+        tree_markdown: "",
+        tree_format: "markdown",
+        screenshot_width: 1348,
+        screenshot_height: 816,
+        screenshot_mime_type: "image/png",
+        window_bounds: { x: 2892, y: 485, width: 674, height: 408 },
+        screenshot_scale: 2,
+        image: {
+          mimeType: "image/png" as const,
+          bytes: Buffer.from("png").toString("base64"),
+          width: 1348,
+          height: 816,
+        },
+      };
+      const { host, sent } = fixture({ get_window_state: calcShot });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const shot = yield* host.observe(call("screenshot", {}, ref), context);
+      const regionId = shot.imageMetadata?.regionId ?? "";
+      const before = sent.length;
+
+      const oobHigh = yield* host
+        .invoke(call("click", { x: 5000, y: 5000, regionId }, ref), context)
+        .pipe(Effect.flip);
+      expect(oobHigh).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(oobHigh.nextStep).toContain("(5000, 5000) px");
+      expect(oobHigh.nextStep).toContain("scale 2x");
+      expect(oobHigh.nextStep).toContain("(2500.0, 2500.0) pt");
+      expect(oobHigh.nextStep).toContain("1348×816 px");
+      expect(oobHigh.nextStep).toContain("674×408 pt");
+
+      const oobNeg = yield* host
+        .invoke(call("click", { x: -10, y: -10, regionId }, ref), context)
+        .pipe(Effect.flip);
+      expect(oobNeg).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(oobNeg.nextStep).toContain("(-10, -10) px");
+      expect(oobNeg.nextStep).toContain("(-5.0, -5.0) pt");
+
+      // Far edge (px === pixelWidth or py === pixelHeight) is outside [0, 1348) x [0, 816).
+      const oobEdge = yield* host
+        .invoke(call("click", { x: 1348, y: 816, regionId }, ref), context)
+        .pipe(Effect.flip);
+      expect(oobEdge).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(oobEdge.nextStep).toContain("(1348, 816) px");
+
+      // Out-of-bounds window_points also fails pre-dispatch.
+      const oobWinPt = yield* host
+        .invoke(call("click", { x: 675, y: 408, coordinate_space: "window_points" }, ref), context)
+        .pipe(Effect.flip);
+      expect(oobWinPt).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(oobWinPt.nextStep).toContain("(675.0, 408.0) pt");
+      expect(oobWinPt.nextStep).toContain("674×408 pt");
+
+      expect(sent.slice(before)).toEqual([]);
     }),
 );

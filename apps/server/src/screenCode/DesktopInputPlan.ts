@@ -3,9 +3,10 @@ import type { BoundWindow } from "./DesktopTargetHost.ts";
 /**
  * Desktop input argument planning, named AX action validation, and waitFor expectation building.
  */
-import type { ScreenRunError } from "@goat/contracts";
+import type { ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import { fail } from "./DesktopDriverReplies.ts";
 import type { DesktopRow } from "./DesktopObserveRead.ts";
+import { applyDesktopPointerArgs, pointerStateFor } from "./DesktopTargetPoints.ts";
 
 const ACTION_TO_AX: Readonly<Record<string, string>> = {
   press: "AXPress",
@@ -222,4 +223,34 @@ export const availabilityFromControlState = (state: {
         : ("paused" as const)
       : ("no_lease" as const);
   return [{ kind: "app" as const, available: false, reason }];
+};
+
+export const inspectBatchMember = (
+  method: ScreenHostCall["method"],
+  args: Record<string, unknown>,
+  bound: BoundWindow | undefined,
+  platform: NodeJS.Platform | undefined,
+  resolveToken: (el: Record<string, unknown>, b: BoundWindow) => string | undefined,
+) => {
+  if (!bound) return { ok: false as const, error: fail("stale_reference") };
+  const element =
+    typeof args.elementRef === "object" &&
+    args.elementRef !== null &&
+    !Array.isArray(args.elementRef)
+      ? (args.elementRef as Record<string, unknown>)
+      : undefined;
+  const elementToken = element ? resolveToken(element, bound) : undefined;
+  if (element && !elementToken) return { ok: false as const, error: fail("stale_reference") };
+  const guardInput = buildGuardInput(method, args, bound, elementToken, (el) =>
+    resolveToken(el, bound),
+  );
+  if (!guardInput.ok) return guardInput;
+  const pointerResolved = applyDesktopPointerArgs(
+    method,
+    args,
+    elementToken === undefined ? {} : { element_token: elementToken },
+    pointerStateFor(bound, platform, (el) => resolveToken(el, bound)),
+  );
+  if (!pointerResolved.ok) return pointerResolved;
+  return { ok: true as const, ...guardInput.input };
 };

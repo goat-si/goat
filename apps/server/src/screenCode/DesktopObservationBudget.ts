@@ -156,16 +156,14 @@ export const desktopCutOrder = (
   );
   take(
     elements
-      .filter(
-        (element) =>
-          ROWS.has(element.role) &&
-          kids(element.index).some((child) => {
-            const cell = byIndex.get(child);
-            return (
-              cell !== undefined && cell.name !== "" && cell.name === element.name && acts(cell)
-            );
-          }),
-      )
+      .filter((element) => {
+        if (!ROWS.has(element.role)) return false;
+        const rowKids = kids(element.index);
+        const firstKid = rowKids.length === 1 ? rowKids[0] : undefined;
+        if (firstKid === undefined) return false;
+        const cell = byIndex.get(firstKid);
+        return cell !== undefined && cell.name !== "" && cell.name === element.name && acts(cell);
+      })
       .map((element) => element.index),
   );
   const compactRows = new Set<number>();

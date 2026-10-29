@@ -20,6 +20,20 @@ import {
   type WindowEntry,
 } from "./DesktopWindows.ts";
 import type { DesktopRow } from "./DesktopObserveRead.ts";
+import type { BoundWindow } from "./DesktopTargetHost.ts";
+
+export const settleCaptureIfNeeded = Effect.fn("DesktopEvidence.settleCaptureIfNeeded")(function* (
+  capture: boolean,
+  bound: BoundWindow,
+  callDeadlineMillis: number,
+) {
+  if (!capture || bound.needsSettleBeforeCapture !== true) return;
+  const now = yield* Clock.currentTimeMillis;
+  if (callDeadlineMillis - now - CELL_RESERVE_MS >= 7_060) {
+    yield* Effect.sleep("60 millis");
+    delete bound.needsSettleBeforeCapture;
+  }
+});
 
 export interface WatchedElement {
   readonly kind: "acted" | "window";
@@ -220,6 +234,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     readonly acted: DesktopRow | undefined;
     readonly rows: ReadonlyArray<DesktopRow>;
     readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
+    readonly onSettled?: () => void;
   }) {
     const {
       send,
@@ -234,6 +249,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       acted,
       rows,
       runInput,
+      onSettled,
     } = deps;
     const inputCapMs = driverCallCapMs(tool, forwarded);
     const watched = buildWatchedElements(acted, rows);
@@ -262,6 +278,11 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
           )
         : undefined;
     const base = yield* runInput;
+    const nowAfter = yield* Clock.currentTimeMillis;
+    if (call.deadlineMillis - nowAfter - CELL_RESERVE_MS >= 1_560) {
+      yield* Effect.sleep("60 millis");
+      onSettled?.();
+    }
     const postWinRaw = yield* quietRead(
       send,
       call,
@@ -294,10 +315,11 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
             parseVerifyObservations(postVerifyRaw, watched.length),
           )
         : [];
+    const allObserved = [...elDiff, ...winDiff.evidence].slice(0, 16);
     return {
       ...base,
-      value: fitInputWindows(base.value, winDiff.report, context.limits.returnBytes),
-      evidence: [...(base.evidence ?? []), ...elDiff, ...winDiff.evidence].slice(0, 16),
+      value: fitInputWindows(base.value, winDiff.report, context.limits.returnBytes, allObserved),
+      evidence: [...(base.evidence ?? []), ...allObserved].slice(0, 16),
     };
   },
 );

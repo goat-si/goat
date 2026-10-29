@@ -47,6 +47,19 @@ const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
+const fmtNum = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+
+const formatPixelOutOfBounds = (
+  px: number,
+  py: number,
+  wx: number,
+  wy: number,
+  shot: ScreenshotBasis,
+): string =>
+  `Screenshot pixel (${fmtNum(px)}, ${fmtNum(py)}) px at scale ${fmtNum(shot.scale)}x maps to (${wx.toFixed(1)}, ${wy.toFixed(1)}) pt, which is outside the ${shot.pixelWidth}×${shot.pixelHeight} px (${Math.round(shot.basis.w)}×${Math.round(shot.basis.h)} pt) window. Nothing was sent.`;
+
+const formatWindowPointOutOfBounds = (wx: number, wy: number, basis: Rect): string =>
+  `Window point (${wx.toFixed(1)}, ${wy.toFixed(1)}) pt is outside the ${Math.round(basis.w)}×${Math.round(basis.h)} pt window. Nothing was sent.`;
 
 export interface PointResolutionState {
   readonly platform?: NodeJS.Platform;
@@ -58,6 +71,28 @@ export interface PointResolutionState {
   readonly latestScreenshot?: ScreenshotBasis;
   readonly resolveToken: (element: Record<string, unknown>) => string | undefined;
 }
+
+export const pointerStateFor = (
+  bound: {
+    readonly pointsStale?: "input" | "restart" | undefined;
+    readonly frames?: ReadonlyMap<string, Placed> | undefined;
+    readonly framesBasis?: Rect | undefined;
+    readonly windowBounds?: Rect | undefined;
+    readonly screenshots?: ReadonlyMap<string, ScreenshotBasis> | undefined;
+    readonly latestScreenshot?: ScreenshotBasis | undefined;
+  },
+  platform: NodeJS.Platform | undefined,
+  resolveToken: (element: Record<string, unknown>) => string | undefined,
+): PointResolutionState => ({
+  ...(platform === undefined ? {} : { platform }),
+  ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
+  ...(bound.frames === undefined ? {} : { frames: bound.frames }),
+  ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
+  ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
+  ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
+  ...(bound.latestScreenshot === undefined ? {} : { latestScreenshot: bound.latestScreenshot }),
+  resolveToken,
+});
 
 const resolveEndpoint = (
   end: Record<string, unknown>,
@@ -90,6 +125,11 @@ const resolveEndpoint = (
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+    if (x < 0 || y < 0 || x > basis.w || y > basis.h)
+      return {
+        ok: false,
+        error: fail("invalid_argument", formatWindowPointOutOfBounds(x, y, basis)),
+      };
     return { ok: true, x, y, basis, needs: "nothing" };
   }
   if (state.pointsStale === "restart")
@@ -98,10 +138,26 @@ const resolveEndpoint = (
   const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
   if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
     return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+  const wx = (x * shot.basis.w) / shot.pixelWidth;
+  const wy = (y * shot.basis.h) / shot.pixelHeight;
+  if (
+    x < 0 ||
+    y < 0 ||
+    x >= shot.pixelWidth ||
+    y >= shot.pixelHeight ||
+    wx < 0 ||
+    wy < 0 ||
+    wx > shot.basis.w ||
+    wy > shot.basis.h
+  )
+    return {
+      ok: false,
+      error: fail("invalid_argument", formatPixelOutOfBounds(x, y, wx, wy, shot)),
+    };
   return {
     ok: true,
-    x: (x * shot.basis.w) / shot.pixelWidth,
-    y: (y * shot.basis.h) / shot.pixelHeight,
+    x: wx,
+    y: wy,
     basis: shot.basis,
     needs: "points",
   };
@@ -290,6 +346,27 @@ export const applyDesktopPointerArgs = (
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+    if (hasXY) {
+      const wx = args.x as number;
+      const wy = args.y as number;
+      if (wx < 0 || wy < 0 || wx > basis.w || wy > basis.h)
+        return {
+          ok: false,
+          error: fail("invalid_argument", formatWindowPointOutOfBounds(wx, wy, basis)),
+        };
+    }
+    if (hasDragXY) {
+      for (const [wx, wy] of [
+        [args.from_x as number, args.from_y as number],
+        [args.to_x as number, args.to_y as number],
+      ] as const) {
+        if (wx < 0 || wy < 0 || wx > basis.w || wy > basis.h)
+          return {
+            ok: false,
+            error: fail("invalid_argument", formatWindowPointOutOfBounds(wx, wy, basis)),
+          };
+      }
+    }
     forwarded.coordinate_space = "window_points";
     forwarded.window_basis = basis;
     return {
@@ -303,13 +380,29 @@ export const applyDesktopPointerArgs = (
     return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
 
   const regionId = string(args.regionId);
+  const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
   if (regionId !== undefined) {
-    const shot = state.screenshots?.get(regionId);
     if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
     if (hasXY) {
-      const wx = ((args.x as number) * shot.basis.w) / shot.pixelWidth;
-      const wy = ((args.y as number) * shot.basis.h) / shot.pixelHeight;
+      const px = args.x as number;
+      const py = args.y as number;
+      const wx = (px * shot.basis.w) / shot.pixelWidth;
+      const wy = (py * shot.basis.h) / shot.pixelHeight;
+      if (
+        px < 0 ||
+        py < 0 ||
+        px >= shot.pixelWidth ||
+        py >= shot.pixelHeight ||
+        wx < 0 ||
+        wy < 0 ||
+        wx > shot.basis.w ||
+        wy > shot.basis.h
+      )
+        return {
+          ok: false,
+          error: fail("invalid_argument", formatPixelOutOfBounds(px, py, wx, wy, shot)),
+        };
       forwarded.x = wx;
       forwarded.y = wy;
       forwarded.coordinate_space = "window_points";
@@ -317,10 +410,33 @@ export const applyDesktopPointerArgs = (
       return { ok: true, windowPoint: { x: wx, y: wy }, needs: "points" };
     }
     if (hasDragXY) {
-      const fx = ((args.from_x as number) * shot.basis.w) / shot.pixelWidth;
-      const fy = ((args.from_y as number) * shot.basis.h) / shot.pixelHeight;
-      const tx = ((args.to_x as number) * shot.basis.w) / shot.pixelWidth;
-      const ty = ((args.to_y as number) * shot.basis.h) / shot.pixelHeight;
+      const fpx = args.from_x as number;
+      const fpy = args.from_y as number;
+      const tpx = args.to_x as number;
+      const tpy = args.to_y as number;
+      const fx = (fpx * shot.basis.w) / shot.pixelWidth;
+      const fy = (fpy * shot.basis.h) / shot.pixelHeight;
+      const tx = (tpx * shot.basis.w) / shot.pixelWidth;
+      const ty = (tpy * shot.basis.h) / shot.pixelHeight;
+      for (const [px, py, wx, wy] of [
+        [fpx, fpy, fx, fy],
+        [tpx, tpy, tx, ty],
+      ] as const) {
+        if (
+          px < 0 ||
+          py < 0 ||
+          px >= shot.pixelWidth ||
+          py >= shot.pixelHeight ||
+          wx < 0 ||
+          wy < 0 ||
+          wx > shot.basis.w ||
+          wy > shot.basis.h
+        )
+          return {
+            ok: false,
+            error: fail("invalid_argument", formatPixelOutOfBounds(px, py, wx, wy, shot)),
+          };
+      }
       forwarded.from_x = fx;
       forwarded.from_y = fy;
       forwarded.to_x = tx;
@@ -328,6 +444,51 @@ export const applyDesktopPointerArgs = (
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = shot.basis;
       return { ok: true, windowPoint: { x: tx, y: ty }, needs: "points" };
+    }
+  }
+  if (shot && shot.pixelWidth > 0 && shot.pixelHeight > 0) {
+    if (hasXY) {
+      const px = args.x as number;
+      const py = args.y as number;
+      const wx = (px * shot.basis.w) / shot.pixelWidth;
+      const wy = (py * shot.basis.h) / shot.pixelHeight;
+      if (
+        px < 0 ||
+        py < 0 ||
+        px >= shot.pixelWidth ||
+        py >= shot.pixelHeight ||
+        wx < 0 ||
+        wy < 0 ||
+        wx > shot.basis.w ||
+        wy > shot.basis.h
+      )
+        return {
+          ok: false,
+          error: fail("invalid_argument", formatPixelOutOfBounds(px, py, wx, wy, shot)),
+        };
+    }
+    if (hasDragXY) {
+      for (const [px, py] of [
+        [args.from_x as number, args.from_y as number],
+        [args.to_x as number, args.to_y as number],
+      ] as const) {
+        const wx = (px * shot.basis.w) / shot.pixelWidth;
+        const wy = (py * shot.basis.h) / shot.pixelHeight;
+        if (
+          px < 0 ||
+          py < 0 ||
+          px >= shot.pixelWidth ||
+          py >= shot.pixelHeight ||
+          wx < 0 ||
+          wy < 0 ||
+          wx > shot.basis.w ||
+          wy > shot.basis.h
+        )
+          return {
+            ok: false,
+            error: fail("invalid_argument", formatPixelOutOfBounds(px, py, wx, wy, shot)),
+          };
+      }
     }
   }
 

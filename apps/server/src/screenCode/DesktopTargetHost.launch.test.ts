@@ -6,11 +6,12 @@ import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
-import type {
-  ComputerUsePrimitiveReply,
-  ScreenHostCall,
-  ScreenRunLimits,
-  ScreenTargetRef,
+import {
+  type ComputerUsePrimitiveReply,
+  type ScreenHostCall,
+  type ScreenRunLimits,
+  type ScreenTargetRef,
+  SCREEN_TARGET_API,
 } from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
@@ -539,3 +540,50 @@ it("launch arguments follow each platform's driver contract", () => {
   ).toEqual({ args: { launch_path: "C:\\Program Files\\paint.net\\paintdotnet.exe" } });
   expect(launchPlan("linux", { path: "/opt/Editor.app" })).toMatchObject({ code: "unsupported" });
 });
+
+it.live(
+  "T60: screen.app('Editor') normalizes a string query to {name}, launches or binds a single window, refuses empty strings, and keeps multi-window/process/bundle ambiguity",
+  () => {
+    const closedFix = fixture({
+      list_apps: { apps: [installed] },
+      launch_app: launched([document]),
+    });
+    const runningSingle = fixture({
+      list_apps: { apps: [running] },
+      list_windows: { windows: [document] },
+    });
+    const multiWin = fixture({
+      list_apps: { apps: [running] },
+      list_windows: { windows: [document, { ...document, window_id: 8, title: "Second" }] },
+    });
+    const multiProc = fixture({
+      list_apps: { apps: [running, { ...running, pid: 99 }] },
+    });
+    const sharedName = fixture({
+      list_apps: { apps: [installed, { ...installed, bundle_id: "com.other.Editor" }] },
+    });
+    return Effect.gen(function* () {
+      const launchedRes = yield* cell(
+        closedFix.host,
+        "const app = await screen.app('Editor'); return { launched: app.launched, windowId: app.windowId };",
+      );
+      expect(launchedRes.value).toEqual({ launched: true, windowId: 7 });
+
+      const boundRes = yield* cell(
+        runningSingle.host,
+        "const app = await screen.app('  Editor  '); return { launched: app.launched, windowId: app.windowId };",
+      );
+      expect(boundRes.value).toEqual({ launched: false, windowId: 7 });
+
+      const emptyRes = yield* cell(runningSingle.host, caught("await screen.app('   ');"));
+      expect(emptyRes.value).toMatchObject({ code: "invalid_argument", nothingSent: true });
+
+      for (const ambFix of [multiWin, multiProc, sharedName]) {
+        const ambRes = yield* cell(ambFix.host, caught("await screen.app('Editor');"));
+        expect(ambRes.value).toMatchObject({ code: "target_ambiguous", nothingSent: true });
+      }
+      expect(SCREEN_TARGET_API).toContain("app(q: string | {");
+      expect(SCREEN_TARGET_API).toContain("observed?: string[]");
+    });
+  },
+);
