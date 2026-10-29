@@ -183,6 +183,7 @@ export const createDesktopTargetHost = (deps: {
   readonly primitiveChannel: ComputerUsePrimitiveChannel["Service"];
   readonly leases: ComputerUseLeases["Service"];
   readonly observations?: ScreenObservations;
+  readonly platform?: NodeJS.Platform;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
   readonly cursorGeneration?: (ref: ScreenTargetRef, callKey?: string) => number;
