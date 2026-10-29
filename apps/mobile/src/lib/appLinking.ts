@@ -44,6 +44,33 @@ export function restoreDraftLinkState(
 type LinkState = PartialState<NavigationState>;
 type LinkRoute = LinkState["routes"][number];
 
+export function withoutPairingTarget(state: LinkState | undefined): LinkState | undefined {
+  if (!state) return state;
+  return {
+    ...state,
+    routes: state.routes.map((route) => {
+      const nested = isLinkState(route.state) ? withoutPairingTarget(route.state) : route.state;
+      if (
+        !["Pair", "ConnectionsNew", "SettingsEnvironmentNew"].includes(route.name) ||
+        !route.params ||
+        !(
+          "routeFor" in route.params ||
+          "intent" in route.params ||
+          "replaceEnvironmentId" in route.params
+        )
+      )
+        return nested === route.state ? route : { ...route, state: nested };
+      const {
+        routeFor: _routeFor,
+        intent: _intent,
+        replaceEnvironmentId: _replace,
+        ...params
+      } = route.params as Record<string, unknown>;
+      return { ...route, state: nested, params: { ...params, intent: "add-server" } };
+    }),
+  };
+}
+
 function isLinkState(value: unknown): value is LinkState {
   return typeof value === "object" && value !== null && Array.isArray((value as LinkState).routes);
 }
