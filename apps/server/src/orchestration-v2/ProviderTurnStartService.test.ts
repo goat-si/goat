@@ -1033,6 +1033,7 @@ effectIt.effect(
         instanceId: harness.oldInstanceId,
         text: "/logout",
         hasAttachments: false,
+        byPerson: true,
       });
       expect(harness.open).not.toHaveBeenCalled();
       expect(harness.startRootRun).not.toHaveBeenCalled();
@@ -1066,6 +1067,7 @@ effectIt.effect(
         instanceId: harness.oldInstanceId,
         text: "/logout",
         hasAttachments: false,
+        byPerson: true,
       });
       expect(harness.open).not.toHaveBeenCalled();
       expect(harness.startRootRun).not.toHaveBeenCalled();
@@ -1083,6 +1085,27 @@ effectIt.effect(
       ]);
       expect(projection.providerTurns).toEqual([]);
       expect(projection.checkpoints).toEqual([]);
+    }),
+);
+
+effectIt.effect(
+  "asks the provider to sign out for an agent's /logout only as not written by a person",
+  () =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({
+        text: "/logout",
+        previousNativeSession: true,
+        createdBy: "agent",
+      });
+
+      yield* harness.start;
+
+      expect(harness.tryHandlePromptCommand).toHaveBeenCalledExactlyOnceWith({
+        instanceId: harness.oldInstanceId,
+        text: "/logout",
+        hasAttachments: false,
+        byPerson: false,
+      });
     }),
 );
 

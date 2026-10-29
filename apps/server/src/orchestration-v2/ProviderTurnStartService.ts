@@ -510,6 +510,7 @@ export const layer: Layer.Layer<
                   records: message.context?.records ?? [],
                 }),
                 hasAttachments: false,
+                byPerson: message.createdBy === "user",
               }),
             );
         if (isEmptyCompaction || authResult?._tag === "Failure" || authResult?.success) {

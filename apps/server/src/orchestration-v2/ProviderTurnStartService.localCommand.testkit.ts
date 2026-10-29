@@ -61,6 +61,7 @@ export function makeLocalCommandHarness(input: {
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
+  readonly createdBy?: "user" | "agent";
   readonly openFailure?: unknown;
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
@@ -137,7 +138,7 @@ export function makeLocalCommandHarness(input: {
     text: input.text,
     attachments: [],
     streaming: false,
-    createdBy: "user",
+    createdBy: input.createdBy ?? "user",
     creationSource: "web",
     createdAt: now,
     updatedAt: now,
