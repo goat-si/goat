@@ -27,7 +27,9 @@ const DriverElement = Schema.Struct({
   actions: Schema.optionalKey(Schema.Array(Schema.String)),
   enabled: Schema.optionalKey(Schema.Boolean),
   selected: Schema.optionalKey(Schema.Boolean),
-  // Not sent by the driver: a platform layer sets them where it knows better (computerUseWindows).
+  /** A toggle's state; GOAT's driver fork sends it on Windows and, for AT-SPI toggles, Linux. */
+  toggle_state: Schema.optionalKey(Schema.Literals(["on", "off", "mixed"])),
+  // Not sent by the driver: a platform layer sets it where it knows better (computerUseWindows).
   checked: Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Literal("mixed")])),
   expanded: Schema.optionalKey(Schema.Boolean),
   parent_index: Schema.optionalKey(Schema.Number),
@@ -238,6 +240,11 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
       };
       const toElement = (ref: string, element: DriverElement, parent: string | undefined) => {
         const frame = element.screenshot_frame;
+        const checked =
+          element.checked ??
+          (element.toggle_state === undefined || element.toggle_state === "mixed"
+            ? element.toggle_state
+            : element.toggle_state === "on");
         return {
           ref,
           role: element.role,
@@ -246,14 +253,14 @@ export function makeObservationTracker(newId: () => string): ObservationTracker 
           actions: [...(element.actions ?? [])],
           ...(element.enabled === undefined &&
           element.selected === undefined &&
-          element.checked === undefined &&
+          checked === undefined &&
           element.expanded === undefined
             ? {}
             : {
                 state: {
                   ...(element.enabled === undefined ? {} : { enabled: element.enabled }),
                   ...(element.selected === undefined ? {} : { selected: element.selected }),
-                  ...(element.checked === undefined ? {} : { checked: element.checked }),
+                  ...(checked === undefined ? {} : { checked }),
                   ...(element.expanded === undefined ? {} : { expanded: element.expanded }),
                 },
               }),
