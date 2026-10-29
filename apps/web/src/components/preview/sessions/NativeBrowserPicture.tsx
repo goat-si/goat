@@ -1,4 +1,4 @@
-import type { PreviewSession } from "@goat/contracts";
+import type { PreviewSession, PreviewSessionSnapshot } from "@goat/contracts";
 import { ThreadId } from "@goat/contracts";
 import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -11,6 +11,7 @@ import { cn } from "~/lib/utils";
 import { type DesktopPreviewOverlay, useThreadPreviewState } from "~/previewStateStore";
 
 import { AgentBrowserCursor } from "../AgentBrowserCursor";
+import { useDesktopCardPreviewSession } from "../usePreviewSession";
 import { BROWSER_SCREEN_ASPECT, FittedScreen } from "./PreviewSessionThumbnail";
 
 /**
@@ -26,6 +27,20 @@ const SCREEN_RADIUS_PX = 8;
 /** Marks the stack's scrolling list; a webview is shown only while its picture is fully inside it. */
 export const AGENT_CARDS_SCROLL_ATTRIBUTE = "data-agent-cards-scroll";
 
+/** Agent sessions list only server tabs; assumed until the thread's preview list has loaded the tab. */
+const SERVER_TAB = { runtime: "server" } as const;
+
+/** The snapshot an agent browser card checks to decide whether this desktop draws its webview. */
+export function cardServerTabSnapshot(
+  session: PreviewSession,
+  sessions:
+    | Readonly<Record<string, Pick<PreviewSessionSnapshot, "runtime" | "serverRendered">>>
+    | undefined,
+): Pick<PreviewSessionSnapshot, "runtime" | "serverRendered"> | null {
+  if (session.target.kind !== "browser") return null;
+  return sessions?.[session.target.tabId] ?? SERVER_TAB;
+}
+
 /**
  * The id this desktop hosts a browser tab's webview under, from the thread's own preview state,
  * which ElectronBrowserHost hosts from. Null until that state lists the tab as a server tab, and
@@ -36,13 +51,20 @@ export function useHostedTab(session: PreviewSession): {
   readonly overlay: DesktopPreviewOverlay | null;
 } | null {
   const threadId = session.threadId;
+  const tabId = session.target.kind === "browser" ? session.target.tabId : null;
   const threadRef =
-    threadId === undefined
+    threadId === undefined || tabId === null
       ? null
       : { environmentId: session.environmentId, threadId: ThreadId.make(threadId) };
+  useDesktopCardPreviewSession(threadRef);
   const state = useThreadPreviewState(threadRef);
-  const tabId = session.target.kind === "browser" ? session.target.tabId : null;
-  if (threadRef === null || tabId === null || state.sessions[tabId]?.runtime !== "server")
+  const snapshot = tabId === null ? undefined : state.sessions[tabId];
+  if (
+    threadRef === null ||
+    tabId === null ||
+    snapshot?.runtime !== "server" ||
+    snapshot.serverRendered === true
+  )
     return null;
   return {
     runtimeTabId: previewRuntimeTabId(threadRef, state.serverEpoch, tabId),

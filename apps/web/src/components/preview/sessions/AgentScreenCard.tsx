@@ -42,20 +42,18 @@ import { cn } from "~/lib/utils";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
+import { useThreadPreviewState } from "~/previewStateStore";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useEnvironmentScope } from "~/state/session";
 
 import { NativeAppIcon } from "../../chat/TimelineToolActivityIcon";
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { BrowserCardActions } from "./BrowserCardActions";
-import { NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
+import { cardServerTabSnapshot, NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 type Chip = ReturnType<typeof previewSessionChip>;
-
-/** Agent sessions list only server tabs; this asks whether this client draws one natively. */
-const SERVER_TAB = { runtime: "server" } as const;
 
 /** Who holds the session, said by the dot beside the name and the picture's outline. */
 const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
@@ -571,8 +569,11 @@ export function AgentScreenCard(
     previewSessionsEnvironment.control.permissionAtom(session.environmentId),
   );
   const canOperateBrowser = useEnvironmentScope(session.environmentId, AuthPreviewOperateScope);
-  const drawnHere =
-    useRendersServerTabNatively(session.environmentId, SERVER_TAB) && browserTab !== null;
+  const previewState = useThreadPreviewState(threadRef);
+  const drawnHere = useRendersServerTabNatively(
+    session.environmentId,
+    cardServerTabSnapshot(session, previewState.sessions),
+  );
   const hosted = useHostedTab(session);
   return (
     <AgentScreenCardView
