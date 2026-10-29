@@ -309,6 +309,7 @@ export function workEntryRowLabel(
   expanded = false,
   workspaceRoot?: string | null,
 ): string {
+  if (entry.itemType === "fork") return entry.label;
   if (expanded && entry.itemType === "reasoning")
     return entry.toolLifecycleStatus === "inProgress" ? "Thinking" : "Thought";
   const presentation = resolveWorkEntryToolPresentation(entry);
