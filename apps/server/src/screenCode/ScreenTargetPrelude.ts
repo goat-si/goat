@@ -355,19 +355,108 @@ const __target = (binding, note, owner) => {
   });
 };
 const __tab = (bound) => __target(bound, __note('site', String((bound.tab && bound.tab.url) ?? '')), bound.tab ? bound.tab.owner : undefined);
+const __appTarget = (bound, key, launched, windowId) =>
+  Object.freeze({ ...__target(bound, __note('app', String(key ?? ''))), launched, windowId });
+// list_windows with a pid answers every layer; menu bar items and slivers are not windows to bind.
+// It also keeps windows an app closed but still holds, which look like minimized ones: off screen.
+const __own = (listed, pid) => (listed && listed.windows ? listed.windows : []).filter((item) =>
+  item.pid === pid && (item.layer === undefined || item.layer === 0) &&
+  !(item.bounds && (item.bounds.width <= 1 || item.bounds.height <= 1)));
+// Without window_id: an app running with one window on screen binds it and nothing launches;
+// several windows or processes are ambiguous, and windows all off screen are named, not guessed.
+// An app with no window, closed or running, is launched (reopened when running) and its first
+// window bound in that one launch_app call.
 const __app = async (query) => {
-  let wanted = query;
-  const app = query.bundle_id ?? query.bundleId ?? query.name;
-  if (query.window_id === undefined && query.windowId === undefined && app !== undefined) {
-    const listed = await __call('list_apps', {});
-    const pids = (listed && listed.apps ? listed.apps : []).filter((item) => item.bundle_id === app || item.name === app).map((item) => item.pid);
-    if (pids.length !== 1) throw new ScreenError(pids.length ? 'target_ambiguous' : 'target_missing', 'Find ' + app + ' with screen.discover() and pass window_id.', true);
-    const windows = await __call('list_windows', { pid: pids[0] });
-    const own = (windows && windows.windows ? windows.windows : []).filter((item) => item.pid === pids[0]);
-    if (own.length !== 1) throw new ScreenError(own.length ? 'target_ambiguous' : 'target_missing', app + ' has ' + own.length + ' windows; pass window_id from screen.discover().', true);
-    wanted = { ...query, window_id: own[0].window_id };
+  const windowId = query.window_id ?? query.windowId;
+  const bundle = query.bundle_id ?? query.bundleId;
+  const { name, path } = query;
+  if ((windowId !== undefined && path === undefined) || (bundle === undefined && name === undefined && path === undefined))
+    return __appTarget(await __call('bind_app', query), bundle ?? name, false, windowId);
+  const listed = await __call('list_apps', {});
+  // A reply cut at the channel's cap lists nothing: that is not "not running", so nothing launches.
+  if (!listed || !Array.isArray(listed.apps))
+    throw new ScreenError('target_missing', 'The app list came back incomplete, so whether ' + (bundle ?? name ?? path) + ' runs is unknown and nothing was launched. Pass window_id from screen.discover().', true);
+  const rows = listed.apps;
+  let id = bundle;
+  let copyName;
+  if (path !== undefined) {
+    const copy = rows.find((item) => item.launch_path === path);
+    if (!copy)
+      throw new ScreenError('invalid_argument', 'list_apps does not list ' + path + '; another copy of that app may be running. Pass bundle_id to use the running copy.', true);
+    id = copy.bundle_id ?? id;
+    copyName = copy.name;
   }
-  return __target(await __call('bind_app', wanted), __note('app', String(app ?? '')));
+  if (id === undefined && name !== undefined) {
+    // A name stands for one app only when the rows it matches share one bundle id.
+    const ids = [...new Set(rows.filter((item) => item.name === name && item.bundle_id).map((item) => item.bundle_id))];
+    if (ids.length > 1)
+      throw new ScreenError('target_ambiguous', name + ' names ' + ids.length + ' apps (' + ids.join(', ') + '); pass bundle_id.', true);
+    // A process listed under that name without an id may be another app: the name alone cannot choose.
+    const unnamed = rows.filter((item) => item.pid > 0 && item.running !== false && !item.bundle_id && item.name === name);
+    if (ids.length === 1 && unnamed.length > 0)
+      throw new ScreenError('target_ambiguous', name + ' is ' + ids[0] + ' and also a process listed without an id (pid ' + unnamed.map((item) => item.pid).join(', ') + '); pass bundle_id, or window_id from screen.discover() with name.', true);
+    id = ids[0];
+  }
+  if (windowId !== undefined)
+    return __appTarget(await __call('bind_app', { ...(id !== undefined ? { bundle_id: id } : { name: copyName }), window_id: windowId }), id ?? path, false, windowId);
+  const label = id ?? name ?? path;
+  const mine = rows.filter((item) => (id !== undefined ? item.bundle_id === id : item.name === name));
+  const live = (item) => item.pid > 0 && item.running !== false;
+  const running = mine.filter(live);
+  // Linux and Windows can list a running process without the id its installed row carries. A
+  // shared display name does not prove it is this app, so it is named, never bound or relaunched.
+  if (running.length === 0 && id !== undefined) {
+    const names = new Set(mine.map((item) => item.name).filter((each) => typeof each === 'string'));
+    const unproven = rows.filter((item) => live(item) && (item.bundle_id === undefined || item.bundle_id === null) && names.has(item.name));
+    if (unproven.length > 0)
+      throw new ScreenError('target_ambiguous', label + ' may be running as ' + unproven.map((item) => item.name + ' (pid ' + item.pid + ')').join(', ') + ', listed without its id; nothing was launched. If it is, pick its window in screen.discover() and call screen.app({name: ' + JSON.stringify(String(unproven[0].name)) + ', window_id}).', true);
+  }
+  const pids = [...new Set(running.map((item) => item.pid))];
+  if (pids.length > 1)
+    throw new ScreenError('target_ambiguous', label + ' runs as ' + pids.length + ' processes (pid ' + pids.join(', ') + '); pass window_id from screen.discover().', true);
+  const by = (row) => (row.bundle_id ? { bundle_id: row.bundle_id } : { name: row.name });
+  let wanted;
+  if (pids.length === 1) {
+    const listedWindows = await __call('list_windows', { pid: pids[0] });
+    if (!listedWindows || !Array.isArray(listedWindows.windows))
+      throw new ScreenError('target_missing', 'The window list of ' + label + ' came back incomplete; nothing was launched. Pass window_id from screen.discover().', true);
+    const all = __own(listedWindows, pids[0]);
+    const own = all.filter((item) => item.is_on_screen !== false);
+    const named = (items) => items.map((item) => item.window_id + (item.title ? ' ' + JSON.stringify(String(item.title)) : '')).join(', ');
+    if (own.length > 1)
+      throw new ScreenError('target_ambiguous', label + ' has ' + own.length + ' windows (' + named(own) + '); pass window_id.', true);
+    if (own.length === 1)
+      return __appTarget(await __call('bind_app', { ...by(running[0]), window_id: own[0].window_id }), label, false, own[0].window_id);
+    if (all.length > 0)
+      throw new ScreenError('target_missing', label + ' is running with no window on screen; ' + named(all) + ' may be minimized, hidden, on another Space or closed. Pass window_id to bind one, or ask the person to show it.', true);
+    wanted = by(running[0]);
+  } else if (path !== undefined) {
+    wanted = { path };
+  } else {
+    // Several installed copies of one bundle id and none running: the /Applications copy.
+    const copies = [...new Set(mine.map((item) => item.launch_path).filter((each) => typeof each === 'string'))];
+    const preferred = id !== undefined && copies.length > 1 ? copies.find((each) => each.startsWith('/Applications/')) : undefined;
+    const row = mine[0];
+    wanted = {
+      ...(id !== undefined ? { bundle_id: id } : row && row.bundle_id ? { bundle_id: row.bundle_id } : {}),
+      ...(name !== undefined ? { name } : row && typeof row.name === 'string' ? { name: row.name } : {}),
+      ...(row && typeof row.launch_path === 'string' ? { launch_path: row.launch_path } : {}),
+      ...(preferred === undefined ? {} : { prefer_path: preferred }),
+    };
+  }
+  const reply = await __checked('launch_app', { ...wanted, bind: true });
+  __remember({ call: 'launch', verdict: __verdict(reply) });
+  return __appTarget(reply.v, reply.v.bundle_id ?? label, true, reply.v.windowId);
+};
+const __launch = async (query = {}) => {
+  const bundle = query.bundle_id ?? query.bundleId;
+  const reply = await __checked('launch_app', {
+    ...(bundle === undefined ? {} : { bundle_id: bundle }),
+    ...(query.name === undefined ? {} : { name: query.name }),
+    ...(query.path === undefined ? {} : { path: query.path }),
+  });
+  __remember({ call: 'launch', verdict: __verdict(reply) });
+  return reply.v;
 };
 globalThis.ScreenError = ScreenError;
 globalThis.screen = Object.freeze({ values: __values, state: {},
@@ -380,6 +469,7 @@ globalThis.screen = Object.freeze({ values: __values, state: {},
     return result;
   },
   app: async (query = {}) => __app(query),
+  launch: __launch,
   tab: async (query = {}) => __tab(await __call('select_tab', __tabQuery(query))),
   openTab: async (arg = {}) => __tab(await __call('open_tab', arg)),
   listTabs: () => __call('list_tabs', {}),

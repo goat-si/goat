@@ -246,6 +246,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             Effect.sync(() => {
               if (
                 call.method !== "bind_app" &&
+                call.method !== "launch_app" &&
                 call.method !== "select_tab" &&
                 call.method !== "open_tab"
               )

@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/2";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/3";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -59,11 +59,19 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
 interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }): Promise<Done>; launch(): Promise<Done>;
-  screenshot(): Promise<object> }`;
+  screenshot(): Promise<object>; windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
 
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
   openTab(q: { url: string }): Promise<Tab>;`;
-const SCREEN_APP = `  app(q: { bundle_id?: string; name?: string; window_id?: number }): Promise<App>; // window_id may be left out for a one-window app`;
+const SCREEN_APP = `  // app() without window_id: a running app with one window on screen binds it, never opening another; several
+  // windows or processes are ambiguous; windows all off screen (minimized, hidden, closed) are named for window_id.
+  // A closed app, or one running with no window at all, is launched in the background
+  // (reopened when running) and bound to its first window in the same call. It is looked for during 5 s, and a
+  // last check started then may take 2 s more; no window then throws, with the app still running. Several
+  // installed copies: a running one wins, else /Applications. A name shared by apps with different ids is ambiguous.
+  // path: a launch_path list_apps lists (macOS) picks the copy to launch.
+  app(q: { bundle_id?: string; name?: string; path?: string; window_id?: number }): Promise<App>;
+  launch(q: { bundle_id?: string; name?: string; path?: string }): Promise<{ pid: number; windows: object[] }>; // starts it, binds nothing`;
 
 const FOOTER = `// Batch decided steps in one cell and observe once at the end. A failed cell still returns its
 // receipts; an uncaught host failure is reported as that call's receipt, and a cell that fails in its own

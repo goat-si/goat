@@ -131,6 +131,8 @@ export const fixture = (
   connection = { id: "driver:1" },
   observations?: ScreenObservations,
   labelTarget?: Parameters<typeof createDesktopTargetHost>[0]["labelTarget"],
+  // Launch arguments depend on the platform; tests pin macOS so they read the same on every runner.
+  platform: NodeJS.Platform = "darwin",
 ) => {
   const sent: Array<{
     tool: string;
@@ -205,6 +207,7 @@ export const fixture = (
       leases,
       ...(observations ? { observations } : {}),
       ...(labelTarget ? { labelTarget } : {}),
+      platform,
     }),
     sent,
   };
