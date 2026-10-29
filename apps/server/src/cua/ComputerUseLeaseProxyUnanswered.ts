@@ -36,6 +36,17 @@ const windowStateBoundMs = (given: Readonly<Record<string, unknown>>): number =>
   return 2_000 + (wantTree ? walk * 2 + 5_000 : 0) + (shouldCapture ? 7_000 : 0);
 };
 
+const stepToolAndArgs = (
+  raw: unknown,
+): { readonly tool: string; readonly args: unknown } | undefined => {
+  const step = record(raw);
+  if (typeof step.tool === "string") return { tool: step.tool, args: step.args };
+  const key = Object.keys(step).find(
+    (k) => !["tool", "args", "wait_for", "expect", "timeout_ms"].includes(k),
+  );
+  return key === undefined ? undefined : { tool: key, args: step[key] };
+};
+
 /** Maximum legitimate execution bound of an earlier call on the driver before it is judged wedged. */
 const headExecutionBoundMs = (tool: string, args: unknown): number => {
   const given = record(args);
@@ -47,30 +58,19 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
   }
   if (tool === "run_steps") {
     const obs = record(given.observe);
-    const obsBound =
+    let obsBound =
       driverBoolArg(given.observe) === false ? 18_000 : Math.max(18_000, windowStateBoundMs(obs));
     const steps = Array.isArray(given.steps) ? given.steps : [];
     let lastStepMs = 15_000;
-    const last = record(steps[steps.length - 1]);
-    const stepTool =
-      typeof last.tool === "string"
-        ? last.tool
-        : [
-            "click",
-            "right_click",
-            "press_key",
-            "type_text",
-            "set_value",
-            "scroll",
-            "drag",
-            "invoke_menu",
-            "launch_app",
-            "bring_to_front",
-          ].find((k) => k in last);
-    const stepArgs =
-      typeof last.tool === "string" ? last.args : stepTool ? last[stepTool] : undefined;
-    if (stepTool !== undefined)
-      lastStepMs = Math.max(lastStepMs, driverCallCapMs(stepTool, stepArgs) + 60_000);
+    for (const rawStep of steps) {
+      const parsed = stepToolAndArgs(rawStep);
+      if (!parsed) continue;
+      if (parsed.tool === "get_window_state") {
+        obsBound = Math.max(obsBound, windowStateBoundMs({ ...record(parsed.args), ...obs }));
+      } else {
+        lastStepMs = Math.max(lastStepMs, driverCallCapMs(parsed.tool, parsed.args) + 60_000);
+      }
+    }
     return 60_000 + lastStepMs + obsBound;
   }
   return driverCallCapMs(tool, args);
