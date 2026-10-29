@@ -610,7 +610,7 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   names before every spawn (`linuxHelperHost/helperBundle.ts`): every file must match its
   `manifest.json` hash, and the bundle may hold nothing unlisted. Neither the bundle nor any
   folder above it may be a symlink, belong to a user other than root or the server's, or be
-  writable by another user (a sticky folder like `/tmp` aside), and a bundle that changes while it
+  writable by its group or other users (a sticky folder like `/tmp` aside; a POSIX ACL that lets anyone else write shows in the group bits), and a bundle that changes while it
   is hashed is refused. So only root or the server's own user can swap files between the check and
   the spawn; closing that window too would take running an immutable copy. Hashes alone only catch
   corruption and partial updates, since whoever can rewrite a file can rewrite the manifest.

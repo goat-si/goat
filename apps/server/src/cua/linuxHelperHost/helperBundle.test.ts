@@ -106,6 +106,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         "cua-driver/cua-driver can be changed by other users",
       ],
       [
+        "a file its group can write",
+        (b: ReturnType<typeof bundle>) => NodeFS.chmodSync(b.at("goat-computer-use.mjs"), 0o664),
+        "goat-computer-use.mjs can be changed by other users",
+      ],
+      [
         "a folder other users can write",
         (b: ReturnType<typeof bundle>) => NodeFS.chmodSync(b.at("cua-driver"), 0o777),
         "cua-driver can be changed by other users",
@@ -120,16 +125,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       expect(refused).toMatch(/^GOAT's Linux computer use helper was not started: /u);
     });
 
-    it("refuses a bundle under a folder others can write unless it is sticky or only its own group can, or under a symbolic link", async () => {
+    it("refuses a bundle under a folder its group or others can write unless it is sticky, or under a symbolic link", async () => {
       const b = bundle();
       const parent = NodePath.dirname(b.directory);
       NodeFS.chmodSync(parent, 0o777);
       expect(await makeHelperBundleCheck(b.entry, [])()).toContain(
         parent + " can be changed by other users",
       );
-      // Writable by the server user's own group, as umask 002 leaves a folder: still its own.
+      // Group write as umask 002 leaves it: the group may hold other users, or stand for an ACL.
       NodeFS.chmodSync(parent, 0o775);
-      expect(await makeHelperBundleCheck(b.entry, [])()).toBeUndefined();
+      expect(await makeHelperBundleCheck(b.entry, [])()).toContain(
+        parent + " can be changed by other users",
+      );
       NodeFS.chmodSync(parent, 0o1777);
       expect(await makeHelperBundleCheck(b.entry, [])()).toBeUndefined();
       NodeFS.chmodSync(parent, 0o755);

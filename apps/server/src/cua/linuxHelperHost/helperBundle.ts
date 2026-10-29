@@ -71,12 +71,11 @@ function untrusted(stat: NodeFS.BigIntStats, sticky: boolean) {
   if (stat.isSymbolicLink()) return "is a symbolic link";
   if (!stat.isFile() && !stat.isDirectory()) return "is not a regular file";
   if (!trustedOwner(stat.uid)) return "belongs to another user";
-  // Group write is the server user's own primary group by default on Ubuntu (umask 002), a
-  // group of that user alone unless an administrator shares it.
-  const ownGroup = stat.gid === 0n || stat.gid === BigInt(process.getgid?.() ?? -1);
-  const shared = (Number(stat.mode) & (ownGroup ? 0o002 : 0o022)) !== 0;
+  // Group write counts too: the group may have other members, and a POSIX ACL that lets
+  // anyone else write shows in the group bits as its mask.
+  const shared = (Number(stat.mode) & 0o022) !== 0;
   if (shared && !(sticky && stat.isDirectory() && (Number(stat.mode) & 0o1000) !== 0))
-    return "can be changed by other users";
+    return "can be changed by other users (chmod g-w,o-w it)";
   return undefined;
 }
 
