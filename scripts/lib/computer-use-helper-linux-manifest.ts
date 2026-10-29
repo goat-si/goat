@@ -60,3 +60,18 @@ export async function writeLinuxHelperManifest(input: {
     ) + "\n",
   );
 }
+
+/**
+ * Signs a built bundle's manifest.json with an Ed25519 private key (PKCS #8 PEM), writing the
+ * base64 signature to manifest.json.sig, which the server checks before it runs the helper.
+ */
+export async function signLinuxHelperManifest(out: string, privateKeyPem: string) {
+  const key = NodeCrypto.createPrivateKey(privateKeyPem);
+  if (key.asymmetricKeyType !== "ed25519")
+    throw new Error("The Linux helper signing key must be an Ed25519 key.");
+  const manifest = await NodeFSP.readFile(NodePath.join(out, "manifest.json"));
+  await NodeFSP.writeFile(
+    NodePath.join(out, "manifest.json.sig"),
+    NodeCrypto.sign(null, manifest, key).toString("base64") + "\n",
+  );
+}

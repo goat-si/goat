@@ -606,9 +606,18 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   grants to the designated requirement, not the path, so grants should survive a switch; that,
   and a revoked grant being noticed, are negative qualification cases (#1162).
 - The Windows helper is signed through the existing Windows signing path and staged beside the
-  driver. Linux desktop artifacts are not signed today, so signing the Linux helper and verifying
-  its signature before launch is new work for WS10 and WS4, and its CI part is a proposal like
-  the rest.
+  driver. A standalone Linux server checks the packaged helper that `GOAT_COMPUTER_USE_HELPER`
+  names before every spawn (`linuxHelperHost/helperBundle.ts`): every file must match its
+  `manifest.json` hash, and the bundle may hold nothing unlisted. Neither the bundle nor any
+  folder above it may be a symlink, belong to a user other than root or the server's, or be
+  writable by its group or other users (a sticky folder like `/tmp` aside; a POSIX ACL that lets anyone else write shows in the group bits), and a bundle that changes while it
+  is hashed is refused. So only root or the server's own user can swap files between the check and
+  the spawn; closing that window too would take running an immutable copy. A file that was once writable by others
+  may still be held open for writing, so the fix for a refused bundle is a fresh install, not a
+  permission change. Hashes alone only catch
+  corruption and partial updates, since whoever can rewrite a file can rewrite the manifest.
+  Authenticity comes from the Ed25519 signature check, which turns on once a release key is committed
+  ([release runbook](../operations/release.md#linux-computer-use-helper-signing)).
 - This epic adds local build and signing scripts. Wiring them into CI and release workflows is a
   separate proposal issue for maintainers.
 - Telemetry stays off. The helper reports nothing to anyone, and the driver keeps ADR-0022's
