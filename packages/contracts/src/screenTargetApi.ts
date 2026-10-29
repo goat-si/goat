@@ -75,7 +75,7 @@ interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }):
   screenshot(): Promise<ReadTime & { imageRef: string; pixelWidth: number; pixelHeight: number; [k: string]: unknown }>; windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
 
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
-  openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1; an address that does not connect throws and its tab is closed`;
+  openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1; an address that does not connect throws and closes its tab, or names it if it could not`;
 const SCREEN_APP = `  // app() without window_id: a running app with one window on screen binds it, never opening another; several
   // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass window_id explicitly instead of opening a new window.
   // A closed app is launched in the background and bound to its first window in the same call; a running

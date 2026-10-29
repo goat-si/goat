@@ -193,3 +193,13 @@ it.effect("a tab observe carries its host time, with and without a screenshot", 
     }
   }),
 );
+
+it.effect("a double click a dialog cut short after its first press is never confirmed", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    fixture.state.clickResult = { effect: "confirmed", evidence: ["dialog"], pressesSent: 1 };
+    const reply = yield* fixture.dispatch("click", { selector: "#b", count: 2 });
+    expect(reply).toMatchObject({ outcome: "ok", category: "unverifiable" });
+  }),
+);

@@ -746,10 +746,12 @@ export const click = async (
       .down({ button, clickCount: count })
       .then(() => page.mouse.up({ button, clickCount: count }));
   };
+  let presses = 0;
   try {
     await watch.arm(aim);
     for (let count = 1; count <= (input.clickCount ?? 1); count++) {
       const pressed = press(count);
+      presses = count;
       if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
         // That press waits on the dialog, past this action; later presses are never sent.
         dialog = true;
@@ -766,7 +768,13 @@ export const click = async (
     page.off("dialog", onDialog);
   }
   if (!sent) watch.cancel();
-  return { ...point, ...(await watch.settle(dialog).finally(() => releaseAim(aim))) };
+  const settled = await watch.settle(dialog).finally(() => releaseAim(aim));
+  // A dialog that stopped a multi-press click leaves it short of what was asked.
+  return {
+    ...point,
+    ...settled,
+    ...(presses < (input.clickCount ?? 1) ? { pressesSent: presses } : {}),
+  };
 };
 
 export const type = async (

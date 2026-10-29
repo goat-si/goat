@@ -870,13 +870,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         (operation === "click" || call.method === "set_value") &&
         typeof result === "object" &&
         result !== null
-          ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
+          ? (result as {
+              readonly effect?: unknown;
+              readonly evidence?: unknown;
+              readonly pressesSent?: unknown;
+            })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
-      // A range the browser set and read back is confirmed; typed text never is.
+      // A range the browser set and read back is confirmed; typed text never is, nor a click a
+      // dialog cut short of its count.
       const confirmed =
         navigated ||
         (seen?.effect === "confirmed" &&
+          seen.pressesSent === undefined &&
           Array.isArray(seen.evidence) &&
           (operation === "click" || seen.evidence.includes("value")));
       return {

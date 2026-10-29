@@ -176,7 +176,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     const control = new SessionControl("agent");
     control.onDispatchCut(inputFence(cdp));
     const dialog = new Promise<Dialog>((resolve) => page.once("dialog", resolve));
-    await control.agent("agent", () =>
+    const clicked = await control.agent("agent", () =>
       ServerBrowserPage.click(
         page,
         { locator: "#b", clickCount: 2 },
@@ -189,6 +189,8 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await (await dialog).dismiss();
     await control.system(async () => {});
     expect(await page.evaluate("window.hits")).toBe(1);
+    // The answer says the click fell short, so it is never read as a double click.
+    expect(clicked).toMatchObject({ pressesSent: 1 });
   });
 
   it("clears a single select when given no values", async () => {
