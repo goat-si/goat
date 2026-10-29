@@ -315,27 +315,26 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  for (const fixture of hostReleases)
-    it.effect(
-      `publishes a complete ${fixture.format} release in GOAT home and reuses it across installer instances`,
-      () =>
-        Effect.gen(function* () {
-          const h = yield* makeHarness(fixture);
+  it.effect.each(hostReleases)(
+    "publishes a complete $format release in GOAT home and reuses it across installer instances",
+    (fixture) =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness(fixture);
 
-          const executable = yield* h.installation.executable;
+        const executable = yield* h.installation.executable;
 
-          expect(executable).toBe(h.path.join(h.destination, fixture.executable));
-          for (const file of fixture.files) {
-            expect(yield* h.fs.readFileString(h.path.join(h.destination, file))).toBe(file);
-          }
-          expect(h.publications).toEqual([h.destination]);
-          expect(yield* h.fs.readDirectory(h.installRoot)).toEqual(["0.34.1"]);
-          expect(yield* h.installation.executable).toBe(executable);
-          const freshInstallation = yield* h.makeInstallation;
-          expect(yield* freshInstallation.executable).toBe(executable);
-          expect(h.requests).toEqual([h.release.url]);
-        }).pipe(Effect.scoped),
-    );
+        expect(executable).toBe(h.path.join(h.destination, fixture.executable));
+        for (const file of fixture.files) {
+          expect(yield* h.fs.readFileString(h.path.join(h.destination, file))).toBe(file);
+        }
+        expect(h.publications).toEqual([h.destination]);
+        expect(yield* h.fs.readDirectory(h.installRoot)).toEqual(["0.34.1"]);
+        expect(yield* h.installation.executable).toBe(executable);
+        const freshInstallation = yield* h.makeInstallation;
+        expect(yield* freshInstallation.executable).toBe(executable);
+        expect(h.requests).toEqual([h.release.url]);
+      }).pipe(Effect.scoped),
+  );
 
   it.effect("rejects short, oversized, and wrong-SHA downloads without publishing", () =>
     Effect.gen(function* () {
