@@ -43,8 +43,8 @@ vi.mock("../../lib/useThreadContextHosts", async () => {
     useThreadContextHosts: () => {
       if (!routeState.available) return new ComposerThreadHosts();
       const hosts = new ComposerThreadHosts();
-      hosts.allow("question-remote", "build-box");
-      hosts.set("question-remote", "build-box");
+      hosts.allow(EnvironmentId.make("question-remote"), "build-box");
+      hosts.set(EnvironmentId.make("question-remote"), "build-box");
       return hosts;
     },
   };
