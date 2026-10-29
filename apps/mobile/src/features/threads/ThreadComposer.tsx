@@ -480,6 +480,11 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
   };
   const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
   const verifiedThreadHosts = useThreadContextHosts(props.environmentId);
+  const verifiedThreadHostsRef = useRef(verifiedThreadHosts);
+  // oxlint-disable-next-line goat/react-effect-budget -- Recheck a pending asynchronous send against current routes.
+  useEffect(() => {
+    verifiedThreadHostsRef.current = verifiedThreadHosts;
+  }, [verifiedThreadHosts]);
   const usageLimitsOffered =
     selectedProviderStatus !== null &&
     hasProviderUsageLimits(
@@ -651,6 +656,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       return (
         pendingPastedTextAttachmentCountRef.current === 0 &&
         pendingNativeImagePasteCountRef.current === 0 &&
+        threadContextsOutsideEnvironment({
+          text: draft.text,
+          records: draft.context?.records ?? [],
+          environmentId: props.environmentId,
+          verifiedHosts: verifiedThreadHostsRef.current,
+        }).length === 0 &&
         draft.text === draftAtSend.text &&
         draft.attachments.length === draftAtSend.attachments.length &&
         draft.attachments.every(
