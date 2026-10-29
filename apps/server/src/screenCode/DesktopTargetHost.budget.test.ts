@@ -577,3 +577,30 @@ it.effect(
       expect(observation.indexedText).toContain("| process-0 | 0.5 | 0:01.33 | 12");
     }),
 );
+
+it.effect(
+  "visible table rows outlast off-screen ones when the read cannot place frames in its window",
+  () =>
+    Effect.gen(function* () {
+      // Scrolled to the end: the first rows sit above the window and the last ones are visible.
+      const state = activityMonitor(500);
+      const scrolled = {
+        ...state,
+        elements: state.elements.map((element) =>
+          element.frame === undefined
+            ? element
+            : { ...element, frame: { ...element.frame, y: element.frame.y - 9500 } },
+        ),
+      };
+      const observation = yield* observe(scrolled);
+      expect(observation.truncated).toBe(true);
+      // The window root has no frame, so no element frame reaches the agent.
+      expect(observation.elements.filter((element) => element.frame !== undefined)).toEqual([]);
+      expect(observation.omitted).toContainEqual(expect.objectContaining({ kind: "frames" }));
+      const rows = observation.elements.filter((e) => e.role === "AXRow").map((e) => e.index);
+      // Rows 472-499 are inside the 600 pt window; the budget keeps them and cuts off-screen ones.
+      const visible = Array.from({ length: 28 }, (_, at) => 3 + (472 + at) * 4);
+      expect(rows).toEqual(expect.arrayContaining(visible));
+      expect(rows.length).toBeLessThan(500);
+    }),
+);

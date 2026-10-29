@@ -38,10 +38,10 @@ import {
   READ_BOUNDS,
   renderFailure,
   renderPageObservation,
+  screenPlacement,
   shownTree,
   treeOf,
   type DesktopQuery,
-  windowViewport,
 } from "./DesktopObserveRead.ts";
 import { buildScreenshotCapture, treeWindowBasis } from "./DesktopTargetPoints.ts";
 import { cleanActionText, isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
@@ -424,7 +424,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       ...sheet.extraOmitted,
       ...framesOmission(placed.dropped),
     ];
-    const viewport = windowViewport(nextBounds, origin);
+    const screen = screenPlacement(tree.shown, nextBounds);
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
@@ -457,7 +457,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               shown: placed.rows,
               shownText: tree.shownText,
               omitted,
-              viewport,
+              screen,
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
                 ?.title,
             }),
@@ -488,7 +488,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
           ids: new Set(),
           ...(origin === undefined ? {} : { origin }),
           dropped: placed.dropped,
-          ...(viewport === undefined ? {} : { viewport }),
+          screen,
         };
       else delete bound.pages;
       const timing = buildObserveTiming({

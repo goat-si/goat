@@ -102,9 +102,9 @@ export const elementFrames = (entries: readonly Record<string, unknown>[]) => {
 export const sameRect = (a: Rect, b: Rect) =>
   a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 /**
- * Where agent-facing frames are measured from: the read's top-level window, only when every
- * top-level window it lists has that same positive frame. A frameless or second window cannot
- * be told apart from the bound one, so then there is none.
+ * Where agent-facing frames are measured from: the read's one top-level window, when it has a
+ * positive frame. A second top-level window, even one with the same bounds, cannot be told apart
+ * from the bound one, so then there is none.
  */
 export const windowOrigin = (entries: readonly Record<string, unknown>[]): Rect | undefined => {
   let origin: Rect | undefined;
@@ -112,8 +112,7 @@ export const windowOrigin = (entries: readonly Record<string, unknown>[]): Rect 
     if (natural(entry.parent_index) !== undefined) continue;
     if (!WINDOW_ROLES.has(string(entry.role)?.toLowerCase() ?? "")) continue;
     const frame = frameOf(entry);
-    if (!frame || frame.w <= 0 || frame.h <= 0) return undefined;
-    if (origin && !sameRect(origin, frame)) return undefined;
+    if (origin || !frame || frame.w <= 0 || frame.h <= 0) return undefined;
     origin = frame;
   }
   return origin;

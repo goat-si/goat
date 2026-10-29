@@ -235,6 +235,12 @@ it.effect(
           windowRoot(2, otherRoot),
           child(3, 2, 20),
         ],
+        "two window roots with the same bounds": [
+          windowRoot(0, harnessRoot),
+          child(1, 0, 629),
+          windowRoot(2, harnessRoot),
+          child(3, 2, 700),
+        ],
         "two window roots, other first": [
           windowRoot(2, otherRoot),
           child(3, 2, 20),

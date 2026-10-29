@@ -147,8 +147,10 @@ export interface ScreenObservationDraft {
   readonly lineage?: string;
   /** Regions the source left out, such as frames it could not read. */
   readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
-  /** The window's bounds, for app reads: elements outside them go before visible ones. */
+  /** The window's screen bounds, for app reads: elements outside them go before visible ones. */
   readonly viewport?: Viewport;
+  /** Each element's screen frame by index, for that cut; the elements' own frames are window points. */
+  readonly screenFrames?: ReadonlyMap<number, Viewport>;
   readonly elements: readonly ({
     readonly role: string;
     readonly name: string;
@@ -630,7 +632,12 @@ export class ScreenObservations {
     if (draft.targetRef.kind === "app" && Buffer.byteLength(JSON.stringify(build())) > budget) {
       const plain = renderedText.replace(/ actions=\[[^\]]*\]/g, "").replace(/ \[\]/g, "");
       text = cut(plain);
-      const cutPlan = desktopCutOrder(elements, draft.indexedText, draft.viewport);
+      const cutPlan = desktopCutOrder(
+        elements,
+        draft.indexedText,
+        draft.viewport,
+        draft.screenFrames,
+      );
       const sizes = new Map(
         elements.map((element) => [element.index, Buffer.byteLength(JSON.stringify(element)) + 1]),
       );

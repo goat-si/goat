@@ -45,7 +45,7 @@ export interface DesktopPages {
   readonly origin?: Rect;
   /** Frames the read could not place in its window. */
   readonly dropped: number;
-  readonly viewport?: Viewport;
+  readonly screen: ScreenPlacement;
 }
 
 /** A full read too large to carry walks fewer elements, in this order, before it gives up. */
@@ -100,14 +100,25 @@ export const framesOmission = (dropped: number): NonNullable<ScreenObservation["
         },
       ];
 
-/** The window's bounds in the frames' window points, for the budget's visible-first cut. */
-export const windowViewport = (
+/** Where a read's window and elements sit on screen, for the budget's visible-first cut. */
+export interface ScreenPlacement {
+  readonly viewport?: Viewport;
+  readonly screenFrames: ReadonlyMap<number, Viewport>;
+}
+/** The read's rows (screen frames) and window bounds as the budget measures them. */
+export const screenPlacement = (
+  rows: ReadonlyArray<DesktopRow>,
   bounds: Rect | undefined,
-  origin: Rect | undefined,
-): Viewport | undefined =>
-  bounds === undefined || origin === undefined
-    ? undefined
-    : { x: bounds.x - origin.x, y: bounds.y - origin.y, width: bounds.w, height: bounds.h };
+): ScreenPlacement => ({
+  ...(bounds === undefined
+    ? {}
+    : { viewport: { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } }),
+  screenFrames: new Map(
+    rows.flatMap((row) =>
+      row.index === undefined || row.frame === undefined ? [] : [[row.index, row.frame] as const],
+    ),
+  ),
+});
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -311,7 +322,7 @@ const pageDraft = (
     loading: false,
     elements: placed ? rows : rows.map(withoutFrame),
     ...(omitted.length === 0 ? {} : { omitted }),
-    ...(placed && pages.viewport !== undefined ? { viewport: pages.viewport } : {}),
+    ...pages.screen,
   };
 };
 
@@ -410,8 +421,8 @@ export const buildObservedDraft = (input: {
   readonly shown: ReadonlyArray<DesktopRow>;
   readonly shownText: string;
   readonly omitted: NonNullable<ScreenObservation["omitted"]>;
-  /** The window in the shown frames' window points; elements outside it go first when over budget. */
-  readonly viewport: Viewport | undefined;
+  /** Screen geometry for the budget; shown frames are window points. */
+  readonly screen: ScreenPlacement;
   readonly fallbackTitle: string | undefined;
 }): ScreenObservationDraft => {
   const title = (
@@ -432,7 +443,7 @@ export const buildObservedDraft = (input: {
     loading: false,
     elements: input.shown,
     ...(input.omitted.length === 0 ? {} : { omitted: input.omitted }),
-    ...(input.viewport === undefined ? {} : { viewport: input.viewport }),
+    ...input.screen,
   };
 };
 
