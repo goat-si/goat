@@ -54,7 +54,7 @@ import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import { deliveryIdFor, questionIdFor, workerLaunchIdsFor } from "./channelIds.ts";
 import { settleCompletedRun } from "./channelRunOutcome.ts";
-import { sessionFinalText } from "./channelSessionReceipt.ts";
+import { sessionFinalText, sessionReceiptPending } from "./channelSessionReceipt.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   completionHoldCount,
@@ -544,6 +544,12 @@ const make = Effect.gen(function* () {
           }
           return true;
         }
+        // The answer is stripped against the session's committed first line, so it waits for it.
+        if (
+          latest.task.kind === "turn" &&
+          (yield* sessionReceiptPending(sql, latest.task.originInputId))
+        )
+          return latest !== stored;
         // The worker's own report decides failed, cancelled and blocked; an unreadable report
         // waits for the next pass rather than settling as "no report".
         const reported =

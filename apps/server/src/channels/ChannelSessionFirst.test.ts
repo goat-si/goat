@@ -12,6 +12,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 import { taskIdFor } from "./channelIds.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
@@ -98,6 +99,34 @@ describe("session first receipts", () => {
       }).pipe(Effect.provide(harness.layer));
     },
   );
+
+  it.effect("a run reconciled before its receipt commits still sends its answer once", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      const input = yield* gateway.ingest(goatInput("What is two plus two?", "race"), rpcContext);
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+      harness.assistant(task, "Four.");
+      harness.world.setStatus(task.worker!.threadId, 1, "completed");
+      // The worker pass sees the finished run before the observer commits its first line.
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(task.taskId))?.task.status, "running");
+      yield* runtime.drain;
+      yield* runtime.settle([input.inputId]);
+      yield* runtime.drain;
+      const { messages } = yield* botMessages;
+      assert.lengthOf(
+        messages.filter((message) => message.text === "Four."),
+        1,
+      );
+      assert.isFalse(messages.some((message) => message.text === "Done."));
+    }).pipe(Effect.provide(harness.layer));
+  });
 
   it.effect("a claim before dispatch survives a runtime restart as one turn", () => {
     const harness = makeHarness({ botWorkspace: true });
