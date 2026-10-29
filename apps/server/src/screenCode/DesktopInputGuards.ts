@@ -8,6 +8,7 @@ import type { ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 import type { Placed, Rect } from "./DesktopFrames.ts";
+import { parseTree } from "./DesktopTreeText.ts";
 
 interface DragEndpointGuard {
   readonly elementToken?: string;
@@ -27,6 +28,8 @@ export interface GuardElement {
   readonly placeholder: string;
   readonly identifier: string;
   readonly editable: boolean;
+  /** A text field in a list or table that has keyboard focus: the item's name is being edited. */
+  readonly editingCell: boolean;
   readonly tableCell: boolean;
   readonly menuSurface: boolean;
 }
@@ -52,7 +55,14 @@ const PASTE_MENU_LABELS: ReadonlySet<string> = new Set([
 ]);
 
 const TABLE_CELL_ROLES: ReadonlySet<string> = new Set(["textfield", "statictext", "cell"]);
-const TABLE_ANCESTOR_ROLES: ReadonlySet<string> = new Set(["row", "cell", "outline", "table"]);
+const TABLE_ANCESTOR_ROLES: ReadonlySet<string> = new Set([
+  "row",
+  "cell",
+  "outline",
+  "outlinerow",
+  "table",
+  "list",
+]);
 const MENU_ROLES: ReadonlySet<string> = new Set([
   "menu",
   "menuitem",
@@ -267,7 +277,7 @@ const canonicalKeyName = (key: string): string => {
   }
 };
 
-const resolveKeyPress = (
+export const resolveKeyPress = (
   args: Record<string, unknown>,
 ): { readonly key: string; readonly modifiers: ReadonlySet<string> } => {
   const modifiers = new Set<string>();
@@ -325,7 +335,25 @@ export const outcomeSentence = (
   }
 };
 
-/** Indexes each observed element's role, labels and 4-hop table/outline ancestry by driver token. */
+/**
+ * Indexes of numbered tree lines indented under a row, cell, outline, table or list line. The
+ * driver numbers only actionable or labelled nodes and links parent_index past the rest, so a name
+ * field's row can be missing from the element list while its line still holds the field's.
+ */
+const tableNestedIndexes = (markdown: string | undefined): ReadonlySet<number> => {
+  const nested = new Set<number>();
+  // Text without any table role word has no line to nest under, so it is not parsed.
+  if (markdown === undefined || !/(?:row|cell|outline|table|list)\b/i.test(markdown)) return nested;
+  const open: Array<{ readonly depth: number; readonly table: boolean }> = [];
+  for (const line of parseTree(markdown)) {
+    while (open.length > 0 && (open.at(-1)?.depth ?? 0) >= line.depth) open.pop();
+    if (line.index !== undefined && open.some((ancestor) => ancestor.table)) nested.add(line.index);
+    open.push({ depth: line.depth, table: TABLE_ANCESTOR_ROLES.has(bareRole(line.role)) });
+  }
+  return nested;
+};
+
+/** Indexes each observed element's role, labels and table/outline ancestry by driver token. */
 export const inspectTreeElements = (
   entries: readonly Record<string, unknown>[],
   rows: ReadonlyArray<{
@@ -333,7 +361,9 @@ export const inspectTreeElements = (
     readonly name: string;
     readonly driverToken?: string;
   }>,
+  markdown?: string,
 ): ReadonlyMap<string, GuardElement> => {
+  const nestedInTable = tableNestedIndexes(markdown);
   const byIndex = new Map<number, Record<string, unknown>>();
   for (const entry of entries) {
     const index = natural(entry.element_index);
@@ -350,7 +380,7 @@ export const inspectTreeElements = (
     const role = string(entry.role) ?? "unknown";
     const bare = bareRole(role);
     const editable = entry.editable === true || entry.settable === true;
-    let inTable = bare === "cell";
+    let inTable = bare === "cell" || nestedInTable.has(natural(entry.element_index) ?? -1);
     let cursor: Record<string, unknown> | undefined = entry;
     for (let hop = 0; !inTable && hop < 4 && cursor !== undefined; hop++) {
       const parentIdx = natural(cursor.parent_index);
@@ -381,6 +411,11 @@ export const inspectTreeElements = (
       (rawValueDesc !== undefined && rawLabel === rawValueDesc)
         ? ""
         : rawLabel);
+    const identifier = string(entry.identifier) ?? "";
+    // Settable does not mean editing: the driver can report a list item's name as settable while
+    // only the row is selected. Focus on the field is what macOS gives the inline rename editor.
+    const editingCell =
+      inTable && bare === "textfield" && entry.focused === true && identifier !== "PathTextField";
     map.set(token, {
       ...(index === undefined ? {} : { index }),
       role,
@@ -389,9 +424,11 @@ export const inspectTreeElements = (
       nonValueLabel,
       description: string(entry.description) ?? "",
       placeholder: string(entry.placeholder) ?? "",
-      identifier: string(entry.identifier) ?? "",
+      identifier,
       editable,
-      tableCell: TABLE_CELL_ROLES.has(bare) && !editable && inTable,
+      editingCell,
+      tableCell:
+        TABLE_CELL_ROLES.has(bare) && inTable && !editingCell && identifier !== "PathTextField",
       menuSurface: inMenu,
     });
   }
@@ -510,6 +547,19 @@ const hasVisibleClickBounds = (
   );
 };
 
+/** Keys that type into or delete a selected list item: characters, Tab and the delete keys. */
+const editsCell = (key: { readonly key: string; readonly modifiers: ReadonlySet<string> }) => {
+  if (key.key === "backspace" || key.key === "delete" || key.key === "forward_delete") return true;
+  if (key.modifiers.has("cmd") || key.modifiers.has("ctrl")) return false;
+  return key.key === "tab" || ([...key.key].length === 1 && key.key !== " ");
+};
+
+const nameCellRefusal = (cellLabel: number | string) =>
+  fail(
+    "invalid_argument",
+    `Element ${cellLabel} is a name cell in a list or table that is not being edited, so typing or setValue would go to the list or rename the file. Press Enter on it to start editing, observe() again and type into the focused cell by its number; to go to a folder, open Go to Folder (cmd+shift+g) and set its PathTextField.`,
+  );
+
 const PASTE_REFUSAL =
   "Paste would insert the person's clipboard. Insert text with type(text, N); it restores the clipboard.";
 
@@ -590,21 +640,16 @@ export const admitDesktopInput = (input: {
       ),
     };
   }
-  if (method === "type_text") {
-    const cellLabel =
-      element?.tableCell === true
-        ? (element.index ?? elementToken)
-        : elementToken === undefined
-          ? lastClickedTableCell
-          : undefined;
-    if (cellLabel !== undefined)
-      return {
-        refused: fail(
-          "invalid_argument",
-          `Element ${cellLabel} is a cell in a list or table; typing would send keys to the list. Use setValue(${cellLabel}, value) to change it (it renames a Finder item).`,
-        ),
-      };
-  }
+  const addressedCell = element?.tableCell === true ? (element.index ?? elementToken) : undefined;
+  const clickedCell = elementToken === undefined ? lastClickedTableCell : undefined;
+  const key = method === "press_key" || method === "hotkey" ? resolveKeyPress(args) : undefined;
+  const cellLabel =
+    method === "type_text" || (key !== undefined && editsCell(key))
+      ? (addressedCell ?? clickedCell)
+      : method === "set_value"
+        ? addressedCell
+        : undefined;
+  if (cellLabel !== undefined) return { refused: nameCellRefusal(cellLabel) };
   const chatApp = chatAppName(input.appId, input.bundleId);
   if (chatApp !== undefined) {
     const aimed = ["x", "y", "from_x", "from_y", "to_x", "to_y"].some(
@@ -644,6 +689,13 @@ export const admitDesktopInput = (input: {
   }
   if ((method === "click" || method === "right_click") && element?.tableCell === true)
     return { clickedTableCell: element.index ?? elementToken ?? 0 };
+  // Enter starts editing the selected item; the host clears the guard only on focus_confirmed.
+  if (
+    key?.key === "enter" &&
+    key.modifiers.size === 0 &&
+    (addressedCell ?? clickedCell) !== undefined
+  )
+    return { clearClickedTableCell: true };
   if (
     elementToken !== undefined &&
     element?.tableCell !== true &&

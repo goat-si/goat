@@ -218,74 +218,194 @@ const byIndex = (observed: unknown, index: number): ScreenElementRef => {
   return found.ref;
 };
 
-it.effect("typing into a list's name cell is refused before dispatch and names setValue", () =>
+const NAME_CELL_GUIDANCE = ["Press Enter on it to start editing", "PathTextField"];
+const withElement = (base: typeof finderState, index: number, patch: Record<string, unknown>) => ({
+  ...base,
+  elements: base.elements.map((e) => (e.element_index === index ? { ...e, ...patch } : e)),
+});
+// goat.10 gives a display-only row or cell no number, so parent_index skips it (tree.rs:1004).
+const unnumberedRowState = {
+  pid: 42,
+  window_id: 7,
+  snapshot_id: "s0000000u",
+  elements_complete: false,
+  tree_format: "both",
+  tree_markdown: [
+    '- [0] AXWindow "Recents"',
+    "  - AXOutline",
+    "    - AXRow",
+    "      - AXCell",
+    '        - [41] AXTextField "Math Problem 13 × 2 + 7 = 33"',
+  ].join("\n"),
+  elements: [
+    { element_index: 0, element_token: "s0000000u:0", role: "AXWindow", label: "Recents" },
+    {
+      element_index: 41,
+      element_token: "s0000000u:41",
+      role: "AXTextField",
+      label: "Math Problem 13 × 2 + 7 = 33",
+      value: "Math Problem 13 × 2 + 7 = 33",
+      parent_index: 0,
+      frame: { x: 120, y: 60, w: 300, h: 20 },
+    },
+  ],
+};
+const observeWindow = (overrides: Partial<Record<string, unknown>>) =>
   Effect.gen(function* () {
-    for (const [stateFixture, cellIndex] of [
-      [finderState, 41],
-      [activityMonitorState, 3],
-    ] as const) {
-      const { host, sent } = fixture({ get_window_state: stateFixture });
-      const bound = yield* host.bindApp(
-        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-        context,
-      );
-      const ref = bound.value as ScreenTargetRef;
-      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
-      const cellRef = byIndex(observed.value, cellIndex);
-      const before = sent.length;
-      const refused = yield* host
-        .invoke(call("type_text", { text: "renamed", elementRef: cellRef }, ref), context)
-        .pipe(Effect.flip);
-      expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
-      expect(refused.nextStep).toContain(`setValue(${cellIndex}, value)`);
-      expect(sent.slice(before)).toEqual([]);
-    }
-  }),
-);
-
-it.effect("an unaddressed type right after clicking a table cell is refused", () =>
-  Effect.gen(function* () {
-    const { host, sent } = fixture({ get_window_state: finderState });
-    const bound = yield* host.bindApp(
+    const made = fixture(overrides);
+    const bound = yield* made.host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
       context,
     );
     const ref = bound.value as ScreenTargetRef;
-    const observed = yield* host.observe(call("get_window_state", {}, ref), context);
-    const cellRef = byIndex(observed.value, 41);
-    yield* host.invoke(call("click", { elementRef: cellRef }, ref), context);
+    const observed = yield* made.host.observe(call("get_window_state", {}, ref), context);
+    return { ...made, ref, observed: observed.value };
+  });
+const expectRefusedUnsent = (
+  host: ReturnType<typeof fixture>["host"],
+  sent: ReturnType<typeof fixture>["sent"],
+  input: ReturnType<typeof call>,
+) =>
+  Effect.gen(function* () {
     const before = sent.length;
-    const refused = yield* host
-      .invoke(call("type_text", { text: "renamed" }, ref), context)
-      .pipe(Effect.flip);
+    const refused = yield* host.invoke(input, context).pipe(Effect.flip);
     expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
-    expect(refused.nextStep).toContain("setValue(41, value)");
+    for (const words of NAME_CELL_GUIDANCE) expect(refused.nextStep).toContain(words);
     expect(sent.slice(before)).toEqual([]);
-  }),
+  });
+
+it.effect(
+  "a list name cell that is not being edited refuses typing, setValue and editing keys before dispatch (G47 Finder [41], Activity Monitor [3]), also when the driver calls it settable or omits its row from parent_index",
+  () =>
+    Effect.gen(function* () {
+      for (const [stateFixture, cellIndex] of [
+        // goat.10 shape: no focused/settable fields.
+        [finderState, 41],
+        [activityMonitorState, 3],
+        // A future driver that reports settable must not reopen the cell.
+        [withElement(finderState, 41, { settable: true, focused: false }), 41],
+        [unnumberedRowState, 41],
+      ] as const) {
+        const { host, sent, ref, observed } = yield* observeWindow({
+          get_window_state: stateFixture,
+        });
+        const cellRef = byIndex(observed, cellIndex);
+        for (const input of [
+          call("type_text", { text: "~/Developer/codex/computeruse", elementRef: cellRef }, ref),
+          call("set_value", { value: "renamed", elementRef: cellRef }, ref),
+          call("press_key", { key: "a", elementRef: cellRef }, ref),
+          call("press_key", { key: "Backspace", elementRef: cellRef }, ref),
+          call("press_key", { key: "shift+a", elementRef: cellRef }, ref),
+        ])
+          yield* expectRefusedUnsent(host, sent, input);
+        // Enter starts editing and arrows move the selection; both still go out.
+        for (const key of ["Enter", "Down"])
+          expect(
+            (yield* host.invoke(call("press_key", { key, elementRef: cellRef }, ref), context))
+              .category,
+          ).toBe("confirmed");
+      }
+    }),
 );
 
-it.effect("setValue on a Finder name cell and typing into a plain text field go through", () =>
+it.effect(
+  "after clicking a name cell, unaddressed characters and deletion keys are refused while navigation, Quick Look and command shortcuts such as cmd+shift+g go out",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent, ref, observed } = yield* observeWindow({ get_window_state: finderState });
+      yield* host.invoke(call("click", { elementRef: byIndex(observed, 41) }, ref), context);
+      yield* expectRefusedUnsent(host, sent, call("type_text", { text: "renamed" }, ref));
+      for (const key of [
+        "a",
+        "/",
+        "option+g",
+        "shift+g",
+        "fn+a",
+        "Tab",
+        "Backspace",
+        "cmd+Backspace",
+        "cmd+Delete",
+      ])
+        yield* expectRefusedUnsent(host, sent, call("press_key", { key }, ref));
+      for (const key of ["Escape", "space", "ArrowDown", "cmd+1", "cmd+shift+g"])
+        expect((yield* host.invoke(call("press_key", { key }, ref), context)).category).toBe(
+          "confirmed",
+        );
+    }),
+);
+
+it.effect(
+  "a name cell in edit mode (focused, as a driver that reports focus shows it) takes addressed typing and setValue, while unaddressed typing waits for a focus_confirmed Enter",
+  () =>
+    Effect.gen(function* () {
+      let editing = false;
+      let focusConfirmed = false;
+      const { host, sent, ref, observed } = yield* observeWindow({
+        get_window_state: () =>
+          editing ? withElement(finderState, 41, { focused: true }) : finderState,
+        press_key: () => ({
+          effect: "unverifiable",
+          ...(focusConfirmed ? { focus_confirmed: true } : {}),
+        }),
+      });
+      yield* host.invoke(call("click", { elementRef: byIndex(observed, 41) }, ref), context);
+      yield* host.invoke(call("press_key", { key: "Enter" }, ref), context);
+      yield* expectRefusedUnsent(host, sent, call("type_text", { text: "renamed" }, ref));
+      editing = true;
+      const reread = (yield* host.observe(call("get_window_state", {}, ref), context)).value;
+      const editor = byIndex(reread, 41);
+      for (const input of [
+        call("type_text", { text: "renamed", elementRef: editor }, ref),
+        call("set_value", { value: "renamed", elementRef: editor }, ref),
+      ])
+        expect((yield* host.invoke(input, context)).category).toBe("confirmed");
+      yield* expectRefusedUnsent(host, sent, call("type_text", { text: "renamed" }, ref));
+      focusConfirmed = true;
+      yield* host.invoke(call("press_key", { key: "Enter" }, ref), context);
+      expect(
+        (yield* host.invoke(call("type_text", { text: "renamed" }, ref), context)).category,
+      ).toBe("confirmed");
+    }),
+);
+
+it.effect("a search field and a Go to Folder PathTextField stay typeable beside a list", () =>
   Effect.gen(function* () {
-    const { host, sent } = fixture({ get_window_state: finderState });
-    const bound = yield* host.bindApp(
-      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-      context,
-    );
-    const ref = bound.value as ScreenTargetRef;
-    const observed = yield* host.observe(call("get_window_state", {}, ref), context);
-    const cellRef = byIndex(observed.value, 41);
-    const searchRef = byIndex(observed.value, 50);
-    const set = yield* host.invoke(
-      call("set_value", { value: "renamed", elementRef: cellRef }, ref),
-      context,
-    );
-    expect(set.category).toBe("confirmed");
-    const typed = yield* host.invoke(
-      call("type_text", { text: "query", elementRef: searchRef }, ref),
-      context,
-    );
-    expect(typed.category).toBe("confirmed");
-    expect(sent.slice(-2).map((entry) => entry.tool)).toEqual(["set_value", "type_text"]);
+    const pathState = {
+      ...finderState,
+      elements: [
+        ...finderState.elements,
+        {
+          element_index: 60,
+          element_token: "s0000000f:60",
+          role: "AXTextField",
+          label: "~/Developer",
+          value: "~/Developer",
+          identifier: "PathTextField",
+          parent_index: 3,
+          frame: { x: 120, y: 90, w: 300, h: 20 },
+        },
+      ],
+    };
+    const { host, sent, ref, observed } = yield* observeWindow({ get_window_state: pathState });
+    for (const index of [50, 60]) {
+      const field = byIndex(observed, index);
+      expect(
+        (yield* host.invoke(call("type_text", { text: "q", elementRef: field }, ref), context))
+          .category,
+      ).toBe("confirmed");
+      expect(
+        (yield* host.invoke(
+          call("set_value", { value: "~/Developer/codex", elementRef: field }, ref),
+          context,
+        )).category,
+      ).toBe("confirmed");
+    }
+    expect(sent.slice(-4).map((entry) => entry.tool)).toEqual([
+      "type_text",
+      "set_value",
+      "type_text",
+      "set_value",
+    ]);
   }),
 );
 

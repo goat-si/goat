@@ -75,10 +75,10 @@ const toSummary = (entry: WindowEntry): ScreenWindowSummary => ({
 export const parseWindowList = (
   value: unknown,
   pid: number,
-): ReadonlyArray<WindowEntry> | undefined => {
+): ReadonlyArray<SheetWindowEntry> | undefined => {
   const raw = object(value)?.windows;
   if (!Array.isArray(raw)) return undefined;
-  const entries: WindowEntry[] = [];
+  const entries: SheetWindowEntry[] = [];
   for (const item of raw) {
     const rec = object(item);
     const wid = natural(rec?.window_id);
@@ -89,10 +89,12 @@ export const parseWindowList = (
     const width = finite(bounds?.width) ?? finite(rec.width);
     const height = finite(bounds?.height) ?? finite(rec.height);
     const sheetOf = natural(rec.sheet_of_window_id) ?? natural(rec.sheetOf);
+    const title = clipTitle(rec.title);
     entries.push({
       window_id: wid,
       pid: wpid,
-      title: clipTitle(rec.title),
+      title,
+      ...sheetKind(rec, title, width, height, sheetOf),
       ...(width === undefined ? {} : { width }),
       ...(height === undefined ? {} : { height }),
       ...(rect === undefined ? {} : { bounds: rect }),
@@ -106,9 +108,50 @@ export const parseWindowList = (
   return entries;
 };
 
+/** A listed window with what the driver says about it being a sheet or a panel. */
+export interface SheetWindowEntry extends WindowEntry {
+  /** Finder's Go to Folder sheet, by its accessibility identifier or title. */
+  readonly gotoSheet?: true;
+  /** Another sheet: attached to a window, or with a sheet role. */
+  readonly sheet?: true;
+  /** A dialog, or an untitled window small enough to be a panel such as Go to Folder. */
+  readonly panelCandidate?: true;
+}
+
+const bareKind = (value: unknown) =>
+  typeof value === "string" ? value.trim().toLowerCase().replace(/^ax/, "") : "";
+const GOTO_TITLE = /^(go to folder|폴더로 이동)$/i;
+
+const sheetKind = (
+  rec: Record<string, unknown>,
+  title: string,
+  width: number | undefined,
+  height: number | undefined,
+  sheetOf: number | undefined,
+): Pick<SheetWindowEntry, "gotoSheet" | "sheet" | "panelCandidate"> => {
+  const kinds = [bareKind(rec.role), bareKind(rec.subrole)];
+  if (rec.identifier === "GoToWindow" || GOTO_TITLE.test(title.trim())) return { gotoSheet: true };
+  if ((sheetOf !== undefined && sheetOf > 0) || kinds.includes("sheet")) return { sheet: true };
+  const small = width !== undefined && height !== undefined && width <= 700 && height <= 500;
+  return kinds.some((kind) => kind === "dialog" || kind === "systemdialog") ||
+    (title === "" && small && rec.is_on_screen !== false)
+    ? { panelCandidate: true }
+    : {};
+};
+
+/** The hint an input's result gives for a window it opened that looks like a sheet or panel. */
+const sheetHint = (w: SheetWindowEntry, onlyOpened: boolean): string | undefined =>
+  w.gotoSheet
+    ? `observed:sheet_window:${w.window_id} (GoToWindow sheet; bind window_id ${w.window_id} for its PathTextField)`
+    : w.sheet
+      ? `observed:sheet_window:${w.window_id} (sheet; bind window_id ${w.window_id} to read it)`
+      : w.panelCandidate && (w.title !== "" || onlyOpened)
+        ? `observed:sheet_candidate:${w.window_id} (dialog or panel; bind window_id ${w.window_id} to read it)`
+        : undefined;
+
 export const diffInputWindows = (
-  before: ReadonlyArray<WindowEntry> | undefined,
-  after: ReadonlyArray<WindowEntry> | undefined,
+  before: ReadonlyArray<SheetWindowEntry> | undefined,
+  after: ReadonlyArray<SheetWindowEntry> | undefined,
   boundWindowId: number,
   closure?: WindowClosure,
 ): { readonly report: InputWindowsReport; readonly evidence: ReadonlyArray<string> } => {
@@ -154,6 +197,11 @@ export const diffInputWindows = (
   }
   for (const w of openedAll.slice(0, 4)) {
     evidence.push(`observed:window_opened:${w.window_id}`);
+  }
+  const openedOnScreen = after.filter((w) => !beforeById.has(w.window_id) && w.is_on_screen);
+  for (const w of openedOnScreen.slice(0, 2)) {
+    const hint = sheetHint(w, openedOnScreen.length === 1 && boundAfter?.is_on_screen === true);
+    if (hint !== undefined) evidence.push(hint);
   }
   const truncated = openedAll.length > 8 || notListedAll.length > 8;
   return {
@@ -288,6 +336,16 @@ export const hiddenWindowStatus = (
   };
 };
 
+/** A Go to Folder input of one binding and, once it returned, the windows before and after it. */
+export interface SheetTrigger {
+  readonly targetId: string;
+  diff?: {
+    readonly before: ReadonlyArray<SheetWindowEntry>;
+    readonly after: ReadonlyArray<SheetWindowEntry>;
+  };
+  void?: true;
+}
+
 export interface CellWindowsOutcome {
   readonly windowsOpened?: ReadonlyArray<ScreenWindowSummary>;
   readonly windowsOpenedTruncated?: boolean;
@@ -298,6 +356,21 @@ export class CellWindowTracker {
   private readonly startByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
   private readonly latestByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
   private readonly seenOpened = new Map<number, Map<number, ScreenWindowSummary>>();
+  /** Bindings that sent input to each process in this cell, and the Go to Folder input awaiting its windows. */
+  private readonly inputTargets = new Map<number, Set<string>>();
+  private readonly armed = new Map<number, SheetTrigger>();
+
+  /** Records that a binding's input was admitted for a process. */
+  noteInput(pid: number, targetId: string): void {
+    const targets = this.inputTargets.get(pid) ?? new Set();
+    targets.add(targetId);
+    this.inputTargets.set(pid, targets);
+  }
+
+  /** Waits for the windows around a Go to Folder input; the next completed input of the process gives them. */
+  armSheetTrigger(pid: number, trigger: SheetTrigger): void {
+    this.armed.set(pid, trigger);
+  }
 
   hasPid(pid: number): boolean {
     return this.startByPid.has(pid);
@@ -315,13 +388,25 @@ export class CellWindowTracker {
 
   recordAfter(
     pid: number,
-    before: ReadonlyArray<WindowEntry> | undefined,
-    after: ReadonlyArray<WindowEntry> | undefined,
+    before: ReadonlyArray<SheetWindowEntry> | undefined,
+    after: ReadonlyArray<SheetWindowEntry> | undefined,
   ): void {
     if (after && after.length > 0) this.latestByPid.set(pid, after);
-    if (!before || !after) return;
+    const trigger = this.armed.get(pid);
+    this.armed.delete(pid);
+    if (!before || !after) {
+      if (trigger) trigger.void = true;
+      return;
+    }
     const beforeIds = new Set(before.map((w) => w.window_id));
     const afterIds = new Set(after.map((w) => w.window_id));
+    if (trigger) {
+      // Another binding's input on this process in the cell could have opened or closed windows.
+      const targets = this.inputTargets.get(pid);
+      const alone = targets?.size === 1 && targets.has(trigger.targetId);
+      if (alone && before.some((w) => afterIds.has(w.window_id))) trigger.diff = { before, after };
+      else trigger.void = true;
+    }
     let map = this.seenOpened.get(pid);
     if (!map) {
       map = new Map();
