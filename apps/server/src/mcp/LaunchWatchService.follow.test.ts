@@ -549,4 +549,38 @@ describe("LaunchWatchService runs the thread starts itself", () => {
         expect(world.webhookReports.map(({ report }) => report.runId)).toEqual([run2]);
       }),
   );
+  it.effect("follows a watch registered again after its expired predecessor was pruned", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const released = yield* Queue.unbounded<void>();
+      world.webhookRelease = Queue.offer(released, undefined).pipe(Effect.asVoid);
+      const baseDir = yield* tempDir;
+      const inline = {
+        type: "inline" as const,
+        url: "https://bot.example/hook",
+        secretName: "s-1",
+      };
+      const launch = (runId: RunId) => ({
+        ...external(),
+        runId,
+        route: { notifyWebhook: true, webhookTarget: inline },
+      });
+      addRun(world, run1, 1);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(launch(run1));
+          yield* launchAndFinish(world, reported);
+          // Its follower waits for the next look while the sweep prunes the expired watch.
+          yield* TestClock.adjust("8 days");
+          yield* Queue.take(released);
+          yield* service.watchExternal(launch(run2));
+          expect(yield* Queue.take(world.waitStarted)).toBe(run2);
+          yield* Queue.offer(world.waits, finished(run2));
+          yield* Queue.take(reported);
+        }),
+      );
+      expect(reportedRuns(world)).toEqual([run1, run2]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
