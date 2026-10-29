@@ -32,6 +32,7 @@ import {
 } from "./DesktopInputGuards.ts";
 import { aimOf, type Placed, type Rect } from "./DesktopFrames.ts";
 import { waitForOutcome } from "./DesktopWindowClosure.ts";
+import { windowIntentOf } from "./DesktopWindowIntent.ts";
 import {
   annotatePointerResult,
   applyDesktopPointerArgs,
@@ -458,7 +459,8 @@ export const createDesktopTargetHost = (deps: {
     ) =>
       Effect.suspend(() => {
         bound.needsSettleBeforeCapture = true;
-        if (inBatch) return runInput;
+        // A batch member skips window reads, except one that opens or closes a window.
+        if (inBatch && windowIntentOf(tool, forwarded, acted) === undefined) return runInput;
         return runInputWithEvidence({
           send,
           call,

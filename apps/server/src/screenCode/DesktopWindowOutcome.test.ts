@@ -109,6 +109,29 @@ const ok = <A, E>(result: { _tag: "Success"; success: A } | { _tag: "Failure"; f
 const press = (key: string) => ({ key, modifiers: ["command"] });
 const boundOf = (value: unknown) => (value as { windows?: { bound?: string } }).windows?.bound;
 
+/** Runs one cell through the real guest runtime against the fixture host. */
+const runCellOn = (host: Host, source: string) => {
+  const turn = { runId: "r", turnId: "t", threadId: "thread", environmentId: "env" };
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({ ...turn, invocation: context.invocation, source });
+    yield* service.finishTurn({ ...turn, reason: "test" });
+    return result;
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        desktopHost: host,
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+};
+
 it.effect(
   "a key that opens a window is confirmed once its id enters the process's complete id snapshot",
   () =>
@@ -267,34 +290,17 @@ it.live(
         return { effect: "unverifiable" };
       },
     });
-    const turn = { runId: "r", turnId: "t", threadId: "thread", environmentId: "env" };
     return Effect.gen(function* () {
-      const service = yield* ScreenRunService;
-      const result = yield* service.runCell({
-        ...turn,
-        invocation: context.invocation,
-        source:
-          "const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+      const result = yield* runCellOn(
+        host,
+        "const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
           "const first = await a.press('cmd+a'); const second = await a.press('cmd+w'); " +
           "const b = await screen.app({bundle_id: 'org.example.Editor', window_id: 9}); " +
           "const third = await b.press('cmd+a'); return [first.verdict, second.verdict, third.verdict];",
-      });
-      yield* service.finishTurn({ ...turn, reason: "test" });
+      );
       expect(result.value).toEqual(["unverifiable", "confirmed", "unverifiable"]);
       expect(sent.filter((each) => each.tool === "press_key")).toHaveLength(3);
-    }).pipe(
-      Effect.provide(
-        ScreenRunService.layerWithRuntime({
-          dispatcher: createScreenDispatchRouter({ app: host }),
-          desktopHost: host,
-          invocation: {
-            command: process.execPath,
-            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-          },
-          assetResolver: () => resolveScreenRuntimeAsset("dev"),
-        }).pipe(Layer.provide(NodeServices.layer)),
-      ),
-    );
+    });
   },
 );
 
@@ -378,5 +384,93 @@ it.effect(
       const out = ok(yield* input(host, yield* bind(host), "press_key", press("w")));
       expect(out.category).toBe("unverifiable");
       expect(out.evidence).not.toContain("observed:window_closed");
+    }),
+);
+
+it.effect(
+  "a close the driver calls confirmed stays unverifiable until the listing shows it closed",
+  () =>
+    Effect.gen(function* () {
+      for (const after of [
+        listing([9], false),
+        {
+          windows: [shown(7), shown(9)],
+          enumeration_complete: true,
+          authoritative_window_ids: [9],
+        },
+      ]) {
+        const { host } = desktop(listing([7, 9]), [after], {
+          effect: "confirmed",
+          evidence: ["driver:acted"],
+        });
+        const out = ok(yield* input(host, yield* bind(host), "press_key", press("w")));
+        expect(out.category).toBe("unverifiable");
+        expect(out.safety?.writeStatus).toBe("may_have_applied");
+      }
+    }),
+);
+
+it.effect(
+  "a close chord written as one key, cmd+w, reads the windows and is confirmed by closure",
+  () =>
+    Effect.gen(function* () {
+      const { host } = desktop(listing([7, 9]), [listing([9])]);
+      const out = ok(yield* input(host, yield* bind(host), "press_key", { key: "cmd+w" }));
+      expect(out.category).toBe("confirmed");
+      expect(boundOf(out.value)).toBe("closed");
+    }),
+);
+
+it.live(
+  "a close button clicked in an unawaited group is judged by the listing like any close",
+  () =>
+    Effect.gen(function* () {
+      const verdicts = [];
+      for (const closes of [true, false]) {
+        let closed = false;
+        const { host, sent } = fixture({
+          list_windows: () => (closed ? listing([9]) : listing([7, 9])),
+          click: (args: unknown) => {
+            if (closes && (args as { element_token?: string }).element_token === "s1:1")
+              closed = true;
+            return { effect: "confirmed", evidence: ["driver:acted"] };
+          },
+          get_window_state: {
+            pid: 42,
+            window_id: 7,
+            tree_markdown:
+              '- [0] AXWindow "W7"\n  - [1] AXButton (close button) [actions=[press]]\n  - [2] AXButton "Apply" [actions=[press]]',
+            elements_complete: false,
+            elements: [
+              { role: "AXWindow", element_index: 0, element_token: "s1:0", label: "W7" },
+              {
+                role: "AXButton",
+                element_index: 1,
+                element_token: "s1:1",
+                label: "close button",
+                actions: ["AXPress"],
+              },
+              {
+                role: "AXButton",
+                element_index: 2,
+                element_token: "s1:2",
+                label: "Apply",
+                actions: ["AXPress"],
+              },
+            ],
+          },
+        });
+        const result = yield* runCellOn(
+          host,
+          "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
+            "return (await Promise.all([app.click('Apply'), app.click('close button')])).map((done) => done.verdict);",
+        );
+        verdicts.push(result.value);
+        expect(sent.filter((each) => each.tool === "click")).toHaveLength(2);
+      }
+      expect(verdicts).toEqual([
+        ["confirmed", "confirmed"],
+        ["confirmed", "unverifiable"],
+      ]);
     }),
 );

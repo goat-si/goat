@@ -38,6 +38,11 @@ const COMPLETED_WRITE = classifyActionOutcome({
   status: "completed",
   dispatched: true,
 });
+const INDETERMINATE_WRITE = classifyActionOutcome({
+  effect: "write",
+  status: "indeterminate",
+  dispatched: true,
+});
 
 /**
  * An input no longer waits for its effect to settle unless it reads the acted element back, so
@@ -259,7 +264,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     const startedAt = yield* Clock.currentTimeMillis;
     // A simple key rarely opens or closes a window; the cell's end read still compares windows
     // against the cell's first baseline, so it reads one only when the cell has none yet.
-    if (!opening && isSimpleKey(tool, forwarded, acted)) {
+    if (!opening && intent === undefined && isSimpleKey(tool, forwarded, acted)) {
       const seeds = !tracker.hasPid(pid);
       if (seeds)
         tracker.recordBefore(
@@ -379,10 +384,12 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       },
     };
     const upgrade = proven && base?.category !== "confirmed" && base?.category !== "refused";
+    // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
+    const unproven = closing && !closedByClose && base?.category === "confirmed";
     return {
       ...base,
-      category: upgrade ? "confirmed" : (base?.category ?? "confirmed"),
-      ...(upgrade ? { safety: COMPLETED_WRITE } : {}),
+      category: upgrade ? "confirmed" : unproven ? "unverifiable" : (base?.category ?? "confirmed"),
+      ...(upgrade ? { safety: COMPLETED_WRITE } : unproven ? { safety: INDETERMINATE_WRITE } : {}),
       value: fitInputWindows(
         base?.value,
         winDiff.report,
