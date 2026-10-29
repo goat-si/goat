@@ -115,6 +115,11 @@ export const LaunchWatch = Schema.Struct({
   ),
   /** Runs retried while their end was still owed, followed once more after it is reported. */
   followAgain: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
+   * Pending runs the thread started on its own (a wake, a pull request watch, a message typed
+   * there), found by looking at the thread rather than armed by a launch, send or retry.
+   */
+  discoveredRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** The most recently reported pending requests, keyed by questionKey. */
   reportedQuestions: Schema.Array(Schema.String),
   /** Number of the last outage episode that ended; the next one counts from it. */
@@ -189,6 +194,10 @@ export interface LaunchWatchRunDetails {
   readonly linkOnlyRegistration: boolean;
   /** Why the run failed before its agent's first message, when it did. */
   readonly failure: OrchestratorMcpRunFailure | null;
+  /** A later run the thread was already on when this one's end was read. */
+  readonly continuedIn: RunId | null;
+  /** The message that started the run, when it could be read. */
+  readonly trigger: string | null;
 }
 
 export const noRunDetails: LaunchWatchRunDetails = {
@@ -199,6 +208,8 @@ export const noRunDetails: LaunchWatchRunDetails = {
   prUrl: null,
   linkOnlyRegistration: false,
   failure: null,
+  continuedIn: null,
+  trigger: null,
 };
 
 const REPORTED_LIMIT = 20;
@@ -278,6 +289,7 @@ export function newLaunchWatch(input: {
     reportedRuns: [],
     reportedEnds: {},
     followAgain: [],
+    discoveredRuns: [],
     reportedQuestions: [],
     lastEpisode: 0,
     outage: null,
@@ -322,10 +334,70 @@ export function clearAttempts(watch: LaunchWatch, wake: LaunchWatchWake): Launch
 const keepRecent = <A>(values: ReadonlyArray<A>, value: A) =>
   [...values.filter((existing) => existing !== value), value].slice(-REPORTED_LIMIT);
 
-/** Adds a run to report; a run already pending or reported is left alone. */
+/**
+ * Adds a run to report; a run already pending or reported is left alone. A run found by looking
+ * at the thread is owed from then on like any armed run.
+ */
 export function addPendingRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  if (watch.discoveredRuns.includes(runId))
+    return {
+      ...watch,
+      discoveredRuns: watch.discoveredRuns.filter((found) => found !== runId),
+      armedAt: now,
+      updatedAt: now,
+    };
   if (watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId)) return watch;
   return { ...watch, pendingRuns: [...watch.pendingRuns, runId], armedAt: now, updatedAt: now };
+}
+
+/**
+ * Follows a run the thread started on its own, found by looking at it while nothing was owed. A
+ * run already pending or reported is left alone. Finding one arms the watch, so a launcherless
+ * watch's retention counts from it.
+ */
+export function discoverRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  if (watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId)) return watch;
+  return {
+    ...watch,
+    pendingRuns: [...watch.pendingRuns, runId],
+    discoveredRuns: [...watch.discoveredRuns, runId],
+    armedAt: now,
+    updatedAt: now,
+  };
+}
+
+const SEND_MESSAGE = /^message:mcp:[^:]*:thread-send:/u;
+
+const decodePart = (part: string | undefined) => {
+  try {
+    return part === undefined ? null : decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Why a found run's end settles unreported (null: report it). A thread already on a later run is
+ * reported when that one ends, so short wakes report once, when it goes idle. A send's run reports
+ * to the sender's own watch only. A run started by the launcher's report on this thread, reported
+ * back, would have two threads that watch each other wake each other forever.
+ */
+export function quietEnd(
+  watch: LaunchWatch,
+  runId: RunId,
+  details: Pick<LaunchWatchRunDetails, "continuedIn" | "trigger">,
+): "continued" | "sent" | "echo" | null {
+  if (!watch.discoveredRuns.includes(runId)) return null;
+  if (details.continuedIn !== null && details.continuedIn !== runId) return "continued";
+  const trigger = details.trigger;
+  if (trigger === null) return null;
+  if (SEND_MESSAGE.test(trigger)) return "sent";
+  if (watch.launcherThreadId === null || !trigger.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX))
+    return null;
+  const [from, , about] = trigger.slice(LAUNCH_WATCH_MESSAGE_PREFIX.length).split(":");
+  return decodePart(from) === watch.threadId && decodePart(about) === watch.launcherThreadId
+    ? "echo"
+    : null;
 }
 
 /** Moves a run from pending to reported, whether or not a wake went out for it. */
@@ -335,6 +407,7 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
     pendingRuns: watch.pendingRuns.filter((pending) => pending !== runId),
     reportedRuns: keepRecent(watch.reportedRuns, runId),
     followAgain: watch.followAgain.filter((again) => again !== runId),
+    discoveredRuns: watch.discoveredRuns.filter((found) => found !== runId),
     updatedAt: now,
   };
 }
@@ -346,10 +419,18 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
  * end already reported settles without a second report.
  */
 export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  const owed = watch.discoveredRuns.filter((found) => found !== runId);
   if (watch.pendingRuns.includes(runId)) {
-    return watch.followAgain.includes(runId)
+    return watch.followAgain.includes(runId) && owed.length === watch.discoveredRuns.length
       ? watch
-      : { ...watch, followAgain: [...watch.followAgain, runId], updatedAt: now };
+      : {
+          ...watch,
+          followAgain: watch.followAgain.includes(runId)
+            ? watch.followAgain
+            : [...watch.followAgain, runId],
+          discoveredRuns: owed,
+          updatedAt: now,
+        };
   }
   if (!watch.reportedRuns.includes(runId)) return watch;
   return {
