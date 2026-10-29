@@ -178,6 +178,7 @@ const watchedThread = (name: string) =>
     });
     const host = yield* Ref.make<HostState | "unreachable">(openAt("aaaa111", [pending]));
     const reads = yield* Ref.make(0);
+    const activityBroken = yield* Ref.make(false);
     const duringRead = yield* Ref.make<Effect.Effect<void>>(Effect.void);
     const reactor = yield* PullRequestWatchReactor.make.pipe(
       Effect.provide(
@@ -194,13 +195,17 @@ const watchedThread = (name: string) =>
                 return detailOf(projectId, state);
               }),
             activity: () =>
-              Effect.succeed({
-                comments: [],
-                commentCount: 0,
-                commentsTruncated: false,
-                reviewThreads: [],
-                commits: [],
-              }),
+              Effect.flatMap(Ref.get(activityBroken), (broken) =>
+                broken
+                  ? Effect.die("activity unreadable")
+                  : Effect.succeed({
+                      comments: [],
+                      commentCount: 0,
+                      commentsTruncated: false,
+                      reviewThreads: [],
+                      commits: [],
+                    }),
+              ),
           }),
         ),
       ),
@@ -233,7 +238,19 @@ const watchedThread = (name: string) =>
         },
         stack: null,
       });
-    return { orchestrator, threadId, host, reads, duringRead, reactor, link, records, snapshot };
+    return {
+      orchestrator,
+      threadId,
+      projectId,
+      host,
+      reads,
+      activityBroken,
+      duringRead,
+      reactor,
+      link,
+      records,
+      snapshot,
+    };
   });
 
 const sweeps = (
@@ -304,10 +321,12 @@ describe("a watch on a pull request that merged or closed", () => {
         headSha === null ? "head-deleted" : "closed",
       );
       yield* reactor.sweep;
+      const { headSha: _open, ...open } = openAt("aaaa111", [pending]);
+      // A deleted head leaves the host without a head commit to report.
       yield* Ref.set(host, {
-        ...openAt("aaaa111", [pending]),
+        ...open,
+        ...(headSha === null ? {} : { headSha }),
         state: "closed",
-        headSha,
         closedAt: AT,
       });
       yield* TestClock.adjust("2 minutes");
@@ -317,6 +336,17 @@ describe("a watch on a pull request that merged or closed", () => {
       yield* sweeps(reactor, 5);
       assert.strictEqual(yield* Ref.get(reads), readsAtEnd);
       assert.deepEqual((yield* records).summaries, ["#41: closed, stopped watching"]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("ends on a merge the detail read reports while the activity read fails", () =>
+    Effect.gen(function* () {
+      const { host, activityBroken, reactor, link, records } = yield* watchedThread("activity");
+      yield* Ref.set(host, { ...openAt("aaaa111", [pending]), state: "merged", mergedAt: AT });
+      yield* Ref.set(activityBroken, true);
+      yield* reactor.sweep;
+      assert.isUndefined((yield* link)?.watch);
+      assert.deepEqual(yield* records, { summaries: [], runs: [] });
     }).pipe(Effect.provide(layerTest)),
   );
 
@@ -379,6 +409,47 @@ describe("a watch that cannot read its pull request", () => {
       assert.strictEqual(yield* Ref.get(reads), 8);
       assert.isDefined((yield* link)?.watch);
       assert.deepEqual((yield* records).summaries, []);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("an older watch still reaches its limit when another thread starts watching", () =>
+    Effect.gen(function* () {
+      const { host, reads, reactor, link, records, orchestrator, projectId } =
+        yield* watchedThread("two-watches");
+      yield* Ref.set(host, "unreachable");
+      for (let pass = 0; pass < 60 && (yield* Ref.get(reads)) < 7; pass += 1) {
+        yield* reactor.sweep;
+        yield* TestClock.adjust("2 minutes");
+      }
+      const laterId = ThreadId.make("pr-terminal-two-watches-later");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-terminal-two-watches-later-create"),
+        threadId: laterId,
+        projectId,
+        title: "Watching later",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-terminal-two-watches-later-watch"),
+        threadId: laterId,
+        ...key,
+        watching: true,
+        link: { url: URL, source: "agent" },
+      });
+      yield* reactor.sweep;
+      assert.strictEqual(yield* Ref.get(reads), 8);
+      assert.isUndefined((yield* link)?.watch);
+      assert.deepEqual((yield* records).summaries, ["#41: stopped watching, could not read it"]);
+      const later = yield* orchestrator.getThreadShell(laterId);
+      assert.isDefined(later?.pullRequests?.[0]?.watch);
     }).pipe(Effect.provide(layerTest)),
   );
 });

@@ -248,6 +248,7 @@ export const make = Effect.gen(function* () {
   const ended = (target: WatchTarget, reason: WatchEndReason) =>
     Effect.suspend(() => reportEnd(lifeKey(target), lifeOf(target), reason));
 
+  /** Consecutive failed reads by watch, so a watch started later gets its own limit. */
   const readFailures = new Map<string, number>();
   /** When a failing group reads again, and the watches it held when it last failed. */
   const readRetryAt = new Map<string, { readonly at: number; readonly watches: Set<string> }>();
@@ -503,30 +504,40 @@ export const make = Effect.gen(function* () {
       Effect.all(
         [
           pullRequests.detail({ ...reference, allowStale: false }),
-          plan.activity
-            ? pullRequests.activity(reference).pipe(Effect.asSome)
-            : Effect.succeed(Option.none<PullRequestActivity>()),
+          plan.activity ? Effect.exit(pullRequests.activity(reference)) : Effect.succeed(null),
         ],
         { concurrency: 2 },
+      ).pipe(
+        // A merge or close the detail read reports ends the watch even when activity failed.
+        Effect.flatMap(([detail, activity]) =>
+          activity === null || detail.state !== "open"
+            ? Effect.succeed([detail, Option.none<PullRequestActivity>()] as const)
+            : Exit.isSuccess(activity)
+              ? Effect.succeed([detail, Option.some(activity.value)] as const)
+              : Effect.failCause(activity.cause),
+        ),
       ),
     );
     if (Exit.isFailure(read)) {
       if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
       lastReads.delete(group.key);
       if (isRateLimited(read.cause)) return;
-      const failures = (readFailures.get(group.key) ?? 0) + 1;
-      readFailures.set(group.key, failures);
+      const counts = group.targets.map((target) => (readFailures.get(watchKey(target)) ?? 0) + 1);
+      group.targets.forEach((target, index) => readFailures.set(watchKey(target), counts[index]!));
+      // The newest watch sets the pace, so it is not held back by older watches' failures.
       readRetryAt.set(group.key, {
-        at: now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (failures - 1), READ_RETRY_MAX_MS),
+        at:
+          now +
+          Math.min(SWEEP_MINUTES * 60_000 * 2 ** (Math.min(...counts) - 1), READ_RETRY_MAX_MS),
         watches: new Set(group.targets.map(watchKey)),
       });
-      if (failures >= READ_FAILURE_LIMIT && (yield* eachTarget(group, giveUp))) {
-        readFailures.delete(group.key);
-        readRetryAt.delete(group.key);
+      const spent = group.targets.filter((_, index) => counts[index]! >= READ_FAILURE_LIMIT);
+      if (spent.length > 0 && (yield* eachTarget({ ...group, targets: spent }, giveUp))) {
+        for (const target of spent) readFailures.delete(watchKey(target));
       }
       return yield* Effect.failCause(read.cause);
     }
-    readFailures.delete(group.key);
+    for (const target of group.targets) readFailures.delete(watchKey(target));
     readRetryAt.delete(group.key);
     const [detail, activity] = read.value;
     const headSha = detail.headSha ?? null;
@@ -633,9 +644,11 @@ export const make = Effect.gen(function* () {
       targets: members,
       fingerprint: [...new Set(members.map(snapshotFingerprint))].toSorted().join("\n"),
     }));
-    for (const cache of [readFailures, readRetryAt, lastReads, threadTails]) {
+    for (const cache of [readRetryAt, lastReads, threadTails]) {
       for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
     }
+    const watching = new Set(targets.map(watchKey));
+    for (const key of readFailures.keys()) if (!watching.has(key)) readFailures.delete(key);
     yield* Effect.forEach(
       ending,
       ([target, reason]) =>
@@ -660,10 +673,9 @@ export const make = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     for (const group of groups) {
       const retry = readRetryAt.get(group.key);
-      // A watch started since the last failure reads at once and counts its own failures.
+      // A watch started since the last failure reads at once.
       if (retry && group.targets.some((target) => !retry.watches.has(watchKey(target)))) {
         readRetryAt.delete(group.key);
-        readFailures.delete(group.key);
       }
     }
     const due = groups.filter((group) => (readRetryAt.get(group.key)?.at ?? 0) <= now);
