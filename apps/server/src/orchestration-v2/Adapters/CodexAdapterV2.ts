@@ -6472,9 +6472,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const terminal = yield* makeRootTerminalEvent(input);
                 if (
                   input.context.subagent === null &&
-                  !input.context.hasOutput &&
-                  !(goalRuns.get(input.context.providerTurnId) ?? []).some(
-                    (turn) => turn.hasOutput,
+                  (terminal.failure.code === "serverOverloaded" ||
+                    (!input.context.hasOutput &&
+                      !(goalRuns.get(input.context.providerTurnId) ?? []).some(
+                        (turn) => turn.hasOutput,
+                      ))) &&
+                  !(
+                    input.context.input.message.attachments.length === 0 &&
+                    input.context.input.message.text.trim().toLowerCase() === "/compact"
                   ) &&
                   terminal.status === "failed" &&
                   terminal.failure.retryable === true &&
