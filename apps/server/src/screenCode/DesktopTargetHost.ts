@@ -7,8 +7,6 @@ import * as Schema from "effect/Schema";
 import type {
   ComputerUseOverlayPoint,
   ScreenHostCall,
-  ScreenImage,
-  ScreenImageMetadata,
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
@@ -46,6 +44,13 @@ import {
   type Placed,
   type Rect,
 } from "./DesktopFrames.ts";
+import {
+  annotatePointerResult,
+  applyDesktopPointerArgs,
+  buildScreenshotCapture,
+  treeWindowBasis,
+  type ScreenshotBasis,
+} from "./DesktopTargetPoints.ts";
 import { isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
 import {
   boundedReadDetail,
@@ -118,6 +123,8 @@ interface BoundWindow {
   lastClickedTableCell?: number | string;
   /** The window bounds held when those frames were read, until a screenshot shows them wrong. */
   framesBasis?: Rect;
+  screenshots?: Map<string, ScreenshotBasis>;
+  latestScreenshot?: ScreenshotBasis;
   /**
    * The window's screen bounds from its binding or latest screenshot. They place a tree that
    * leaves the window out (macOS indexes only actionable elements); a tree read returns none.
@@ -569,8 +576,9 @@ export const createDesktopTargetHost = (deps: {
         // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
         bound.elementsByToken = inspectTreeElements(elements, rows);
-        if (bound.windowBounds === undefined) delete bound.framesBasis;
-        else bound.framesBasis = bound.windowBounds;
+        const basis = treeWindowBasis(bound.frames, bound.windowBounds);
+        if (basis === undefined) delete bound.framesBasis;
+        else bound.framesBasis = basis;
       }
       const render = Effect.try({
         try: () =>
@@ -629,45 +637,27 @@ export const createDesktopTargetHost = (deps: {
       // Once shown wrong, the basis stays dropped until the next tree read, even if it matches again.
       if (shotBounds && bound.framesBasis && !sameRect(bound.framesBasis, shotBounds))
         delete bound.framesBasis;
-      if (
-        !imagePart ||
-        !width ||
-        !height ||
-        imagePart.width !== width ||
-        imagePart.height !== height
-      )
-        return yield* Effect.fail(fail("downstream_failure"));
-      const mimeType =
-        imagePart.mimeType === "image/jpeg" ? ("image/jpeg" as const) : ("image/png" as const);
-      const metadata: ScreenImageMetadata = {
-        imageRef: NodeCrypto.randomUUID(),
+      const captured = buildScreenshotCapture({
         callId: call.callId,
         targetId: bound.ref.id,
         observationId,
-        regionId: NodeCrypto.randomUUID(),
-        region: {
-          kind: "window",
-          x: typeof bounds?.x === "number" ? bounds.x : 0,
-          y: typeof bounds?.y === "number" ? bounds.y : 0,
-          width: typeof bounds?.width === "number" && bounds.width > 0 ? bounds.width : width,
-          height: typeof bounds?.height === "number" && bounds.height > 0 ? bounds.height : height,
-        },
-        pixelWidth: width,
-        pixelHeight: height,
-        scale:
-          typeof state.screenshot_scale === "number" && state.screenshot_scale > 0
-            ? state.screenshot_scale
-            : 1,
-        mimeType,
-      };
+        state,
+        imagePart,
+        width,
+        height,
+      });
+      if (!captured) return yield* Effect.fail(fail("downstream_failure"));
+      const { metadata, image, shotBasis } = captured;
       observations.index.putRegion(bound.ref.id, observationId, metadata.regionId, {
         ...metadata.region,
-        pixelWidth: width,
-        pixelHeight: height,
+        pixelWidth: metadata.pixelWidth,
+        pixelHeight: metadata.pixelHeight,
         scale: metadata.scale,
       });
+      bound.screenshots ??= new Map();
+      bound.screenshots.set(metadata.regionId, shotBasis);
+      bound.latestScreenshot = shotBasis;
       delete bound.pointsStale;
-      const image: ScreenImage = { ...metadata, bytes: imagePart.bytes };
       return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
     },
   );
@@ -861,18 +851,21 @@ export const createDesktopTargetHost = (deps: {
         if (elementToken === undefined) forwarded.window_id = bound.windowId;
       }
       const tool = call.method === "right_click" ? "right_click" : call.method;
-      const aimed = ["x", "y", "from_x", "from_y", "to_x", "to_y"].some((key) => key in args);
-      if (aimed && bound.pointsStale)
-        return yield* Effect.fail(
-          fail(
-            "stale_reference",
-            bound.pointsStale === "restart"
-              ? RESTARTED_POINTS
-              : "Input reached this window after its latest screenshot; take a new screenshot before using points.",
-          ),
-        );
-      // Any input, even one that fails, may change what is under a pixel.
-      bound.pointsStale = "input";
+      const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, {
+        ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
+        ...(bound.frames === undefined ? {} : { frames: bound.frames }),
+        ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
+        ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
+        ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
+        ...(bound.latestScreenshot === undefined
+          ? {}
+          : { latestScreenshot: bound.latestScreenshot }),
+        resolveToken: (el) => tokenOf(el, bound),
+      });
+      if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
+      const aimed =
+        ["x", "y", "from_x", "from_y", "to_x", "to_y"].some((key) => key in forwarded) &&
+        forwarded.coordinate_space !== "window_points";
       if (admission.clickedTableCell !== undefined)
         bound.lastClickedTableCell = admission.clickedTableCell;
       const needs = elementToken !== undefined ? "element" : aimed ? "points" : "nothing";
@@ -890,7 +883,7 @@ export const createDesktopTargetHost = (deps: {
           }),
         ),
       );
-      const result = driverResult(tool, reply);
+      const result = annotatePointerResult(driverResult(tool, reply), pointerResolved.windowPoint);
       const replyData = object(driverValue(reply));
       const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
       if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;

@@ -83,6 +83,14 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
       : structured.effect === "refused")
   ) {
     const code = string(object(structured.refusal)?.code) ?? string(structured.code);
+    if (code === "window_geometry_changed")
+      return {
+        ...fail(
+          "stale_reference",
+          "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).",
+        ),
+        ...refusalOf(structured),
+      };
     return {
       ...fail(
         code === "invalid_arguments"
