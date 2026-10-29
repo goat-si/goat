@@ -284,7 +284,11 @@ export function useRightPanelActions(input: RightPanelActionsInput) {
     const diffOpen =
       selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, activeThreadRef) === "diff";
     explicitDiffOpenRef.current = diffOpen ? null : activeThreadRef;
-    useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath, sourceItem);
+    if (sourceItem) {
+      useDiffPanelStore.getState().selectToolCall(activeThreadRef, sourceItem, filePath);
+    } else {
+      useDiffPanelStore.getState().selectTurn(activeThreadRef, runId, filePath);
+    }
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   };
