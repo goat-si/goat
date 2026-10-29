@@ -117,6 +117,27 @@ const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
 const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 describe("acpToolCallDiffPatch", () => {
+  it("adds file headers to header-less ACP git_patch hunks for added and deleted files", () => {
+    for (const operation of ["add", "delete"]) {
+      const text = operation === "add" ? "@@ -0,0 +1 @@\n+content\n" : "@@ -1 +0,0 @@\n-content\n";
+      assert.equal(
+        acpToolCallDiffPatch([
+          {
+            type: "diff",
+            changes: [{ operation, path: "/repo/a.ts" }],
+            patch: { format: "git_patch", text },
+          },
+        ]),
+        [
+          'diff --git "a//repo/a.ts" "b//repo/a.ts"',
+          operation === "add" ? "--- /dev/null" : '--- "a//repo/a.ts"',
+          operation === "delete" ? "+++ /dev/null" : '+++ "b//repo/a.ts"',
+          text,
+        ].join("\n"),
+      );
+    }
+  });
+
   it("builds a patch per file from ACP v1 oldText/newText, with /dev/null for a new file", () => {
     assert.equal(
       acpToolCallDiffPatch([
