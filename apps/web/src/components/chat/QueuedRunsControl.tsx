@@ -1,5 +1,6 @@
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { deriveThreadQueueWorkflowState } from "@goat/client-runtime/state/thread-workflows";
+import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
 import type {
@@ -20,7 +21,9 @@ import { useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 
 import { useAssetUrls } from "../../assets/assetUrls";
 import { threadEnvironment } from "../../state/threads";
-import { useThreadProjection } from "../../state/entities";
+import { useQuietThreadShell, useThreadProjection } from "../../state/entities";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
@@ -49,6 +52,23 @@ export interface QueuedRunsControlHandle {
 }
 
 type ThreadQueueProjection = Parameters<typeof deriveThreadQueueWorkflowState>[0];
+
+function QueuedSender({ environmentId, message }: {
+  environmentId: EnvironmentId;
+  message: ThreadQueueProjection["messages"][number];
+}) {
+  const presentation = resolveUserMessagePresentation(message);
+  const sender = useQuietThreadShell(message.senderThreadId && presentation.attribution === "agent"
+    ? scopeThreadRef(environmentId, message.senderThreadId) : null);
+  const tasks = useEnvironmentQuery(presentation.scheduledTaskId
+    ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null);
+  const label = presentation.attribution === "automation"
+    ? tasks.data?.tasks.find((task) => task.id === presentation.scheduledTaskId)?.title ?? "Automation"
+    : presentation.attribution === "agent"
+      ? message.senderThreadId ? sender?.title.trim() || "Agent" : message.context?.remoteSender?.title ?? "Agent"
+      : presentation.attribution === "t3code" ? "Sent by GOAT" : null;
+  return label ? <span className="shrink-0 text-muted-foreground">{label}</span> : null;
+}
 
 function queuedImageResources(projection: ThreadQueueProjection | undefined) {
   if (!projection) return [];
@@ -117,7 +137,7 @@ export function QueuedRunsControl({
     (message) => message.inputIntent === "queued_turn" && !acknowledgedMessageIds.has(message.id),
   );
   const items = [
-    ...queued.map(({ run, text, attachments, context }, serverIndex) => ({
+    ...queued.map(({ run, text, attachments, context, message }, serverIndex) => ({
       key: run.id,
       runId: run.id,
       messageId: run.userMessageId,
@@ -126,6 +146,7 @@ export function QueuedRunsControl({
       // A guest's message keeps the guest's words; the owner can cancel it, not rewrite it.
       editable: context?.guest === undefined,
       guestName: context?.guest?.name,
+      message,
       attachments,
       thumbnails: attachments
         .filter((attachment) => attachment.type === "image")
@@ -144,6 +165,7 @@ export function QueuedRunsControl({
       text: message.text,
       editable: true,
       guestName: undefined,
+      message: undefined,
       attachments: [] as ReadonlyArray<ContractChatAttachment>,
       thumbnails: (message.attachments ?? [])
         .filter(isImageAttachment)
@@ -393,6 +415,7 @@ export function QueuedRunsControl({
                     {item.guestName === undefined ? null : (
                       <span className="shrink-0 text-guest-foreground">{item.guestName}</span>
                     )}
+                    {item.message ? <QueuedSender environmentId={props.environmentId} message={item.message} /> : null}
                     <Tooltip>
                       <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
                         {previewText}
