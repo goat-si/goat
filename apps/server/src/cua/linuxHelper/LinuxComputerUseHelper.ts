@@ -295,10 +295,12 @@ export function makeLinuxHelper(deps: LinuxHelperDependencies): LinuxHelper {
         : unshot;
     const privateMode = await privateFor(input.pid);
     const elements = (state.elements ?? []).map((element) => {
-      // The driver's selected on an AT-SPI toggle is only its checked state, which toggle_state
-      // carries with mixed included (#1261).
+      // On a check role the driver's selected is only its CHECKED state, which toggle_state
+      // carries with mixed included; a radio's selected is its own state and stays.
       const { selected: _selected, ...unselected } = element;
-      const row = element.toggle_state === undefined ? element : unselected;
+      const duplicate =
+        element.toggle_state !== undefined && element.role.toLowerCase().includes("check");
+      const row = duplicate ? unselected : element;
       // A password field's value never leaves, even when it does not have focus.
       if (row.role !== SECURE_ROLE || row.value === undefined) return row;
       const { value: _value, ...rest } = row;
