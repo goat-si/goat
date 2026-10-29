@@ -474,3 +474,35 @@ it.live(
       ]);
     }),
 );
+
+it.live(
+  "a grouped click by point the driver says hit a close button is not confirmed without a listing",
+  () => {
+    const { host, sent } = fixture({
+      list_windows: listing([7]),
+      click: (args: unknown) =>
+        (args as { element_token?: string }).element_token === undefined
+          ? {
+              effect: "confirmed",
+              evidence: ["driver:acted"],
+              hit: { role: "AXButton", label: "close button" },
+            }
+          : { effect: "confirmed", evidence: ["driver:acted"] },
+    });
+    return Effect.gen(function* () {
+      const result = yield* runCellOn(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
+          "await Promise.all([app.click('Apply'), app.click({window: [10, 10]})]); return 1;",
+      );
+      expect(
+        result.journal
+          .filter((entry) => entry.receipt.method === "click")
+          .map((entry) => entry.receipt.category),
+      ).toEqual(["confirmed", "unverifiable"]);
+      // Both clicks went out as one group: no window read between them, only the cell's end read.
+      const tools = sent.map((each) => each.tool);
+      expect(tools.slice(tools.indexOf("click"))).toEqual(["click", "click", "list_windows"]);
+    });
+  },
+);

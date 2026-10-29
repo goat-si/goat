@@ -44,6 +44,7 @@ import {
   pollHiddenWindow,
   runInputWithEvidence,
   seedBatchBaseline,
+  withoutUnprovenClose,
 } from "./DesktopEvidence.ts";
 import {
   availabilityFromControlState,
@@ -460,7 +461,8 @@ export const createDesktopTargetHost = (deps: {
       Effect.suspend(() => {
         bound.needsSettleBeforeCapture = true;
         // A batch member skips window reads, except one that opens or closes a window.
-        if (inBatch && windowIntentOf(tool, forwarded, acted) === undefined) return runInput;
+        if (inBatch && windowIntentOf(tool, forwarded, acted) === undefined)
+          return Effect.map(runInput, (result) => withoutUnprovenClose(tool, result));
         return runInputWithEvidence({
           send,
           call,

@@ -45,6 +45,18 @@ const INDETERMINATE_WRITE = classifyActionOutcome({
 });
 
 /**
+ * A grouped click reads no windows, so one the driver says hit a close button cannot show the
+ * window closed: the driver's confirmed becomes unverifiable.
+ */
+export const withoutUnprovenClose = (
+  tool: string,
+  result: ScreenHostDispatchResult,
+): ScreenHostDispatchResult =>
+  result.category === "confirmed" && hitCloseButton(tool, result.value)
+    ? { ...result, category: "unverifiable", safety: INDETERMINATE_WRITE }
+    : result;
+
+/**
  * An input no longer waits for its effect to settle unless it reads the acted element back, so
  * the next read of the window waits instead: a screenshot when its own cap still fits, a tree read
  * whenever a minimal call still fits after the wait. A tree read with less left reads unsettled.
