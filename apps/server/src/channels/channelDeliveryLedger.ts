@@ -27,8 +27,8 @@ export const deliveryLedger = (
       SELECT 1 FROM channel_inbox i WHERE channel_outbox.cause_key = 'reply:' || i.input_id
         AND i.accepted_at <= ${DateTime.formatIso(DateTime.makeUnsafe(Date.parse(now) - 60_000))})
     RETURNING delivery_id`;
-  // Rows held behind an expired receipt are free now, wherever the expiry happened, so the
-  // channel loop is told after the transaction commits.
+  // Rows held behind an expired receipt are free now, so the channel loop is told once the
+  // operation's own transaction commits. Callers never nest these operations in another one.
   const expiring = <A, E, R>(
     run: (expire: (now: string) => Effect.Effect<void, SqlError>) => Effect.Effect<A, E, R>,
   ) =>
