@@ -81,6 +81,11 @@ const releases = [
   },
 ] as const;
 
+// A tar.gz release exists only for macOS and Linux hosts; Windows gets the zip. Windows also has
+// no execute bit for the Linux fixture's check, and Git's tar there reads "C:" as a remote host.
+const tarHost = HostProcess.Platform.defaultValue() !== "win32";
+const hostReleases = releases.filter((release) => tarHost || release.format !== "tar.gz");
+
 const makeHarness = Effect.fn("test.makeCuaDriverInstallation")(function* (
   fixture: (typeof releases)[number],
   options: {
@@ -250,8 +255,7 @@ const makeTarFixture = Effect.fn("test.makeTarFixture")(function* (options: {
 
 it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
   for (const hang of ["-tzf", "-tvzf", "-xzf"] as const)
-    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
-    it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    it.effect.skipIf(!tarHost)(
       `expires tar ${hang} without publishing and releases installation for retry`,
       () =>
         Effect.gen(function* () {
@@ -274,8 +278,7 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
     );
 
   for (const oversized of ["-tzf", "-tvzf"] as const)
-    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
-    it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    it.effect.skipIf(!tarHost)(
       `rejects oversized tar ${oversized} output without publishing and permits retry`,
       () =>
         Effect.gen(function* () {
@@ -291,8 +294,7 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
         }).pipe(Effect.scoped),
     );
 
-  // quarantine: #2120 Its tar fixtures fail during extract on Windows.
-  it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.effect.skipIf(!tarHost)(
     "does not reuse another release archive's driver at the same version",
     () =>
       Effect.gen(function* () {
@@ -313,11 +315,8 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
       }).pipe(Effect.scoped),
   );
 
-  for (const fixture of releases)
-    // quarantine: #2120 Its tar fixtures fail during extract on Windows.
-    it.effect.skipIf(
-      HostProcess.Platform.defaultValue() === "win32" && fixture.format === "tar.gz",
-    )(
+  for (const fixture of hostReleases)
+    it.effect(
       `publishes a complete ${fixture.format} release in GOAT home and reuses it across installer instances`,
       () =>
         Effect.gen(function* () {
@@ -360,7 +359,7 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
 
   it.effect("rejects TAR and ZIP traversal entries without overwriting outside files", () =>
     Effect.gen(function* () {
-      for (const fixture of releases) {
+      for (const fixture of hostReleases) {
         const h = yield* makeHarness(fixture, { archive: fixture.traversal });
 
         const error = yield* Effect.flip(h.installation.executable);
@@ -371,22 +370,24 @@ it.layer(NodeServices.layer)("CuaDriverInstallation", (it) => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("rejects TAR symlinks and hardlinks even when their targets are in the archive", () =>
-    Effect.gen(function* () {
-      for (const archive of [archives.tarSymlink, archives.tarHardlink]) {
-        const h = yield* makeHarness(releases[0], { archive });
+  it.effect.skipIf(!tarHost)(
+    "rejects TAR symlinks and hardlinks even when their targets are in the archive",
+    () =>
+      Effect.gen(function* () {
+        for (const archive of [archives.tarSymlink, archives.tarHardlink]) {
+          const h = yield* makeHarness(releases[0], { archive });
 
-        const error = yield* Effect.flip(h.installation.executable);
+          const error = yield* Effect.flip(h.installation.executable);
 
-        expect(error._tag).toBe("CuaDriverInstallError");
-        yield* h.expectUnpublished;
-      }
-    }).pipe(Effect.scoped),
+          expect(error._tag).toBe("CuaDriverInstallError");
+          yield* h.expectUnpublished;
+        }
+      }).pipe(Effect.scoped),
   );
 
   it.effect("does not publish a verified archive missing a required companion", () =>
     Effect.gen(function* () {
-      for (const fixture of releases) {
+      for (const fixture of hostReleases) {
         const h = yield* makeHarness(fixture, { archive: fixture.missing });
 
         const error = yield* Effect.flip(h.installation.executable);
