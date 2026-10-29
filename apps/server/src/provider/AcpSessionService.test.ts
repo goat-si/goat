@@ -14,7 +14,7 @@ import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "./ProviderRegistry.ts";
 import * as AcpSessionService from "./AcpSessionService.ts";
 
-it.effect("imports a native session once and protects imported sessions from deletion", () =>
+it.effect("preserves incomplete listings, imports once, and protects imported sessions", () =>
   Effect.gen(function* () {
     const instanceId = ProviderInstanceId.make("acp-fixture");
     const projectId = ProjectId.make("project-fixture");
@@ -52,6 +52,7 @@ it.effect("imports a native session once and protects imported sessions from del
               },
             ],
             nextCursor: null,
+            truncated: true,
             canLoad: true,
             canResume: false,
             canDelete: true,
@@ -107,6 +108,7 @@ it.effect("imports a native session once and protects imported sessions from del
       const service = yield* AcpSessionService.AcpSessionService;
       const initial = yield* service.list({ instanceId, projectId });
       expect(initial.sessions).toHaveLength(1);
+      expect(initial.truncated).toBe(true);
       expect(initial.sessions[0]).toMatchObject({ sessionId: "native-1", importedThreadId: null });
       const first = yield* service.import({ instanceId, projectId, sessionId: "native-1" });
       expect(first).toEqual({ threadId: expectedThreadId, imported: true });
@@ -119,6 +121,7 @@ it.effect("imports a native session once and protects imported sessions from del
       });
       const listed = yield* service.list({ instanceId, projectId });
       expect(listed.sessions).toHaveLength(1);
+      expect(listed.truncated).toBe(true);
       expect(listed.sessions[0]).toMatchObject({
         sessionId: "native-1",
         importedThreadId: expectedThreadId,
