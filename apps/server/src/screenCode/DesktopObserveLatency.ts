@@ -100,7 +100,7 @@ export const withObserveTiming = (
 };
 
 /** A screenshot's reply value with its timing when that still fits returnBytes. */
-export const withScreenshotTiming = (
+const withScreenshotTiming = (
   metadata: ScreenImageMetadata,
   timing: ObserveTiming,
   returnBytes: number,
@@ -109,7 +109,7 @@ export const withScreenshotTiming = (
   return Buffer.byteLength(JSON.stringify(timed)) <= returnBytes ? timed : metadata;
 };
 
-export const buildDesktopReadArgs = (input: {
+const buildDesktopReadArgs = (input: {
   readonly pid: number;
   readonly windowId: number;
   readonly capture: boolean;
@@ -129,7 +129,7 @@ export const buildDesktopReadArgs = (input: {
  * The tree's observation a screenshot keeps: one that kept the tree's driver snapshot keeps its
  * tokens, so the tree's refs stay and the screenshot only adds its region.
  */
-export const keptScreenshotObservationId = (
+const keptScreenshotObservationId = (
   capture: boolean,
   bound: Pick<BoundWindow, "snapshotId" | "observationId">,
   state: Record<string, unknown>,
@@ -203,7 +203,7 @@ export const fastShownTree = (
 };
 
 /** A read's rows, the ones shown and their text, from the driver's state. */
-export const parseDesktopTreeState = (input: {
+const parseDesktopTreeState = (input: {
   readonly state: Record<string, unknown>;
   readonly filtered: boolean;
   readonly query: DesktopQuery | undefined;
