@@ -466,7 +466,7 @@
   "apps/server/src/vcs/GitVcsDriverCore.ts": { "lines": 5273, "nonNull": 11 },
   "apps/server/src/workspace/WorkspaceFileSystem.test.ts": { "lines": 1177 },
   "apps/server/src/workspace/atomicWorkspaceWrite.ts": { "nonNull": 1 },
-  "apps/server/src/ws.test.ts": { "lines": 1156 },
+  "apps/server/src/ws.test.ts": { "lines": 1224 },
   "apps/server/src/ws.ts": { "lines": 3879, "nonNull": 1 },
   "apps/web/scripts/generate-solar-icons.ts": { "nonNull": 6 },
   "apps/web/src/browserFaviconStore.ts": { "nonNull": 2 },
