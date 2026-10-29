@@ -27,7 +27,11 @@ export async function writeLinuxHelperManifest(input: {
     for (const entry of await NodeFSP.readdir(directory, { withFileTypes: true })) {
       const path = NodePath.join(directory, entry.name);
       if (entry.isDirectory()) await walk(path);
-      else files[NodePath.relative(out, path)] = sha256(await NodeFSP.readFile(path));
+      // The manifest is read on Linux, so its keys use "/" wherever it was built.
+      else
+        files[NodePath.relative(out, path).split(NodePath.sep).join("/")] = sha256(
+          await NodeFSP.readFile(path),
+        );
     }
   };
   await walk(out);
