@@ -7,7 +7,13 @@
  *
  * @module PullRequestWatchWakes
  */
-import { MessageId } from "@goat/contracts";
+import {
+  isProviderNativeSubagentThread,
+  MessageId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2ServerCommand,
+  type ThreadPullRequestLink,
+} from "@goat/contracts";
 import { threadPullRequestKeyOf } from "../../sourceControl/threadPullRequests.ts";
 
 /** A link as the thread stores it, so both sides normalize the same key. */
@@ -41,3 +47,45 @@ export const pullRequestWakeChecksHead = (id: string, prefix: string) => {
   if (!rest.startsWith(CHECKS_ON)) return null;
   return decodeURIComponent(rest.slice(CHECKS_ON.length, rest.indexOf(":")));
 };
+
+/**
+ * Whether news a watch read may no longer wake its thread: the thread was put away, or the pull
+ * request merged or closed while the host was read. A watch that continues is refused without
+ * advancing, so if a close was undone the next read reports the news again; the notice a watch
+ * ends with on a close still goes out.
+ */
+export const pullRequestWakeMuted = (
+  thread: Pick<
+    OrchestrationV2AppThread,
+    "archivedAt" | "settledOverride" | "settledAt" | "lineage" | "creationSource"
+  >,
+  link: Pick<ThreadPullRequestLink, "snapshot"> | undefined,
+  continuing: boolean,
+) =>
+  thread.archivedAt !== null ||
+  thread.settledOverride === "settled" ||
+  thread.settledAt !== null ||
+  isProviderNativeSubagentThread(thread) ||
+  link?.snapshot?.state === "merged" ||
+  (continuing && link?.snapshot?.state === "closed");
+
+/**
+ * Whether a command leaves a pull request's queued wakes with nothing to report: its watch
+ * stopped, it was unlinked, or its link recorded the merge. A recorded merge drops them at once,
+ * so a turn that ends before the next watch sweep cannot start one.
+ */
+export const pullRequestWakesEnd = (
+  command: Extract<
+    OrchestrationV2ServerCommand,
+    {
+      readonly type:
+        | "thread.pull-request.watch"
+        | "thread.pull-request.unlink"
+        | "thread.pull-request-link.sync";
+    }
+  >,
+) =>
+  command.type === "thread.pull-request.unlink" ||
+  (command.type === "thread.pull-request.watch"
+    ? !command.watching
+    : command.snapshot.state === "merged");

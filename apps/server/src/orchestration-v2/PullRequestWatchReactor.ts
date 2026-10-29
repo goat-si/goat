@@ -48,6 +48,8 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 /** Checks take minutes; faster sweeps waste the account's shared host quota. */
 const SWEEP_MINUTES = 2;
 const READ_FAILURE_LIMIT = 8;
+/** A failed read waits twice as long as the one before it, up to this, before the next try. */
+const READ_RETRY_MAX_MS = 30 * 60_000;
 /** Without fingerprints, reread quiet PRs on snapshot changes or this interval to catch edits. */
 const QUIET_REREAD_MS = 10 * 60_000;
 /** Reread despite unchanged fingerprints; they miss review-thread comment edits. */
@@ -246,7 +248,10 @@ export const make = Effect.gen(function* () {
   const ended = (target: WatchTarget, reason: WatchEndReason) =>
     Effect.suspend(() => reportEnd(lifeKey(target), lifeOf(target), reason));
 
+  /** Consecutive failed reads by watch and pull request, so each watch has its own limit. */
   const readFailures = new Map<string, number>();
+  /** When a failing group reads again, and the watches it held when it last failed. */
+  const readRetryAt = new Map<string, { readonly at: number; readonly watches: Set<string> }>();
   const lastReads = new Map<string, LastRead>();
   const threadTails = new Map<
     string,
@@ -499,25 +504,45 @@ export const make = Effect.gen(function* () {
       Effect.all(
         [
           pullRequests.detail({ ...reference, allowStale: false }),
-          plan.activity
-            ? pullRequests.activity(reference).pipe(Effect.asSome)
-            : Effect.succeed(Option.none<PullRequestActivity>()),
+          plan.activity ? Effect.exit(pullRequests.activity(reference)) : Effect.succeed(null),
         ],
         { concurrency: 2 },
+      ).pipe(
+        // A merge or close the detail read reports ends the watch even when activity failed.
+        Effect.flatMap(([detail, activity]) =>
+          activity === null || detail.state !== "open"
+            ? Effect.succeed([detail, Option.none<PullRequestActivity>()] as const)
+            : Exit.isSuccess(activity)
+              ? Effect.succeed([detail, Option.some(activity.value)] as const)
+              : Effect.failCause(activity.cause),
+        ),
       ),
     );
     if (Exit.isFailure(read)) {
       if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
       lastReads.delete(group.key);
       if (isRateLimited(read.cause)) return;
-      const failures = (readFailures.get(group.key) ?? 0) + 1;
-      readFailures.set(group.key, failures);
-      if (failures >= READ_FAILURE_LIMIT && (yield* eachTarget(group, giveUp))) {
-        readFailures.delete(group.key);
+      const counts = group.targets.map((target) => {
+        const count = (readFailures.get(lifeKey(target)) ?? 0) + 1;
+        readFailures.set(lifeKey(target), count);
+        return { target, count };
+      });
+      // The newest watch sets the pace, so it is not held back by older watches' failures.
+      const fewest = Math.min(...counts.map(({ count }) => count));
+      readRetryAt.set(group.key, {
+        at: now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (fewest - 1), READ_RETRY_MAX_MS),
+        watches: new Set(group.targets.map(watchKey)),
+      });
+      const spent = counts.flatMap(({ target, count }) =>
+        count >= READ_FAILURE_LIMIT ? [target] : [],
+      );
+      if (spent.length > 0 && (yield* eachTarget({ ...group, targets: spent }, giveUp))) {
+        for (const target of spent) readFailures.delete(lifeKey(target));
       }
       return yield* Effect.failCause(read.cause);
     }
-    readFailures.delete(group.key);
+    for (const target of group.targets) readFailures.delete(lifeKey(target));
+    readRetryAt.delete(group.key);
     const [detail, activity] = read.value;
     const headSha = detail.headSha ?? null;
     for (const target of group.targets) {
@@ -623,9 +648,10 @@ export const make = Effect.gen(function* () {
       targets: members,
       fingerprint: [...new Set(members.map(snapshotFingerprint))].toSorted().join("\n"),
     }));
-    for (const cache of [readFailures, lastReads, threadTails]) {
+    for (const cache of [readRetryAt, lastReads, threadTails]) {
       for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
     }
+    for (const key of readFailures.keys()) if (!present.has(key)) readFailures.delete(key);
     yield* Effect.forEach(
       ending,
       ([target, reason]) =>
@@ -647,11 +673,20 @@ export const make = Effect.gen(function* () {
         ),
       { discard: true },
     );
-    const fingerprints = yield* Effect.forEach(groups, fingerprintOf, {
+    const now = yield* Clock.currentTimeMillis;
+    for (const group of groups) {
+      const retry = readRetryAt.get(group.key);
+      // A watch started since the last failure reads at once.
+      if (retry && group.targets.some((target) => !retry.watches.has(watchKey(target)))) {
+        readRetryAt.delete(group.key);
+      }
+    }
+    const due = groups.filter((group) => (readRetryAt.get(group.key)?.at ?? 0) <= now);
+    const fingerprints = yield* Effect.forEach(due, fingerprintOf, {
       concurrency: "unbounded",
     });
     yield* Effect.forEach(
-      groups,
+      due,
       (group, index) => {
         const fingerprint = fingerprints[index]!;
         return fingerprint === "paused"
