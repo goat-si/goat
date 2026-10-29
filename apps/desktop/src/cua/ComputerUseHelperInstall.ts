@@ -19,18 +19,20 @@ import { windowsHelperBundle } from "./ComputerUseHelperWindows.ts";
 
 /**
  * The installed copy of "GOAT Computer Use.app" (ADR-0023, #1162). A Developer ID GOAT.app seeds
- * it from Contents/Helpers into the desktop state directory and runs it from there:
+ * it from Contents/Helpers into the desktop state directory and runs it from one fixed path:
  *
- *   computer-use-helper/generations/<cdhash>/GOAT Computer Use.app
- *   computer-use-helper/current  -> generations/<cdhash>
- *   computer-use-helper/previous -> the generation current replaced, kept for rollback
+ *   computer-use-helper/GOAT Computer Use.app       the build that runs
+ *   computer-use-helper/generations/<cdhash>/       the build it replaced, kept for rollback
+ *   computer-use-helper/previous, rejected          links into generations
  *
- * A new generation is copied without extended attributes, must satisfy the running GOAT.app's
- * team and the helper's bundle id with an intact seal, and must answer hello before `current`
- * moves to it by renaming a fresh link over it. The switch waits while a helper runs. After it,
- * a generation that lost the grants its predecessor had is rolled back and remembered in
- * `rejected`, so it is not copied again on every start. Ad-hoc and dev builds run the helper in
- * place: an ad-hoc signature has no team to check a copy against.
+ * The path never changes because macOS keys its screen capture approvals to the executable's path
+ * as well as its signature (#2175); a path per build asked for them again after every update. A
+ * new build is staged in generations without extended attributes, must satisfy the running
+ * GOAT.app's team and the helper's bundle id with an intact seal, and must answer hello. It moves
+ * to the fixed path only while no helper runs, and the build it replaces moves into generations.
+ * A build that lost grants its predecessor had is moved back out and remembered in rejected, so
+ * it is not copied again on every start. Ad-hoc and dev builds run the helper in place: an ad-hoc
+ * signature has no team to check a copy against.
  */
 
 export interface HelperCodeSignature {
@@ -55,7 +57,7 @@ export interface HelperInstallDependencies {
 }
 
 export interface HelperInstallInput {
-  /** GOAT.app; its team anchors the requirement every installed generation must meet. */
+  /** GOAT.app; its team anchors the requirement every installed build must meet. */
   readonly app: string;
   /** The helper GOAT.app carries, sealed inside it. */
   readonly source: string;
@@ -81,6 +83,7 @@ const lostGrant = (before: Grants, after: Grants | undefined) =>
 export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
   const install = async (input: HelperInstallInput): Promise<HelperInstallResult> => {
     const generations = NodePath.join(input.root, "generations");
+    const active = NodePath.join(input.root, HELPER_APP);
     const bundleOf = (generation: string) => NodePath.join(generations, generation, HELPER_APP);
     /** The generation a link this installer wrote names; anything else reads as no link. */
     const linked = async (name: string) => {
@@ -112,6 +115,12 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
         await NodeFSP.rename(fresh, link);
       });
     };
+    /** Moves a bundle by renaming it, replacing whatever is left at the destination. */
+    const move = async (from: string, to: string) => {
+      await NodeFSP.rm(to, { recursive: true, force: true });
+      await NodeFSP.mkdir(NodePath.dirname(to), { recursive: true });
+      await NodeFSP.rename(from, to);
+    };
 
     const team = (await dependencies.signature(input.app))?.team;
     if (team === undefined) return { kind: "found", path: input.source };
@@ -139,22 +148,41 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
     // Checked on every use: the directory is writable by the user, so a name proves nothing.
     const valid = async (generation: string | undefined) =>
       generation !== undefined && (await dependencies.satisfies(bundleOf(generation), requirement));
-    const use = (generation: string, note?: string): HelperInstallResult => ({
+    /** The build at the fixed path, read from its own signature. */
+    const runningBuild = async () => {
+      const cdhash = (await dependencies.signature(active))?.cdhash;
+      return cdhash !== undefined &&
+        GENERATION_NAME.test(cdhash) &&
+        (await dependencies.satisfies(active, requirement))
+        ? cdhash
+        : undefined;
+    };
+    const use = (note?: string): HelperInstallResult => ({
       kind: "found",
-      path: bundleOf(generation),
+      path: active,
       ...(note ? { note } : {}),
     });
-    const current = await linked("current");
-    const currentValid = await valid(current);
-    if (current !== undefined && currentValid) {
-      if (current === wanted) return use(current);
-      if (input.busy || (await linked("rejected")) === wanted) return use(current);
+
+    let running = await runningBuild();
+    // Earlier versions ran the build that `current` names from its generation; it moves here once.
+    const legacy = running === undefined ? await linked("current") : undefined;
+    if (legacy !== undefined && (await valid(legacy))) {
+      if (input.busy) return { kind: "found", path: bundleOf(legacy) };
+      await move(bundleOf(legacy), active);
+      await NodeFSP.rm(NodePath.join(generations, legacy), { recursive: true, force: true });
+      running = legacy;
+    }
+    if (!input.busy) await NodeFSP.rm(NodePath.join(input.root, "current"), { force: true });
+    if (running !== undefined) {
+      if (running === wanted) return use();
+      if (input.busy || (await linked("rejected")) === wanted) return use();
     }
     // Busy with a copy that fails its check: the sealed one in GOAT.app is the only safe choice.
     if (input.busy) return { kind: "found", path: input.source };
 
     await NodeFSP.mkdir(generations, { recursive: true });
     const staging = await NodeFSP.mkdtemp(NodePath.join(generations, ".staging-"));
+    let kept: string | undefined;
     try {
       const staged = NodePath.join(staging, HELPER_APP);
       await dependencies.copy(input.source, staged);
@@ -164,29 +192,30 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
       )
         throw new Error("the copy in " + input.root + " does not match GOAT.app's");
       await dependencies.probe(staged, input.bundleId);
-      const target = NodePath.join(generations, wanted);
-      await NodeFSP.rm(target, { recursive: true, force: true });
-      await NodeFSP.rename(staging, target);
+      if (running !== undefined) {
+        await move(active, bundleOf(running));
+        kept = running;
+      } else {
+        const previous = await linked("previous");
+        kept = previous !== wanted && (await valid(previous)) ? previous : undefined;
+      }
+      await point("previous", kept);
+      await move(staged, active);
     } finally {
       await NodeFSP.rm(staging, { recursive: true, force: true });
     }
-
-    const previous = currentValid && current !== wanted ? current : await linked("previous");
-    const kept = previous !== undefined && (await valid(previous)) ? previous : undefined;
-    await point("previous", kept);
-    await point("current", wanted);
     for (const entry of await NodeFSP.readdir(generations))
-      if (entry !== wanted && entry !== kept)
+      if (entry !== kept)
         await NodeFSP.rm(NodePath.join(generations, entry), { recursive: true, force: true });
 
-    // A new code identity can lose grants; keep the generation that still has them, as long as
-    // it speaks this app's protocol and carries the same driver, so the host can still run it.
+    // A new code identity can lose grants; keep the build that still has them, as long as it
+    // speaks this app's protocol and carries the same driver, so the host can still run it.
     if (kept !== undefined) {
-      const grantsOf = (generation: string) =>
-        dependencies.grants(bundleOf(generation), input.bundleId).catch(() => undefined);
-      const after = await grantsOf(wanted);
+      const after = await dependencies.grants(active, input.bundleId).catch(() => undefined);
       const before =
-        after && after.accessibility && after.screenRecording ? undefined : await grantsOf(kept);
+        after && after.accessibility && after.screenRecording
+          ? undefined
+          : await dependencies.grants(bundleOf(kept), input.bundleId).catch(() => undefined);
       if (
         before !== undefined &&
         lostGrant(before, after) &&
@@ -196,11 +225,12 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
           () => false,
         ))
       ) {
-        await point("current", kept);
+        await move(active, bundleOf(wanted));
+        await move(bundleOf(kept), active);
+        await NodeFSP.rm(NodePath.join(generations, kept), { recursive: true, force: true });
         await point("previous", wanted);
         await point("rejected", wanted);
         return use(
-          kept,
           "The updated " +
             COMPUTER_USE_HELPER_NAME +
             " lost an Accessibility or Screen Recording grant the previous one holds, so the previous one keeps running until GOAT carries a newer helper.",
@@ -208,7 +238,7 @@ export function makeHelperInstaller(dependencies: HelperInstallDependencies) {
       }
     }
     await point("rejected", undefined);
-    return use(wanted);
+    return use();
   };
 
   // One install at a time: a second caller would otherwise prune the first one's directories.

@@ -587,13 +587,17 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   `com.apple.provenance` attribute, and Gatekeeper then kills the helper at launch.
 - The helper has its own version, records the driver version and patch set it carries, and has
   its own update. The copy inside GOAT.app is the seed; the helper that runs is an installed copy
-  in a GOAT-owned directory, one directory per generation. A helper update is its own signed and
+  at one fixed path in a GOAT-owned directory, and the build it replaced waits beside it for
+  rollback. The path must not change between builds: macOS keys the screen capture approval
+  behind its private window picker prompt to the executable's path, so a path per build asked
+  again after every update even though TCC's grants followed the designated requirement (#2175).
+  A helper update is its own signed and
   notarized artifact. Before a switch, the host checks the new copy against the helper's
   designated requirement and the protocol version range the host supports, and it never installs
-  over a generation that is running. Leases are drained or revoked and active sessions end
+  over a build that is running. Leases are drained or revoked and active sessions end
   through the normal Stop path with their cleanup report; the host then switches to the new
-  generation in one step, keeps the previous one for rollback, and rechecks the grants. A
-  generation that lost a grant its predecessor holds is switched back, if the predecessor still
+  build, keeps the previous one for rollback, and rechecks the grants. A
+  build that lost a grant its predecessor holds is switched back, if the predecessor still
   answers hello and carries a byte-identical driver, and is not retried until GOAT carries
   another one. The other readiness answers come from the host's normal check before
   agents get the helper. A GOAT update that carries a newer seed goes through the same switch

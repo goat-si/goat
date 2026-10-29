@@ -94,72 +94,94 @@ async function fixture() {
     link: (name: string) =>
       NodeFSP.readlink(NodePath.join(root, name)).then(NodePath.basename, () => undefined),
     generations: () =>
-      NodeFSP.readdir(NodePath.join(root, "generations")).then((names) => names.sort()),
+      NodeFSP.readdir(NodePath.join(root, "generations")).then(
+        (names) => names.sort(),
+        () => [],
+      ),
     fresh: () => makeHelperInstaller(dependencies),
     holdHello: (gate: Promise<void> | undefined) => {
       helloGate = gate;
     },
     bundleAt: (generation: string) => NodePath.join(root, "generations", generation, APP),
+    active: NodePath.join(root, APP),
+    /** The cdhash of the build at the fixed path. */
+    running: () => read(NodePath.join(root, APP)).then((signature) => signature?.cdhash),
+    /** A generation as earlier versions left it, holding a build they ran in place. */
+    legacy: (generation: string) =>
+      bundle(NodePath.join(root, "generations", generation, APP), {
+        cdhash: generation,
+        team: TEAM,
+      }),
+    linkTo: (name: string, generation: string) =>
+      NodeFSP.symlink(NodePath.join("generations", generation), NodePath.join(root, name)),
   };
 }
 
 describe("ComputerUseHelperInstall", () => {
-  it("installs a generation once, then runs it without copying again", async () => {
+  it("installs a build once at the fixed path, then runs it without copying again", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1" });
     const first = await f.install(f.input());
-    assert.deepEqual(first, {
-      kind: "found",
-      path: NodePath.join(f.root, "generations", "g1", APP),
-    });
-    assert.equal(await f.link("current"), "g1");
+    assert.deepEqual(first, { kind: "found", path: f.active });
+    assert.equal(await f.running(), "g1");
     assert.isUndefined(await f.link("previous"));
+    assert.deepEqual(await f.generations(), []);
     // A new process, as after relaunching GOAT, finds it installed.
     assert.deepEqual(await f.fresh()(f.input()), first);
     assert.lengthOf(f.copies, 1);
   });
 
-  it("switches to a new generation, keeps the last one for rollback and prunes older ones", async () => {
+  it("runs every build from the same path, so path-keyed screen capture approvals survive updates (#2175)", async () => {
+    await using f = await fixture();
+    await f.ship({ cdhash: "g1" });
+    const first = await f.install(f.input());
+    await f.ship({ cdhash: "g2" });
+    const second = await f.install(f.input());
+    assert.deepEqual(second, first);
+    assert.equal(await f.running(), "g2");
+  });
+
+  it("switches to a new build, keeps the last one for rollback and prunes older ones", async () => {
     await using f = await fixture();
     for (const cdhash of ["g1", "g2", "g3"]) {
       await f.ship({ cdhash });
       await f.install(f.input());
     }
-    assert.equal(await f.link("current"), "g3");
+    assert.equal(await f.running(), "g3");
     assert.equal(await f.link("previous"), "g2");
-    assert.deepEqual(await f.generations(), ["g2", "g3"]);
+    assert.deepEqual(await f.generations(), ["g2"]);
   });
 
-  it("waits to switch while a helper runs, then switches once it stopped", async () => {
+  it("defers the swap while a helper runs, then swaps once it stopped", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1" });
     await f.install(f.input());
     await f.ship({ cdhash: "g2" });
-    const busy = await f.install(f.input(true));
-    assert.equal(busy.kind === "found" && NodePath.basename(NodePath.dirname(busy.path)), "g1");
-    assert.equal(await f.link("current"), "g1");
+    assert.deepEqual(await f.install(f.input(true)), { kind: "found", path: f.active });
+    assert.equal(await f.running(), "g1");
+    assert.lengthOf(f.copies, 1);
     await f.install(f.input(false));
-    assert.equal(await f.link("current"), "g2");
+    assert.equal(await f.running(), "g2");
+    assert.equal(await f.link("previous"), "g1");
   });
 
   it("replaces an installed copy that no longer meets GOAT's team and identifier, even after it was used", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1" });
     await f.install(f.input());
-    // The same installer that just checked it: having used a generation proves nothing later.
-    await bundle(f.bundleAt("g1"), { cdhash: "g1", team: "OTHERTEAM1" });
-    const result = await f.install(f.input());
-    assert.equal(result.kind, "found");
-    assert.equal((await read(f.bundleAt("g1")))?.team, TEAM);
+    // The same installer that just checked it: having used a build proves nothing later.
+    await bundle(f.active, { cdhash: "g1", team: "OTHERTEAM1" });
+    assert.deepEqual(await f.install(f.input()), { kind: "found", path: f.active });
+    assert.equal((await read(f.active))?.team, TEAM);
     // Busy, a tampered copy is never used: the sealed copy in GOAT.app runs instead.
-    await bundle(f.bundleAt("g1"), { cdhash: "g1", team: "OTHERTEAM1" });
+    await bundle(f.active, { cdhash: "g1", team: "OTHERTEAM1" });
     assert.deepEqual(await f.install(f.input(true)), {
       kind: "found",
       path: NodePath.join(f.app, "Contents", "Helpers", APP),
     });
   });
 
-  it("runs installs one at a time, so a second caller never removes the first one's generation", async () => {
+  it("runs installs one at a time, so a second caller never removes the first one's build", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1" });
     let release!: () => void;
@@ -169,27 +191,44 @@ describe("ComputerUseHelperInstall", () => {
     release();
     f.holdHello(undefined);
     const results = await Promise.all([first, second]);
-    for (const result of results)
-      assert.deepEqual(result, { kind: "found", path: f.bundleAt("g1") });
-    assert.equal(await f.link("current"), "g1");
-    assert.deepEqual(await f.generations(), ["g1"]);
+    for (const result of results) assert.deepEqual(result, { kind: "found", path: f.active });
+    assert.equal(await f.running(), "g1");
+    assert.deepEqual(await f.generations(), []);
     assert.lengthOf(f.copies, 1);
   });
 
-  it("ignores and repairs a current link that does not name one of its generations", async () => {
+  it("moves a build an earlier version ran from its generation to the fixed path, without copying it", async () => {
     await using f = await fixture();
+    await f.legacy("g0");
+    await f.legacy("g1");
+    await f.linkTo("previous", "g0");
+    await f.linkTo("current", "g1");
     await f.ship({ cdhash: "g1" });
+    // While that helper runs it keeps its old path.
+    assert.deepEqual(await f.install(f.input(true)), { kind: "found", path: f.bundleAt("g1") });
+    assert.deepEqual(await f.install(f.input()), { kind: "found", path: f.active });
+    assert.equal(await f.running(), "g1");
+    assert.lengthOf(f.copies, 0);
+    assert.isUndefined(await f.link("current"));
+    assert.equal(await f.link("previous"), "g0");
+    await f.ship({ cdhash: "g2" });
     await f.install(f.input());
-    await NodeFSP.rm(NodePath.join(f.root, "current"));
-    await NodeFSP.symlink("/nonexistent/elsewhere/g1", NodePath.join(f.root, "current"));
-    assert.deepEqual(await f.install(f.input()), { kind: "found", path: f.bundleAt("g1") });
-    assert.equal(
-      await NodeFSP.readlink(NodePath.join(f.root, "current")),
-      NodePath.join("generations", "g1"),
-    );
+    assert.equal(await f.running(), "g2");
+    assert.equal(await f.link("previous"), "g1");
+    assert.deepEqual(await f.generations(), ["g1"]);
   });
 
-  it("leaves the current generation in place when the new one does not answer hello", async () => {
+  it("ignores a current link that does not name one of its generations", async () => {
+    await using f = await fixture();
+    await NodeFSP.mkdir(f.root, { recursive: true });
+    await NodeFSP.symlink("/nonexistent/elsewhere/g1", NodePath.join(f.root, "current"));
+    await f.ship({ cdhash: "g1" });
+    assert.deepEqual(await f.install(f.input()), { kind: "found", path: f.active });
+    assert.equal(await f.running(), "g1");
+    assert.isUndefined(await f.link("current"));
+  });
+
+  it("leaves the running build in place when the new one does not answer hello", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1" });
     await f.install(f.input());
@@ -199,20 +238,20 @@ describe("ComputerUseHelperInstall", () => {
       (error: Error) => error.message,
     );
     assert.equal(failed, "no hello");
-    assert.equal(await f.link("current"), "g1");
-    assert.deepEqual(await f.generations(), ["g1"]);
+    assert.equal(await f.running(), "g1");
+    assert.deepEqual(await f.generations(), []);
   });
 
-  it("rolls back a generation that lost a grant its predecessor had, and does not retry it", async () => {
+  it("rolls back a build that lost a grant its predecessor had to the same path, and does not retry it", async () => {
     await using f = await fixture();
-    // The old generation held only Accessibility; losing that one grant is enough.
+    // The old build held only Accessibility; losing that one grant is enough.
     await f.ship({ cdhash: "g1", grants: { accessibility: true, screenRecording: false } });
-    await f.install(f.input());
+    const first = await f.install(f.input());
     await f.ship({ cdhash: "g2", granted: false });
     const result = await f.install(f.input());
-    assert.equal(result.kind === "found" && NodePath.basename(NodePath.dirname(result.path)), "g1");
+    assert.equal(result.kind === "found" && result.path, first.kind === "found" && first.path);
     assert.match(result.kind === "found" ? (result.note ?? "") : "", /lost an Accessibility/);
-    assert.equal(await f.link("current"), "g1");
+    assert.equal(await f.running(), "g1");
     assert.equal(await f.link("previous"), "g2");
     assert.equal(await f.link("rejected"), "g2");
     const copies = f.copies.length;
@@ -221,11 +260,11 @@ describe("ComputerUseHelperInstall", () => {
     // A later build moves forward again.
     await f.ship({ cdhash: "g3", granted: true });
     await f.install(f.input());
-    assert.equal(await f.link("current"), "g3");
+    assert.equal(await f.running(), "g3");
     assert.isUndefined(await f.link("rejected"));
   });
 
-  it("copies a rejected generation again once its directory is gone, and checks its grants again", async () => {
+  it("copies a rejected build again once its directory is gone, and checks its grants again", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1", granted: true });
     await f.install(f.input());
@@ -234,10 +273,10 @@ describe("ComputerUseHelperInstall", () => {
     assert.equal(await f.link("rejected"), "g2");
     await NodeFSP.rm(NodePath.join(f.root, "generations", "g2"), { recursive: true });
     const copies = f.copies.length;
-    const result = await f.install(f.input());
+    await f.install(f.input());
     assert.lengthOf(f.copies, copies + 1);
-    // Still without its grants, so the previous generation keeps running.
-    assert.equal(result.kind === "found" && NodePath.basename(NodePath.dirname(result.path)), "g1");
+    // Still without its grants, so the previous build keeps running.
+    assert.equal(await f.running(), "g1");
     assert.equal(await f.link("rejected"), "g2");
   });
 
@@ -255,14 +294,15 @@ describe("ComputerUseHelperInstall", () => {
     assert.equal(failure?.signal, "SIGKILL");
   });
 
-  it("keeps a new generation that lost grants when the previous one carries another driver", async () => {
+  it("keeps a new build that lost grants when the previous one carries another driver", async () => {
     await using f = await fixture();
     await f.ship({ cdhash: "g1", granted: true, driver: "0.36" });
     await f.install(f.input());
     await f.ship({ cdhash: "g2", granted: false, driver: "0.37" });
     const result = await f.install(f.input());
     // The host would refuse the old driver, so rolling back would leave computer use broken.
-    assert.deepEqual(result, { kind: "found", path: f.bundleAt("g2") });
+    assert.deepEqual(result, { kind: "found", path: f.active });
+    assert.equal(await f.running(), "g2");
     assert.isUndefined(await f.link("rejected"));
   });
 
