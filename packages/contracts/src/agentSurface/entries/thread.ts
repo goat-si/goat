@@ -215,7 +215,7 @@ export const threadEntries = {
     description:
       "Update a thread’s metadata: rename or regenerate its title, or link or unlink a pull request. Workspace and branch changes are unsupported. Reuse clientRequestId to make retries idempotent.",
     guide:
-      'Omit threadId to update the calling thread.\n\n- Set action="rename" with title.\n- Set action="regenerate_title" with no extra field.\n- Set action="link_pull_request" with pullRequest.\n- Set action="unlink_pull_request" to remove the link.\n\nUse clientRequestId for idempotent retries.',
+      'Omit threadId to update the calling thread.\n\n- Set action="rename" with title.\n- Set action="regenerate_title" with no extra field.\n- Set action="link_pull_request" with pullRequest.\n- Set action="unlink_pull_request" to remove the link.\n\nUse clientRequestId for idempotent retries.\n\nSharing a thread through a guest link, stopping a share, and sending or dismissing a guest\'s message are a person\'s steps in the app; agents have no path for them.',
     effect: "destructive",
     capability: "threads.launch",
     hostRoutable: false,

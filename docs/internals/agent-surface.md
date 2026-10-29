@@ -754,6 +754,18 @@ take no `decisionId`: they refuse a turn a person did not start and point to
 `goat_cloud_launch` on the machine that holds the account, since it does not take a remote
 holder while goatclaw is on.
 
+**Now.** Some actions stay a person's with no agent path and no handoff, because each one
+creates a secret, lets someone outside reach the environment, or records a person's standing
+consent: creating or stopping a guest link and sending a guest's message, rotating a webhook
+token, setting, disconnecting, deleting or forgetting a cloud machine's credentials,
+connecting Slack and linking a channel identity, opting a hub child into automatic setup,
+signing out of a provider, and importing a ChatGPT profile. They are rare setup a person does on
+purpose, and a handoff would let an agent ask for reach it would then use itself, so none gets
+one; an agent never approves its own consent. The guide of the nearest tool says each one is
+a person's step, so an agent searching for it learns why it has none
+([#2062](https://github.com/goat-si/goat/issues/2062)). The settings behind them are
+`person` in [settingsAccess.ts](../../packages/contracts/src/agentSurface/settingsAccess.ts).
+
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
