@@ -23,6 +23,18 @@ const identity = (canonicalKey: string, origin?: string): RepositoryIdentity => 
 });
 
 describe("findPromptLinkProjects", () => {
+  it("matches GitCafe mirrors while excluding unrelated hosts and repositories", () => {
+    const projects = [
+      { id: "github", repositoryIdentity: identity("github.com/goat-si/goat") },
+      { id: "gitcafe", repositoryIdentity: identity("git.cafe/GOAT-SI/GOAT") },
+      { id: "staging", repositoryIdentity: identity("staging.git.cafe/goat-si/goat") },
+      { id: "other", repositoryIdentity: identity("gitlab.com/goat-si/goat") },
+      { id: "different", repositoryIdentity: identity("git.cafe/other/goat") },
+    ];
+    expect(
+      findPromptLinkProjects(projects, { owner: "goat-si", name: "goat" }).map((p) => p.id),
+    ).toEqual(["github", "gitcafe", "staging"]);
+  });
   it("keeps exact matches in order and never a fork of the repository", () => {
     const projects = [
       {
