@@ -1,4 +1,4 @@
-import type { PreviewSession } from "@goat/contracts";
+import type { PreviewSession, PreviewSessionSnapshot } from "@goat/contracts";
 import { ThreadId } from "@goat/contracts";
 import { type ReactNode, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -34,6 +34,7 @@ export const AGENT_CARDS_SCROLL_ATTRIBUTE = "data-agent-cards-scroll";
 export function useHostedTab(session: PreviewSession): {
   readonly runtimeTabId: string;
   readonly overlay: DesktopPreviewOverlay | null;
+  readonly snapshot: PreviewSessionSnapshot;
 } | null {
   const threadId = session.threadId;
   const threadRef =
@@ -42,11 +43,12 @@ export function useHostedTab(session: PreviewSession): {
       : { environmentId: session.environmentId, threadId: ThreadId.make(threadId) };
   const state = useThreadPreviewState(threadRef);
   const tabId = session.target.kind === "browser" ? session.target.tabId : null;
-  if (threadRef === null || tabId === null || state.sessions[tabId]?.runtime !== "server")
-    return null;
+  const snapshot = tabId === null ? undefined : state.sessions[tabId];
+  if (threadRef === null || tabId === null || snapshot?.runtime !== "server") return null;
   return {
     runtimeTabId: previewRuntimeTabId(threadRef, state.serverEpoch, tabId),
     overlay: state.desktopByTabId[tabId] ?? null,
+    snapshot,
   };
 }
 
