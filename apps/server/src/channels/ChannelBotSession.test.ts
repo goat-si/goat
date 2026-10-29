@@ -27,15 +27,18 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   botMessages,
   defaultScript,
+  environmentId,
   goatInput,
   makeHarness,
   modelSelection,
   owner,
+  projectId,
   rpcContext,
   setupBot,
   slackContext,
@@ -172,6 +175,36 @@ const dispatchNow = (task: ChannelTask) =>
     return yield* current(task.taskId);
   });
 
+/** The teammate's message, claimed for a session turn whose launch has not run yet. */
+const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_write") =>
+  Effect.gen(function* () {
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const task = yield* receiveFromTeammate("look: claimed look", key);
+    yield* commitTransition(
+      ledger,
+      (yield* ledger.getTask(task.taskId))!,
+      {
+        type: "task.dispatch.claimed",
+        payload: {
+          generation: task.generation,
+          target: {
+            environmentId,
+            projectId,
+            modelSelection: botModel,
+            runtimeMode: "auto-accept-edits",
+            interactionMode: "default",
+            workspaceStrategy: { type: "root" },
+            ...(memoryGrantCeiling === undefined ? {} : { memoryGrantCeiling }),
+          },
+          leaseExpiresAt: "2026-10-12T00:00:00.000Z",
+        },
+      },
+      { owner: runtime.ownerToken },
+    );
+    return (yield* ledger.getTask(task.taskId))!;
+  });
+
 const current = (taskId: ChannelTaskId) =>
   ChannelLedger.ChannelLedger.pipe(
     Effect.flatMap((ledger) => ledger.getTask(taskId)),
@@ -273,24 +306,61 @@ describe("GOAT Bot sessions", () => {
   });
 
   it.effect(
-    "refuses to serve a requester whose link was removed instead of using intake authority",
+    "refuses to start a session for a requester whose link was removed after the task was claimed",
     () => {
       const harness = sessionHarness();
       return Effect.gen(function* () {
         yield* setupBot;
         yield* linkTeammate;
-        const served = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "u1"));
-        assert.isDefined(served.worker);
+        const stored = yield* claimedFromTeammate("u1");
         const identities = yield* ChannelIdentityService.ChannelIdentityService;
         yield* identities.unlink({ connectionId: "slack-1", externalActorId: "U2" });
+        const session = yield* ChannelBotSession.ChannelBotSession;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "failed");
+        const after = yield* current(stored.task.taskId);
+        assert.strictEqual(after.status, "failed");
+        assert.lengthOf(harness.world.launches, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "starts a session with no more memory than the requester's current scopes allow",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        // The claim recorded memory reads; the teammate's link grants none now.
+        const stored = yield* claimedFromTeammate("m1", "read");
+        const session = yield* ChannelBotSession.ChannelBotSession;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "served");
+        assert.lengthOf(harness.world.launches, 1);
+        assert.isUndefined(harness.world.launches[0]!.initialMessage?.memoryGrantCeiling);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "binds a task already sent into its session after a narrowing instead of sending it again",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        const served = yield* dispatchNow(yield* receiveFromTeammate("look: first look", "b1"));
+        yield* narrowTeammate;
+        // A pass that sent the task but died before binding runs again under the narrowed link.
         const ledger = yield* ChannelLedger.ChannelLedger;
         const session = yield* ChannelBotSession.ChannelBotSession;
         const runtime = yield* ChannelRuntime.ChannelRuntime;
         const stored = (yield* ledger.getTask(served.taskId))!;
-        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "failed");
-        const after = yield* current(served.taskId);
-        assert.strictEqual(after.status, "failed");
+        assert.strictEqual(yield* session.serve(stored, runtime.ownerToken), "served");
         assert.lengthOf(harness.world.launches, 1);
+        assert.lengthOf(harness.world.sends, 0);
+        assert.strictEqual((yield* current(served.taskId)).worker?.runId, served.worker?.runId);
       }).pipe(Effect.provide(harness.layer));
     },
   );

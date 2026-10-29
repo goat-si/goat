@@ -36,6 +36,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import { goatclawRoleTemplate } from "../goatclaw/RoleTemplates.ts";
+import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import {
   type DispatchModeRefusal,
   DispatchModeLimit,
@@ -82,6 +83,7 @@ import {
 } from "./channelBotSessionRuns.ts";
 
 const LIVE_SUBAGENT = new Set(["idle", "pending", "running", "waiting"]);
+const MEMORY_RANK = { none: 0, read: 1, read_write: 2 } as const;
 const STOP_REASON = "Stopped from GOAT Bot.";
 const encodeRequester = Schema.encodeSync(Schema.fromJsonString(ChannelRequester));
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
@@ -236,6 +238,21 @@ const make = Effect.gen(function* () {
     return false;
   });
 
+  /** The newest run any session already holds for this task generation, found by its intents. */
+  const sentRun = Effect.fn("ChannelBotSession.sentRun")(function* (task: ChannelTask) {
+    const sessions = yield* sql<{ readonly thread_id: ThreadId }>`
+      SELECT DISTINCT thread_id FROM channel_bot_session_runs
+      WHERE task_id = ${task.taskId} AND task_generation = ${task.generation}
+    `;
+    for (const { thread_id: threadId } of sessions) {
+      const records = yield* readRecords(threads, threadId).pipe(Effect.option);
+      if (Option.isNone(records)) continue;
+      const run = (yield* sessionTaskRuns(sql, threadId, records.value, task)).at(-1);
+      if (run !== undefined) return { threadId, runId: run.id };
+    }
+    return undefined;
+  });
+
   /** The six-part prefix for a new session, frozen into its row; the journal is what the requester may see now. */
   const freezePrefix = Effect.fn("ChannelBotSession.freezePrefix")(function* (
     task: ChannelTask,
@@ -300,6 +317,7 @@ const make = Effect.gen(function* () {
     row: SessionRow,
     owner: string,
     requester: ChannelRequester,
+    memoryGrantCeiling: keyof typeof MEMORY_RANK,
   ) {
     const task = stored.task;
     const target = yield* requireTarget(task);
@@ -334,9 +352,7 @@ const make = Effect.gen(function* () {
           messageId: ids.messageId,
           text: row.context_text ?? "",
           attachments: [],
-          ...(target.memoryGrantCeiling === undefined
-            ? {}
-            : { memoryGrantCeiling: target.memoryGrantCeiling }),
+          ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
         },
         createdBy: "system",
         creationSource: "server",
@@ -458,6 +474,14 @@ const make = Effect.gen(function* () {
     const target = yield* requireTarget(initial.task);
     const driver = (yield* providers.getInstance(target.modelSelection.instanceId))?.driverKind;
     const sharing = goatBotSessionSharingFor(driver);
+    // A task already sent into a session (a pass interrupted after the send) only binds again,
+    // whichever session its requester maps to now: started work runs on, and a new send would
+    // run it twice.
+    const sent = yield* sentRun(initial.task);
+    if (sent !== undefined) {
+      yield* bindWorker(initial, sent.threadId, sent.runId, owner);
+      return "served" as const;
+    }
     // The requester as they stand now: a Slack grant lowered since the message arrived counts,
     // and one that can no longer start work is refused rather than served on intake authority.
     const requester = yield* requesterForDispatch(initial.task).pipe(
@@ -471,20 +495,16 @@ const make = Effect.gen(function* () {
         "The requester’s permission to start this work changed.",
         "permission_changed",
       );
-    const key = bindingKeyFor(initial.task, target, sharing, requester);
+    // The memory the session may use, lowered to what the requester's scopes allow now.
+    const allowed = captureMemoryGrantCeiling(requester.grantedScopes, false);
+    const recorded = target.memoryGrantCeiling ?? "none";
+    const memoryGrantCeiling = MEMORY_RANK[allowed] < MEMORY_RANK[recorded] ? allowed : recorded;
+    const key = bindingKeyFor(initial.task, { ...target, memoryGrantCeiling }, sharing, requester);
     let row = yield* currentRow(key);
     const records =
       row === undefined
         ? Option.none()
         : yield* readRecords(threads, row.thread_id).pipe(Effect.option);
-    // A task already sent into its session (a pass interrupted after the send) only binds again.
-    if (row !== undefined && Option.isSome(records)) {
-      const run = (yield* sessionTaskRuns(sql, row.thread_id, records.value, initial.task)).at(-1);
-      if (run !== undefined) {
-        yield* bindWorker(initial, row.thread_id, run.id, owner);
-        return "served" as const;
-      }
-    }
     // A generation that never finished launching belongs to the task that started it: only that
     // task resumes its launch, while it can still run; otherwise the row is retired unused.
     if (
@@ -545,7 +565,7 @@ const make = Effect.gen(function* () {
       if (row === undefined) return "deferred" as const;
     }
     const { stored } = yield* freeze(row.context_text ?? message);
-    return yield* launchGeneration(stored, row, owner, requester);
+    return yield* launchGeneration(stored, row, owner, requester, memoryGrantCeiling);
   });
 
   const serve: ChannelBotSession["Service"]["serve"] = (initial, owner) =>
