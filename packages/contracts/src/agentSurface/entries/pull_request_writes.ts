@@ -136,12 +136,12 @@ export const pullRequestWriteEntries = {
       {
         capability: "pr.merge",
         guide:
-          "Pass headSha from the pull_request.read result you reviewed. The host refuses the request if the head has moved; unsupported hosts and methods refuse the pin. Auto-merge may happen later under the host's queue rules. Accepted never means merged.",
+          "Pass headSha from the pull_request.read result you reviewed. The host refuses if the head has moved. A pinned head cannot be used with auto:true or a merge queue; merge directly or omit the pin. Unsupported hosts and methods refuse the pin. Accepted never means merged.",
       },
     ),
     parameters: {
       headSha:
-        "Reviewed head SHA from pull_request.read; the host refuses the request if it has moved.",
+        "Reviewed head SHA from pull_request.read; direct merges only, not auto:true or a merge queue.",
     },
   },
   "pull_request.close": write(

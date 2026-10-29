@@ -128,7 +128,8 @@ export const makeWriteTools = (
       method: Schema.optional(PullRequestMergeMethod),
       auto: Schema.optional(Schema.Boolean),
       headSha: PullRequestActionInput.fields.headSha.annotate({
-        description: "Head SHA reviewed from pull_request.read; the host refuses if it has moved.",
+        description:
+          "Reviewed head SHA from pull_request.read; direct merges only, not auto:true or a merge queue.",
       }),
     }),
     make("close", {}),

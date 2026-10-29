@@ -2,6 +2,7 @@ import {
   GitHubBranchDeletionRefusedError,
   GitHubMergeHeadChangedError,
   GitHubMergeHeadUnsupportedError,
+  GitHubPinnedAutoMergeError,
 } from "./gitHubPullRequestActionErrors.ts";
 import { removeAgentCredits } from "@goat/source-control-core/server/mergeMessage";
 import { KnownWorkflowRuns, makeChecksRevalidator } from "./gitHubConditionalChecks.ts";
@@ -282,6 +283,7 @@ export type GitHubPullRequestApiError =
   | GitHubBranchDeletionRefusedError
   | GitHubMergeHeadChangedError
   | GitHubMergeHeadUnsupportedError
+  | GitHubPinnedAutoMergeError
   | GitHubStackActionError
   | GitHubRequestPolicy.GitHubApiError
   | GitHubPullRequestReadError
@@ -2322,6 +2324,9 @@ export const make = Effect.gen(function* () {
     }),
 
     runPullRequestAction: Effect.fn("GitHubPullRequestApi.runPullRequestAction")(function (input) {
+      if (input.headSha !== undefined && input.action === "enable-auto-merge") {
+        return Effect.fail(new GitHubPinnedAutoMergeError());
+      }
       if (
         input.headSha !== undefined &&
         (input.stackNumber !== undefined || !["merge", "enable-auto-merge"].includes(input.action))
@@ -2528,6 +2533,9 @@ export const make = Effect.gen(function* () {
             Effect.map((result) => result.repository?.pullRequest ?? null),
             Effect.flatMap(found(target)),
           );
+        if (input.headSha !== undefined && state.isMergeQueueEnabled === true) {
+          return yield* new GitHubPinnedAutoMergeError();
+        }
         if (action === "update-branch") {
           if (state.baseRef?.compare?.behindBy === 0) return;
           return yield* client

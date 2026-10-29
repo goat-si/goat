@@ -13,6 +13,7 @@ import * as GitHubQuota from "./GitHubQuota.ts";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
+import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 type ApiCall =
@@ -188,7 +189,58 @@ layer("GitHub pinned merge", (it) => {
     },
   });
 
-  it.effect.each(["merge", "enable-auto-merge"] as const)(
+  it.effect(
+    "refuses a pinned merge queue before any mutation while an unpinned merge enters the queue",
+    () =>
+      Effect.gen(function* () {
+        route(["query PullRequestActionState", actionState({ isMergeQueueEnabled: true })]);
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const ref = {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          action: "merge" as const,
+        };
+        const error = yield* Effect.flip(
+          cli.runPullRequestAction({ ...ref, headSha: "reviewed-head" }),
+        );
+        expect(error.message).toMatch(/queued|automatic/i);
+        expect(variablesOf("mergePullRequest(")).toEqual([]);
+        expect(variablesOf("enablePullRequestAutoMerge(")).toEqual([]);
+        const provider = yield* GitHubPullRequestProvider.make;
+        const providerError = yield* Effect.flip(
+          provider.runAction({ ...ref, headSha: "reviewed-head" }),
+        );
+        expect(providerError).toMatchObject({ reason: "pinned-auto-merge" });
+        yield* cli.runPullRequestAction(ref);
+        expect(variablesOf("enablePullRequestAutoMerge(")).toHaveLength(1);
+      }),
+  );
+
+  it.effect.each(["BLOCKED", "CLEAN"])(
+    "refuses a pinned automatic merge even when state is %s",
+    (mergeStateStatus) =>
+      Effect.gen(function* () {
+        route(["query PullRequestActionState", actionState({ mergeStateStatus })]);
+        const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+        const result = yield* Effect.result(
+          cli.runPullRequestAction({
+            cwd: "/w",
+            repository: "acme/web",
+            host: "github.com",
+            number: 7,
+            action: "enable-auto-merge",
+            headSha: "reviewed-head",
+          }),
+        );
+        expect(result).toMatchObject({ _tag: "Failure" });
+        expect(variablesOf("mergePullRequest(")).toEqual([]);
+        expect(variablesOf("enablePullRequestAutoMerge(")).toEqual([]);
+      }),
+  );
+
+  it.effect.each(["merge"] as const)(
     "pins the reviewed head in the GitHub mutation for %s",
     (action) =>
       Effect.gen(function* () {

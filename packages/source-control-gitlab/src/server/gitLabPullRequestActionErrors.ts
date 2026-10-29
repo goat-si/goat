@@ -1,5 +1,17 @@
 import * as Schema from "effect/Schema";
 
+export class GitLabPinnedAutoMergeError extends Schema.TaggedError<GitLabPinnedAutoMergeError>()(
+  "GitLabPinnedAutoMergeError",
+  {},
+) {
+  get detail(): string {
+    return "A pinned head cannot be guaranteed for an automatic merge. Merge directly or omit headSha.";
+  }
+  override get message(): string {
+    return this.detail;
+  }
+}
+
 export class GitLabDiffRefsUnavailableError extends Schema.TaggedError<GitLabDiffRefsUnavailableError>()(
   "GitLabDiffRefsUnavailableError",
   {

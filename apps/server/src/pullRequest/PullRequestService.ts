@@ -1,4 +1,4 @@
-import { ACTION_ACCESS_REFUSALS } from "./pullRequestActionPolicy.ts";
+import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import { parseDiffFilePaths } from "@goat/source-control-core/server/diffFileRevisions";
 import * as Cache from "effect/Cache";
@@ -1931,6 +1931,8 @@ export const make = Effect.gen(function* () {
   const runAction = (input: PullRequestActionInput): Effect.Effect<string, PullRequestError> =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<string, PullRequestError> => {
+        const pinnedAutoRefusal = pinnedAutoMergeRefusal(input);
+        if (pinnedAutoRefusal !== undefined) return Effect.fail(pinnedAutoRefusal);
         if (
           input.headSha !== undefined &&
           (input.stackNumber !== undefined ||

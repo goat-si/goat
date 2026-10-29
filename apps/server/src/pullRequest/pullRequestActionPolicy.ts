@@ -1,4 +1,16 @@
-import type { PullRequestAction } from "@goat/contracts";
+import {
+  PullRequestOperationError,
+  type PullRequestAction,
+  type PullRequestActionInput,
+} from "@goat/contracts";
+
+export const PINNED_AUTO_MERGE_REFUSAL =
+  "A pinned head cannot be guaranteed for an automatic or queued merge. Merge directly or omit headSha.";
+
+export const pinnedAutoMergeRefusal = (input: PullRequestActionInput) =>
+  input.headSha !== undefined && input.action === "enable-auto-merge"
+    ? new PullRequestOperationError({ operation: "runAction", detail: PINNED_AUTO_MERGE_REFUSAL })
+    : undefined;
 
 export const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
   merge: "You need write access on this repository to merge.",

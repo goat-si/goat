@@ -24,6 +24,7 @@ import type {
   ProviderChangeRequest,
   PullRequestProviderApi,
 } from "@goat/source-control-core/server/PullRequestProvider";
+import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import * as PullRequestProviderRegistry from "./PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 import * as PullRequestReadCache from "./PullRequestReadCache.ts";
@@ -206,5 +207,96 @@ it.effect("passes the reviewed head to a host that enforces it", () =>
       headSha: "reviewed-head",
     });
     assert.strictEqual(seenHead, "reviewed-head");
+  }),
+);
+
+it.effect.each(["automatic", "stack"] as const)(
+  "refuses a pinned %s merge before a host write",
+  (mode) =>
+    Effect.gen(function* () {
+      let writes = 0;
+      const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"));
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          {
+            ...provider,
+            capabilities: {
+              ...provider.capabilities,
+              actions: ["merge", "enable-auto-merge"],
+              stackActions: true,
+              expectedHeadMergeMethods: ["merge"],
+            },
+            getViewerPermissions: () =>
+              Effect.succeed({
+                actions: ["merge", "enable-auto-merge"],
+                comment: true,
+                resolve: true,
+                verdicts: ["comment"],
+                requestReviewers: true,
+              }),
+            getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
+            runAction: () => {
+              writes++;
+              return Effect.void;
+            },
+          },
+        ],
+      });
+      const error = yield* Effect.flip(
+        service.runAction({
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 1,
+          headSha: "reviewed-head",
+          ...(mode === "automatic"
+            ? { action: "enable-auto-merge" as const }
+            : {
+                action: "merge" as const,
+                stackNumber: 1,
+                expectedStackHeads: [{ number: 1, headSha: "reviewed-head" }],
+              }),
+        }),
+      );
+      assert.match(error.message, /head/i);
+      assert.strictEqual(writes, 0);
+    }),
+);
+
+it.effect("retains a host's pinned queue refusal for the transport to classify", () =>
+  Effect.gen(function* () {
+    const provider = fakePullRequestProvider(SourceControlProviderKind.make("github"));
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        {
+          ...provider,
+          capabilities: { ...provider.capabilities, expectedHeadMergeMethods: ["merge"] },
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("")),
+          runAction: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: SourceControlProviderKind.make("github"),
+                operation: "runAction",
+                reason: "pinned-auto-merge",
+                detail: "A pinned head cannot be guaranteed for a queued merge.",
+              }),
+            ),
+        },
+      ],
+    });
+    const error = yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "merge",
+        headSha: "reviewed-head",
+      }),
+    );
+    assert.match(error.message, /queued merge/);
+    assert.deepInclude(error.cause, { reason: "pinned-auto-merge" });
   }),
 );

@@ -38,43 +38,58 @@ afterEach(() => {
   mockedExecute.mockReset();
 });
 layer("GitLab pinned merge", (it) => {
-  it.effect.each(["merge", "enable-auto-merge"] as const)(
-    "passes the reviewed head to GitLab for %s",
-    (action) =>
-      Effect.gen(function* () {
-        mockedExecute.mockImplementation(({ args }) =>
-          Effect.succeed(
-            output(
-              args[0] === "api"
-                ? mergeRequestJson({
-                    diff_refs: { base_sha: "base", head_sha: "current-head", start_sha: "start" },
-                  })
-                : "",
-            ),
-          ),
-        );
-        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
-        yield* cli.runMergeRequestAction({
+  it.effect("refuses a pinned automatic merge before invoking GitLab", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const result = yield* Effect.result(
+        cli.runMergeRequestAction({
           cwd: "/w",
           repository: "acme/web",
           number: 7,
-          action,
+          action: "enable-auto-merge",
           headSha: "reviewed-head",
-        });
-        expect(mockedExecute.mock.calls.map(([input]) => input.args)).toEqual([
-          [
-            "mr",
-            "merge",
-            "7",
-            "--repo",
-            "acme/web",
-            `--auto-merge=${action === "merge" ? "false" : "true"}`,
-            "--yes",
-            "--sha",
-            "reviewed-head",
-          ],
-        ]);
-      }),
+        }),
+      );
+      expect(result).toMatchObject({ _tag: "Failure" });
+      expect(mockedExecute).not.toHaveBeenCalled();
+    }),
+  );
+  it.effect.each(["merge"] as const)("passes the reviewed head to GitLab for %s", (action) =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(({ args }) =>
+        Effect.succeed(
+          output(
+            args[0] === "api"
+              ? mergeRequestJson({
+                  diff_refs: { base_sha: "base", head_sha: "current-head", start_sha: "start" },
+                })
+              : "",
+          ),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      yield* cli.runMergeRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        action,
+        headSha: "reviewed-head",
+      });
+      expect(mockedExecute.mock.calls.map(([input]) => input.args)).toEqual([
+        [
+          "mr",
+          "merge",
+          "7",
+          "--repo",
+          "acme/web",
+          `--auto-merge=${action === "merge" ? "false" : "true"}`,
+          "--yes",
+          "--sha",
+          "reviewed-head",
+        ],
+      ]);
+    }),
   );
 
   it.effect("refuses a pinned rebase before changing the source branch", () =>

@@ -383,17 +383,8 @@ thread or browser, a person who completes the step, or another grant such as
 `memory:write`. The type refuses a write without one. Tools whose thread callers
 only ask a person, such as provider sign-in and sync, declare `none` so a profile
 never preempts the person's decision.
-No tool opens or merges a pull request, so `pr.open` gates only GOAT's pull
-request tracking, and `pr.merge` gates nothing here: agents run `gh` in their own
-terminal, which a profile bounds only through its runtime-mode ceiling. A goatclaw
-role launch is refused when the narrowed profile lacks a capability the role's work
-uses ([RoleTemplates.ts](../../apps/server/src/goatclaw/RoleTemplates.ts)), so a
-merge manager is never started without `pr.merge`.
-A supervisor keeps `pr.merge` from its own profile when only its caller's stored
-profile lacks it, so a person's worker thread can still get merges through one; a
-launch snapshot or forwarded ceiling without it still removes it. That is safe only
-while `pr.merge` gates nothing but role launches, so gating a tool on it would hand
-that tool to every supervisor.
+The pull request merge and close tools require `pr.merge`.
+Supervisors retaining `pr.merge` can access those tools; the retention decision is tracked in [#2194](https://github.com/goat-si/goat/issues/2194).
 Every check that compares a role thread's grant with its caller's, such as the
 recheck before an SSH launch and a send's target check and rebinding, derives it
 with the same `roleProfile`; comparing against the caller's plain profile reads the

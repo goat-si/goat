@@ -1,6 +1,7 @@
 import {
   GitLabDiffRefsUnavailableError,
   GitLabPinnedRebaseError,
+  GitLabPinnedAutoMergeError,
 } from "./gitLabPullRequestActionErrors.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -162,6 +163,7 @@ export class GitLabDiffFileContentsUnavailableError extends Schema.TaggedError<G
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabPinnedRebaseError
+  | GitLabPinnedAutoMergeError
   | GitLabMergeRequestReadError
   | GitLabDiffCursorError
   | GitLabDiffCommitError
@@ -1363,6 +1365,9 @@ export const make = Effect.gen(function* () {
 
     runMergeRequestAction: Effect.fn("GitLabPullRequestCli.runMergeRequestAction")(
       function* (input) {
+        if (input.headSha !== undefined && input.action === "enable-auto-merge") {
+          return yield* new GitLabPinnedAutoMergeError();
+        }
         if (
           input.headSha !== undefined &&
           (input.mergeMethod === "rebase" || !["merge", "enable-auto-merge"].includes(input.action))

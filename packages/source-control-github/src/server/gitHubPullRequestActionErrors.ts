@@ -1,5 +1,14 @@
 import * as Schema from "effect/Schema";
 
+export class GitHubPinnedAutoMergeError extends Schema.TaggedError<GitHubPinnedAutoMergeError>()(
+  "GitHubPinnedAutoMergeError",
+  {},
+) {
+  override get message(): string {
+    return "A pinned head cannot be guaranteed for a queued or automatic merge. Merge directly or omit headSha.";
+  }
+}
+
 export class GitHubBranchDeletionRefusedError extends Schema.TaggedError<GitHubBranchDeletionRefusedError>()(
   "GitHubBranchDeletionRefusedError",
   {
