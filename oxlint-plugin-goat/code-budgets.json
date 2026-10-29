@@ -313,7 +313,7 @@
   "apps/server/src/orchestration-v2/ProviderSessionManager.ts": { "lines": 3013, "nonNull": 3 },
   "apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts": { "lines": 1274 },
   "apps/server/src/orchestration-v2/ProviderTurnStartService.ts": { "lines": 1744, "nonNull": 5 },
-  "apps/server/src/orchestration-v2/PullRequestSyncReactor.test.ts": { "lines": 1692 },
+  "apps/server/src/orchestration-v2/PullRequestSyncReactor.test.ts": { "lines": 1730 },
   "apps/server/src/orchestration-v2/PullRequestSyncReactor.ts": { "nonNull": 6 },
   "apps/server/src/orchestration-v2/PullRequestWatchReactor.ts": { "nonNull": 3 },
   "apps/server/src/orchestration-v2/QuestionEscalationService.test.ts": { "lines": 1309 },
