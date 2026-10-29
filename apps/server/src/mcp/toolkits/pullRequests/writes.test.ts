@@ -225,34 +225,16 @@ it.effect.each(["worker", "merge-manager"])(
       const h = yield* harness({ profile });
       yield* Effect.gen(function* () {
         yield* seed;
-        for (const verb of ["merge", "close", "branch_delete"]) {
-          const result = yield* write(
-            verb,
-            verb === "branch_delete" ? {} : { clientRequestId: verb },
-          );
+        for (const verb of ["merge", "close"]) {
+          const result = yield* write(verb, { clientRequestId: verb });
           expect(result).toMatchObject(
             profile === "worker" ? { code: "capability_denied" } : receipt,
           );
         }
-        expect(yield* Ref.get(h.calls)).toHaveLength(profile === "worker" ? 0 : 3);
+        expect(yield* Ref.get(h.calls)).toHaveLength(profile === "worker" ? 0 : 2);
         expect(yield* reservations).toHaveLength(profile === "worker" ? 0 : 2);
       }).pipe(Effect.provide(h.registered));
     }),
-);
-
-it.effect("repeats branch deletion without reserving a retry key", () =>
-  Effect.gen(function* () {
-    const h = yield* harness();
-    yield* Effect.gen(function* () {
-      yield* seed;
-      for (let repeat = 0; repeat < 2; repeat++)
-        expect(
-          yield* call("goat_call", { path: "pull_request.branch_delete", args: target }),
-        ).toMatchObject({ status: "ok", value: receipt });
-      expect(yield* Ref.get(h.calls)).toHaveLength(2);
-      expect(yield* reservations).toEqual([]);
-    }).pipe(Effect.provide(h.registered));
-  }),
 );
 
 it.effect("returns the service's unsupported head-pin refusal through goat_call", () =>
@@ -419,15 +401,11 @@ it.effect(
             { action: "enable-auto-merge", mergeMethod: "merge" },
           ],
           ["close", {}, "runAction", { action: "close" }],
-          ["branch_delete", {}, "runAction", { action: "delete-branch" }],
         ] as const;
         for (const [index, [verb, args, method, mapped]] of cases.entries()) {
-          expect(
-            yield* write(
-              verb,
-              verb === "branch_delete" ? args : { ...args, clientRequestId: `write-${index}` },
-            ),
-          ).toEqual(receipt);
+          expect(yield* write(verb, { ...args, clientRequestId: `write-${index}` })).toEqual(
+            receipt,
+          );
           expect((yield* Ref.get(h.calls)).at(-1)).toEqual({
             method,
             input: {
@@ -440,7 +418,7 @@ it.effect(
           });
         }
         expect(yield* Ref.get(h.syncs)).toEqual(
-          Array.from({ length: 5 }, () => ({
+          Array.from({ length: 4 }, () => ({
             host: "github.com",
             repository: "sample-tools/goat",
             number: 42,

@@ -74,7 +74,7 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret and sign_in_state.
-  expect(entries).toHaveLength(275);
+  expect(entries).toHaveLength(274);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -207,7 +207,6 @@ const NOT_A_FLEET_HOST: Readonly<Record<string, string>> = {
   "pull_request.action": "the git forge's host",
   "pull_request.merge": "the git forge's host",
   "pull_request.close": "the git forge's host",
-  "pull_request.branch_delete": "the git forge's host",
   "pull_request.link": "the git forge's host",
   "pull_request.unlink": "the git forge's host",
   "pull_request.watch": "the git forge's host",
@@ -443,7 +442,6 @@ const ACCESS_EXCEPTIONS: Readonly<
     fullClient: "denied",
   },
   "surface.call": { reason: "dispatches", readOnlyClient: "reached" },
-  "pull_request.branch_delete": { reason: "grantChecked", fullClient: "denied" },
   ...Object.fromEntries(
     entries
       .filter((entry) => entry.resource === "pull_request" && isKeyedWrite(entry))

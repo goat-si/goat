@@ -19,10 +19,10 @@ import { PullRequestWriteFailedError, PullRequestWriteRefusedError } from "./wri
  * may follow an earlier request of the same write (GitLab posts a review in several), so it stays
  * an unknown outcome.
  */
-const classified = (error: PullRequests.PullRequestError, natural = false) =>
+const classified = (error: PullRequests.PullRequestError) =>
   error.cause === undefined
     ? new PullRequestWriteRefusedError({ detail: error.message })
-    : new PullRequestWriteFailedError({ cause: error, ...(natural ? { natural: true } : {}) });
+    : new PullRequestWriteFailedError({ cause: error });
 
 const prWriteGate = Effect.fn("PullRequestsToolkit.prWriteGate")(function* () {
   const scope = yield* McpInvocationContext.requireMcpCapability("pull-requests");
@@ -54,7 +54,7 @@ type Located = {
 };
 type WriteHandlers = Pick<
   McpToolAccess.Handlers<typeof PullRequestsToolkit.tools>,
-  `goat_pull_request_${"update" | "comment" | "comment_update" | "review_submit" | "thread_reply" | "thread_resolve" | "react" | "labels" | "reviewers" | "action" | "merge" | "close" | "branch_delete"}`
+  `goat_pull_request_${"update" | "comment" | "comment_update" | "review_submit" | "thread_reply" | "thread_resolve" | "react" | "labels" | "reviewers" | "action" | "merge" | "close"}`
 >;
 
 export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandlers")(function* (
@@ -66,7 +66,6 @@ export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandler
   const sync = yield* Sync.PullRequestSyncReactor;
   const write = <P extends Target>(
     handle: (input: P, ref: Located["ref"]) => Effect.Effect<void, PullRequests.PullRequestError>,
-    natural = false,
   ) =>
     McpToolAccess.writesWithCapability(
       (input: P) =>
@@ -74,7 +73,7 @@ export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandler
           yield* prWriteGate();
           const { target, ref } = yield* locateOne(input);
           yield* McpToolAccess.admit(input);
-          yield* handle(input, ref).pipe(Effect.mapError((error) => classified(error, natural)));
+          yield* handle(input, ref).pipe(Effect.mapError(classified));
           return { ...target, status: "accepted" as const };
         }),
       { admission: "handler" },
@@ -134,9 +133,5 @@ export const makeWriteHandlers = Effect.fn("PullRequestsToolkit.makeWriteHandler
       }),
     ),
     goat_pull_request_close: write((_, ref) => action(ref, { action: "close" })),
-    goat_pull_request_branch_delete: write(
-      (_, ref) => action(ref, { action: "delete-branch" }),
-      true,
-    ),
   } satisfies WriteHandlers;
 });

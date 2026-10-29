@@ -91,7 +91,7 @@ const templates: Readonly<Record<GoatclawRole, Omit<GoatclawRoleTemplate, "role"
     supervisor: {
       title: "goatclaw supervisor",
       requires: [],
-      // Retain pr.merge so a supervisor can launch a merge manager for a worker.
+      // pr.merge gates only merge-manager launches; merging itself runs in a terminal (#858).
       keeps: ["pr.merge"],
       preamble: [
         "You are the goatclaw supervisor. You read, plan, and ask; the managers you launch do the writing.",

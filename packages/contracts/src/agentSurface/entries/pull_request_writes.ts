@@ -124,8 +124,7 @@ export const pullRequestWriteEntries = {
     "Mark ready or draft, reopen, update the branch, or disable auto-merge. Reconcile with pull_request.read. Merge and close have separate tools requiring pr.merge.",
     "pull_request.read",
     {
-      guide:
-        "Branch deletion has a separate tool; revert and approve-workflows are not exposed here.",
+      guide: "delete-branch, revert and approve-workflows are not exposed here.",
     },
   ),
   "pull_request.merge": {
@@ -152,25 +151,4 @@ export const pullRequestWriteEntries = {
     "pull_request.read",
     { capability: "pr.merge" },
   ),
-  "pull_request.branch_delete": entry({
-    resource: "pull_request",
-    verb: "branch_delete",
-    name: "goat_pull_request_branch_delete",
-    toolkit: "pullRequests",
-    summary: "Delete a pull request source branch",
-    description:
-      "Delete the source branch of a closed or merged pull request. Requires pr.merge; unsupported hosts refuse.",
-    guide:
-      access +
-      "Repeating is safe: an absent branch succeeds, and a moved or unsafe branch is refused. pull_request.read does not show whether the branch exists.",
-    effect: "write",
-    hostRoutable: false,
-    requires: "either",
-    dryRun: "unsupported",
-    humanSteps: [],
-    capability: "pr.merge",
-    idempotencyReason:
-      "The supported host accepts an absent branch and atomically deletes only the unchanged PR head; a repeat refuses a moved branch.",
-    annotations: { idempotentHint: true, openWorldHint: true },
-  }),
 } as const;

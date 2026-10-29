@@ -262,7 +262,6 @@ export const PullRequestCapabilities = Schema.Struct({
   actions: ForwardCompatibleArray(PullRequestAction),
   mergeMethods: ForwardCompatibleArray(PullRequestMergeMethod),
   expectedHeadMergeMethods: Schema.optional(ForwardCompatibleArray(PullRequestMergeMethod)),
-  /** Deletion must accept an absent branch and atomically refuse a moved head. */
   deleteBranch: Schema.optional(Schema.Boolean),
   /**
    * Absent where it cannot at all, which is every host that has not said otherwise — so a
