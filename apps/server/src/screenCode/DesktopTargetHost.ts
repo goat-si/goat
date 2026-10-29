@@ -472,6 +472,7 @@ export const createDesktopTargetHost = (deps: {
           acted,
           rows: bound.rows ?? [],
           runInput,
+          opensWindow: bound.sheetTrigger !== undefined,
           onSettled: () => {
             delete bound.needsSettleBeforeCapture;
           },

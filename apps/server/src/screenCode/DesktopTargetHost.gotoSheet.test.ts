@@ -82,18 +82,27 @@ const gotoTree = {
 
 /** Finder that opens Go to Folder on cmd+shift+g and closes it on Return. */
 const finder = (
-  options: { sheetRead?: "tree" | "empty" | "fails"; opened?: () => unknown[] } = {},
+  options: {
+    sheetRead?: "tree" | "empty" | "fails";
+    opened?: () => unknown[];
+    /** Window lists read after the key, before Go to Folder shows in one. */
+    lateLists?: number;
+  } = {},
 ) => {
-  const state = { open: false, readFails: false, navigated: false };
+  const state = { open: false, readFails: false, navigated: false, pendingLists: -1 };
   const title = () => (state.navigated ? "computeruse" : "Recents");
   const made = fixture({
-    list_windows: () => ({
-      windows: [
-        win(72907, { title: title() }),
-        win(72908, { title: "Downloads" }),
-        ...(state.open ? (options.opened?.() ?? [win(82779, GOTO_WINDOW)]) : []),
-      ],
-    }),
+    list_windows: () => {
+      if (state.pendingLists === 0) state.open = true;
+      if (state.pendingLists >= 0) state.pendingLists--;
+      return {
+        windows: [
+          win(72907, { title: title() }),
+          win(72908, { title: "Downloads" }),
+          ...(state.open ? (options.opened?.() ?? [win(82779, GOTO_WINDOW)]) : []),
+        ],
+      };
+    },
     get_window_state: (args: Record<string, unknown>) => {
       if (args.window_id !== 82779) return finderTree(Number(args.window_id), title());
       if (state.readFails || options.sheetRead === "fails" || !state.open)
@@ -104,8 +113,11 @@ const finder = (
     },
     press_key: (args: Record<string, unknown>) => {
       const modifiers = Array.isArray(args.modifiers) ? args.modifiers : [];
-      if (args.key === "g" && modifiers.includes("command") && modifiers.includes("shift"))
-        state.open = true;
+      const chord =
+        (args.key === "g" && modifiers.includes("command") && modifiers.includes("shift")) ||
+        args.key === "cmd+shift+g";
+      if (chord && options.lateLists === undefined) state.open = true;
+      if (chord && options.lateLists !== undefined) state.pendingLists = options.lateLists;
       if ((args.key === "Enter" || args.key === "Return") && state.open) {
         state.open = false;
         state.navigated = true;
@@ -199,6 +211,25 @@ it.live(
       expect(second.value).toEqual(["downstream_failure", 82779]);
     }).pipe(Effect.provide(service(host)));
   },
+);
+
+it.live(
+  "a Go to Folder window that shows only after the key's first window read is still reported by the input and followed by observe(), also when the chord is one raw key string",
+  () =>
+    Effect.gen(function* () {
+      for (const press of ["app.press('cmd+shift+g')", "app.pressKey({ key: 'cmd+shift+g' })"]) {
+        const { host } = finder({ lateLists: 1 });
+        const result = yield* cell(
+          BIND +
+            "const done = await " +
+            press +
+            ";" +
+            "await app.observe();" +
+            "return { opened: (done.result ?? done).windows?.opened.map((w) => w.window_id), onSheet: app.windowId };",
+        ).pipe(Effect.provide(service(host)));
+        expect(result.value).toEqual({ opened: [82779], onSheet: 82779 });
+      }
+    }),
 );
 
 it.live(
