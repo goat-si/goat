@@ -260,6 +260,8 @@ type StepResult =
   | {
       readonly _tag: "Running";
       readonly questions: ReadonlyArray<{ readonly id: string; readonly kind: string | null }>;
+      /** The run that asks them: a continuation or joined run of the followed one, else it. */
+      readonly askedRunId?: RunId;
       readonly escalatesUserInput?: boolean;
       readonly retryIfNoNewQuestions?: boolean;
     }
@@ -552,7 +554,8 @@ export const make = Effect.gen(function* () {
         )
         .map((request) => ({ id: request.id as string, kind: request.kind as string }));
       const launcherThreadId = watch.launcherThreadId;
-      if (launcherThreadId === null) return { _tag: "Running", questions } satisfies StepResult;
+      if (launcherThreadId === null)
+        return { _tag: "Running", questions, askedRunId: asked } satisfies StepResult;
       const subagents =
         shell.launchedBy === undefined &&
         shell.lineage.parentThreadId === launcherThreadId &&
@@ -562,6 +565,7 @@ export const make = Effect.gen(function* () {
       return {
         _tag: "Running",
         questions,
+        askedRunId: asked,
         escalatesUserInput: localQuestionLauncher(shell, subagents) === launcherThreadId,
       } satisfies StepResult;
     }).pipe(
@@ -648,6 +652,7 @@ export const make = Effect.gen(function* () {
       return {
         _tag: "Running",
         questions,
+        ...(waited.runId === null ? {} : { askedRunId: waited.runId }),
         retryIfNoNewQuestions: !waited.timedOut,
       } satisfies StepResult;
     }).pipe(
@@ -927,16 +932,17 @@ export const make = Effect.gen(function* () {
                 }
                 const sent = yield* deliver(
                   next,
+                  // Keys stay under the followed run; the report names the run that asks.
                   questionWake({
                     watch: next,
-                    runId,
+                    runId: result.askedRunId ?? runId,
                     requestId: question.id,
                     kind: question.kind,
                     title: null,
                   }),
                   {
                     event: "question",
-                    runId,
+                    runId: result.askedRunId ?? runId,
                     requestId: question.id,
                     status: "waiting",
                     title: next.title,
