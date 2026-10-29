@@ -148,7 +148,7 @@ export const TRANSPORT_SAFE_TOOLS: ReadonlySet<string> = new Set([
  * Tools that only read. One the driver already had when a pause or Stop cut it off changed
  * nothing on the screen; any other tool, a script or batch included, may have acted.
  */
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "check_permissions",
   "health_report",
   "get_guide",

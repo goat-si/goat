@@ -20,9 +20,9 @@ type Send = (
   expectedConnectionGeneration?: string,
 ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
 
-export const SELECT_TEXT_UNSUPPORTED =
+const SELECT_TEXT_UNSUPPORTED =
   "This computer's driver does not offer select_text yet, or GOAT has not enabled it; nothing was sent. To replace a field's whole value, use setValue(target, value).";
-export const MENU_BAR_EXTRAS_UNSUPPORTED =
+const MENU_BAR_EXTRAS_UNSUPPORTED =
   "This computer's driver does not offer menu bar extras yet, or GOAT has not enabled them; nothing was sent. Bind an app window with screen.app() or hand the status item to the person.";
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
@@ -49,7 +49,7 @@ const replyText = (reply: ComputerUsePrimitiveReply): string => {
  * anything: an unknown or unclassified tool, or one outside the manifest. Any sign the call ran,
  * an effect other than refused or a possible commit, keeps the answer as the call's own.
  */
-export const toolUnavailable = (
+const toolUnavailable = (
   reply: ComputerUsePrimitiveReply,
   tool: string,
   args: Record<string, unknown>,
@@ -115,7 +115,7 @@ const driverFailure = (
 const SELECTION = new Set(["text", "cursor_before", "cursor_after"]);
 
 /** select_text's arguments for the bound window, or why there are none. */
-export const selectTextArgs = (
+const selectTextArgs = (
   args: Record<string, unknown>,
   bound: BoundWindow,
   tokenOf: (element: Record<string, unknown>, bound: BoundWindow) => string | undefined,
