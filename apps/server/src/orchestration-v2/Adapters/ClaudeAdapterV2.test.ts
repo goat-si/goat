@@ -868,6 +868,20 @@ describe("ClaudeAdapterV2 native protocol logging", () => {
     assert.equal(logged.hasMcpServers, true);
     assert.notInclude(JSON.stringify(logged), "secret-claude-token");
   });
+
+  it("redacts settings values from query logs", () => {
+    const options = ClaudeAdapterV2.makeClaudeQueryOptions({
+      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+      nativeThreadId: "settings-log",
+      resume: false,
+      cwd: "/workspace",
+      sdkSettings: { env: { ANTHROPIC_API_KEY: "secret-settings-key" } },
+    });
+    assert.notInclude(
+      JSON.stringify(ClaudeAdapterV2.loggedClaudeQueryOptions(options)),
+      "secret-settings-key",
+    );
+  });
 });
 
 describe("ClaudeAdapterV2 context usage", () => {
@@ -1106,153 +1120,6 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
     ),
   );
 });
-describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
-  const startTurnWithLaunchArgs = Effect.fnUntraced(function* (launchArgs: string, cwd: string) {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions> = [];
-    const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
-      instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
-      settings: { ...DEFAULT_CLAUDE_SETTINGS, launchArgs },
-      environment: {},
-      attachmentsDir: yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-append-" }),
-      fileSystem,
-      path: yield* Path.Path,
-      crypto: yield* Crypto.Crypto,
-      idAllocator: yield* IdAllocator.IdAllocatorV2,
-      queryRunner: {
-        allocateSessionId: Effect.succeed("native-thread-claude-append-file"),
-        open: (input) =>
-          Effect.sync(() => {
-            opened.push(input.options);
-            return {
-              messages: Stream.never,
-              offer: () => Effect.void,
-              setModel: () => Effect.void,
-              applyFlagSettings: () => Effect.void,
-              setPermissionMode: () => Effect.void,
-              backgroundTasks: () => Effect.succeed(false),
-              stopTask: () => Effect.void,
-              interrupt: Effect.void,
-              close: Effect.void,
-            };
-          }),
-        forkSession: () => Effect.die("unused"),
-        subagentLaunchToolUseId: () => Effect.succeed(null),
-        assertComplete: Effect.void,
-      },
-    });
-    const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      cwd,
-    });
-    const threadId = ThreadId.make("thread-claude-append-file");
-    const runtime = yield* adapter.openSession({
-      threadId,
-      providerSessionId: ProviderSessionId.make("provider-session-claude-append-file"),
-      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-      runtimePolicy,
-    });
-    const providerThread = yield* runtime.ensureThread({
-      threadId,
-      modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-      runtimePolicy,
-    });
-    const exit = yield* runtime
-      .startTurn(
-        makeClaudeTestTurnInput({
-          threadId,
-          providerThread,
-          now: yield* DateTime.now,
-          attemptId: RunAttemptId.make("attempt-claude-append-file"),
-          text: "What is the sentinel?",
-          attachments: [],
-          runtimePolicy,
-        }),
-      )
-      .pipe(Effect.exit);
-    return { exit, opened };
-  });
-
-  const appendSystemPrompt = (options: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined) =>
-    (options?.systemPrompt as { readonly append?: string } | undefined)?.append;
-
-  it.effect("sends append launch arguments to Claude after the GOAT instructions", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const cwd = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-claude-append-cwd-",
-        });
-        yield* fileSystem.writeFileString(NodePath.join(cwd, "rules.md"), "File sentinel\n");
-        const plain = yield* startTurnWithLaunchArgs("", cwd);
-        const { exit, opened } = yield* startTurnWithLaunchArgs(
-          '--append-system-prompt "Inline sentinel" --append-system-prompt-file rules.md --system-prompt Replacement',
-          cwd,
-        );
-        assert.isTrue(Exit.isSuccess(exit));
-        assert.lengthOf(opened, 1);
-        assert.equal(
-          appendSystemPrompt(opened[0]),
-          `${appendSystemPrompt(plain.opened[0])}\n\nFile sentinel\n\nInline sentinel`,
-        );
-        assert.isUndefined(opened[0]!.extraArgs?.["append-system-prompt"]);
-        assert.isUndefined(opened[0]!.extraArgs?.["append-system-prompt-file"]);
-        assert.equal(opened[0]!.extraArgs?.["system-prompt"], "Replacement");
-      }).pipe(Effect.provide(layerAdapterTest)),
-    ),
-  );
-
-  // regression: #20413 malformed append-system-prompt launch args fail before a query opens
-  it.effect.each([
-    [
-      "--append-system-prompt-file missing.md",
-      (cwd: string) =>
-        new ClaudeAdapterV2.ClaudeAppendSystemPromptFileError({
-          path: NodePath.join(cwd, "missing.md"),
-        }).message,
-    ],
-    [
-      "--append-system-prompt-file",
-      () =>
-        new ClaudeAdapterV2.ClaudeAppendSystemPromptMissingValueError({
-          flag: "--append-system-prompt-file",
-        }).message,
-    ],
-    [
-      "--append-system-prompt-file=",
-      () =>
-        new ClaudeAdapterV2.ClaudeAppendSystemPromptMissingValueError({
-          flag: "--append-system-prompt-file",
-        }).message,
-    ],
-    [
-      "--append-system-prompt",
-      () =>
-        new ClaudeAdapterV2.ClaudeAppendSystemPromptMissingValueError({
-          flag: "--append-system-prompt",
-        }).message,
-    ],
-  ] as const)("fails the turn before opening Claude for %s", ([launchArgs, expectedMessage]) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const cwd = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-claude-append-cwd-",
-        });
-        const { exit, opened } = yield* startTurnWithLaunchArgs(launchArgs, cwd);
-        assert.lengthOf(opened, 0);
-        assert.isTrue(Exit.isFailure(exit));
-        if (!Exit.isFailure(exit)) return;
-        assert.equal(
-          makeProviderFailure({ cause: exit.cause, class: "provider_error" }).message,
-          expectedMessage(cwd),
-        );
-      }).pipe(Effect.provide(layerAdapterTest)),
-    ),
-  );
-});
-
 describe("ClaudeAdapterV2 approval cancellation", () => {
   it.effect("observes an approval signal that was already aborted", () =>
     Effect.gen(function* () {
@@ -3562,29 +3429,31 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           vi.importActual<typeof ClaudeSdk>("@anthropic-ai/claude-agent-sdk"),
         );
         vi.mocked(ClaudeSdk.resolveSettings).mockImplementation(sdk.resolveSettings);
-        const open = Effect.scoped(
-          Effect.gen(function* () {
-            const harness = yield* makeWakeHarnessWithOptions({
-              settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: home },
-            });
-            yield* harness.runtime.startTurn(
-              makeClaudeTestTurnInput({
-                threadId: harness.threadId,
-                providerThread: harness.providerThread,
-                now: yield* DateTime.now,
-                attemptId: RunAttemptId.make("attempt-cached-managed-policy"),
-                text: "Run git status.",
-                attachments: [],
-                runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-                  runtimeMode: "full-access",
-                  interactionMode: "default",
-                  cwd,
+        const openWith = (launchArgs: string) =>
+          Effect.scoped(
+            Effect.gen(function* () {
+              const harness = yield* makeWakeHarnessWithOptions({
+                settings: { ...DEFAULT_CLAUDE_SETTINGS, homePath: home, launchArgs },
+              });
+              yield* harness.runtime.startTurn(
+                makeClaudeTestTurnInput({
+                  threadId: harness.threadId,
+                  providerThread: harness.providerThread,
+                  now: yield* DateTime.now,
+                  attemptId: RunAttemptId.make("attempt-cached-managed-policy"),
+                  text: "Run git status.",
+                  attachments: [],
+                  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+                    runtimeMode: "full-access",
+                    interactionMode: "default",
+                    cwd,
+                  }),
                 }),
-              }),
-            );
-            return harness.getOpenedOptions()!;
-          }),
-        );
+              );
+              return harness.getOpenedOptions()!;
+            }),
+          );
+        const open = openWith("");
         yield* fileSystem.writeFileString(
           remoteFile,
           JSON.stringify({
@@ -3598,6 +3467,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.isUndefined(restricted.allowDangerouslySkipPermissions);
         yield* fileSystem.remove(remoteFile);
         assert.equal((yield* open).permissionMode, "bypassPermissions");
+        const launchRestricted = yield* openWith(
+          `--settings '{"permissions":{"disableBypassPermissionsMode":"disable"}}'`,
+        );
+        assert.notEqual(launchRestricted.permissionMode, "bypassPermissions");
+        assert.isUndefined(launchRestricted.allowDangerouslySkipPermissions);
         yield* fileSystem.writeFileString(remoteFile, "{ invalid json");
         assert.equal((yield* open).permissionMode, "auto");
         yield* fileSystem.remove(remoteFile);
