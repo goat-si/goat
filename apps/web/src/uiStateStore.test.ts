@@ -19,7 +19,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
-    sidebarProjectScopeKey: null,
+    sidebarProjectScopeKeys: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -126,7 +126,7 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
-      sidebarProjectScopeKey: null,
+      sidebarProjectScopeKeys: [],
       pullRequestMergeMethod: "merge",
       fleetConsoleCollapsed: false,
       threadChangedFilesExpandedById: {
@@ -216,6 +216,7 @@ describe("uiStateStore persistence", () => {
         },
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarProjectScopeKeys: [],
     });
 
     persistState(state);
@@ -233,6 +234,7 @@ describe("uiStateStore persistence", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
+      sidebarProjectScopeKeys: [],
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -249,12 +251,30 @@ describe("uiStateStore persistence", () => {
   });
 
   it("restores the sidebar project scope across reloads", () => {
-    persistState(makeUiState({ sidebarProjectScopeKey: "github.com/goat-si/goat" }));
+    persistState(makeUiState({ sidebarProjectScopeKeys: ["github.com/goat-si/goat"] }));
 
     const persisted = JSON.parse(
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
 
-    expect(parsePersistedState(persisted).sidebarProjectScopeKey).toBe("github.com/goat-si/goat");
+    expect(parsePersistedState(persisted).sidebarProjectScopeKeys).toEqual([
+      "github.com/goat-si/goat",
+    ]);
+    expect(persisted.sidebarProjectScopeKey).toBe("github.com/goat-si/goat");
+    expect(
+      parsePersistedState({ sidebarProjectScopeKey: "legacy" }).sidebarProjectScopeKeys,
+    ).toEqual(["legacy"]);
+  });
+
+  it("restores multiple project scopes and keeps the legacy scope compatible", () => {
+    const parsed = parsePersistedState({
+      sidebarProjectScopeKeys: ["project-a", "project-b"],
+      sidebarProjectScopeKey: null,
+    });
+    expect(parsed).toHaveProperty("sidebarProjectScopeKeys", ["project-a", "project-b"]);
+    persistState(parsed);
+    const saved = JSON.parse(localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}");
+    expect(saved.sidebarProjectScopeKeys).toEqual(["project-a", "project-b"]);
+    expect(saved.sidebarProjectScopeKey).toBeNull();
   });
 });
