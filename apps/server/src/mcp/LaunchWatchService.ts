@@ -281,6 +281,8 @@ const encodeReplicaModel = Schema.encodeEffect(
 );
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
+/** Whether a run in this state can be the one a pending question belongs to. */
+const asksQuestions = (status: string | undefined) => status !== "queued" && status !== "preparing";
 const decodeRequestIds = Schema.decodeUnknownEffect(
   Schema.Struct({ requestIds: Schema.Array(Schema.String) }),
 );
@@ -530,6 +532,8 @@ export const make = Effect.gen(function* () {
           end: completedAt == null ? null : DateTime.formatIso(completedAt),
         } satisfies StepResult;
       }
+      // Only the active run asks questions; one queued behind another run must not report its.
+      if (!asksQuestions(status)) return { _tag: "Running", questions: [] } satisfies StepResult;
       const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
       const questions = records.runtimeRequests
         .filter((request) => request.status === "pending" && request.kind !== "dynamic_tool_call")
@@ -623,6 +627,12 @@ export const make = Effect.gen(function* () {
           end: waited.completedAt ?? null,
         } satisfies StepResult;
       }
+      if (!asksQuestions(waited.status))
+        return {
+          _tag: "Running",
+          questions: [],
+          retryIfNoNewQuestions: !waited.timedOut,
+        } satisfies StepResult;
       // Only user questions are listed remotely; approvals show up when the run ends.
       const listedQuestions = yield* callHost(
         watch,

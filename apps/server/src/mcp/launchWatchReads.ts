@@ -73,11 +73,25 @@ const remoteRuns = (read: RemoteRead, triggers: ReadonlyMap<string, string>): Ar
     trigger: triggers.get(run.runId),
   }));
 
-/** The message that started each run, from timeline items. */
-const recordTriggers = (items: RemoteRead["items"], into: Map<string, string>) => {
-  for (const item of items)
-    if (item.type === "user_message" && item.runId !== null && item.messageId !== null)
-      if (!into.has(item.runId)) into.set(item.runId, item.messageId);
+/**
+ * The message that started each run whose start the items show: the run's first item, when it is
+ * a user message and the items reach back past it (to an earlier run, or the thread's start).
+ * A later message in a run may be a steer from anyone, so it never names who started the run.
+ */
+const startTriggers = (items: ReadonlyArray<RemoteRead["items"][number]>, fromStart: boolean) => {
+  const triggers = new Map<string, string>();
+  const runs = new Set<string>();
+  let reachesBack = fromStart;
+  for (const item of items.toSorted((left, right) => left.position - right.position)) {
+    if (item.runId === null) continue;
+    if (!runs.has(item.runId)) {
+      runs.add(item.runId);
+      if (reachesBack && item.type === "user_message" && item.messageId !== null)
+        triggers.set(item.runId, item.messageId);
+    }
+    reachesBack = true;
+  }
+  return triggers;
 };
 
 export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
@@ -147,7 +161,7 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
     const start = head.thread.itemCount - TAIL_WINDOW - 1;
     let afterPosition: number | undefined = start < 0 ? undefined : start;
     const texts: Array<string | null> = [];
-    const triggers = new Map<string, string>();
+    const items: Array<RemoteRead["items"][number]> = [];
     for (let page = 0; page < TAIL_PAGES; page++) {
       const result = yield* remoteRead(watch, host, {
         limit: TAIL_PAGE,
@@ -156,7 +170,7 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
       });
       for (const item of result.items)
         if (item.type === "assistant_message" && item.runId === runId) texts.push(item.text);
-      recordTriggers(result.items, triggers);
+      items.push(...result.items);
       if (!result.hasMore || result.nextPosition === null) break;
       afterPosition = result.nextPosition;
     }
@@ -192,7 +206,7 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
       // Registered runs live on their holder, whose own watch reads them locally.
       linkOnlyRegistration: false,
       failure,
-      runs: remoteRuns(head, triggers),
+      runs: remoteRuns(head, startTriggers(items, start < 0)),
     } satisfies LaunchWatchRunDetails;
   });
 
@@ -257,9 +271,10 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
       maxCharsPerItem: 1,
       ...(start < 0 ? {} : { afterPosition: start }),
     });
-    const triggers = new Map<string, string>();
-    recordTriggers(tail.items, triggers);
-    return { _tag: "Runs", runs: remoteRuns(head, triggers) } satisfies Look;
+    return {
+      _tag: "Runs",
+      runs: remoteRuns(head, startTriggers(tail.items, start < 0)),
+    } satisfies Look;
   });
 
   /** The thread's runs since the last look; an unanswered remote look counts as unreachable. */
