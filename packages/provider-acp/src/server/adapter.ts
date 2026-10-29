@@ -824,7 +824,6 @@ export function acpToolCallDiffPatch(content: unknown): string | undefined {
         Array.isArray(diff.changes) && diff.changes.length === 1
           ? unknownRecord(diff.changes[0])
           : undefined;
-      // Some agents send a lone file's hunks without the headers that name the file.
       if (
         patch.format === "git_patch" &&
         patch.text.trimStart().startsWith("@@ ") &&
