@@ -31,6 +31,17 @@ export interface InputWindowsReport {
   readonly truncated?: boolean;
 }
 
+/** Host time an input took, in total and by step; a step that did not run is left out. */
+export interface InputTiming {
+  readonly ms: number;
+  readonly phases: {
+    readonly preMs?: number;
+    readonly driverMs: number;
+    readonly settleMs?: number;
+    readonly postMs?: number;
+  };
+}
+
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -143,10 +154,12 @@ export const diffInputWindows = (
 const guestDoneBytes = (
   resultValue: unknown,
   observed: ReadonlyArray<string> | undefined,
+  timing: InputTiming | undefined,
 ): number => {
   const obj = object(resultValue);
   const doneShape = {
     verdict: "unverifiable",
+    ...(timing === undefined ? {} : timing),
     ...(observed && observed.length > 0 ? { observed } : {}),
     ...(obj && "point" in obj ? { point: obj.point } : {}),
     ...(obj && "hit" in obj ? { hit: obj.hit } : {}),
@@ -155,40 +168,58 @@ const guestDoneBytes = (
   return Buffer.byteLength(JSON.stringify(doneShape) ?? "");
 };
 
+/** The host value carries timing as _timing and observed rows as _observed; the guest lifts both onto Done. */
 const fitsInputBudget = (
   candidateResult: Record<string, unknown>,
   observed: ReadonlyArray<string> | undefined,
   returnBytes: number,
+  timing: InputTiming | undefined,
 ): unknown | undefined => {
-  const payload =
-    observed && observed.length > 0 ? { ...candidateResult, _observed: observed } : candidateResult;
+  const payload = {
+    ...candidateResult,
+    ...(observed && observed.length > 0 ? { _observed: observed } : {}),
+    ...(timing === undefined ? {} : { _timing: timing }),
+  };
   if (
     Buffer.byteLength(JSON.stringify(payload) ?? "") <= returnBytes &&
-    guestDoneBytes(candidateResult, observed) <= returnBytes
+    guestDoneBytes(candidateResult, observed, timing) <= returnBytes
   )
     return payload;
   return undefined;
 };
 
+/**
+ * The largest input result that fits returnBytes both as the host value and as the guest's Done:
+ * timing goes first, then observed rows and window detail. When nothing fits, the driver's value
+ * goes back as it was, and the bridge refuses it as output_limit if it is over the cap.
+ */
 export const fitInputWindows = (
   driverVal: unknown,
-  report: InputWindowsReport,
+  report: InputWindowsReport | undefined,
   returnBytes: number,
   observed?: ReadonlyArray<string>,
+  timing?: InputTiming,
 ): unknown => {
   const base = object(driverVal) ?? {};
   const withWindows = { ...base, windows: report };
-  const full = fitsInputBudget(withWindows, observed, returnBytes);
-  if (full !== undefined) return full;
-  const winOnly = fitsInputBudget(withWindows, undefined, returnBytes);
-  if (winOnly !== undefined) return winOnly;
   const withFlag = { ...base, windowsTruncated: true };
-  const flagAndObs = fitsInputBudget(withFlag, observed, returnBytes);
-  if (flagAndObs !== undefined) return flagAndObs;
-  const flagOnly = fitsInputBudget(withFlag, undefined, returnBytes);
-  if (flagOnly !== undefined) return flagOnly;
-  const obsOnly = fitsInputBudget(base, observed, returnBytes);
-  if (obsOnly !== undefined) return obsOnly;
+  const candidates: ReadonlyArray<
+    readonly [Record<string, unknown>, ReadonlyArray<string> | undefined]
+  > =
+    report === undefined
+      ? [[base, observed]]
+      : [
+          [withWindows, observed],
+          [withWindows, undefined],
+          [withFlag, observed],
+          [withFlag, undefined],
+          [base, observed],
+        ];
+  for (const withTiming of timing === undefined ? [undefined] : [timing, undefined])
+    for (const [candidate, rows] of candidates) {
+      const fitted = fitsInputBudget(candidate, rows, returnBytes, withTiming);
+      if (fitted !== undefined) return fitted;
+    }
   return driverVal;
 };
 

@@ -1,8 +1,9 @@
 import { CELL_RESERVE_MS, driverCallCapMs, MIN_CALL_MS } from "../cua/ComputerUseCallCaps.ts";
 // @effect-diagnostics preferSchemaOverJson:off - verify_state observed_json payloads are bounded by the driver.
 /**
- * Observation-only evidence around a non-batch desktop input: watched element state before and
- * after via verify_state(timeout_ms: 0), paired with DesktopWindows list diffs.
+ * Observation-only evidence around a non-batch desktop input: the acted element's own state
+ * before and after via verify_state(timeout_ms: 0), paired with DesktopWindows list diffs, and
+ * the host time each step took.
  */
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -16,27 +17,36 @@ import {
   diffInputWindows,
   fitInputWindows,
   hiddenWindowStatus,
+  type InputTiming,
   parseWindowList,
   type WindowEntry,
 } from "./DesktopWindows.ts";
 import type { DesktopRow } from "./DesktopObserveRead.ts";
 import type { BoundWindow } from "./DesktopTargetHost.ts";
 
+/** How long a window's main run loop gets to show an input's effect before it is read. */
+const SETTLE_MS = 60;
+
+/**
+ * An input no longer waits for its effect to settle unless it reads the acted element back, so
+ * the next read of the window waits instead: a screenshot when its own cap still fits, a tree read
+ * whenever a minimal call still fits after the wait. A tree read with less left reads unsettled.
+ */
 export const settleCaptureIfNeeded = Effect.fn("DesktopEvidence.settleCaptureIfNeeded")(function* (
   capture: boolean,
   bound: BoundWindow,
   callDeadlineMillis: number,
 ) {
-  if (!capture || bound.needsSettleBeforeCapture !== true) return;
+  if (bound.needsSettleBeforeCapture !== true) return;
   const now = yield* Clock.currentTimeMillis;
-  if (callDeadlineMillis - now - CELL_RESERVE_MS >= 7_060) {
-    yield* Effect.sleep("60 millis");
+  const floor = capture ? 7_000 + SETTLE_MS : MIN_CALL_MS + SETTLE_MS;
+  if (callDeadlineMillis - now - CELL_RESERVE_MS >= floor) {
+    yield* Effect.sleep(SETTLE_MS);
     delete bound.needsSettleBeforeCapture;
   }
 });
 
-export interface WatchedElement {
-  readonly kind: "acted" | "window";
+interface WatchedElement {
   readonly role: string;
   readonly label: string;
   readonly value?: string;
@@ -67,39 +77,37 @@ const isUniqueNativeLabel = (row: DesktopRow, allRows: ReadonlyArray<DesktopRow>
   return matches === 1;
 };
 
-const buildWatchedElements = (
+/**
+ * Only the acted element's own state is read back, and only when it has one and its label finds
+ * it alone: other rows cost two verify_state reads on every input and prove nothing about it.
+ */
+const watchedFor = (
   acted: DesktopRow | undefined,
   allRows: ReadonlyArray<DesktopRow>,
-): ReadonlyArray<WatchedElement> => {
-  const list: WatchedElement[] = [];
-  if (
-    acted &&
-    (acted.text !== undefined || acted.selected !== undefined) &&
-    isUniqueNativeLabel(acted, allRows)
-  ) {
-    list.push({
-      kind: "acted",
-      role: acted.role,
-      label: acted.name,
-      ...(acted.text === undefined ? {} : { value: acted.text }),
-      ...(acted.selected === undefined ? {} : { selected: acted.selected }),
-    });
-  }
-  for (const row of allRows) {
-    if (list.length >= 7) break;
-    if (acted && row.driverToken === acted.driverToken) continue;
-    if (row.text === undefined && row.selected === undefined) continue;
-    if (!isUniqueNativeLabel(row, allRows)) continue;
-    list.push({
-      kind: "window",
-      role: row.role,
-      label: row.name,
-      ...(row.text === undefined ? {} : { value: row.text }),
-      ...(row.selected === undefined ? {} : { selected: row.selected }),
-    });
-  }
-  return list;
-};
+): ReadonlyArray<WatchedElement> =>
+  acted &&
+  (acted.text !== undefined || acted.selected !== undefined) &&
+  isUniqueNativeLabel(acted, allRows)
+    ? [
+        {
+          role: acted.role,
+          label: acted.name,
+          ...(acted.text === undefined ? {} : { value: acted.text }),
+          ...(acted.selected === undefined ? {} : { selected: acted.selected }),
+        },
+      ]
+    : [];
+
+/** A key with no element and no modifiers, such as Escape or Enter on the focused control. */
+const isSimpleKey = (
+  tool: string,
+  forwarded: Record<string, unknown>,
+  acted: DesktopRow | undefined,
+): boolean =>
+  tool === "press_key" &&
+  acted === undefined &&
+  forwarded.element_token === undefined &&
+  !(Array.isArray(forwarded.modifiers) && forwarded.modifiers.length > 0);
 
 const toVerifyExpectations = (watched: ReadonlyArray<WatchedElement>) =>
   watched.map((w) => ({
@@ -164,22 +172,14 @@ const diffWatchedEvidence = (
       pre.elementIndex !== post.elementIndex
     )
       return;
-    const prefix =
-      w.kind === "acted"
-        ? "observed:element_state:"
-        : `observed:window_change:${w.label.slice(0, 32)} `;
     if (pre.value !== undefined && post.value !== undefined && pre.value !== post.value) {
-      out.push(
-        w.kind === "acted"
-          ? `${prefix}value ${clip(pre.value)}→${clip(post.value)}`
-          : `${prefix}${clip(pre.value)}→${clip(post.value)}`,
-      );
+      out.push(`observed:element_state:value ${clip(pre.value)}→${clip(post.value)}`);
     } else if (
       pre.selected !== undefined &&
       post.selected !== undefined &&
       pre.selected !== post.selected
     ) {
-      out.push(`${prefix}selected ${String(pre.selected)}→${String(post.selected)}`);
+      out.push(`observed:element_state:selected ${String(pre.selected)}→${String(post.selected)}`);
     }
   });
   return out;
@@ -236,79 +236,66 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
     readonly onSettled?: () => void;
   }) {
-    const {
-      send,
-      call,
-      context,
-      pid,
-      windowId,
-      connectionGeneration,
-      tracker,
-      tool,
-      forwarded,
-      acted,
-      rows,
-      runInput,
-      onSettled,
-    } = deps;
+    const { call, context, pid, windowId, tracker, tool, forwarded, acted, runInput } = deps;
+    const read = (method: string, args: Record<string, unknown>, reserveAfterMs: number) =>
+      quietRead(deps.send, call, context, deps.connectionGeneration, method, args, reserveAfterMs);
     const inputCapMs = driverCallCapMs(tool, forwarded);
-    const watched = buildWatchedElements(acted, rows);
-    const preReserve = inputCapMs + (watched.length > 0 ? 1500 : 0);
-    const preWinRaw = yield* quietRead(
-      send,
-      call,
-      context,
-      connectionGeneration,
-      "list_windows",
-      { pid },
-      preReserve,
+    const startedAt = yield* Clock.currentTimeMillis;
+    // A simple key rarely opens or closes a window; the cell's end read still compares windows
+    // against the cell's first baseline, so it reads one only when the cell has none yet.
+    if (isSimpleKey(tool, forwarded, acted)) {
+      const seeds = !tracker.hasPid(pid);
+      if (seeds)
+        tracker.recordBefore(
+          pid,
+          parseWindowList(yield* read("list_windows", { pid }, inputCapMs), pid),
+        );
+      const sentAt = yield* Clock.currentTimeMillis;
+      const base = yield* runInput;
+      const endedAt = yield* Clock.currentTimeMillis;
+      const timing: InputTiming = {
+        ms: endedAt - startedAt,
+        phases: { ...(seeds ? { preMs: sentAt - startedAt } : {}), driverMs: endedAt - sentAt },
+      };
+      return {
+        ...base,
+        value: fitInputWindows(base.value, undefined, context.limits.returnBytes, [], timing),
+      };
+    }
+    const watched = watchedFor(acted, deps.rows);
+    const verifyArgs = {
+      pid,
+      window_id: windowId,
+      expect: toVerifyExpectations(watched),
+      timeout_ms: 0,
+    };
+    const preWins = parseWindowList(
+      yield* read("list_windows", { pid }, inputCapMs + (watched.length > 0 ? 1500 : 0)),
+      pid,
     );
-    const preWins = parseWindowList(preWinRaw, pid);
     tracker.recordBefore(pid, preWins);
     const preVerifyRaw =
-      watched.length > 0
-        ? yield* quietRead(
-            send,
-            call,
-            context,
-            connectionGeneration,
-            "verify_state",
-            { pid, window_id: windowId, expect: toVerifyExpectations(watched), timeout_ms: 0 },
-            inputCapMs,
-          )
-        : undefined;
+      watched.length > 0 ? yield* read("verify_state", verifyArgs, inputCapMs) : undefined;
+    const sentAt = yield* Clock.currentTimeMillis;
     const base = yield* runInput;
-    const nowAfter = yield* Clock.currentTimeMillis;
-    if (call.deadlineMillis - nowAfter - CELL_RESERVE_MS >= 1_560) {
-      yield* Effect.sleep("60 millis");
-      onSettled?.();
+    const drivenAt = yield* Clock.currentTimeMillis;
+    // Only a read-back of the acted element waits here; otherwise the next read of the window does.
+    const settles =
+      preVerifyRaw !== undefined &&
+      call.deadlineMillis - drivenAt - CELL_RESERVE_MS >= 1_500 + SETTLE_MS;
+    if (settles) {
+      yield* Effect.sleep(SETTLE_MS);
+      deps.onSettled?.();
     }
-    const postWinRaw = yield* quietRead(
-      send,
-      call,
-      context,
-      connectionGeneration,
-      "list_windows",
-      { pid },
-      0,
-    );
-    const postWins = parseWindowList(postWinRaw, pid);
+    const settledAt = yield* Clock.currentTimeMillis;
+    const postWins = parseWindowList(yield* read("list_windows", { pid }, 0), pid);
     tracker.recordAfter(pid, preWins, postWins);
     const postVerifyRaw =
-      watched.length > 0 && preVerifyRaw !== undefined
-        ? yield* quietRead(
-            send,
-            call,
-            context,
-            connectionGeneration,
-            "verify_state",
-            { pid, window_id: windowId, expect: toVerifyExpectations(watched), timeout_ms: 0 },
-            0,
-          )
-        : undefined;
+      preVerifyRaw !== undefined ? yield* read("verify_state", verifyArgs, 0) : undefined;
+    const endedAt = yield* Clock.currentTimeMillis;
     const winDiff = diffInputWindows(preWins, postWins, windowId);
     const elDiff =
-      watched.length > 0 && preVerifyRaw !== undefined && postVerifyRaw !== undefined
+      preVerifyRaw !== undefined && postVerifyRaw !== undefined
         ? diffWatchedEvidence(
             watched,
             parseVerifyObservations(preVerifyRaw, watched.length),
@@ -316,9 +303,24 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
           )
         : [];
     const allObserved = [...elDiff, ...winDiff.evidence].slice(0, 16);
+    const timing: InputTiming = {
+      ms: endedAt - startedAt,
+      phases: {
+        preMs: sentAt - startedAt,
+        driverMs: drivenAt - sentAt,
+        ...(settles ? { settleMs: settledAt - drivenAt } : {}),
+        postMs: endedAt - settledAt,
+      },
+    };
     return {
       ...base,
-      value: fitInputWindows(base.value, winDiff.report, context.limits.returnBytes, allObserved),
+      value: fitInputWindows(
+        base.value,
+        winDiff.report,
+        context.limits.returnBytes,
+        allObserved,
+        timing,
+      ),
       evidence: [...(base.evidence ?? []), ...allObserved].slice(0, 16),
     };
   },

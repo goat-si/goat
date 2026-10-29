@@ -149,20 +149,25 @@ const __target = (binding, note, owner, extraProps = {}) => {
     if (reply.v === undefined) return { verdict };
     const isObj = reply.v !== null && typeof reply.v === 'object' && !Array.isArray(reply.v);
     const observed = isObj && Array.isArray(reply.v._observed) ? reply.v._observed : undefined;
+    // The host's time for this call rides in _timing and comes out on Done as ms and phases.
+    const timing = isObj && reply.v._timing && typeof reply.v._timing === 'object' ? reply.v._timing : undefined;
     let cleanResult = reply.v;
-    if (isObj && '_observed' in reply.v) {
-      const { _observed: _omitted, ...rest } = reply.v;
+    if (isObj && ('_observed' in reply.v || '_timing' in reply.v)) {
+      const { _observed: _omitted, _timing: _timed, ...rest } = reply.v;
       cleanResult = rest;
     }
     const extra =
       isObj
         ? {
+            ...(timing ? { ms: timing.ms, phases: timing.phases } : {}),
             ...(observed && observed.length > 0 ? { observed } : {}),
             ...('point' in reply.v ? { point: reply.v.point } : {}),
             ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
           }
         : {};
-    return { verdict, ...extra, result: cleanResult };
+    // A value that held only the host's own fields has no result of its own.
+    const bare = isObj && Object.keys(cleanResult).length === 0 && Object.keys(reply.v).length > 0;
+    return { verdict, ...extra, ...(bare ? {} : { result: cleanResult }) };
   };
   const element = (target) => {
     const observation = seen.observation;
@@ -332,12 +337,12 @@ const __target = (binding, note, owner, extraProps = {}) => {
     observe,
     click: (target = {}, options = {}) => {
       if (__legacy(target)) return call('click', target);
-      if (tab && options.count !== undefined && options.count !== 1)
-        throw new ScreenError('unsupported', 'Tabs click once per call.', true);
+      if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
+        throw new ScreenError('invalid_argument', 'A tab click count is 1, 2 or 3.', true);
       const run = () =>
         act('click', options.button === 'right' ? 'right_click' : 'click', {
           ...aim(target),
-          ...(!tab && options.count !== undefined ? { count: options.count } : {}),
+          ...(options.count !== undefined ? { count: options.count } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
         });
@@ -422,7 +427,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
     // The timeout comes as a number, waitFor(c, 5000), or as options, waitFor(c, {timeoutMs: 5000}).
     waitFor: (wanted = {}, options = {}) => wait(wanted, typeof options === 'number' ? options : options.timeoutMs),
-    verify: (wanted = {}) => wait(wanted, tab ? 250 : 0),
+    // An app input no longer waits for its effect to settle, so verify gives the app 60 ms to show it.
+    verify: (wanted = {}) => wait(wanted, tab ? 250 : 60),
     rightClick: (arg = {}) => call('right_click', arg),
     selectText: (arg = {}) => call('select_text', arg),
     pressKey: (arg = {}) => call('press_key', arg),
