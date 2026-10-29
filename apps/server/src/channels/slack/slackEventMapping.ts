@@ -50,8 +50,10 @@ const SlackMessageEvent = Schema.Struct({
   blocks: Schema.optionalKey(Schema.Unknown),
   ts: Schema.optionalKey(Schema.String),
   thread_ts: Schema.optionalKey(Schema.String),
-  /** The sender's own workspace; differs from the envelope's in a Slack Connect channel. */
+  /** Workspaces the sender and message belong to; another one marks a Slack Connect sender. */
   user_team: Schema.optionalKey(Schema.String),
+  team: Schema.optionalKey(Schema.String),
+  source_team: Schema.optionalKey(Schema.String),
 });
 
 const SlackRevocation = Schema.Union([
@@ -250,7 +252,12 @@ export function classifySlackEvent(
   const { user: userId, channel: channelId, ts, thread_ts: threadTs } = event;
   if (userId === undefined) return ignored("missing_user");
   // Someone from another organization in a Slack Connect channel is not in this workspace.
-  if (event.user_team !== undefined && event.user_team !== teamId) return ignored("external_user");
+  if (
+    [event.user_team, event.team, event.source_team].some(
+      (team) => team !== undefined && team !== teamId,
+    )
+  )
+    return ignored("external_user");
   if (
     !isSlackId(userId) ||
     channelId === undefined ||

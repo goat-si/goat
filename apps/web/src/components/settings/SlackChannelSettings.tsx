@@ -38,7 +38,6 @@ import {
   slackSettingsAvailability,
   slackSettingsDraft,
   slackSettingsUnavailableMessage,
-  slackServerHasAccessChoices,
   slackStatusLabel,
   withLiveStatus,
 } from "./SlackChannelSettings.logic";
@@ -79,7 +78,12 @@ export function SlackChannelSettings() {
   return (
     <SettingsSection id="slack-channel" title="Slack">
       {availability === "ready" && environmentId !== null ? (
-        <SlackConnectionControls environmentId={environmentId} />
+        <SlackConnectionControls
+          environmentId={environmentId}
+          accessChoices={
+            selected?.serverConfig?.environment.capabilities.slackChannelAccess === true
+          }
+        />
       ) : (
         <SettingsUnavailableGroup message={slackSettingsUnavailableMessage(availability)}>
           <SettingsRow
@@ -92,7 +96,13 @@ export function SlackChannelSettings() {
   );
 }
 
-function SlackConnectionControls({ environmentId }: { environmentId: EnvironmentId }) {
+function SlackConnectionControls({
+  environmentId,
+  accessChoices,
+}: {
+  environmentId: EnvironmentId;
+  accessChoices: boolean;
+}) {
   const settingsQuery = useEnvironmentQuery(
     channelEnvironment.slackSettings({ environmentId, input: {} }),
   );
@@ -119,6 +129,7 @@ function SlackConnectionControls({ environmentId }: { environmentId: Environment
       <SlackConnectionForm
         environmentId={environmentId}
         connection={undefined}
+        accessChoices={accessChoices}
         onSaved={refreshSettings}
       />
     );
@@ -128,6 +139,7 @@ function SlackConnectionControls({ environmentId }: { environmentId: Environment
       <SlackConnectionForm
         environmentId={environmentId}
         connection={connection}
+        accessChoices={accessChoices}
         onSaved={refreshSettings}
       />
       <SlackIdentityLinks environmentId={environmentId} connectionId={connection.connectionId} />
@@ -138,6 +150,8 @@ function SlackConnectionControls({ environmentId }: { environmentId: Environment
 function SlackConnectionForm(props: {
   environmentId: EnvironmentId;
   connection: SlackConnection | undefined;
+  /** The server's slackChannelAccess capability. */
+  accessChoices: boolean;
   onSaved: () => void;
 }) {
   const { environmentId, connection } = props;
@@ -147,8 +161,8 @@ function SlackConnectionForm(props: {
   const projects = allProjects.filter((project) => project.environmentId === environmentId);
   // Untouched fields follow the latest saved settings; only the user's edits are kept locally.
   const [edits, setEdits] = useState<Partial<SlackSettingsDraft>>({});
-  const draft: SlackSettingsDraft = { ...slackSettingsDraft(connection), ...edits };
-  const accessChoices = slackServerHasAccessChoices(connection);
+  const { accessChoices } = props;
+  const draft: SlackSettingsDraft = { ...slackSettingsDraft(connection, accessChoices), ...edits };
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -158,7 +172,7 @@ function SlackConnectionForm(props: {
   };
 
   const save = async () => {
-    const built = slackConfigureInput(draft, connection);
+    const built = slackConfigureInput(draft, connection, accessChoices);
     if (built._tag === "invalid") {
       setFormError(built.message);
       return;

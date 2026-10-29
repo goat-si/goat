@@ -19,6 +19,8 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { CHANNEL_COPY } from "./channelCopy.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as MemoryService from "../memory/MemoryService.ts";
+import * as MemorySyncService from "../memory/MemorySyncService.ts";
 import {
   defaultScript,
   goatInput,
@@ -381,6 +383,81 @@ describe("a link removed while the message waits", () => {
       const later = seen.find((input) => input.inputText === "what machine is this?");
       assert.isDefined(later);
       assert.notInclude(later?.notes ?? "", "Reply in Korean.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("a link removed while reads run", () => {
+  it.effect("drops what was read and the owner's thread titles from the answer", () => {
+    let duringSearch: Effect.Effect<void> = Effect.void;
+    const memoryLayer = Layer.mergeAll(
+      Layer.mock(MemoryService.MemoryService)({
+        importPorts: {} as never,
+        search: (_input, permit) =>
+          permit.pipe(
+            Effect.andThen(Effect.suspend(() => duringSearch)),
+            Effect.as({
+              items: [{ status: "active", payload: { text: "Owner memory: payroll vendor." } }],
+              projectionWatermark: 0,
+              nextCursor: null,
+            } as never),
+          ),
+      }),
+      Layer.mock(MemorySyncService.MemorySyncService)({
+        readLocalReadiness: () =>
+          Effect.succeed({ memorySpaceId: "space:test" as never, bootstrap: "ready" as const }),
+      }),
+    );
+    const harness = makeHarness({ memoryLayer });
+    const passes: Array<ChannelReceptionInput> = [];
+    harness.script.current = (input) => {
+      if (input.mode !== "input") return defaultScript(input);
+      passes.push(input);
+      return input.readsAllowed === true
+        ? Effect.succeed({
+            replyText: "",
+            action: {
+              type: "read" as const,
+              reads: [{ kind: "memory" as const, query: "vendor" }],
+            },
+          })
+        : Effect.succeed({ replyText: "Done.", action: { type: "report_only" as const } });
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* createOwnerThread;
+      const identities = yield* ChannelIdentityService.ChannelIdentityService;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const memoryOwner = {
+        ...owner,
+        grantedScopes: [...owner.grantedScopes, "memory:read" as const],
+      };
+      const { code } = yield* identities.createLink(
+        { connectionId: "slack-1", runtimeModeCeiling: "auto-accept-edits" },
+        memoryOwner,
+      );
+      const context = { ...slackContext, grantedScopes: memoryOwner.grantedScopes };
+      yield* gateway.linkIdentity(
+        {
+          connectionId: "slack-1",
+          externalActorId: "U1",
+          code,
+          idempotencyKey: "link-U1",
+          replyAddress: slackInput("", "unused").replyAddress,
+        },
+        context,
+      );
+      const services = yield* Effect.context<ChannelIdentityService.ChannelIdentityService>();
+      duringSearch = identities
+        .unlink({ connectionId: "slack-1", externalActorId: "U1" })
+        .pipe(Effect.provide(services), Effect.orDie);
+      yield* gateway.ingest(slackInput("who is the payroll vendor?", "Ev-mem"), context);
+      yield* runtime.drain;
+      assert.strictEqual(passes.length, 2);
+      assert.include(JSON.stringify(passes[0]?.recentThreads), "Fix the release pipeline");
+      assert.notInclude(JSON.stringify(passes[1]), "payroll vendor.");
+      assert.notInclude(JSON.stringify(passes[1]), "Fix the release pipeline");
     }).pipe(Effect.provide(harness.layer));
   });
 });

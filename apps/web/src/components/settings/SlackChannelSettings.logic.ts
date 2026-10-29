@@ -91,15 +91,14 @@ export interface SlackSettingsDraft {
 }
 
 /**
- * Servers from before the access choices omit them; those answer only listed channels and only
- * linked accounts, and drop the choices on save.
+ * `accessChoices` is the server's `slackChannelAccess` capability. Servers without it answer
+ * only listed channels and only linked accounts, and drop the choices on save.
  */
-export function slackServerHasAccessChoices(settings: SlackChannelSettings | undefined): boolean {
-  return settings === undefined || settings.userAccess !== undefined;
-}
-
-export function slackSettingsDraft(settings: SlackChannelSettings | undefined): SlackSettingsDraft {
-  const access = slackServerHasAccessChoices(settings)
+export function slackSettingsDraft(
+  settings: SlackChannelSettings | undefined,
+  accessChoices: boolean,
+): SlackSettingsDraft {
+  const access = accessChoices
     ? resolveSlackAccess(settings ?? { allowedChannelIds: [] })
     : {
         channelScope: "listed" as const,
@@ -130,6 +129,7 @@ export type SlackConfigureDraftResult =
 export function slackConfigureInput(
   draft: SlackSettingsDraft,
   settings: SlackChannelSettings | undefined,
+  accessChoices: boolean,
 ): SlackConfigureDraftResult {
   const appToken = draft.appToken.trim();
   const botToken = draft.botToken.trim();
@@ -146,7 +146,6 @@ export function slackConfigureInput(
       message: `Use channel IDs such as C0123456789, not ${channels.invalid.join(", ")}.`,
     };
   }
-  const accessChoices = slackServerHasAccessChoices(settings);
   if (accessChoices && draft.channelScope === "listed" && channels.ids.length === 0) {
     return { _tag: "invalid", message: "Add a channel ID, or answer in every channel." };
   }

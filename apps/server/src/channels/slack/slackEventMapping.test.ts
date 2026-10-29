@@ -194,6 +194,13 @@ describe("classifySlackEvent", () => {
       _tag: "ignored",
       reason: "external_user",
     });
+    // Without user_team, the sender's team or the message's source team still gives it away.
+    for (const field of ["team", "source_team"]) {
+      expect(classifySlackEvent(envelope(mention({ [field]: "T0OTHER" })), all)).toEqual({
+        _tag: "ignored",
+        reason: "external_user",
+      });
+    }
     expect(classifySlackEvent(envelope(mention({ user_team: "T0TEAM" })), all)._tag).toBe(
       "message",
     );

@@ -1294,21 +1294,29 @@ const make = Effect.gen(function* () {
                   message.connectionId,
                   inputId,
                 );
+                // Reads take time too: results read under a link that narrowed meanwhile are dropped,
+                // and everything else in the answer is judged by who the person is now.
+                const current = yield* viewerNow(requester, message.connectionId);
+                const narrowedDuringReads =
+                  current.principalId !== reader.principalId ||
+                  reader.grantedScopes.some((scope) => !current.grantedScopes.includes(scope));
                 // The first pass wrote its queries from what it could see then. When the link
                 // narrowed since, a query may quote work the person can no longer see.
                 const narrowed =
-                  reader.principalId !== viewer.principalId ||
-                  viewer.grantedScopes.some((scope) => !reader.grantedScopes.includes(scope));
-                const readResults = narrowed
-                  ? results.map((result) => ({ ...result, query: "(withheld)" }))
-                  : results;
+                  current.principalId !== viewer.principalId ||
+                  viewer.grantedScopes.some((scope) => !current.grantedScopes.includes(scope));
+                const readResults = narrowedDuringReads
+                  ? []
+                  : narrowed
+                    ? results.map((result) => ({ ...result, query: "(withheld)" }))
+                    : results;
                 const journalNow = journalFor(
-                  yield* visibleTasks(reader, conversationId).pipe(
+                  yield* visibleTasks(current, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
                 const { journal: _journal, recentThreads: _recent, ...rest } = base;
-                const recentNow = reader.grantedScopes.includes("orchestration:read")
+                const recentNow = current.grantedScopes.includes("orchestration:read")
                   ? recentThreads(shells, targets, bot?.threadId)
                   : [];
                 const second = yield* generateOutcome({
