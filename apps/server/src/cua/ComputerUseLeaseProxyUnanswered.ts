@@ -62,16 +62,20 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
       driverBoolArg(given.observe) === false ? 18_000 : Math.max(18_000, windowStateBoundMs(obs));
     const steps = Array.isArray(given.steps) ? given.steps : [];
     let lastStepMs = 15_000;
+    let tailReadsMs = 0;
     for (const rawStep of steps) {
       const parsed = stepToolAndArgs(rawStep);
       if (!parsed) continue;
       if (parsed.tool === "get_window_state") {
         obsBound = Math.max(obsBound, windowStateBoundMs({ ...record(parsed.args), ...obs }));
+      } else if (parsed.tool === "zoom") {
+        tailReadsMs += 7_000;
+        obsBound = Math.max(obsBound, windowStateBoundMs({ ...obs, include_screenshot: true }));
       } else {
         lastStepMs = Math.max(lastStepMs, driverCallCapMs(parsed.tool, parsed.args) + 60_000);
       }
     }
-    return 60_000 + lastStepMs + obsBound;
+    return 60_000 + lastStepMs + obsBound + tailReadsMs;
   }
   return driverCallCapMs(tool, args);
 };

@@ -14,6 +14,7 @@ const CAP_MS: Readonly<Record<string, number>> = {
   bring_to_front: 3_000,
   drag: 3_000,
   invoke_menu: 5_000,
+  zoom: 7_000,
   scroll: 10_000,
   launch_app: 15_000,
   run_steps: 60_000,
