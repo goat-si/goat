@@ -66,7 +66,7 @@ export function canonicalUserInputAnswers(
 }
 
 /** An answer as an agent reads it back: option labels, comma-joined for several picks. */
-export function userInputAnswerText(
+function userInputAnswerText(
   question: Pick<OrchestrationV2UserInputQuestion, "options" | "allowCustomAnswer">,
   answer: UserInputAnswer | undefined,
 ): string {

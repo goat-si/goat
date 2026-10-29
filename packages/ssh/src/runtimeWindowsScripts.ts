@@ -180,7 +180,7 @@ try {
   foreach ($key in @($si.EnvironmentVariables.Keys)) {
     if ($key -match '^(GOAT|T3|T3CODE)_') { $si.EnvironmentVariables.Remove($key) } # goat-rename: legacy
   }
-  $si.EnvironmentVariables['GOAT_NO_BROWSER']='1'
+  $si.EnvironmentVariables['T3CODE_NO_BROWSER']='1'
   $child=New-Object Diagnostics.Process; $child.StartInfo=$si; [void]$child.Start(); $child.StandardInput.Close()
   $outFile=[IO.File]::Open((Join-Path $state ($r.nonce+'.stdout.log')),'CreateNew','Write','Read')
   $errFile=[IO.File]::Open((Join-Path $state ($r.nonce+'.stderr.log')),'CreateNew','Write','Read')
