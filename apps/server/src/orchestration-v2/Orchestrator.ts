@@ -133,6 +133,7 @@ import {
   pullRequestWatchNote,
   takeHeldPullRequestContext,
 } from "./goat/PullRequestDigest.ts";
+import { pullRequestWakeMuted } from "./goat/PullRequestWatchWakes.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -2853,16 +2854,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         (candidate) =>
           candidate.source !== "stack-dismissed" && threadPullRequestKeysEqual(candidate, key),
       );
-      const inactive =
-        thread.archivedAt !== null ||
-        thread.settledOverride === "settled" ||
-        thread.settledAt !== null ||
-        isProviderNativeSubagentThread(thread);
-      if (link?.watch?.startedAt !== command.startedAt || (command.wake && inactive)) {
+      if (
+        link?.watch?.startedAt !== command.startedAt ||
+        (command.wake && pullRequestWakeMuted(thread, link))
+      ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,
-          cause: "The pull request watch ended or its thread settled while it was read.",
+          cause:
+            "The watch ended, its thread settled, or the pull request merged while it was read.",
         });
       }
       yield* dispatchThreadMutation(command, events, effects);

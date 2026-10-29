@@ -7,7 +7,12 @@
  *
  * @module PullRequestWatchWakes
  */
-import { MessageId } from "@goat/contracts";
+import {
+  isProviderNativeSubagentThread,
+  MessageId,
+  type OrchestrationV2AppThread,
+  type ThreadPullRequestLink,
+} from "@goat/contracts";
 import { threadPullRequestKeyOf } from "../../sourceControl/threadPullRequests.ts";
 
 /** A link as the thread stores it, so both sides normalize the same key. */
@@ -41,3 +46,20 @@ export const pullRequestWakeChecksHead = (id: string, prefix: string) => {
   if (!rest.startsWith(CHECKS_ON)) return null;
   return decodeURIComponent(rest.slice(CHECKS_ON.length, rest.indexOf(":")));
 };
+
+/**
+ * Whether news a watch read may no longer wake its thread: the thread was put away, or the pull
+ * request merged while the host was read. A merge is final, so news read before it is moot.
+ */
+export const pullRequestWakeMuted = (
+  thread: Pick<
+    OrchestrationV2AppThread,
+    "archivedAt" | "settledOverride" | "settledAt" | "lineage" | "creationSource"
+  >,
+  link: Pick<ThreadPullRequestLink, "snapshot"> | undefined,
+) =>
+  thread.archivedAt !== null ||
+  thread.settledOverride === "settled" ||
+  thread.settledAt !== null ||
+  isProviderNativeSubagentThread(thread) ||
+  link?.snapshot?.state === "merged";
