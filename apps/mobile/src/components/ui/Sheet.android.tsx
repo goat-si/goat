@@ -3,6 +3,7 @@ import { View } from "react-native";
 import { FormSheet } from "react-native-screens";
 import { useResolveClassNames } from "uniwind";
 import { AndroidSheetHeader } from "./AndroidScreenHeader";
+import { RoutedFormSheetContext } from "./RoutedFormSheetContext";
 import type { SheetProps } from "./Sheet.types";
 export type { SheetProps } from "./Sheet.types";
 
@@ -19,10 +20,12 @@ export function Sheet(props: SheetProps) {
       onNativeDismiss={props.onClose}
     >
       {/* Android FormSheet does not bound flex children. Material drags target the first scroll view, so place content before the header. */}
-      <View collapsable={false} className="absolute inset-0 flex-col-reverse bg-sheet">
-        <View className="flex-1">{props.children}</View>
-        <AndroidSheetHeader title={props.title} onBack={() => setIsOpen(false)} />
-      </View>
+      <RoutedFormSheetContext value={false}>
+        <View collapsable={false} className="absolute inset-0 flex-col-reverse bg-sheet">
+          <View className="flex-1">{props.children}</View>
+          <AndroidSheetHeader title={props.title} onBack={() => setIsOpen(false)} />
+        </View>
+      </RoutedFormSheetContext>
     </FormSheet>
   );
 }

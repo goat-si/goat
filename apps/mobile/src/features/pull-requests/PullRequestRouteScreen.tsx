@@ -1,7 +1,7 @@
 import { Toolbar } from "../../components/ui/Toolbar";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { Chip } from "../../components/ui/Chip";
-import { pullRequestTabOffset } from "./pullRequestTabScroll";
+import { restorePullRequestTabScroll } from "./pullRequestTabScroll";
 import { guideFocusedRows, type GuideDiffFocus } from "./guide/guideDiffFocus";
 import { PullRequestGuideContent } from "./guide/PullRequestGuideScreen";
 import { useReviewGuidesEnabled } from "./guide/useReviewGuide";
@@ -337,6 +337,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [toolbarHeight, setToolbarHeight] = usePullRequestToolbarHeight(insets.bottom);
+  const barInsets = Platform.OS === "ios" ? insets : { top: 0, bottom: 0 };
   const params = route.params;
   usePullRequestEnvironmentFallback(params);
   const connected = usePullRequestConnected(params.environmentId);
@@ -349,13 +350,12 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>(DEFAULT_ACTIVITY_FILTER);
   const activityContent = usePullRequestActivityRows(params, activityFilter);
   const scrollOffsets = useRef<Record<string, number>>({});
-  const currentScrollOffset = useRef(-insets.top);
+  const currentScrollOffset = useRef(-barInsets.top);
   const bodyY = useRef(0);
   const [headerHeight, setHeaderHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const scrollViews = useRef<Partial<Record<typeof section, LegendListRef | null>>>({});
-  // AnimatedLegendList re-attaches its handle and sets state whenever its ref changes,
-  // so an inline ref in the tab map loops the screen into "Maximum update depth exceeded".
+  // Stable refs prevent AnimatedLegendList from reattaching in a render loop.
   const [listRefs] = useState(() => {
     const listRef = (tab: typeof section) => (list: LegendListRef | null) => {
       scrollViews.current[tab] = list;
@@ -369,26 +369,26 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const selectSection = (next: typeof section) => {
     if (next === section) return;
     scrollOffsets.current[section] = currentScrollOffset.current;
-    const headerEnd = Math.max(-insets.top, bodyY.current - insets.top);
-    const offset = pullRequestTabOffset(
-      currentScrollOffset.current,
-      scrollOffsets.current[next],
-      headerEnd,
-    );
     requestedSection.current = next;
+    const offset = restorePullRequestTabScroll(scrollViews.current[next], {
+      current: currentScrollOffset.current,
+      saved: scrollOffsets.current[next],
+      bodyY: bodyY.current,
+      topInset: insets.top,
+      platform: Platform.OS,
+    });
     scrollOffsets.current[next] = offset;
     currentScrollOffset.current = offset;
-    scrollViews.current[next]?.scrollToOffset({ offset, animated: false });
     setSection(next);
   };
   useEffect(() => {
     if (!guidesEnabled && section === "guide") {
       requestedSection.current = "overview";
-      currentScrollOffset.current = scrollOffsets.current.overview ?? -insets.top;
+      currentScrollOffset.current = scrollOffsets.current.overview ?? -barInsets.top;
       // oxlint-disable-next-line react/set-state-in-effect -- When guides turn off, the tab and its saved scroll offset must switch to overview together.
       setSection("overview");
     }
-  }, [guidesEnabled, section, insets.top, currentScrollOffset, requestedSection, scrollOffsets]);
+  }, [guidesEnabled, section, barInsets.top, currentScrollOffset, requestedSection, scrollOffsets]);
   const tabContent = activityContent;
   const filesY = useRef(0);
   const descriptionY = useRef(0);
@@ -434,7 +434,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
     });
   const jumpToFiles = () => {
     scrollViews.current.overview?.scrollToOffset({
-      offset: bodyY.current + filesY.current - insets.top,
+      offset: bodyY.current + filesY.current - barInsets.top,
       animated: true,
     });
     pendingFilesJump.current = false;
@@ -652,9 +652,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
               >
                 <AnimatedLegendList
                   ref={listRefs[tab]}
-                  // The scroll view owns its resting offset. LegendList keeps the first
-                  // initialScrollOffset it gets, and the first render has the window's top
-                  // inset (0 on the folded iPhone Duo), not the header's.
+                  // LegendList keeps its first offset, which may have the window's inset rather than the header's.
                   onScroll={(event) => {
                     const offset = event.nativeEvent.contentOffset.y;
                     scrollOffsets.current[tab] = offset;
@@ -667,7 +665,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                   // UIKit owns the bar's inset, so a minimizing bar and a resized column
                   // move the list in the same frame as the bar.
                   contentInsetAdjustmentBehavior="automatic"
-                  contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
+                  contentInsetStartAdjustment={barInsets.top}
+                  scrollToOverflowEnabled
                   refreshControl={
                     <RefreshControl
                       refreshing={section === tab && pullRefresh.refreshing}
@@ -686,7 +685,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     pendingDescriptionJump.current = false;
                     // Collapse changes the scroll range; restore the heading after that layout commits.
                     scrollViews.current.overview?.scrollToOffset({
-                      offset: bodyY.current + descriptionY.current - insets.top,
+                      offset: bodyY.current + descriptionY.current - barInsets.top,
                       animated: false,
                     });
                   }}
@@ -697,7 +696,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     // Short tabs must still be tall enough to preserve the collapsed header.
                     minHeight: Math.max(
                       0,
-                      viewportHeight + headerHeight - insets.top - insets.bottom,
+                      viewportHeight + headerHeight - barInsets.top - barInsets.bottom,
                     ),
                   }}
                   data={[

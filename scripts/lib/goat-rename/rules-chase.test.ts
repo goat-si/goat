@@ -210,8 +210,8 @@ describe("upstream chase identities", () => {
 
   it.each([
     [
-      "apps/mobile/deps/react-native-screens-5.0.0-t3.45.tgz",
-      "apps/mobile/deps/react-native-screens-5.0.0-t3.45.tgz",
+      "apps/mobile/deps/react-native-screens-5.0.0-t3.48.tgz",
+      "apps/mobile/deps/react-native-screens-5.0.0-t3.48.tgz",
     ],
     [
       "apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.16-558767d9.tgz",
@@ -222,7 +222,7 @@ describe("upstream chase identities", () => {
     ["scripts/mobile-native-client.ts", 'HttpClientRequest.setHeader("x-t3-build-ms", value)'],
     [
       "docs/operations/mobile-screens-fork.md",
-      "https://github.com/pingdotgg/react-native-screens/tree/t3-v5.0.0-t3.45",
+      "https://github.com/PixPMusic/react-native-screens/tree/t3-v5.0.0-t3.48",
     ],
     [
       "packages/shared/src/paletteSearch.ts",

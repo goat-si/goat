@@ -1,4 +1,8 @@
 import { SafeAreaInsetsContext, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  WorkspaceColumnsRendererContext,
+  WorkspacePresentationHostContext,
+} from "./workspace-presentation-context";
 import { AdaptiveWorkspaceContext, useAdaptiveWorkspaceLayout } from "./adaptive-workspace-context";
 import { threadSelectionDeferral } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
@@ -199,6 +203,7 @@ function AdaptiveWorkspaceLayoutContent(
   const botHome = useMobileGoatBotModeButton();
   const projectGroupingMode = props.projectGroupingMode;
   const nativeWorkspace = use(NativeWorkspaceModeContext);
+  const usesPresentationHost = use(WorkspacePresentationHostContext);
   const windowDimensions = useWindowDimensions();
   const nativeMetrics = useNativeLayoutMetrics();
   const { width: viewportWidth, height } = nativeMetrics ?? windowDimensions;
@@ -818,6 +823,146 @@ function AdaptiveWorkspaceLayoutContent(
       </HomeListOptionsProvider>
     );
   }
+  const renderColumns = (children: ReactNode) => (
+    <View
+      testID="adaptive-workspace-layout"
+      className={Platform.OS === "android" ? "flex-1 flex-row bg-header" : "flex-1 flex-row"}
+    >
+      <AndroidHingeObserver onChange={handleHingeChange} />
+      {shouldRenderNavigationRail ? (
+        <Animated.View className="self-stretch" style={railAnimatedStyle} />
+      ) : null}
+      {shouldRenderPrimarySidebar && layout.listPaneWidth !== null ? (
+        <Animated.View
+          className="self-stretch overflow-hidden"
+          accessibilityElementsHidden={!panes.primarySidebarVisible}
+          collapsable={false}
+          importantForAccessibility={panes.primarySidebarVisible ? "auto" : "no-hide-descendants"}
+          pointerEvents={panes.primarySidebarVisible ? "auto" : "none"}
+          // Under a workspace page the sidebar leaves the row but keeps its size, so its
+          // lists never lay out at zero size and are ready, unchanged, on the way back. The
+          // content pane, laid out after it, covers it, in the same mount as the page.
+          style={[
+            workspacePage ? { position: "absolute", top: 0, bottom: 0, left: 0 } : null,
+            sidebarAnimatedStyle,
+          ]}
+        >
+          <Animated.View className="flex-1" style={listPaneAnimatedStyle}>
+            <RenderErrorBoundary
+              renderFallback={(fallback) => (
+                <RenderFailureView
+                  {...fallback}
+                  title="The sidebar couldn't be displayed"
+                  exit={{ label: "Open settings", onPress: handleOpenSettings }}
+                />
+              )}
+            >
+              <AndroidWorkspaceSidebar
+                onRequestVisibility={revealPrimarySidebar}
+                selectedPullRequestKey={props.selectedPullRequestKey ?? null}
+              >
+                <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
+                  <ThreadNavigationSidebar
+                    width={layout.listPaneWidth}
+                    visible={panes.primarySidebarVisible}
+                    onRequestVisibility={revealPrimarySidebar}
+                    selectedThreadKey={selectedThreadKey}
+                    onOpenDecisions={handleOpenDecisions}
+                    onOpenSettings={handleOpenSettings}
+                    onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                    onNewThreadInProject={handleNewThreadInProject}
+                    onNewThreadOnBranch={handleNewThreadOnBranch}
+                    onOpenPendingTask={handleOpenPendingTask}
+                    onSelectThread={handleSelectThread}
+                    onOpenThreadPullRequests={handleOpenThreadPullRequests}
+                    onSearchQueryChange={setPrimarySidebarSearchQuery}
+                    searchQuery={primarySidebarSearchQuery}
+                  />
+                </AndroidHomeFabLayout>
+              </AndroidWorkspaceSidebar>
+              {Platform.OS === "ios" && botHome.known ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={botHome.toggle}
+                  className="border-t border-border bg-drawer px-4 py-3"
+                >
+                  <Text className="text-sm font-semibold text-foreground">
+                    {botHome.mode === "bot" && !botHome.threadOpen
+                      ? "Show threads"
+                      : "Show GOAT Bot"}
+                  </Text>
+                </Pressable>
+              ) : null}
+            </RenderErrorBoundary>
+          </Animated.View>
+        </Animated.View>
+      ) : null}
+      <View
+        className={
+          Platform.OS === "android"
+            ? "flex-1 overflow-hidden bg-header"
+            : "flex-1 overflow-hidden bg-screen"
+        }
+        collapsable={false}
+      >
+        <View
+          collapsable={false}
+          style={
+            contentTargetWidth !== null
+              ? {
+                  flex: 1,
+                  width: contentTargetWidth,
+                  alignSelf: contentAnchor.end ? "flex-end" : "flex-start",
+                }
+              : { flex: 1 }
+          }
+        >
+          {/* Android holds the content still, so its floating controls keep its width. */}
+          <WorkspaceContentWidthContext
+            value={layout.usesSplitView && Platform.OS !== "android" ? renderedContentWidth : null}
+          >
+            <WorkspaceSettledContentWidthContext
+              value={Platform.OS === "android" && layout.usesSplitView ? contentTargetWidth : null}
+            >
+              {/* Compact Settings keeps the bottom navigation under all of its pages. */}
+              <SafeAreaInsetsContext
+                value={compactAndroidSettings ? { ...safeAreaInsets, bottom: 0 } : safeAreaInsets}
+              >
+                <View className="flex-1">{children}</View>
+              </SafeAreaInsetsContext>
+              {compactAndroidSettings ? (
+                <AndroidWorkspaceNavigation onNewThread={handleStartNewTask} />
+              ) : null}
+            </WorkspaceSettledContentWidthContext>
+          </WorkspaceContentWidthContext>
+        </View>
+      </View>
+      <WorkspaceInspectorPane
+        pathname={props.pathname}
+        renderedInspectorWidth={renderedInspectorWidth}
+        active={workspaceInspector?.active ?? false}
+        panes={panes}
+        renderInspector={workspaceInspector?.render}
+        setAuxiliaryPaneWidth={setAuxiliaryPaneWidth}
+        onClosed={handleWorkspaceInspectorClosed}
+      />
+      {shouldRenderNavigationRail && navigationRailWidth > 0 ? (
+        // The rail reserves its slot above and draws over the panes, so it can widen over
+        // the list in place. It takes the whole workspace only while it is open.
+        <View
+          className="absolute inset-y-0 left-0"
+          style={railOverlay ? { right: 0 } : { width: navigationRailWidth }}
+        >
+          <AndroidWorkspaceNavigation
+            onNewThread={handleStartNewTask}
+            rail
+            onSelect={revealPrimarySidebar}
+            onOverlayChange={setRailOverlay}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
   return (
     <HomeListOptionsProvider
       projectGroupingMode={projectGroupingMode}
@@ -825,152 +970,13 @@ function AdaptiveWorkspaceLayoutContent(
     >
       <AdaptiveWorkspaceContext.Provider value={contextValue}>
         <WindowHingeContext value={windowHinge}>
-          <View
-            testID="adaptive-workspace-layout"
-            className={Platform.OS === "android" ? "flex-1 flex-row bg-header" : "flex-1 flex-row"}
-          >
-            <AndroidHingeObserver onChange={handleHingeChange} />
-            {shouldRenderNavigationRail ? (
-              <Animated.View className="self-stretch" style={railAnimatedStyle} />
-            ) : null}
-            {shouldRenderPrimarySidebar && layout.listPaneWidth !== null ? (
-              <Animated.View
-                className="self-stretch overflow-hidden"
-                accessibilityElementsHidden={!panes.primarySidebarVisible}
-                collapsable={false}
-                importantForAccessibility={
-                  panes.primarySidebarVisible ? "auto" : "no-hide-descendants"
-                }
-                pointerEvents={panes.primarySidebarVisible ? "auto" : "none"}
-                // Under a workspace page the sidebar leaves the row but keeps its size, so its
-                // lists never lay out at zero size and are ready, unchanged, on the way back. The
-                // content pane, laid out after it, covers it, in the same mount as the page.
-                style={[
-                  workspacePage ? { position: "absolute", top: 0, bottom: 0, left: 0 } : null,
-                  sidebarAnimatedStyle,
-                ]}
-              >
-                <Animated.View className="flex-1" style={listPaneAnimatedStyle}>
-                  <RenderErrorBoundary
-                    renderFallback={(fallback) => (
-                      <RenderFailureView
-                        {...fallback}
-                        title="The sidebar couldn't be displayed"
-                        exit={{ label: "Open settings", onPress: handleOpenSettings }}
-                      />
-                    )}
-                  >
-                    <AndroidWorkspaceSidebar
-                      onRequestVisibility={revealPrimarySidebar}
-                      selectedPullRequestKey={props.selectedPullRequestKey ?? null}
-                    >
-                      <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
-                        <ThreadNavigationSidebar
-                          width={layout.listPaneWidth}
-                          visible={panes.primarySidebarVisible}
-                          onRequestVisibility={revealPrimarySidebar}
-                          selectedThreadKey={selectedThreadKey}
-                          onOpenDecisions={handleOpenDecisions}
-                          onOpenSettings={handleOpenSettings}
-                          onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
-                          onNewThreadInProject={handleNewThreadInProject}
-                          onNewThreadOnBranch={handleNewThreadOnBranch}
-                          onOpenPendingTask={handleOpenPendingTask}
-                          onSelectThread={handleSelectThread}
-                          onOpenThreadPullRequests={handleOpenThreadPullRequests}
-                          onSearchQueryChange={setPrimarySidebarSearchQuery}
-                          searchQuery={primarySidebarSearchQuery}
-                        />
-                      </AndroidHomeFabLayout>
-                    </AndroidWorkspaceSidebar>
-                    {Platform.OS === "ios" && botHome.known ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={botHome.toggle}
-                        className="border-t border-border bg-drawer px-4 py-3"
-                      >
-                        <Text className="text-sm font-semibold text-foreground">
-                          {botHome.mode === "bot" && !botHome.threadOpen
-                            ? "Show threads"
-                            : "Show GOAT Bot"}
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </RenderErrorBoundary>
-                </Animated.View>
-              </Animated.View>
-            ) : null}
-            <View
-              className={
-                Platform.OS === "android"
-                  ? "flex-1 overflow-hidden bg-header"
-                  : "flex-1 overflow-hidden bg-screen"
-              }
-              collapsable={false}
-            >
-              <View
-                collapsable={false}
-                style={
-                  contentTargetWidth !== null
-                    ? {
-                        flex: 1,
-                        width: contentTargetWidth,
-                        alignSelf: contentAnchor.end ? "flex-end" : "flex-start",
-                      }
-                    : { flex: 1 }
-                }
-              >
-                {/* Android holds the content still, so its floating controls keep its width. */}
-                <WorkspaceContentWidthContext
-                  value={
-                    layout.usesSplitView && Platform.OS !== "android" ? renderedContentWidth : null
-                  }
-                >
-                  <WorkspaceSettledContentWidthContext
-                    value={
-                      Platform.OS === "android" && layout.usesSplitView ? contentTargetWidth : null
-                    }
-                  >
-                    {/* Compact Settings keeps the bottom navigation under all of its pages. */}
-                    <SafeAreaInsetsContext
-                      value={
-                        compactAndroidSettings ? { ...safeAreaInsets, bottom: 0 } : safeAreaInsets
-                      }
-                    >
-                      <View className="flex-1">{props.children}</View>
-                    </SafeAreaInsetsContext>
-                    {compactAndroidSettings ? (
-                      <AndroidWorkspaceNavigation onNewThread={handleStartNewTask} />
-                    ) : null}
-                  </WorkspaceSettledContentWidthContext>
-                </WorkspaceContentWidthContext>
-              </View>
-            </View>
-            <WorkspaceInspectorPane
-              pathname={props.pathname}
-              renderedInspectorWidth={renderedInspectorWidth}
-              active={workspaceInspector?.active ?? false}
-              panes={panes}
-              renderInspector={workspaceInspector?.render}
-              setAuxiliaryPaneWidth={setAuxiliaryPaneWidth}
-              onClosed={handleWorkspaceInspectorClosed}
-            />
-            {shouldRenderNavigationRail && navigationRailWidth > 0 ? (
-              // The rail reserves its slot above and draws over the panes, so it can widen over
-              // the list in place. It takes the whole workspace only while it is open.
-              <View
-                className="absolute inset-y-0 left-0"
-                style={railOverlay ? { right: 0 } : { width: navigationRailWidth }}
-              >
-                <AndroidWorkspaceNavigation
-                  onNewThread={handleStartNewTask}
-                  rail
-                  onSelect={revealPrimarySidebar}
-                  onOverlayChange={setRailOverlay}
-                />
-              </View>
-            ) : null}
-          </View>
+          {usesPresentationHost ? (
+            <WorkspaceColumnsRendererContext value={renderColumns}>
+              {props.children}
+            </WorkspaceColumnsRendererContext>
+          ) : (
+            renderColumns(props.children)
+          )}
         </WindowHingeContext>
       </AdaptiveWorkspaceContext.Provider>
     </HomeListOptionsProvider>
