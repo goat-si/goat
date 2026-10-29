@@ -54,15 +54,23 @@ const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
 it.effect("#2059 keeps cursors reusable for long escaped directory paths", () =>
   Effect.gen(function* () {
     const f = yield* fixture();
-    const path = Array.from({ length: 10 }, () => '"'.repeat(240)).join("/");
-    yield* f.fs.makeDirectory(`${f.root}/${path}`, { recursive: true });
-    for (const name of ["a", "b"]) yield* f.fs.writeFileString(`${f.root}/${path}/${name}`, name);
-    yield* Ref.set(f.listed, [
-      { path: `${path}/a`, kind: "file" },
-      { path: `${path}/b`, kind: "file" },
-    ]);
-    const first = yield* f.service.list(f.scope, { projectId: f.projectId, path, limit: 1 });
+    // Stays under macOS's 1,024-byte PATH_MAX; a cursor whose size does not depend on the
+    // directory stays reusable at any length.
+    const path = Array.from({ length: 3 }, () => '"'.repeat(200)).join("/");
+    const firstPage = Effect.fn(function* (directory: string) {
+      yield* f.fs.makeDirectory(`${f.root}/${directory}`, { recursive: true });
+      for (const name of ["a", "b"])
+        yield* f.fs.writeFileString(`${f.root}/${directory}/${name}`, name);
+      yield* Ref.set(f.listed, [
+        { path: `${directory}/a`, kind: "file" },
+        { path: `${directory}/b`, kind: "file" },
+      ]);
+      return yield* f.service.list(f.scope, { projectId: f.projectId, path: directory, limit: 1 });
+    });
+    const short = yield* firstPage("s");
+    const first = yield* firstPage(path);
     expect(first.nextCursor).not.toBeNull();
+    expect(first.nextCursor!.length).toBe(short.nextCursor!.length);
     const nextInput = yield* decodeListInput({
       projectId: f.projectId,
       path,
