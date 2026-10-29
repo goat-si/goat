@@ -198,6 +198,6 @@ export function makeHelperBundleCheck(
       (error: unknown) =>
         "GOAT's Linux computer use helper was not started: it could not be read (" +
         String(error) +
-        ").",
+        "). Reinstall it into a folder only you or root can write.",
     );
 }
