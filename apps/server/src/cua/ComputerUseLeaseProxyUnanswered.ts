@@ -52,6 +52,12 @@ const stepToolAndArgs = (
 const headExecutionBoundMs = (tool: string, args: unknown): number => {
   const given = record(args);
   if (tool === "get_window_state") return windowStateBoundMs(given);
+  if (tool === "type_text" || tool === "type_text_chars") {
+    const rawDelay = driverIntegerArg(given.delay_ms);
+    const perChar = 24 + Math.min(200, Math.max(8, rawDelay ?? 30));
+    const chars = typeof given.text === "string" ? [...given.text].length : 0;
+    return 20_000 + perChar * chars;
+  }
   if (tool === "verify_state") {
     const raw = driverIntegerArg(given.timeout_ms);
     const wait = raw !== undefined && raw <= 10_000 ? raw : 5_000;
@@ -73,7 +79,7 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
         tailReadsMs += 7_000;
         obsBound = Math.max(obsBound, windowStateBoundMs({ ...obs, include_screenshot: true }));
       } else {
-        lastStepMs = Math.max(lastStepMs, driverCallCapMs(parsed.tool, parsed.args) + 60_000);
+        lastStepMs = Math.max(lastStepMs, headExecutionBoundMs(parsed.tool, parsed.args) + 60_000);
       }
     }
     return 60_000 + lastStepMs + obsBound + tailReadsMs;

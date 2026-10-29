@@ -349,8 +349,8 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         );
         assert.equal((yield* h.primitiveReply).status, "settled");
 
-        // Omitted timeout_ms and include_screenshot on get_window_state get the full driver bound (not 4 s),
-        // so a 5.5 s read is not cut off at 5 s.
+        // Default-delay type_text (omitted delay_ms -> 30 ms + 24 ms physical synthesis = 54 ms/char + 20 s overhead)
+        // typing 1,000 uppercase characters (~54 s) is not cut off at 45 s.
         yield* h.send(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -358,7 +358,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
             method: "tools/call",
             params: {
               name: "type_text",
-              arguments: { pid: 42, window_id: 1, text: "x".repeat(100), delay_ms: 200 },
+              arguments: { pid: 42, window_id: 1, text: "A".repeat(1_000) },
             },
           }),
         );
@@ -377,8 +377,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           args: { pid: 42 },
         });
         const auxDefaultRead = yield* h.nextToDriver;
-        // 100 chars with delay_ms: 200 (cap 26.4 s) is not cut off at 9 s or 20 s.
-        yield* TestClock.adjust("20 seconds");
+        yield* TestClock.adjust("55 seconds");
         assert.isFalse(yield* h.isKilled);
         assert.equal(h.drivers.length, 1);
         yield* h.reply(
@@ -419,7 +418,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 12,
-          deadlineMillis: 236_500,
+          deadlineMillis: 271_500,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -433,7 +432,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 13,
-          deadlineMillis: 236_500,
+          deadlineMillis: 271_500,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -501,7 +500,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 1,
-          deadlineMillis: 300_600,
+          deadlineMillis: 335_600,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -573,7 +572,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 2,
-          deadlineMillis: 374_200,
+          deadlineMillis: 409_200,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -608,7 +607,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 3,
-          deadlineMillis: 389_800,
+          deadlineMillis: 424_800,
           tool: "list_windows",
           args: { pid: 42 },
         });
