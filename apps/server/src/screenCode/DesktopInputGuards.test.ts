@@ -705,6 +705,7 @@ it.effect(
           press_key: () => ({
             effect: "unverifiable",
             path: "cgevent",
+            ...(focusConfirmed ? { focus_confirmed: true } : {}),
           }),
         },
         connection,
@@ -758,18 +759,20 @@ it.effect(
         .pipe(Effect.flip);
       expect(afterExplicitBindApp.code).toBe("invalid_argument");
 
-      // 4. Post-pin driver reply with explicit focus_confirmed: true on a safe element clears the guard.
+      // 4. Full row-edit sequence against the 030 §3.7 contract: press('Enter', row) with
+      // focus_confirmed: true (even when press_key's own effect is unverifiable because the row was
+      // already selected) clears the guard and lets unaddressed typing proceed.
       const reobsRebound = yield* host.observe(call("get_window_state", {}, reboundRef), context);
       focusConfirmed = true;
       yield* host.invoke(
-        call("click", { elementRef: byIndex(reobsRebound.value, 50) }, reboundRef),
+        call("press_key", { key: "Enter", elementRef: byIndex(reobsRebound.value, 3) }, reboundRef),
         context,
       );
-      const typedAfterFocusConfirmed = yield* host.invoke(
-        call("type_text", { text: "ok" }, reboundRef),
+      const typedInRowEdit = yield* host.invoke(
+        call("type_text", { text: "edited row name" }, reboundRef),
         context,
       );
-      expect(typedAfterFocusConfirmed.category).toBe("confirmed");
+      expect(typedInRowEdit.category).toBe("confirmed");
       expect(reobsAfterRestart.value).toBeDefined();
     }),
 );

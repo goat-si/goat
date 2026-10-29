@@ -893,8 +893,7 @@ export const createDesktopTargetHost = (deps: {
       const result = driverResult(tool, reply);
       const replyData = object(driverValue(reply));
       const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
-      if (admission.clearClickedTableCell && result.category === "confirmed" && focusConfirmed)
-        delete bound.lastClickedTableCell;
+      if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;
       return result;
     },
   );
