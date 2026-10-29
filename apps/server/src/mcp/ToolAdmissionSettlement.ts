@@ -233,6 +233,7 @@ export const settleForReconcile = Effect.fn("ToolAdmissionSettlement.settleForRe
       readonly reconcilePath?: string;
       readonly path?: string;
       readonly clientRequestId?: string;
+      readonly receiptId?: string;
       readonly checkGrant: (grantJson: string) => Effect.Effect<boolean>;
     },
   ) {
@@ -253,6 +254,7 @@ export const settleForReconcile = Effect.fn("ToolAdmissionSettlement.settleForRe
       WHERE environment_id = ${input.environmentId} AND principal = ${input.principal}
         AND path IN ${sql.in(paths)}
         AND (${input.clientRequestId ?? null} IS NULL OR client_request_id = ${input.clientRequestId ?? null})
+        AND (${input.receiptId ?? null} IS NULL OR receipt_id = ${input.receiptId ?? null})
         AND state != 'completed'`;
     for (const row of rows) {
       const isRunningHere =

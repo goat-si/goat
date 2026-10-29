@@ -331,7 +331,28 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       SET grant_json = json_set(grant_json, '$.correlationId', ${correlationId})
       WHERE receipt_id = ${receiptId} AND state = 'running'`.pipe(
       Effect.asVoid,
-      Effect.ignoreCause,
+      Effect.catchCause((cause) =>
+        Effect.logError("clientRequestId correlation failed", {
+          receiptId,
+          correlationId,
+          cause,
+        }).pipe(
+          Effect.andThen(
+            sql`DELETE FROM mcp_request_reservations
+              WHERE receipt_id = ${receiptId} AND state = 'running'`.pipe(Effect.ignoreCause),
+          ),
+          Effect.andThen(
+            Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                reason: "storage_failed",
+                message: "GOAT could not record the request correlation, so it did not run.",
+                mayHaveStarted: false,
+              }),
+            ),
+          ),
+        ),
+      ),
     );
   /** The outcome could not be recorded: from now on the key reads unknown, in this process too. */
   const abandon = (receiptId: string) =>
@@ -672,7 +693,9 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
               Effect.flatMap(Ref.get(held), (receiptId) =>
                 receiptId === undefined || Option.isNone(store)
                   ? Effect.void
-                  : store.value.correlate(receiptId, correlationId),
+                  : store.value
+                      .correlate(receiptId, correlationId)
+                      .pipe(Effect.tapError(() => Ref.set(held, undefined))),
               ),
           }),
           Effect.provideService(McpToolAccess.CallFailureCapture, {
@@ -931,6 +954,7 @@ export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(fu
         principal,
         path,
         clientRequestId,
+        receiptId: row.receipt_id,
         checkGrant: () => Effect.succeed(true),
       }).pipe(Effect.ignoreCause);
       const [settled] = yield* database.value<{
@@ -940,7 +964,8 @@ export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(fu
         readonly failure_json: string | null;
       }>`SELECT state, receipt_id, result_json, failure_json FROM mcp_request_reservations
         WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
-          AND path = ${path} AND client_request_id = ${clientRequestId}`;
+          AND path = ${path} AND client_request_id = ${clientRequestId}
+          AND receipt_id = ${row.receipt_id}`;
       if (settled === undefined) return { state: "missing" as const };
       if (settled.state === "completed" && settled.result_json !== null)
         return {

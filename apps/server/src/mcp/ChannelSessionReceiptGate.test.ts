@@ -344,6 +344,39 @@ it.effect("restart settlement to ambiguous wakes a waiting write without reservi
 );
 
 it.effect(
+  "requireSettledSessionReceipt refuses immediately while held, succeeds after settlement, and rechecks authority",
+  () =>
+    Effect.gen(function* () {
+      yield* Fixture.seed;
+      const heldResult = yield* ChannelSessionReceiptGate.requireSettledSessionReceipt().pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, sessionScope()),
+        Effect.result,
+      );
+      expect(heldResult._tag).toBe("Failure");
+      yield* Fixture.settle;
+      const settledResult = yield* ChannelSessionReceiptGate.requireSettledSessionReceipt().pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, sessionScope()),
+        Effect.result,
+      );
+      expect(settledResult._tag).toBe("Success");
+      const revokedResult = yield* ChannelSessionReceiptGate.requireSettledSessionReceipt().pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, {
+          ...sessionScope(),
+          reauthorize: () =>
+            Effect.fail(
+              new EnvironmentAuthorizationError({
+                message: "Revoked",
+                requiredScope: "orchestration:operate",
+              }),
+            ),
+        }),
+        Effect.result,
+      );
+      expect(revokedResult._tag).toBe("Failure");
+    }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect(
   "the served MCP layer holds a session write until its receipt settles, then runs it once",
   () => {
     let writes = 0;

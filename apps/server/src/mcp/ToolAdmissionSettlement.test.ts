@@ -500,6 +500,20 @@ it.effect(
       expect(
         yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-1" }),
       ).toMatchObject({ run: 6 });
+
+      // If persisting custom correlationId fails, the launch stops before running and releases its reservation.
+      yield* Ref.set(probe.customCorrelationId, "rr-channel-child-2");
+      yield* sql`CREATE TRIGGER block_correlate_update BEFORE UPDATE OF grant_json ON mcp_request_reservations
+        BEGIN SELECT RAISE(ABORT, 'correlate refused'); END`;
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-fail" }),
+      ).toMatchObject({ reason: "storage_failed", mayHaveStarted: false });
+      yield* sql`DROP TRIGGER block_correlate_update`;
+      yield* Ref.set(probe.customCorrelationId, null);
+      expect(yield* runs).toBe(6);
+      expect(
+        yield* sql`SELECT receipt_id FROM mcp_request_reservations WHERE client_request_id = 'ssh-chan-fail'`,
+      ).toHaveLength(0);
     }).pipe(Effect.provide(served)),
 );
 
