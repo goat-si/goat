@@ -28,6 +28,14 @@ import {
   makeRunOwnedSubagentNodeFixture,
   makeRunOwnedSubagentTurnItemFixture,
 } from "../RunExecutionService.testkit.ts";
+import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
+
+export const layerNoProviderInstances = Layer.mock(
+  ProviderInstanceRegistry.ProviderInstanceRegistry,
+)({
+  // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
+  getInstance: () => Effect.succeed(undefined),
+});
 
 export const threadId = ThreadId.make("goat-bot-session:receipt:1");
 export const runId = RunId.make("receipt-run");
@@ -35,6 +43,7 @@ const attemptId = RunAttemptId.make("receipt-attempt");
 export const providerInstanceId = ProviderInstanceId.make("codex");
 export const providerSessionId = ProviderSessionId.make("receipt-provider");
 const layerIngestor = ProviderEventIngestor.layer.pipe(
+  Layer.provide(layerNoProviderInstances),
   Layer.provideMerge(Foundation.layerTest),
   Layer.provide(
     Layer.mergeAll(Layer.mock(GitVcsDriver.GitVcsDriver)({}), ThreadCommandExecutor.layer),
