@@ -476,7 +476,8 @@ export const fixInputRefusalSafety = {
   code: "write_refused_fix_input",
 } as const;
 
-export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES) => ({
+/** A refused call; read marks the refusal of a read that already ran. */
+export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, read = false) => ({
   jsonrpc: "2.0",
   id,
   result: {
@@ -485,7 +486,15 @@ export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES)
       refused: computerUseRefusalReason(reason),
       detail: reason,
       // Only a call on another display may be sent again, after a fresh look.
-      safety: reason === "wrong_display" ? reobserveRefusalSafety : terminalRefusalSafety,
+      safety: read
+        ? {
+            ...reobserveRefusalSafety,
+            writeStatus: "not_applicable",
+            code: "read_failed_pre_dispatch",
+          }
+        : reason === "wrong_display"
+          ? reobserveRefusalSafety
+          : terminalRefusalSafety,
     },
     isError: true,
   },

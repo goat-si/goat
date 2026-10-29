@@ -12,6 +12,7 @@
  * @module agentInputLog
  */
 import { movesPointer } from "./computerUseTarget.ts";
+import { readsMenuBarExtras } from "./ComputerUseLeaseMessages.ts";
 
 export type InputKind = "keyboard" | "pointer";
 
@@ -71,7 +72,8 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
 
 /** The kinds of event a call can post: none for reads and accessibility-only tools. */
 export function inputKinds(tool: string, args?: unknown): ReadonlyArray<InputKind> {
-  if (READ_ONLY_TOOLS.has(tool) || SEMANTIC_TOOLS.has(tool)) return [];
+  if (READ_ONLY_TOOLS.has(tool) || SEMANTIC_TOOLS.has(tool) || readsMenuBarExtras(tool, args))
+    return [];
   const given = record(args);
   if (tool === "move_cursor" && !movesPointer(given)) return [];
   // A point makes a keyboard tool click there first; modifiers make a pointer tool press keys.

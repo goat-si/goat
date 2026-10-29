@@ -233,6 +233,15 @@ describe("computer use action review regressions", () => {
   );
 
   it("does not call an error a refusal unless the driver says nothing was sent", () => {
+    // An older driver answers a tool it lacks before running anything.
+    const { request: unknownRequest } = setup();
+    const unknown = actionResultFromDriver(unknownRequest({ action: "pressKey", key: "a" }), {
+      isError: true,
+      text: "Unknown tool: select_text",
+      structured: { code: "unknown_tool" },
+    });
+    expect(unknown).toMatchObject({ outcome: "refused", reason: "targetRefused" });
+    expect(classifyComputerUseActionOutcome(unknown)).toMatchObject({ possibleCommit: false });
     const { save, request } = setup();
     const click = request({ action: "pressKey", key: "a" });
     const mapped = (structured: unknown) =>

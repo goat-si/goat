@@ -13,7 +13,7 @@ import {
 } from "@goat/shared/actionOutcomeSafety";
 import { actionResultFromDriver, PRE_DISPATCH_CODES } from "@goat/shared/computerUseActions";
 
-import { READ_ONLY_TOOLS } from "./ComputerUseLeaseMessages.ts";
+import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 
 export { driverExitReason } from "./ComputerUseDriverExit.ts";
 
@@ -74,7 +74,8 @@ const POSSIBLE_COMMIT_DRIVER_CODES: ReadonlySet<unknown> = new Set([
   "tool_call_timeout",
 ]);
 
-const readTool = (tool: unknown) => typeof tool === "string" && READ_ONLY_TOOLS.has(tool);
+// A script's call log names tools without their arguments, so menu_bar_extras there may have acted.
+const readTool = (tool: unknown) => isReadOnlyCall(tool);
 
 /**
  * Whether a run_script reply's call log shows it sent no input: every driver call it lists is a
@@ -93,9 +94,35 @@ const scriptSentNothing = (structured: Record<string, unknown>): boolean =>
       call.driver_calls.every((each: unknown) => isRecord(each) && readTool(each.tool)),
   );
 
+/** The safety a reply already carries, as GOAT marked it on an earlier pass. */
+const markedSafety = (message: unknown): unknown => {
+  const envelope = isRecord(message) ? message : {};
+  if (isRecord(envelope.error))
+    return isRecord(envelope.error.data) ? envelope.error.data.safety : undefined;
+  const result = isRecord(envelope.result) ? envelope.result : {};
+  return isRecord(result.structuredContent) ? result.structuredContent.safety : undefined;
+};
+
+/** A write's outcome safety; a reply already marked as possibly committed keeps that mark. */
 export function driverOutcomeSafety(
   tool: string | undefined,
   message: unknown,
+  args?: unknown,
+): ActionOutcomeSafety {
+  const safety = classifiedSafety(tool, message, args);
+  const marked = markedSafety(message);
+  return !safety.possibleCommit &&
+    !isReadOnlyCall(tool, args) &&
+    isRecord(marked) &&
+    marked.possibleCommit === true
+    ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
+    : safety;
+}
+
+function classifiedSafety(
+  tool: string | undefined,
+  message: unknown,
+  args?: unknown,
 ): ActionOutcomeSafety {
   const envelope = isRecord(message) ? message : {};
   const result = isRecord(envelope.result) ? envelope.result : {};
@@ -111,7 +138,9 @@ export function driverOutcomeSafety(
   const { status: _status, ...withoutStatus } = raw;
   const structured = raw.effect !== undefined && raw.status === "refused" ? withoutStatus : raw;
   const effect =
-    readTool(tool) || (tool === "run_script" && scriptSentNothing(structured)) ? "read" : "write";
+    isReadOnlyCall(tool, args) || (tool === "run_script" && scriptSentNothing(structured))
+      ? "read"
+      : "write";
   // GOAT's own refusal (ComputerUseLeaseResponses refusal) names its detail and sent nothing.
   if (
     isRefusalDetail(structured.detail) &&
@@ -119,7 +148,7 @@ export function driverOutcomeSafety(
     (structured.effect === undefined || structured.effect === "refused") &&
     (envelope.status === "not_started" || error !== undefined || result.isError === true)
   )
-    return refusalSafety(structured.detail, tool);
+    return refusalSafety(structured.detail, tool, args);
   if (envelope.status === "not_started")
     return classifyActionOutcome({ effect, status: "refused", dispatched: false });
   const failed =
@@ -166,8 +195,11 @@ export function driverOutcomeSafety(
 }
 
 /** Whether the driver refused a write before sending any of it, so it never reached the app. */
-export const driverRefused = (tool: string | undefined, message: unknown): boolean =>
-  driverOutcomeSafety(tool, message).code.startsWith("write_refused_");
+export const driverRefused = (
+  tool: string | undefined,
+  message: unknown,
+  args?: unknown,
+): boolean => driverOutcomeSafety(tool, message, args).code.startsWith("write_refused_");
 
 /**
  * The driver's reply with GOAT's outcome safety, and with effect "unverifiable" added when an
@@ -175,7 +207,7 @@ export const driverRefused = (tool: string | undefined, message: unknown): boole
  * Codex shows the model a non-null structuredContent in place of every content block
  * (ComputerUseDriverReply.ts), so adding one would hide the driver's text.
  */
-export function markUnverified(tool: string | undefined, line: string): string {
+export function markUnverified(tool: string | undefined, line: string, args?: unknown): string {
   if (tool === undefined) return line;
   let message: unknown;
   try {
@@ -184,8 +216,8 @@ export function markUnverified(tool: string | undefined, line: string): string {
     return line;
   }
   if (!isRecord(message)) return line;
-  const safety = driverOutcomeSafety(tool, message);
-  const read = READ_ONLY_TOOLS.has(tool);
+  const read = isReadOnlyCall(tool, args);
+  const safety = driverOutcomeSafety(tool, message, args);
   if (isRecord(message.error)) {
     const raw = message.error.data;
     const data = raw === undefined ? {} : isRecord(raw) ? raw : { driverData: raw };
@@ -255,9 +287,10 @@ const REFUSAL_CATEGORY: Partial<Record<ComputerUseRefusalDetail, RefusalCategory
 export const refusalSafety = (
   detail: ComputerUseRefusalDetail,
   tool?: string,
+  args?: unknown,
 ): ActionOutcomeSafety =>
   classifyActionOutcome({
-    effect: tool !== undefined && READ_ONLY_TOOLS.has(tool) ? "read" : "write",
+    effect: isReadOnlyCall(tool, args) ? "read" : "write",
     status: "refused",
     dispatched: false,
     refusalCategory: REFUSAL_CATEGORY[detail] ?? "terminal",

@@ -453,7 +453,7 @@ it.effect("a desktop read that fails to render still retires the refs the driver
   }),
 );
 
-it.effect("desktop select_text is unsupported before any target lookup and sends nothing", () =>
+it.effect("desktop select_text without a field, or on a stale target, sends nothing", () =>
   Effect.gen(function* () {
     const { host, sent } = fixture();
     const bound = yield* host.bindApp(
@@ -461,17 +461,14 @@ it.effect("desktop select_text is unsupported before any target lookup and sends
       context,
     );
     const stale: ScreenTargetRef = { ...(bound.value as ScreenTargetRef), id: "gone" };
+    const codes = [];
     for (const ref of [bound.value as ScreenTargetRef, stale]) {
       const result = yield* host
         .dispatch(call("select_text", { start: 0, end: 3 }, ref), context)
         .pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure).toMatchObject({ code: "unsupported", effectStarted: false });
-        expect(result.failure.nextStep).toContain("nothing was sent");
-        expect(result.failure.nextStep).toContain("setValue");
-      }
+      codes.push(result._tag === "Failure" ? result.failure.code : "sent");
     }
+    expect(codes).toEqual(["invalid_argument", "stale_reference"]);
     expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows"]);
   }),
 );

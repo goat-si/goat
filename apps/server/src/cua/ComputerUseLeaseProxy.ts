@@ -218,7 +218,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
       const refuse = request.sink.answer(
         request.method === "tools/call"
-          ? cutOff(request.id, request.tool, cause)
+          ? cutOff(request.id, request.tool, cause, request.args)
           : refusal(request.id, request.method, interruptionDetail(cause), message),
         request.sink === providerSink ? undefined : "unknown_outcome",
       );
@@ -289,7 +289,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* agentInput.ended(key);
         if (request.cancelled) {
           yield* drawOverlay({ type: "reply", id: key, failed: true });
-          yield* release(request, true, driverRefused(request.tool, message));
+          yield* release(request, true, driverRefused(request.tool, message, request.args));
           if (gone() || paused !== undefined || idle) return;
           outstanding.delete(key);
           options.onCancelledRequestSettled?.(key);
@@ -330,21 +330,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           const heldReply = () =>
             Transport.heldByTransport(options.transportHeld, request.method, request.tool);
           if (gone() || paused !== undefined || heldReply()) return;
-          yield* release(request, true, driverRefused(request.tool, message));
+          yield* release(request, true, driverRefused(request.tool, message, request.args));
           const latest = outstanding.get(key);
           if (gone() || paused !== undefined || idle || latest === undefined || heldReply()) return;
           outstanding.delete(key);
           if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
           if (verdict === "other") {
             yield* request.sink.answer(
-              offScreenAnswer(request.id, request.method, request.tool, "other"),
+              offScreenAnswer(request.id, request.method, request.tool, "other", request.args),
               "settled",
             );
             return yield* end("wrong_display");
           }
           if (verdict === "unknown")
             return yield* request.sink.answer(
-              offScreenAnswer(request.id, request.method, request.tool, "unknown"),
+              offScreenAnswer(request.id, request.method, request.tool, "unknown", request.args),
               "settled",
             );
           if (verdict === "proof") proven = current;

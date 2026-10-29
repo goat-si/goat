@@ -65,7 +65,7 @@ export function makeTokenFirst() {
       line: string,
     ): string => {
       note(request.tool, request.args, message.result);
-      return markUnverified(request.tool, line);
+      return markUnverified(request.tool, line, request.args);
     },
     /** Whether this call must try a token or the keyboard before taking the person's cursor. */
     refuses: (name: unknown, rawArgs: unknown): boolean => {

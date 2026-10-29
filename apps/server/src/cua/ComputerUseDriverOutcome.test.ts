@@ -2,7 +2,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { driverExitReason } from "./ComputerUseDriverExit.ts";
-import { captureStalled, driverOutcomeSafety, markUnverified } from "./ComputerUseDriverOutcome.ts";
+import {
+  captureStalled,
+  driverOutcomeSafety,
+  driverRefused,
+  markUnverified,
+} from "./ComputerUseDriverOutcome.ts";
 
 const reply = (structuredContent: unknown, isError = true) =>
   JSON.stringify({
@@ -252,6 +257,11 @@ describe("a script is marked may-have-acted only when its call log shows input",
   const safety = (line: string) =>
     parsed(markUnverified("run_script", line)).result.structuredContent.safety;
 
+  it("a logged menu_bar_extras call names no operation, so it may have acted", () => {
+    const extras = { ...read("menu_bar_extras") };
+    assert.deepInclude(safety(script([extras])), { possibleCommit: true });
+  });
+
   it("a script that made no driver call, or only reads, sent nothing", () => {
     for (const calls of [[], [read("list_windows"), read("get_window_state")]]) {
       assert.deepInclude(safety(script(calls)), { possibleCommit: false });
@@ -335,4 +345,45 @@ describe("a helper that ends on its own is named by its exit code", () => {
       assert.equal(yield* exiting(undefined), "helper_restarted");
     }),
   );
+});
+
+describe("menu_bar_extras reads only when it finds SystemUIServer or lists status items", () => {
+  const failed = reply({ code: "tool_call_failed" });
+  it("system and list failures are reads; open, click and close may have acted", () => {
+    for (const operation of ["system", "list"]) {
+      const safety = driverOutcomeSafety("menu_bar_extras", parsed(failed), { operation });
+      assert.deepInclude(safety, { possibleCommit: false, writeStatus: "not_applicable" });
+      const marked = parsed(markUnverified("menu_bar_extras", failed, { operation }));
+      assert.isUndefined(marked.result.structuredContent.effect);
+      assert.deepInclude(marked.result.structuredContent.safety, { possibleCommit: false });
+    }
+    for (const args of [
+      { operation: "open" },
+      { operation: "click" },
+      { operation: "close" },
+      {},
+    ]) {
+      assert.isTrue(driverOutcomeSafety("menu_bar_extras", parsed(failed), args).possibleCommit);
+      const marked = parsed(markUnverified("menu_bar_extras", failed, args));
+      assert.equal(marked.result.structuredContent.effect, "unverifiable");
+    }
+  });
+});
+
+describe("a reply already marked as possibly committed keeps that mark", () => {
+  it("a write's earlier possibleCommit survives a code that reads as a refusal; a read's does not", () => {
+    const line = reply({ code: "unknown_tool", safety: { possibleCommit: true } });
+    const write = parsed(markUnverified("select_text", line)).result.structuredContent.safety;
+    assert.deepInclude(write, { possibleCommit: true, writeStatus: "may_have_applied" });
+    const read = parsed(markUnverified("menu_bar_extras", line, { operation: "list" })).result
+      .structuredContent.safety;
+    assert.deepInclude(read, { possibleCommit: false });
+    // Without an earlier mark, an unknown tool was refused before anything ran.
+    const fresh = parsed(markUnverified("select_text", reply({ code: "unknown_tool" }))).result
+      .structuredContent.safety;
+    assert.deepInclude(fresh, { possibleCommit: false });
+    // The app lease reads the same answer: such a write is not called unsent.
+    assert.isFalse(driverRefused("select_text", JSON.parse(line)));
+    assert.isTrue(driverRefused("select_text", JSON.parse(reply({ code: "unknown_tool" }))));
+  });
 });

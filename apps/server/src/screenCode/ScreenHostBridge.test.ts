@@ -457,6 +457,39 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
     }),
 );
 
+it.effect(
+  "a host's unproven no-op after sending is an unknown outcome that stops the cell's later writes",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      let sent = 0;
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.sync(() => {
+            sent++;
+            return { category: "suspected_noop" as const };
+          }),
+      });
+      const first = yield* bridge.handle(
+        call(1),
+        context(() => Effect.void),
+      );
+      expect(first?.error).toMatchObject({
+        code: "unknown_outcome",
+        effectStarted: true,
+        safety: { possibleCommit: true, writeStatus: "may_have_applied" },
+      });
+      expect(
+        (yield* bridge.handle(
+          call(2),
+          context(() => Effect.void),
+        ))?.error?.code,
+      ).toBe("not_run");
+      expect(sent).toBe(1);
+    }),
+);
+
 it.effect("a failure on one target keeps another target's in-flight call and its result", () =>
   Effect.gen(function* () {
     const bridge = new ScreenHostBridge();

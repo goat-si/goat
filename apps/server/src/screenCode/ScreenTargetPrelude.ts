@@ -424,7 +424,16 @@ const __target = (binding, note, owner, extraProps = {}) => {
     waitFor: (wanted = {}, options = {}) => wait(wanted, typeof options === 'number' ? options : options.timeoutMs),
     verify: (wanted = {}) => wait(wanted, tab ? 250 : 0),
     rightClick: (arg = {}) => call('right_click', arg),
-    selectText: (arg = {}) => call('select_text', arg),
+    selectText: (target, text, options = {}) => {
+      if (text === undefined) return call('select_text', target ?? {});
+      if (Array.isArray(target) || __winPt(target))
+        throw new ScreenError('invalid_argument', 'Name the field by number, id, or role and name; a point holds no text.', true);
+      const given = options !== null && typeof options === 'object' ? options : {};
+      const chosen = {};
+      for (const key of ['occurrence', 'prefix', 'suffix', 'selection']) if (given[key] !== undefined) chosen[key] = given[key];
+      const run = () => act('selectText', 'select_text', { ...aim(target), text, ...chosen });
+      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
+    },
     pressKey: (arg = {}) => call('press_key', arg),
     typeText: (arg = {}) => call('type_text', arg),
   };
@@ -596,7 +605,10 @@ globalThis.screen = Object.freeze({ values: __values, state: {},
   },
   app: async (query = {}) => __app(query),
   launch: __launch,
-  menuBarExtras: () => __call('list_menu_bar_extras', {}),
+  menuBarExtras: (options = {}) => __call('list_menu_bar_extras', {
+    ...(options && Number.isSafeInteger(options.pid) ? { pid: options.pid } : {}),
+    ...(options && Number.isSafeInteger(options.owner_pid) ? { owner_pid: options.owner_pid } : {}),
+  }),
   tab: async (query = {}) => __tab(await __call('select_tab', __tabQuery(query))),
   openTab: async (arg = {}) => __tab(await __call('open_tab', arg)),
   listTabs: () => __call('list_tabs', {}),

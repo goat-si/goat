@@ -3,6 +3,13 @@ import { assert, describe, it } from "@effect/vitest";
 import { inputKinds, makeAgentInputLog, postsInput } from "./agentInputLog.ts";
 
 describe("agentInputLog", () => {
+  it("menu_bar_extras posts no input to find or list status items, and may post both to open or click one", () => {
+    for (const operation of ["system", "list"])
+      assert.deepEqual(inputKinds("menu_bar_extras", { operation }), []);
+    for (const operation of ["open", "click", "close", undefined])
+      assert.deepEqual(inputKinds("menu_bar_extras", { operation }), ["keyboard", "pointer"]);
+  });
+
   it("an event of the call's kind during or just after it is the agent's, later ones a person's", () => {
     const log = makeAgentInputLog();
     log.started("1", 1_000, ["pointer"]);

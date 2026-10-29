@@ -273,6 +273,8 @@ export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
   "session_ended",
   "session_unavailable",
   "transport_lease_required",
+  // The driver lacks the tool, or this build cannot name its risk; nothing ran.
+  "unknown_tool",
 ]);
 
 const REFUSAL_CODES: Readonly<Record<string, ComputerUseRefusalReason>> = {

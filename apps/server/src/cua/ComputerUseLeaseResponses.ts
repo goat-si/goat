@@ -14,7 +14,7 @@ import {
   PAUSE_STATE,
   PAUSE_NEXT,
   PAUSE_MESSAGES,
-  READ_ONLY_TOOLS,
+  isReadOnlyCall,
   MAY_HAVE_ACTED,
   READ_CUT_OFF,
 } from "./ComputerUseLeaseMessages.ts";
@@ -46,11 +46,12 @@ export const refusal = (
   message: string,
   app?: string,
   holderThreadId?: import("@goat/contracts").ThreadId,
+  call?: { readonly tool?: string | undefined; readonly args?: unknown },
 ) => {
   const refused = {
     refused: computerUseRefusalReason(detail),
     detail,
-    safety: refusalSafety(detail),
+    safety: refusalSafety(detail, call?.tool, call?.args),
   };
   return JSON.stringify(
     method === "tools/call"
@@ -94,8 +95,13 @@ export const interruptionRefusal = (cause: Interruption) =>
  * have dispatched its input before its transport was killed, so this is not a refusal: an agent
  * told "did not run" resends, and a resent keystroke can submit twice.
  */
-export const cutOff = (id: JsonRpcId, tool: string | undefined, cause: Interruption) => {
-  const read = tool !== undefined && READ_ONLY_TOOLS.has(tool);
+export const cutOff = (
+  id: JsonRpcId,
+  tool: string | undefined,
+  cause: Interruption,
+  args?: unknown,
+) => {
+  const read = isReadOnlyCall(tool, args);
   const safety = classifyActionOutcome({
     effect: read ? "read" : "write",
     status: "indeterminate",
@@ -131,13 +137,17 @@ export const offScreenAnswer = (
   method: string,
   tool: string | undefined,
   verdict: "other" | "unknown",
+  args?: unknown,
 ) =>
-  tool !== undefined && READ_ONLY_TOOLS.has(tool)
+  isReadOnlyCall(tool, args)
     ? refusal(
         id,
         method,
         "wrong_display",
         verdict === "other" ? LEASE_END_MESSAGES.wrong_display : UNCONFIRMED_DISPLAY,
+        undefined,
+        undefined,
+        { tool, args },
       )
     : JSON.stringify({
         jsonrpc: "2.0",

@@ -819,7 +819,8 @@ describe("ComputerUseLeaseProxy", () => {
             result: { content: [], structuredContent: { windows: [{ pid: 900, window_id: 5 }] } },
           }),
         );
-        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "wrong_display"));
+        // The read already ran, so its refusal reads as a read that changed nothing.
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "wrong_display", true));
         yield* h.killed;
         // Nothing after it runs either.
         yield* h.send(call(2, "list_windows"));

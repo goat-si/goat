@@ -120,6 +120,32 @@ describe("actionOutcomeSafety", () => {
     expect(browserUnapplied.code).toBe("write_unapplied");
   });
 
+  it("a write that went out is never unapplied, even with an unapplied diagnostic; one that did not stays rejected", () => {
+    const diagnostic = { field: "value", requested: "a", applied: "b" };
+    for (const unappliedInput of [undefined, diagnostic])
+      expect(
+        classifyActionOutcome({
+          effect: "write",
+          status: "unapplied",
+          dispatched: true,
+          unappliedInput,
+        }),
+      ).toMatchObject({
+        possibleCommit: true,
+        retryClass: "never",
+        writeStatus: "may_have_applied",
+        code: "write_indeterminate",
+      });
+    for (const dispatched of [false, undefined])
+      expect(
+        classifyActionOutcome({ effect: "write", status: "unapplied", dispatched }),
+      ).toMatchObject({
+        possibleCommit: false,
+        writeStatus: "rejected_before_commit",
+        code: "write_unapplied",
+      });
+  });
+
   it("routes pre-dispatch refusals to transient, reobserve, fix_input, or terminal retry classes with possibleCommit false", () => {
     const busy = classifyComputerUseActionOutcome({
       outcome: "refused",
