@@ -27,12 +27,14 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema } from "effect/ai";
 
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
 import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { type CallerLimits, loadCaller } from "./threadAccess.ts";
+import { reconcilePathForReadTool, settleForReconcile } from "./ToolAdmissionSettlement.ts";
 import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
 import { refusalResult } from "./toolRefusals.ts";
 
@@ -121,6 +123,11 @@ const Grant = Schema.Struct({
   role: Schema.NullOr(ProfileGrant),
   scopes: Schema.NullOr(Schema.Array(AuthEnvironmentScope)),
   readOnly: Schema.Boolean,
+  /** True when the reservation's receiptId is wired into newCommandId / SSH correlationId. */
+  correlated: Schema.optionalKey(Schema.Literal(true)),
+  correlationId: Schema.optionalKey(Schema.String),
+  roleName: Schema.optionalKey(GoatclawRole),
+  forwardedCeiling: Schema.optionalKey(PermissionProfile),
 });
 type Grant = typeof Grant.Type;
 const GrantJson = Schema.fromJsonString(Grant);
@@ -319,6 +326,36 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       completed_at = ${DateTime.formatIso(yield* DateTime.now)}
       WHERE receipt_id = ${receiptId} AND state = 'running'`;
   });
+  const correlate = (receiptId: string, correlationId: string) =>
+    sql`UPDATE mcp_request_reservations
+      SET grant_json = json_set(grant_json, '$.correlationId', ${correlationId})
+      WHERE receipt_id = ${receiptId} AND state = 'running'`.pipe(
+      Effect.asVoid,
+      Effect.catchCause((cause) =>
+        Effect.logError("clientRequestId correlation failed", {
+          receiptId,
+          correlationId,
+          cause,
+        }).pipe(
+          Effect.andThen(
+            sql`DELETE FROM mcp_request_reservations
+              WHERE receipt_id = ${receiptId} AND state = 'running'`.pipe(
+              Effect.catchCause(() => abandon(receiptId)),
+            ),
+          ),
+          Effect.andThen(
+            Effect.fail(
+              new OrchestratorMcpFailure({
+                code: "orchestration_error",
+                reason: "storage_failed",
+                message: "GOAT could not record the request correlation, so it did not run.",
+                mayHaveStarted: false,
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
   /** The outcome could not be recorded: from now on the key reads unknown, in this process too. */
   const abandon = (receiptId: string) =>
     Effect.sync(() => ABANDONED_RECEIPTS.add(receiptId)).pipe(
@@ -328,14 +365,17 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
       ),
       Effect.ignoreCause,
     );
-  return { reserve, settle, abandon };
+  return { reserve, settle, correlate, abandon };
 };
 
 /** A call outside a keyed reservation must not inherit an enclosing call's admission. */
 const unkeyed = <A, E, R>(run: Effect.Effect<A, E, R>) =>
   run.pipe(
     Effect.provideService(McpToolAccess.KeyedAdmission, { admit: () => Effect.void }),
-    Effect.provideService(LifecycleAdmissionReceipt, { held: Effect.void }),
+    Effect.provideService(LifecycleAdmissionReceipt, {
+      held: Effect.as(Effect.void, undefined),
+      correlate: () => Effect.void,
+    }),
   );
 
 /** The caller's grant for one call, and whether it still covers one recorded earlier. */
@@ -407,6 +447,9 @@ const makeGrants = (
               },
         scopes,
         readOnly,
+        correlated: true,
+        ...(role === undefined ? {} : { roleName: role }),
+        ...(forwarded === undefined ? {} : { forwardedCeiling: forwarded }),
       } satisfies Grant,
     };
   });
@@ -441,9 +484,70 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
   // goatclaw itself reads these settings; a role launch's profile cannot resolve without them.
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const threads = yield* Effect.serviceOption(ThreadManagement.ThreadManagementService);
   const store = Option.map(database, (sql) => makeStore(sql, bootId));
 
   const { grantOf, stillGranted } = makeGrants(permissions, settings);
+
+  const settleReconcileRead = Effect.fnUntraced(
+    function* (reconcilePath: string) {
+      if (Option.isNone(database)) return;
+      const scope = Option.getOrUndefined(
+        yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+      );
+      const principal = scope === undefined ? undefined : principalOf(scope);
+      if (scope === undefined || principal === undefined) return;
+      yield* ChannelSessionReceiptGate.requireSettledSessionReceipt().pipe((check) =>
+        Option.isSome(receipts)
+          ? Effect.provideService(
+              check,
+              ChannelSessionReceiptGate.ChannelSessionReceiptGate,
+              receipts.value,
+            )
+          : check,
+      );
+      const limits: CallerLimits | undefined =
+        scope.thread === undefined
+          ? {
+              runtimeMode: McpInvocationContext.clientRuntimeModeCeiling(scope.client),
+              interactionMode: "default",
+            }
+          : Option.isSome(threads)
+            ? yield* threads.value.getThreadShell(scope.thread.threadId).pipe(
+                Effect.map((shell) =>
+                  shell === null || shell.deletedAt !== null
+                    ? undefined
+                    : { runtimeMode: shell.runtimeMode, interactionMode: shell.interactionMode },
+                ),
+                Effect.orElseSucceed(() => undefined),
+              )
+            : undefined;
+      if (limits === undefined) return;
+      yield* settleForReconcile(database.value, bootId, ABANDONED_RECEIPTS, {
+        environmentId: scope.environmentId,
+        principal,
+        reconcilePath,
+        checkGrant: Effect.fnUntraced(
+          function* (grantJson: string) {
+            const recorded = yield* decodeGrant(grantJson);
+            const { grant } = yield* grantOf(
+              scope,
+              {
+                ...(recorded.roleName === undefined ? {} : { goatclawRole: recorded.roleName }),
+                ...(recorded.forwardedCeiling === undefined
+                  ? {}
+                  : { permissionProfileCeiling: recorded.forwardedCeiling }),
+              },
+              limits,
+            );
+            return yield* stillGranted(scope, grant, recorded);
+          },
+          Effect.orElseSucceed(() => false),
+        ),
+      });
+    },
+    (effect) => Effect.ignoreCause(effect),
+  );
 
   const keyed =
     /* The request's span already covers each call. */
@@ -585,7 +689,17 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
       return yield* Effect.raceFirst(
         handle(args).pipe(
           Effect.provideService(McpToolAccess.KeyedAdmission, { admit }),
-          Effect.provideService(LifecycleAdmissionReceipt, { held: Ref.get(held) }),
+          Effect.provideService(LifecycleAdmissionReceipt, {
+            held: Ref.get(held),
+            correlate: (correlationId) =>
+              Effect.flatMap(Ref.get(held), (receiptId) =>
+                receiptId === undefined || Option.isNone(store)
+                  ? Effect.void
+                  : store.value
+                      .correlate(receiptId, correlationId)
+                      .pipe(Effect.tapError(() => Ref.set(held, undefined))),
+              ),
+          }),
           Effect.provideService(McpToolAccess.CallFailureCapture, {
             record: (error) =>
               Effect.andThen(Ref.set(failure, declaredFailureLiteral(error)), forward(error)),
@@ -611,8 +725,19 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
     handle: (payload: unknown) => Effect.Effect<Outcome, E, R>,
   ) => {
     const entry = keyedEntries.get(tool);
-    if (entry === undefined || typeof payload !== "object" || payload === null)
-      return unkeyed(handle(payload));
+    if (entry === undefined || typeof payload !== "object" || payload === null) {
+      const reconcilePath = reconcilePathForReadTool(tool);
+      const ran = unkeyed(handle(payload));
+      return reconcilePath === undefined
+        ? ran
+        : ran.pipe(
+            Effect.tap((result) =>
+              isCallToolResult(result) && result.isError !== true
+                ? settleReconcileRead(reconcilePath)
+                : Effect.void,
+            ),
+          );
+    }
     // Handlers never see the key, so a routed call never forwards it to an older remote.
     const { clientRequestId, ...args } = payload as Readonly<Record<string, unknown>>;
     // The advertised JSON codec offers null for an omitted optional key.
@@ -767,10 +892,20 @@ export type EvalAdmission = Effect.Success<ReturnType<typeof makeEvalAdmission>>
 /** Lifecycle reconciliation reads the same principal/environment reservation, never reserving it. */
 export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(function* () {
   const permissions = yield* Profiles.PermissionProfiles;
+  const receipts = yield* Effect.serviceOption(ChannelSessionReceiptGate.ChannelSessionReceiptGate);
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
   const { grantOf, stillGranted } = makeGrants(permissions, settings);
   return Effect.fn("ToolAdmission.readReceipt")(function* (path: string, clientRequestId: string) {
+    yield* ChannelSessionReceiptGate.requireSettledSessionReceipt().pipe((check) =>
+      Option.isSome(receipts)
+        ? Effect.provideService(
+            check,
+            ChannelSessionReceiptGate.ChannelSessionReceiptGate,
+            receipts.value,
+          )
+        : check,
+    );
     const scope = yield* McpInvocationContext.McpInvocationContext;
     const principal = principalOf(scope);
     if (Option.isNone(database) || principal === undefined) return { state: "unknown" as const };
@@ -788,8 +923,18 @@ export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(fu
         AND (state != 'completed' OR expires_at > ${DateTime.formatIso(yield* DateTime.now)})`;
     if (row === undefined) return { state: "missing" as const };
     const { limits } = yield* loadCaller();
-    const { grant } = yield* grantOf(scope, {}, limits);
-    if (!(yield* stillGranted(scope, grant, yield* decodeGrant(row.grant_json))))
+    const recorded = yield* decodeGrant(row.grant_json);
+    const { grant } = yield* grantOf(
+      scope,
+      {
+        ...(recorded.roleName === undefined ? {} : { goatclawRole: recorded.roleName }),
+        ...(recorded.forwardedCeiling === undefined
+          ? {}
+          : { permissionProfileCeiling: recorded.forwardedCeiling }),
+      },
+      limits,
+    );
+    if (!(yield* stillGranted(scope, grant, recorded)))
       return yield* new OrchestratorMcpFailure({
         code: "capability_denied",
         message: "This caller no longer holds the recorded request grant.",
@@ -801,13 +946,41 @@ export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(fu
         result: yield* decodeResult(row.result_json),
         ...(row.failure_json === null ? {} : { failure: yield* decodeLiteral(row.failure_json) }),
       };
+    const isRunningHere =
+      row.state === "running" &&
+      row.boot_id === PROCESS_BOOT_ID &&
+      !ABANDONED_RECEIPTS.has(row.receipt_id);
+    if (!isRunningHere) {
+      yield* settleForReconcile(database.value, PROCESS_BOOT_ID, ABANDONED_RECEIPTS, {
+        environmentId: scope.environmentId,
+        principal,
+        path,
+        clientRequestId,
+        receiptId: row.receipt_id,
+        checkGrant: () => Effect.succeed(true),
+      }).pipe(Effect.ignoreCause);
+      const [settled] = yield* database.value<{
+        readonly state: "running" | "completed" | "unknown";
+        readonly receipt_id: string;
+        readonly result_json: string | null;
+        readonly failure_json: string | null;
+      }>`SELECT state, receipt_id, result_json, failure_json FROM mcp_request_reservations
+        WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
+          AND path = ${path} AND client_request_id = ${clientRequestId}
+          AND receipt_id = ${row.receipt_id}`;
+      if (settled === undefined) return { state: "missing" as const };
+      if (settled.state === "completed" && settled.result_json !== null)
+        return {
+          state: "completed" as const,
+          receiptId: settled.receipt_id,
+          result: yield* decodeResult(settled.result_json),
+          ...(settled.failure_json === null
+            ? {}
+            : { failure: yield* decodeLiteral(settled.failure_json) }),
+        };
+    }
     return {
-      state:
-        row.state === "running" &&
-        row.boot_id === PROCESS_BOOT_ID &&
-        !ABANDONED_RECEIPTS.has(row.receipt_id)
-          ? ("in_progress" as const)
-          : ("unknown" as const),
+      state: isRunningHere ? ("in_progress" as const) : ("unknown" as const),
       receiptId: row.receipt_id,
     };
   });

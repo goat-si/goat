@@ -33,6 +33,7 @@ import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import { LifecycleAdmissionReceipt } from "../../LifecycleAdmissionReceipt.ts";
 import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -550,7 +551,16 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     ),
                   );
                   const result = yield* Effect.gen(function* () {
+                    const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
+                    const receiptId =
+                      receipt._tag === "Some" ? yield* receipt.value.held : undefined;
+                    const correlationId =
+                      admissionCorrelationId(admission) ??
+                      (receiptId === undefined ? undefined : `rr-${receiptId}`);
                     if (scope.thread === undefined) {
+                      if (correlationId !== undefined && receipt._tag === "Some") {
+                        yield* receipt.value.correlate(correlationId);
+                      }
                       const value = yield* dispatch.launchThread(
                         guardedLaunch,
                         authorize.pipe(Effect.asVoid),
@@ -565,6 +575,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                           : Effect.void,
                       ),
                     );
+                    if (correlationId !== undefined && receipt._tag === "Some") {
+                      yield* receipt.value.correlate(correlationId);
+                    }
                     const value = yield* coordinator.launch(
                       {
                         kind: "thread",
@@ -572,7 +585,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                         delivery: input.reportDelivery ?? "wake",
                         // A channel-owned launch carries its record's correlation id, so a retry's
                         // INSERT collides on the row instead of starting a second remote thread.
-                        correlationId: admissionCorrelationId(admission),
+                        correlationId,
                         launch: guardedLaunch,
                       },
                       authorize.pipe(Effect.asVoid),
@@ -593,6 +606,8 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                       const underlying = isRemoteDispatchError(error) ? error.cause : error;
                       const refusedBeforeLaunch =
                         preSend ||
+                        (isOrchestratorMcpFailure(underlying) &&
+                          underlying.mayHaveStarted === false) ||
                         (underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
                           (underlying.reason === "remote_refused" ||
                             underlying.reason === "invalid_request" ||

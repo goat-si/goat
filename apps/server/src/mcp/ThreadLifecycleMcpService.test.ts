@@ -543,6 +543,15 @@ it.effect(
           narrowed,
         )).isError,
       ).toBe(true);
+      yield* sql`DROP TRIGGER refuse_lifecycle_settlement`;
+      expect(
+        value(yield* call("goat_thread_lifecycle_receipt", { clientRequestId: "unknown-delete" })),
+      ).toMatchObject({
+        state: "completed",
+        commandStatus: "accepted",
+        result: { isError: false },
+      });
+      expect(value(yield* call("goat_thread_delete", args))).toMatchObject({ accepted: true });
     }).pipe(Effect.provide(served)),
 );
 
@@ -795,6 +804,45 @@ it.effect(
       yield* sql`UPDATE mcp_request_reservations SET boot_id = 'previous-process' WHERE client_request_id = 'failed-delete'`;
       expect(
         value(yield* call("goat_thread_lifecycle_receipt", { clientRequestId: "failed-delete" })),
-      ).toMatchObject({ state: "unknown", commandStatus: "rejected" });
+      ).toMatchObject({
+        state: "completed",
+        commandStatus: "rejected",
+        result: { isError: true },
+        failure: { code: "invalid_request" },
+      });
+
+      // If a concurrent call replaces the reservation row during reconciliation, readReceipt stays pinned to the original receipt_id.
+      const [existing] = yield* sql<{
+        readonly environment_id: string;
+        readonly principal: string;
+      }>`SELECT environment_id, principal FROM mcp_request_reservations WHERE client_request_id = 'failed-delete'`;
+      yield* sql`INSERT INTO mcp_request_reservations
+        (environment_id, principal, path, client_request_id, receipt_id, tool_name, args_digest, grant_json, state, boot_id, created_at, expires_at)
+        VALUES (${existing!.environment_id}, ${existing!.principal}, 'thread.delete', 'replaced-delete',
+          'receipt-original', 'goat_thread_delete', 'digest-1',
+          '{"runtimeMode":"auto","interactionMode":"default","goatclaw":null,"role":null,"scopes":["orchestration:operate"],"readOnly":false,"correlated":true}',
+          'unknown', 'previous-process', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z')`;
+      yield* sql`CREATE TRIGGER replace_on_release AFTER DELETE ON mcp_request_reservations
+        WHEN OLD.receipt_id = 'receipt-original'
+        BEGIN
+          INSERT INTO mcp_request_reservations
+            (environment_id, principal, path, client_request_id, receipt_id, tool_name, args_digest, grant_json, state, result_json, boot_id, created_at, expires_at)
+          VALUES (OLD.environment_id, OLD.principal, OLD.path, OLD.client_request_id,
+            'receipt-replacement', OLD.tool_name, OLD.args_digest,
+            '{"runtimeMode":"full-access","interactionMode":"default","goatclaw":null,"role":null,"scopes":["orchestration:operate"],"readOnly":false,"correlated":true}',
+            'completed', (SELECT result_json FROM mcp_request_reservations WHERE client_request_id = 'failed-delete'),
+            'previous-process', '1970-01-01T00:00:00.000Z', '1970-01-02T00:00:00.000Z');
+        END`;
+      const autoScope = { ...scope, client: { ...scope.client!, access: "auto" as const } };
+      expect(
+        value(
+          yield* call(
+            "goat_thread_lifecycle_receipt",
+            { clientRequestId: "replaced-delete" },
+            autoScope,
+          ),
+        ),
+      ).toEqual({ state: "missing" });
+      yield* sql`DROP TRIGGER replace_on_release`;
     }).pipe(Effect.provide(served)),
 );

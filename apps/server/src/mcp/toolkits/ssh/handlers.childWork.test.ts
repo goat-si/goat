@@ -48,6 +48,7 @@ import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
 import { newLaunchWatch } from "../../launchWatch.ts";
+import { LifecycleAdmissionReceipt } from "../../LifecycleAdmissionReceipt.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
@@ -224,6 +225,7 @@ interface LaunchFailures {
   readonly failAuthorizeOnCalls?: ReadonlyArray<number>;
   readonly stopBeforeClaimOnCalls?: ReadonlyArray<number>;
   readonly stopDuringLaunchOnCalls?: ReadonlyArray<number>;
+  readonly failCorrelateOnCalls?: ReadonlyArray<number>;
   readonly maxLanes?: number;
 }
 
@@ -232,10 +234,12 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
   Effect.scoped(
     Effect.gen(function* () {
       const launches: Array<LaunchCapture> = [];
+      const correlatedIds: Array<string> = [];
       const rows: Array<{ readonly state: string; readonly remoteThreadId: string | null }> = [];
       const duringLaunchStates: Array<ReadonlyArray<string>> = [];
       let launchCalls = 0;
       let validationCalls = 0;
+      let correlateCalls = 0;
       const caller = {
         id: callerThreadId,
         title: "Bot worker",
@@ -340,6 +344,24 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         Layer.mock(SshDeviceAdd.SshDeviceAdd)({}),
         Layer.mock(SshHostSetup.SshHostSetup)({}),
         Layer.mock(CloudMachineService.CloudMachineService)({}),
+        Layer.succeed(LifecycleAdmissionReceipt, {
+          held: Effect.succeed("receipt-cw"),
+          correlate: (correlationId) => {
+            const call = correlateCalls;
+            correlateCalls += 1;
+            correlatedIds.push(correlationId);
+            return failures.failCorrelateOnCalls?.includes(call) === true
+              ? Effect.fail(
+                  new OrchestratorMcpFailure({
+                    code: "orchestration_error",
+                    reason: "storage_failed",
+                    message: "GOAT could not record the request correlation, so it did not run.",
+                    mayHaveStarted: false,
+                  }),
+                )
+              : Effect.void;
+          },
+        }),
         Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({
           validateLaunchAttachments: (requested) => {
             const call = validationCalls;
@@ -464,7 +486,7 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         Effect.flatMap((store) => store.listForTask(taskId)),
         Effect.provide(deps),
       );
-      return { responses, launches, records, duringLaunchStates };
+      return { responses, launches, correlatedIds, records, duringLaunchStates };
     }),
   );
 
@@ -562,7 +584,7 @@ it.effect(
   "regression #1387: a task stop before the claim refuses the SSH launch and returns the slot",
   () =>
     Effect.gen(function* () {
-      const { responses, launches, records } = yield* launchFromWorker(
+      const { responses, launches, correlatedIds, records } = yield* launchFromWorker(
         ["Stopped audit", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
         { stopBeforeClaimOnCalls: [0], maxLanes: 1 },
       );
@@ -581,6 +603,8 @@ it.effect(
       expect(released).toHaveLength(1);
       expect(bound).toHaveLength(4);
       expect(launches).toHaveLength(4);
+      expect(correlatedIds).toHaveLength(4);
+      expect(correlatedIds).not.toContain(childWorkCorrelationIdFor(released[0]!.childWorkId));
       expect(launches.map((launch) => launch.correlationId)).not.toContain(
         childWorkCorrelationIdFor(released[0]!.childWorkId),
       );
@@ -639,6 +663,31 @@ it.effect(
       expect(responses[4]).toMatchObject({ threadId: "remote-thread" });
       expect(responses[5]).toMatchObject({ code: "capacity_exceeded" });
       expect(launches).toHaveLength(5);
+      expect(records).toHaveLength(5);
+      expect(records.filter((record) => record.state === "released")).toHaveLength(1);
+      expect(records.filter((record) => record.state === "bound")).toHaveLength(4);
+    }),
+);
+
+it.effect(
+  "a correlation storage failure before coordinator.launch releases both the permission lane and child-work slot",
+  () =>
+    Effect.gen(function* () {
+      const { responses, launches, records } = yield* launchFromWorker(
+        ["Correlate failed", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
+        { failCorrelateOnCalls: [0], maxLanes: 1 },
+      );
+      expect(responses[0]).toMatchObject({
+        code: "orchestration_error",
+        reason: "storage_failed",
+        mayHaveStarted: false,
+      });
+      expect(responses[1]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[2]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[3]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[4]).toMatchObject({ threadId: "remote-thread" });
+      expect(responses[5]).toMatchObject({ code: "capacity_exceeded" });
+      expect(launches).toHaveLength(4);
       expect(records).toHaveLength(5);
       expect(records.filter((record) => record.state === "released")).toHaveLength(1);
       expect(records.filter((record) => record.state === "bound")).toHaveLength(4);
