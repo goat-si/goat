@@ -31,13 +31,13 @@ const record = (args: unknown): Readonly<Record<string, unknown>> =>
 export const driverCallCapMs = (tool: string, args: unknown): number => {
   const given = record(args);
   if (tool === "get_window_state") {
-    const base = given.include_screenshot === true ? 7_000 : 4_000;
+    const base = given.include_screenshot === false ? 4_000 : 7_000;
     if (given.include_accessibility_tree === false) return base;
     const walk =
       typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
         ? Math.min(120_000, Math.max(100, given.timeout_ms))
-        : 0;
-    return walk > 0 ? Math.max(base, walk * 2 + 5_000) : base;
+        : 1_000;
+    return Math.max(base, walk * 2 + 5_000);
   }
   if (tool === "run_script") {
     const ms =

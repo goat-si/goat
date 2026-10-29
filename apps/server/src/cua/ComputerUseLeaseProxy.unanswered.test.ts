@@ -291,6 +291,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         const aux1 = yield* h.nextToDriver;
         // A driver-origin request (carrying method) with provBatch's id must not be mistaken for provBatch's reply.
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: provBatch.id, method: "ping" }));
+        assert.equal((yield* h.nextToProvider).method, "ping");
         yield* TestClock.adjust("10 seconds");
         assert.isFalse(yield* h.isKilled);
         assert.equal(h.drivers.length, 1);
@@ -341,6 +342,43 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         );
         assert.equal((yield* h.primitiveReply).status, "settled");
 
+        // Omitted timeout_ms and include_screenshot on get_window_state get the 7 s driver backstop (not 4 s),
+        // so a 5.5 s read is not cut off at 5 s.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:defaultRead",
+            method: "tools/call",
+            params: { name: "get_window_state", arguments: { pid: 42, window_id: 1 } },
+          }),
+        );
+        const defaultRead = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxDefaultRead",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 11,
+          deadlineMillis: 26_500,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxDefaultRead = yield* h.nextToDriver;
+        yield* TestClock.adjust("5500 millis");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: defaultRead.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:defaultRead");
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxDefaultRead.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+
         // (a2) A 90 s provider run_script (timeout_ms: 120_000, cap 121.5 s) followed by a 1.5 s auxiliary read is not cut off at 61 s;
         // an unrelated reply during grace does not end grace early; and a head reply while replacement waits for the lifecycle lock
         // keeps the child and gives the queued read its own 1.5 s budget.
@@ -363,7 +401,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 1,
-          deadlineMillis: 76_500,
+          deadlineMillis: 82_000,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -383,12 +421,29 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         yield* h.reply(
           JSON.stringify({ jsonrpc: "2.0", id: provScript.id, result: { content: [] } }),
         );
+        assert.equal((yield* h.nextToProvider).id, "prov:script");
+        // Even if the provider immediately reuses id "prov:script" while replace(head.key, head.call) is still waiting on the lock,
+        // the replacement check is bound to the old head.call object
+        // and must not kill the child for the newly sent call.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:script",
+            method: "tools/call",
+            params: { name: "list_apps", arguments: {} },
+          }),
+        );
+        const reusedUnderLock = yield* h.nextToDriver;
         holdLock = false;
         yield* Deferred.succeed(lockGate, undefined);
         // Child was not replaced, and auxScript now gets its own 1.5 s budget.
         yield* TestClock.adjust("1 second");
         assert.isFalse(yield* h.isKilled);
         assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: reusedUnderLock.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:script");
         yield* h.reply(
           JSON.stringify({ jsonrpc: "2.0", id: auxScript.id, result: { content: [] } }),
         );
@@ -416,7 +471,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 2,
-          deadlineMillis: 150_100,
+          deadlineMillis: 155_600,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -451,7 +506,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 3,
-          deadlineMillis: 165_700,
+          deadlineMillis: 171_200,
           tool: "list_windows",
           args: { pid: 42 },
         });
