@@ -196,10 +196,9 @@ export function createWorkspaceFocusController(doc: Document) {
     }
     return focusArea(area, restore);
   };
-  const move = (direction: 1 | -1, fromArea?: string, closingPalette = false) => {
+  const move = (direction: 1 | -1, fromArea?: string) => {
     // HTML context menus close on blur, unlike modal dialogs and Base UI popups.
     dismissContextMenu(false);
-    // A palette closes before running its command. Other popups keep their focus boundary.
     // Inline listboxes (such as Settings search) belong to their workspace area, while
     // portalled listboxes and menus can also supply a boundary without a popup data-slot.
     const activePopup = doc.activeElement?.closest<HTMLElement>('[role="menu"], [role="listbox"]');
@@ -216,7 +215,6 @@ export function createWorkspaceFocusController(doc: Document) {
     if (
       boundaries.some(
         (boundary) =>
-          !(closingPalette && boundary.closest("[data-command-palette]")) &&
           (boundary.matches('[aria-modal="true"]') || boundary.contains(doc.activeElement)) &&
           isWorkspaceElementVisible(boundary),
       )
@@ -307,9 +305,9 @@ export function createWorkspaceFocusController(doc: Document) {
   doc.addEventListener("keydown", onUserInput, true);
 
   return {
-    move: (direction: 1 | -1, fromArea?: string, closingPalette = false) => {
+    move: (direction: 1 | -1, fromArea?: string) => {
       cancelRequest();
-      return move(direction, fromArea, closingPalette);
+      return move(direction, fromArea);
     },
     focus,
     request,
@@ -324,8 +322,6 @@ export function createWorkspaceFocusController(doc: Document) {
 }
 
 let controller: ReturnType<typeof createWorkspaceFocusController> | undefined;
-let focusRequestVersion = 0;
-export const getWorkspaceFocusRequestVersion = () => focusRequestVersion;
 
 /**
  * Starts workspace focus for the app: F6 area moves, focus requests, focus-loss recovery,
@@ -363,7 +359,6 @@ export function moveWorkspaceFocus(direction: 1 | -1, fromArea?: string): boolea
 
 /** Explicit user actions request focus after React has committed the destination. */
 export function requestWorkspaceFocus(target: WorkspaceFocusTarget) {
-  focusRequestVersion++;
   controller?.request(target);
 }
 
@@ -371,18 +366,4 @@ export function requestWorkspaceContentFocus() {
   // Resolve after the layout commits: closing a maximized panel makes the
   // composer available again, while hiding a sidebar may leave only the panel.
   requestWorkspaceFocus({ area: "content" });
-}
-
-let pendingPaletteDirection: 1 | -1 | undefined;
-export function queueWorkspaceFocusFromPalette(direction: 1 | -1) {
-  pendingPaletteDirection = direction;
-}
-
-/** Runs at the palette's normal focus restoration milestone, after its focus trap closes. */
-export function restoreWorkspaceFocusFromPalette(): boolean {
-  if (pendingPaletteDirection === undefined) return false;
-  const direction = pendingPaletteDirection;
-  pendingPaletteDirection = undefined;
-  window.requestAnimationFrame(() => controller?.move(direction, undefined, true));
-  return true;
 }

@@ -211,15 +211,23 @@ export function buildAppTab(input: {
     })),
   ];
   const local = input.local;
+  const localMachines = input.localMachines ?? [];
+  const localMachine = localMachines.find(
+    (machine) => machine.environmentId === local?.environmentId,
+  );
+  const localRows =
+    local === null
+      ? []
+      : [
+          localMachine ?? { environmentId: local.environmentId, label: "GOAT on this Mac" },
+          ...localMachines.filter((machine) => machine.environmentId !== local?.environmentId),
+        ];
   return {
     rows: [
       ...remote,
       ...(local === null
         ? []
-        : (input.localMachines?.length
-            ? input.localMachines
-            : [{ environmentId: local.environmentId, label: "GOAT on this Mac" }]
-          ).map((machine, index) => ({
+        : localRows.map((machine, index) => ({
             id: index === 0 ? "local" : `local-host:${machine.environmentId}`,
             kind: "local" as const,
             environmentId: machine.environmentId,
@@ -231,7 +239,9 @@ export function buildAppTab(input: {
             fromVersion: local.currentVersion,
             toVersion: local.version,
             runningThreads:
-              machine.environmentId === null ? 0 : input.runningThreads(machine.environmentId),
+              index !== 0 || local.environmentId === null
+                ? 0
+                : input.runningThreads(local.environmentId),
             selectable: index === 0,
           }))),
     ],
@@ -322,6 +332,10 @@ export function selectedRows(
   unchecked: ReadonlySet<string>,
 ): ReadonlyArray<UpdateDialogRow> {
   return tab.rows.filter((row) => row.selectable && !unchecked.has(row.id));
+}
+
+export function countUpdateTab(tab: UpdateDialogTab): number {
+  return tab.rows.filter((row) => row.selectable).length;
 }
 
 export function updateButtonLabel(count: number): string {

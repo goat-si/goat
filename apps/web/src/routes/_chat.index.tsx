@@ -17,7 +17,11 @@ import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useGlobalAgentStore } from "../globalAgentStore";
-import { confirmPromotedGlobalAgent, resolveGlobalAgent } from "../globalAgentResolver";
+import {
+  confirmPromotedGlobalAgent,
+  resolveGlobalAgent,
+  selectGlobalAgentScratchEnvironment,
+} from "../globalAgentResolver";
 import type { GlobalAgentDraftState } from "../globalAgentResolver";
 import { buildThreadRouteParams } from "../threadRoutes";
 import {
@@ -58,7 +62,7 @@ function IndexDraftLanding() {
   const navigate = useNavigate();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const { scratchEnvironmentId, openScratchProject } = useScratchProject();
+  const { scratchEnvironmentId, scratchWorkspaceRootFor, openScratchProject } = useScratchProject();
   const globalAgentRef = useGlobalAgentStore((state) => state.ref);
   const refEnvironmentBootstrapped = useEnvironmentShellsBootstrapped(
     globalAgentRef?.environmentId ?? null,
@@ -102,10 +106,12 @@ function IndexDraftLanding() {
 
   // A saved global agent keeps its machine. Without one: the primary machine,
   // then the only machine offering projectless threads.
-  const preferredScratchEnvironmentId =
-    globalAgentRef !== null
-      ? scratchEnvironmentId(globalAgentRef.environmentId)
-      : (scratchEnvironmentId(primaryEnvironmentId ?? null) ?? scratchEnvironmentId(null));
+  const preferredScratchEnvironmentId = selectGlobalAgentScratchEnvironment(
+    globalAgentRef,
+    primaryEnvironmentId ?? null,
+    scratchWorkspaceRootFor,
+    scratchEnvironmentId,
+  );
   // Read after a confirm wait, like readMostRecentProject.
   const readScratchEnvironmentId = useEffectEvent(() => preferredScratchEnvironmentId);
   const resolution = resolveGlobalAgent({

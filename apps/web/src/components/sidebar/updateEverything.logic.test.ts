@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildAppTab,
   buildRuntimesTab,
+  countUpdateTab,
   collectServerUpdateTargets,
   describeOpenCodexUpdate,
   runWhenIdle,
@@ -120,6 +121,29 @@ describe("collectServerUpdateTargets", () => {
 const id = (value: string) => EnvironmentId.make(value);
 
 describe("buildAppTab", () => {
+  it("counts the local update once and shows waits only on the local environment", () => {
+    const tab = buildAppTab({
+      local: {
+        environmentId: id("local"),
+        currentVersion: "1.0.0",
+        version: "1.1.0",
+        channel: "latest",
+      },
+      localMachines: [
+        { environmentId: id("wsl"), label: "WSL" },
+        { environmentId: id("local"), label: "Local" },
+      ],
+      servers: [],
+      sshRuntimes: [],
+      skipped: [],
+      runningThreads: (environmentId) => (environmentId === id("local") ? 2 : 5),
+    });
+    expect(tab.rows.find((row) => row.id === "local")?.environmentId).toBe(id("local"));
+    expect(tab.rows.find((row) => row.environmentId === id("wsl"))?.runningThreads).toBe(0);
+    expect(tab.rows.find((row) => row.environmentId === id("local"))?.runningThreads).toBe(2);
+    expect(selectedRows(tab, new Set())).toHaveLength(1);
+    expect(countUpdateTab(tab)).toBe(1);
+  });
   it("names every app-hosted environment while selecting the local update only once", () => {
     const tab = buildAppTab({
       local: {

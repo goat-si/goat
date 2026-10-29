@@ -55,7 +55,7 @@ export function SettingsPageShell({
 
   return (
     <SidebarInset
-      {...workspaceAreaProps("settings", 1, "Settings")}
+      {...workspaceAreaProps("settings", 1, "Settings content")}
       className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate"
     >
       <div
