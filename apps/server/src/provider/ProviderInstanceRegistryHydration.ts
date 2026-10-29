@@ -5,15 +5,19 @@ import {
   CLOUD_SIBLING_DRIVERS,
   defaultInstanceIdForDriver,
   implicitDefaultInstance,
+  ProviderDriverKind,
+  ProviderInstanceId,
   providerInstanceConfigEnabledFlag,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
-  type ProviderInstanceId,
   ServerSettings,
 } from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
 import * as Settings from "../serverSettings.ts";
@@ -26,7 +30,7 @@ import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegis
 import * as ProviderHostLive from "./ProviderHostLive.ts";
 import type * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
-import type * as ServerConfig from "../config.ts";
+import * as ServerConfig from "../config.ts";
 
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<
@@ -37,7 +41,9 @@ type ProviderInstanceRegistryHydrationEnv =
     >
   | Settings.ServerSettingsService
   | BackgroundPolicy.BackgroundPolicy
-  | ServerConfig.ServerConfig;
+  | ServerConfig.ServerConfig
+  | Path.Path
+  | FileSystem.FileSystem;
 
 export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
@@ -76,6 +82,61 @@ export const deriveProviderInstanceConfigMap = (
 
   return merged as ProviderInstanceConfigMap;
 };
+
+export const DEV_REPLAY_INSTANCE_ID = ProviderInstanceId.make("devReplay");
+
+/**
+ * Dev servers run from source keep a free ACP agent that replays recorded turns, so UI checks
+ * need no paid model. Only settings stored inside this checkout get it, never a live GOAT home.
+ * The write waits for the settings watcher to apply it, so it must run after hydration starts.
+ */
+export const seedDevReplayInstance = Effect.fn(
+  "ProviderInstanceRegistryHydration.seedDevReplayInstance",
+)(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  if (config.devUrl === undefined) return;
+  const path = yield* Path.Path;
+  const checkoutRoot = yield* path.fromFileUrl(new URL("../../../../", import.meta.url));
+  const fromCheckout = path.relative(checkoutRoot, config.settingsPath);
+  if (fromCheckout === ".." || fromCheckout.startsWith(`..${path.sep}`)) return;
+  if (path.isAbsolute(fromCheckout)) return;
+  // Bundled servers, such as desktop dev, have no agent script.
+  const agentPath = yield* path.fromFileUrl(
+    new URL("../../scripts/dev-replay-agent.ts", import.meta.url),
+  );
+  if (!(yield* (yield* FileSystem.FileSystem).exists(agentPath))) return;
+  const commandPath = yield* HostProcess.ExecutablePath;
+  const serverSettings = yield* Settings.ServerSettingsService;
+  const existing = (yield* serverSettings.getSettings).providerInstances[DEV_REPLAY_INSTANCE_ID];
+  const existingConfig = existing?.config as Record<string, unknown> | undefined;
+  // Rewritten only when stale: the node and checkout paths can move.
+  if (
+    existingConfig?.commandPath === commandPath &&
+    (existingConfig.commandArgs as ReadonlyArray<unknown> | undefined)?.[0] === agentPath
+  ) {
+    return;
+  }
+  // Keeps user edits, such as turning the provider off.
+  const instance: ProviderInstanceConfig = {
+    displayName: "Replay (dev)",
+    ...existing,
+    driver: ProviderDriverKind.make("acpRegistry"),
+    config: { ...existingConfig, source: "local", commandPath, commandArgs: [agentPath] },
+  };
+  yield* serverSettings.updateProviderInstance({
+    operation: "upsert",
+    instanceId: DEV_REPLAY_INSTANCE_ID,
+    instance,
+  });
+});
+
+// Forked so a slow provider start cannot hold up server startup; the layer scope ends it.
+const layerDevReplaySeed = Layer.effectDiscard(
+  seedDevReplayInstance().pipe(
+    Effect.catchCause((cause) => Effect.logWarning("Dev replay agent unavailable", cause)),
+    Effect.forkScoped,
+  ),
+);
 
 /** Reconciles one settings snapshot; every runtime built from it is bound to its revision. */
 export const reconcileSnapshot = (
@@ -223,7 +284,7 @@ export const layer: Layer.Layer<
           event.revision.sequence > initial.revision.sequence,
       ),
     );
-    return settingsWatcher(afterInitial, {
+    const hydrated = settingsWatcher(afterInitial, {
       configMap: initialConfigMap,
       revision: initial?.revision,
     }).pipe(
@@ -234,6 +295,7 @@ export const layer: Layer.Layer<
           : Effect.void,
       ),
     );
+    return layerDevReplaySeed.pipe(Layer.provideMerge(hydrated));
   }),
 ).pipe(
   Layer.provide(ProviderOrchestrationAdapterInfrastructure.layerMemoryAdmission),

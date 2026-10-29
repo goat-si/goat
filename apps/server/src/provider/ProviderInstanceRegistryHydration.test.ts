@@ -3,11 +3,18 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as ServerConfig from "../config.ts";
 import * as Routes from "./CodexRouteService.ts";
 import * as RouteFixture from "./CodexRouteService.testkit.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Mutator from "./ProviderInstanceRegistryMutator.ts";
-import { layerSettingsWatcher } from "./ProviderInstanceRegistryHydration.ts";
+import {
+  DEV_REPLAY_INSTANCE_ID,
+  layerSettingsWatcher,
+  seedDevReplayInstance,
+} from "./ProviderInstanceRegistryHydration.ts";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
@@ -21,6 +28,111 @@ import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydra
 
 const projectId = ProjectId.make("project-a");
 const instanceId = ProviderInstanceId.make("codex_work");
+const devUrl = new URL("http://localhost:5733");
+
+/** Points only the seed at a dev server whose settings live where `settingsIn` says. */
+const asDevServer = <A, E, R>(
+  seed: Effect.Effect<A, E, R>,
+  url: URL | undefined,
+  settingsIn: "checkout" | "elsewhere",
+) =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    const path = yield* Path.Path;
+    const checkoutRoot = yield* path.fromFileUrl(new URL("../../../../", import.meta.url));
+    const settingsPath =
+      settingsIn === "checkout"
+        ? path.join(checkoutRoot, ".goat", "dev", "settings.json")
+        : config.settingsPath;
+    return yield* seed.pipe(
+      Effect.provideService(ServerConfig.ServerConfig, { ...config, devUrl: url, settingsPath }),
+    );
+  });
+
+describe("seedDevReplayInstance", () => {
+  const seeded = (url: URL | undefined, settingsIn: "checkout" | "elsewhere") =>
+    Effect.gen(function* () {
+      yield* asDevServer(seedDevReplayInstance(), url, settingsIn);
+      const settings = yield* Settings.ServerSettingsService;
+      return (yield* settings.getSettings).providerInstances[DEV_REPLAY_INSTANCE_ID];
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          ServerConfig.layerTest(process.cwd(), { prefix: "goat-dev-replay-seed-" }),
+          Settings.ServerSettingsService.layerTest({
+            providerInstances: {
+              [DEV_REPLAY_INSTANCE_ID]: {
+                driver: ProviderDriverKind.make("acpRegistry"),
+                displayName: "My replay",
+                enabled: false,
+                config: { source: "local", commandPath: "/old/node" },
+              },
+            },
+          }),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
+      ),
+    );
+
+  effectIt.effect("leaves settings alone outside dev", () =>
+    seeded(undefined, "checkout").pipe(
+      Effect.map((instance) =>
+        expect(instance?.config).toEqual({ source: "local", commandPath: "/old/node" }),
+      ),
+    ),
+  );
+
+  effectIt.effect(
+    "never seeds settings stored outside this checkout, such as a live GOAT home",
+    () =>
+      seeded(devUrl, "elsewhere").pipe(
+        Effect.map((instance) =>
+          expect(instance?.config).toEqual({ source: "local", commandPath: "/old/node" }),
+        ),
+      ),
+  );
+
+  effectIt.effect("points a dev worktree at the replay agent and keeps user edits", () =>
+    seeded(devUrl, "checkout").pipe(
+      Effect.map((instance) => {
+        expect(instance?.displayName).toBe("My replay");
+        expect(instance?.enabled).toBe(false);
+        expect(instance?.config).toMatchObject({
+          source: "local",
+          commandArgs: [expect.stringMatching(/scripts[/\\]dev-replay-agent\.ts$/)],
+        });
+      }),
+    ),
+  );
+
+  effectIt.effect("completes once the hydration watcher has reconciled the seeded instance", () =>
+    Effect.gen(function* () {
+      const reconciled = yield* Deferred.make<void>();
+      yield* Effect.gen(function* () {
+        const settings = yield* Settings.ServerSettingsService;
+        yield* settings.start;
+        yield* asDevServer(seedDevReplayInstance(), devUrl, "checkout");
+        expect(yield* Deferred.isDone(reconciled)).toBe(true);
+        expect(
+          (yield* settings.getSettings).providerInstances[DEV_REPLAY_INSTANCE_ID]?.driver,
+        ).toBe("acpRegistry");
+      }).pipe(
+        Effect.provide(
+          layerSettingsWatcher.pipe(
+            Layer.provide(
+              Layer.succeed(Mutator.ProviderInstanceRegistryMutator, {
+                reconcile: (config) =>
+                  config[DEV_REPLAY_INSTANCE_ID]
+                    ? Deferred.succeed(reconciled, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+              }),
+            ),
+            Layer.provideMerge(RouteFixture.layer),
+          ),
+        ),
+      );
+    }),
+  );
+});
 
 function settingsWith(overrides: Partial<ServerSettings>): ServerSettings {
   return { ...DEFAULT_SERVER_SETTINGS, ...overrides };
