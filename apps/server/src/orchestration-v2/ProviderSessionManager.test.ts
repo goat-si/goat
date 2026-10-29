@@ -66,7 +66,6 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -74,7 +73,6 @@ import * as Random from "effect/Random";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import { HttpServer } from "effect/http";
-
 import { ProviderWorkspaceMissingError } from "../provider/Errors.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -82,7 +80,6 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
@@ -106,111 +103,16 @@ import { askComputer, carriesSkill } from "./ComputerUseSkill.testkit.ts";
 import * as CommandOutputHub from "./CommandOutputHub.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
-const layerTestDatabase = SqlitePersistence.layerMemory;
-const layerTestStores = Layer.merge(EventStore.layer, ProjectionStore.layer).pipe(
-  Layer.provide(layerTestDatabase),
-);
-const layerTestEventSink = EventSink.layer.pipe(
-  Layer.provide(Layer.mergeAll(layerTestStores, layerTestDatabase)),
-);
-const layerFailingReleaseEventSink = Layer.effect(
-  EventSink.EventSinkV2,
-  Effect.gen(function* () {
-    const delegate = yield* EventSink.EventSinkV2;
-    return EventSink.EventSinkV2.of({
-      ...delegate,
-      write: (input) =>
-        input.events.some(
-          (event) =>
-            event.type === "provider-session.updated" &&
-            (event.payload.status === "stopped" || event.payload.status === "error"),
-        )
-          ? Effect.fail(new EventSink.EventSinkWriteError({ eventCount: input.events.length }))
-          : delegate.write(input),
-    });
-  }),
-).pipe(Layer.provide(layerTestEventSink));
-
-interface FlakyReleaseWrites {
-  readonly failing: Ref.Ref<"none" | "session" | "session-and-requests">;
-  readonly failures: Queue.Queue<void>;
-  readonly pauseRequestWrites?: {
-    readonly paused: Deferred.Deferred<void>;
-    readonly resume: Deferred.Deferred<void>;
-  };
-}
-
-const layerFlakyReleaseEventSink = (flaky: FlakyReleaseWrites) =>
-  Layer.effect(
-    EventSink.EventSinkV2,
-    Effect.gen(function* () {
-      const delegate = yield* EventSink.EventSinkV2;
-      return EventSink.EventSinkV2.of({
-        ...delegate,
-        write: (input) =>
-          Effect.gen(function* () {
-            const failing = yield* Ref.get(flaky.failing);
-            const fails = input.events.some(
-              (event) =>
-                (failing !== "none" &&
-                  event.type === "provider-session.updated" &&
-                  (event.payload.status === "stopped" || event.payload.status === "error")) ||
-                (failing === "session-and-requests" && event.type === "runtime-request.updated"),
-            );
-            const pause = flaky.pauseRequestWrites;
-            if (
-              pause !== undefined &&
-              input.events.some((event) => event.type === "runtime-request.updated")
-            ) {
-              yield* Deferred.succeed(pause.paused, undefined);
-              yield* Deferred.await(pause.resume);
-            }
-            if (!fails) return yield* delegate.write(input);
-            yield* Queue.offer(flaky.failures, undefined);
-            return yield* Effect.die(new Error("simulated commit failure"));
-          }),
-      });
-    }),
-  ).pipe(Layer.provide(layerTestEventSink));
-
-const layerPausingAttachEventSink = (pause: {
-  readonly armed: Ref.Ref<boolean>;
-  readonly paused: Deferred.Deferred<void>;
-}) =>
-  Layer.effect(
-    EventSink.EventSinkV2,
-    Effect.gen(function* () {
-      const delegate = yield* EventSink.EventSinkV2;
-      return EventSink.EventSinkV2.of({
-        ...delegate,
-        write: (input) =>
-          Effect.gen(function* () {
-            const attach = input.events.some((event) => event.type === "provider-session.attached");
-            if (attach && (yield* Ref.getAndSet(pause.armed, false))) {
-              yield* Deferred.succeed(pause.paused, undefined);
-              return yield* Effect.never;
-            }
-            return yield* delegate.write(input);
-          }),
-      });
-    }),
-  ).pipe(Layer.provide(layerTestEventSink));
-
-const layerBeforeUnchangedWriteEventSink = (before: Ref.Ref<Effect.Effect<void>>) =>
-  Layer.effect(
-    EventSink.EventSinkV2,
-    Effect.gen(function* () {
-      const delegate = yield* EventSink.EventSinkV2;
-      return EventSink.EventSinkV2.of({
-        ...delegate,
-        writeIfProviderThreadUnchanged: (input) =>
-          Ref.getAndSet(before, Effect.void).pipe(
-            Effect.flatten,
-            Effect.andThen(delegate.writeIfProviderThreadUnchanged(input)),
-          ),
-      });
-    }),
-  ).pipe(Layer.provide(layerTestEventSink));
+import {
+  layerTestDatabase,
+  layerTestStores,
+  layerTestEventSink,
+  layerFailingReleaseEventSink,
+  type FlakyReleaseWrites,
+  layerFlakyReleaseEventSink,
+  layerPausingAttachEventSink,
+  layerBeforeUnchangedWriteEventSink,
+} from "./ProviderSessionManager.persistence.testkit.ts";
 
 const CodexCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
 const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
@@ -3653,6 +3555,92 @@ it.effect("ProviderSessionManagerV2 settles a request the event pump persists du
       Effect.provide(layerTest({ state, idleTimeoutMs: 60_000, flakyReleaseWrites: flaky })),
     );
   }),
+);
+
+it.effect.each(["manual_shutdown", "server_shutdown"] as const)(
+  "ProviderSessionManagerV2 preserves questions only for server shutdown (%s)",
+  (reason) =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+        const now = yield* DateTime.now;
+        const projectId = yield* idAllocator.allocate.project({
+          fixtureName: "provider-session-manager-request-expire",
+        });
+        const threadId = yield* idAllocator.allocate.thread({
+          fixtureName: "provider-session-manager-request-expire",
+          projectId,
+        });
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        const providerThread = makeProviderThread({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          now,
+        });
+
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const pendingRequest = yield* makePendingRuntimeRequestEvents({
+          idAllocator,
+          threadId,
+          providerSessionId,
+          providerThread,
+          now,
+        });
+        yield* eventSink.write({
+          events: pendingRequest.events.map((event) =>
+            event.type === "turn-item.updated"
+              ? {
+                  ...event,
+                  payload: {
+                    ...event.payload,
+                    type: "user_input_request",
+                    questions: [
+                      { id: "color", header: "Color", question: "Which color?", options: [] },
+                    ],
+                  },
+                }
+              : event.type === "runtime-request.updated"
+                ? { ...event, payload: { ...event.payload, kind: "user_input" } }
+                : event,
+          ),
+        });
+        yield* manager.open({
+          threadId,
+          providerSessionId,
+          modelSelection,
+          runtimePolicy,
+        });
+        yield* manager.release({
+          providerSessionId,
+          reason,
+        });
+
+        const projection = yield* projectionStore.getThreadProjection(threadId);
+        const request = projection.runtimeRequests.at(-1);
+        const requestNode = projection.nodes.find((node) => node.id === request?.nodeId);
+        const requestTurnItem = projection.turnItems.find(
+          (item) => item.type === "user_input_request" && item.requestId === request?.id,
+        );
+
+        const preserved = reason === "server_shutdown";
+        assert.equal(request?.status, preserved ? "pending" : "cancelled");
+        assert.equal(request?.responseCapability.type, preserved ? "live" : "not_resumable");
+        assert.equal(requestNode?.status, preserved ? "waiting" : "cancelled");
+        assert.equal(requestTurnItem?.status, preserved ? "waiting" : "cancelled");
+      });
+
+      yield* effect.pipe(Effect.provide(layerTest({ state, idleTimeoutMs: 1000 })));
+    }),
 );
 
 it.effect("ProviderSessionManagerV2 persists session-scoped runtime requests without a run", () =>
