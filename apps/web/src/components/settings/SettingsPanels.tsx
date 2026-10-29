@@ -97,6 +97,8 @@ import {
   useSettingsSearchTargetId,
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
+import { SnoozeSettingsSections } from "./SnoozeSettingsSections";
+import { snoozePresetsChanged } from "./SnoozePresetsSettings.logic";
 import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { PullRequestWatchSettings } from "./PullRequestWatchSettings";
 import { ComposerSettingsSection } from "./ComposerSettingsSection";
@@ -510,6 +512,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
       ? ["Snooze until limits reset"]
       : []),
+    ...(snoozePresetsChanged(settings.snoozePresets) ? ["Snooze options"] : []),
     ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
     ...(settings.persistComposerContextStrip !==
     DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
@@ -670,6 +673,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
       autoResumeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.autoResumeLimitedThreads,
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
+      snoozePresets: DEFAULT_UNIFIED_SETTINGS.snoozePresets,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       automaticServerUpdates: DEFAULT_UNIFIED_SETTINGS.automaticServerUpdates,
@@ -1000,40 +1004,7 @@ export function GeneralSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection id="usage-limits" title="Usage limits">
-        <SettingsRow
-          serverScoped
-          {...searchableSetting("auto-resume-limited-threads")}
-          description="Resume usage-limit stops at the reported reset time. Each thread can cancel its scheduled continuation."
-          settingKeys={["autoResumeLimitedThreads"]}
-          control={
-            <ScopedSwitch
-              settingKeys={["autoResumeLimitedThreads"]}
-              checked={settings.autoResumeLimitedThreads}
-              onCheckedChange={(checked) =>
-                updateSettings({ autoResumeLimitedThreads: Boolean(checked) })
-              }
-              aria-label="Resume after usage limits"
-            />
-          }
-        />
-        <SettingsRow
-          serverScoped
-          {...searchableSetting("snooze-limited-threads")}
-          description="Snooze usage-limit stops until reset. Pair with resume to continue on wake."
-          settingKeys={["snoozeLimitedThreads"]}
-          control={
-            <ScopedSwitch
-              settingKeys={["snoozeLimitedThreads"]}
-              checked={settings.snoozeLimitedThreads}
-              onCheckedChange={(checked) =>
-                updateSettings({ snoozeLimitedThreads: Boolean(checked) })
-              }
-              aria-label="Snooze until limits reset"
-            />
-          }
-        />
-      </SettingsSection>
+      <SnoozeSettingsSections />
 
       <SettingsSection id="thread-cleanup" title="Thread cleanup">
         <SettingsRow

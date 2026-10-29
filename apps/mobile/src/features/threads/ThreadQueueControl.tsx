@@ -4,6 +4,8 @@ import {
   queuedRunEditBlockedReason,
 } from "@goat/client-runtime/queued-run-edit";
 import { useAtomValue } from "@effect/atom-react";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { Image } from "expo-image";
@@ -28,6 +30,9 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { NativeStackScreenOptions, nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
 import { useAssetUrl } from "../../state/assets";
+import { useQuietThreadShell } from "../../state/entities";
+import { useEnvironmentQuery } from "../../state/query";
+import { serverEnvironment } from "../../state/server";
 import { assetImageSource } from "../../lib/assetImageSource";
 import { beginQueuedRunEdit, useQueuedRunEdit } from "../../state/queued-run-edit";
 import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
@@ -52,6 +57,46 @@ const EMPTY_QUEUED_COUNT_ATOM = Atom.make(0).pipe(
 type QueueTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
 type QueueAction = "steer" | "edit" | "up" | "down" | "remove";
 type QueueRowLayout = { readonly id: RunId; readonly y?: number; readonly height?: number };
+
+type QueueMessage = NonNullable<
+  NonNullable<ReturnType<typeof useThreadQueueWorkflow>>["queuedRuns"][number]["message"]
+>;
+
+function QueuedSender({
+  environmentId,
+  message,
+}: {
+  environmentId: EnvironmentId;
+  message: QueueMessage;
+}) {
+  const presentation = resolveUserMessagePresentation(message);
+  const sender = useQuietThreadShell(
+    message.senderThreadId && presentation.attribution === "agent"
+      ? scopeThreadRef(environmentId, message.senderThreadId)
+      : null,
+  );
+  const tasks = useEnvironmentQuery(
+    presentation.scheduledTaskId
+      ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} })
+      : null,
+  );
+  const label =
+    presentation.attribution === "automation"
+      ? (tasks.data?.tasks.find((task) => task.id === presentation.scheduledTaskId)?.title ??
+        "Automation")
+      : presentation.attribution === "agent"
+        ? message.senderThreadId
+          ? sender?.title.trim() || "Agent"
+          : (message.context?.remoteSender?.title ?? "Agent")
+        : presentation.attribution !== "guest" &&
+            message.createdBy === "agent" &&
+            message.creationSource === "server"
+          ? "Sent by GOAT"
+          : null;
+  return label ? (
+    <Text className="font-goat-medium text-foreground-muted">{`${label}  `}</Text>
+  ) : null;
+}
 
 export function useThreadQueueWorkflow(target: QueueTarget) {
   return useAtomValue(environmentThreadDetails.queueWorkflowAtom(target));
@@ -230,7 +275,7 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
           No messages waiting in this queue.
         </Text>
       ) : null}
-      {queuedRuns.map(({ run, text, attachments, context }, index) => {
+      {queuedRuns.map(({ run, text, attachments, context, message }, index) => {
         const layout = dragRows?.find((row) => row.id === run.id);
         const offset =
           sourceLayout?.y !== undefined &&
@@ -412,6 +457,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                             {`${context.guest.name}  `}
                           </Text>
                         )}
+                        {message ? (
+                          <QueuedSender environmentId={target.environmentId} message={message} />
+                        ) : null}
                         {title}
                       </Text>
                       {controls.isEditing ? (

@@ -234,7 +234,10 @@ import {
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
 import { type PreparedRunRetryServices, retryPreparedRun } from "./mcp/launchWatchRearm.ts";
-import { coalesceThreadLiveStream } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
+import {
+  coalesceLiveUpdatedEvents,
+  coalesceThreadLiveStream,
+} from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
@@ -647,6 +650,7 @@ export const enqueuePublicOrchestrationCommand = <A, E>(
 
 function shouldUseBoundedThreadSnapshot(input: {
   readonly acceptBoundedSnapshot?: boolean;
+  readonly acceptDeferredWork?: boolean;
 }): boolean {
   return input.acceptBoundedSnapshot === true;
 }
@@ -797,6 +801,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly afterSequence?: number;
     readonly requestCompletionMarker?: boolean;
     readonly acceptBoundedSnapshot?: boolean;
+    readonly acceptDeferredWork?: boolean;
     readonly acceptCompactTurnItems?: boolean;
     readonly acceptDedupedBodies?: boolean;
     readonly acceptCompactIds?: boolean;
@@ -884,6 +889,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         useBoundedSnapshot
           ? threadManagement.getThreadSnapshotWindow(input.threadId, {
               rowLimit: THREAD_HISTORY_SNAPSHOT_ROW_LIMIT,
+              deferWork: input.acceptDeferredWork === true,
               userTurnLimit: THREAD_HISTORY_PAGE_POLICY.maxUserTurns,
             })
           : threadManagement.getThreadSnapshot(input.threadId)
@@ -974,7 +980,9 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         // Retained creation events may describe deleted threads; replace replay only if a snapshot exists.
         if (shell !== null) return yield* snapshotThenLive();
       }
-      const replay = yield* loadReplayThrough(input.afterSequence, highWater);
+      const replay = coalesceLiveUpdatedEvents(
+        yield* loadReplayThrough(input.afterSequence, highWater),
+      );
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,
@@ -1326,6 +1334,10 @@ export const layerWsRpc = (
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
       const crypto = yield* Crypto.Crypto;
       const connectionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      // RPC client ids are only unique within one socket; terminals share viewers across sockets.
+      const terminalViewerPrefix = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      const terminalViewerId = (metadata: { readonly client: { readonly id: number } }) =>
+        `${terminalViewerPrefix}:${metadata.client.id}`;
       const serverCommandId = (tag: string) =>
         crypto.randomUUIDv4().pipe(
           Effect.orDie,
@@ -3394,15 +3406,11 @@ export const layerWsRpc = (
         [WS_METHODS.reviewGetDiffPreview]: (input) => review.getDiffPreview(input),
         [WS_METHODS.reviewGetDiffFileContents]: (input) => review.getDiffFileContents(input),
         [WS_METHODS.terminalOpen]: (input) => terminalManager.open(input),
-        [WS_METHODS.terminalAttach]: (input) =>
-          terminalOutputStream(
-            (listener, registerCleanup) =>
-              terminalManager.attachStream(input, listener, registerCleanup),
-            (listener, registerCleanup) =>
-              terminalManager.resyncStream(input, listener, registerCleanup),
-          ),
+        [WS_METHODS.terminalAttach]: (input, metadata) =>
+          terminalManager.attachOutputStream(input, terminalViewerId(metadata)),
         [WS_METHODS.terminalWrite]: (input) => terminalManager.write(input),
-        [WS_METHODS.terminalResize]: (input) => terminalManager.resize(input),
+        [WS_METHODS.terminalResize]: (input, metadata) =>
+          terminalManager.resize(input, terminalViewerId(metadata)),
         [WS_METHODS.terminalClear]: (input) => terminalManager.clear(input),
         [WS_METHODS.terminalRestart]: (input) => terminalManager.restart(input),
         [WS_METHODS.terminalClose]: (input) => terminalManager.close(input),

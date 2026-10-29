@@ -146,6 +146,10 @@ type WhenToken =
 
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle" },
+  { key: "f6", command: "workspace.focusNext" },
+  { key: "shift+f6", command: "workspace.focusPrevious" },
+  { key: "mod+f6", command: "workspace.focusNext" },
+  { key: "mod+shift+f6", command: "workspace.focusPrevious" },
   { key: "mod+alt+u", command: "sidebar.toggleActivity" },
   { key: "mod+[", command: "navigation.back", when: "!terminalFocus" },
   { key: "mod+]", command: "navigation.forward", when: "!terminalFocus" },

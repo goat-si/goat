@@ -161,7 +161,7 @@ function FileDiffCards(props: {
   readonly files: ReadonlyArray<FileDiffMetadata>;
   readonly patch: string;
   readonly runId: RunId;
-  /** Set when the cards show the edit's own patch, which the panel can show mid-turn. */
+  /** Set when the cards show the edit's own patch, which the panel then opens. */
   readonly sourceItem?: DiffPanelSourceItem;
   readonly workspaceRoot: string | undefined;
   readonly resolvedTheme: "light" | "dark";

@@ -6,6 +6,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import { ChildProcessSpawner } from "effect/process";
@@ -60,6 +62,69 @@ const layerFor = (
   );
 
 describe("GitCafeSourceControlProvider", () => {
+  it.effect("follows only bounded same-origin API redirects with safe methods", () =>
+    Effect.gen(function* () {
+      const run = (status: number, location: string, method: "GET" | "POST", loop = false) => {
+        const sent: Array<{ url: string; method: string; redirect: string | undefined }> = [];
+        const client = HttpClient.make((request, _url, _signal, fiber) => {
+          sent.push({
+            url: request.url,
+            method: request.method,
+            redirect: Context.getOrUndefined(fiber.context, FetchHttpClient.RequestInit)?.redirect,
+          });
+          assert.strictEqual(request.headers.authorization, "Bearer env-token");
+          const response =
+            sent.length === 1 || loop
+              ? new Response(null, { status, headers: { location } })
+              : new Response("{}");
+          return Effect.succeed(HttpClientResponse.fromWeb(request, response));
+        });
+        return {
+          sent,
+          effect: GitCafeApi.GitCafeApi.pipe(
+            Effect.flatMap((api) =>
+              api.request({ host: "git.cafe", operation: "test", method, path: "/old" }),
+            ),
+            Effect.provide(layerFor(client)),
+          ),
+        };
+      };
+      const accepted = run(301, "/api/new", "GET");
+      yield* accepted.effect;
+      assert.deepStrictEqual(
+        accepted.sent.map((r) => r.url),
+        ["https://git.cafe/api/old", "https://git.cafe/api/new"],
+      );
+      assert.deepStrictEqual(
+        accepted.sent.map((r) => r.redirect),
+        ["manual", "manual"],
+      );
+      for (const location of [
+        "https://evil.example/api/new",
+        "//staging.git.cafe/api/new",
+        "/new",
+        "https://user@git.cafe/api/new",
+        "/api/%2f..%2fnew",
+      ]) {
+        const rejected = run(301, location, "GET");
+        yield* rejected.effect.pipe(Effect.flip);
+        assert.strictEqual(rejected.sent.length, 1);
+      }
+      const unsafe = run(302, "/api/new", "POST");
+      yield* unsafe.effect.pipe(Effect.flip);
+      assert.strictEqual(unsafe.sent.length, 1);
+      const preserving = run(307, "/api/new", "POST");
+      yield* preserving.effect;
+      assert.deepStrictEqual(
+        preserving.sent.map((r) => r.method),
+        ["POST", "POST"],
+      );
+      const loop = run(301, "/api/old", "GET", true);
+      yield* loop.effect.pipe(Effect.flip);
+      assert.strictEqual(loop.sent.length, 4);
+    }),
+  );
+
   it("reads a signed-in account and keeps transient failures apart from sign-out", () => {
     const { parseAuth } = GitCafeSourceControlProvider;
     const signedIn = parseAuth(

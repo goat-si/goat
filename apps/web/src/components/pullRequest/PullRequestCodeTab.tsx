@@ -33,15 +33,7 @@ import {
 } from "~/components/solar/nodes";
 import { useAtomRefresh } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
-import {
-  createContext,
-  use,
-  useEffect,
-  useEffectEvent,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, updateClientSettings } from "~/hooks/useSettings";
@@ -85,7 +77,6 @@ import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
-import { Checkbox } from "../ui/checkbox";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   DropdownMenu,
@@ -107,6 +98,7 @@ import {
   toViewerSide,
 } from "./PullRequestReviewAnnotation";
 import {
+  getFileViewedRange,
   isFileDiffCollapsed,
   isLineInFileDiff,
   toggleFileDiffFoldForViewed,
@@ -115,6 +107,7 @@ import {
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import { PullRequestDiffUnavailableState } from "./PullRequestDiffUnavailableState";
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
+import { FileViewedToggle, FileViewedToggleContext } from "./FileViewedToggle";
 import {
   nextPendingReviewCommentId,
   pullRequestReviewKey,
@@ -170,59 +163,6 @@ function parseSlice(slice: DiffSlice, cacheKey: string, ignoreWhitespace: boolea
   });
   parses.set(cacheKey, parsed);
   return parsed;
-}
-
-interface FileViewedToggleState {
-  readonly enabled: boolean;
-  readonly isViewed: (path: string) => boolean;
-  readonly isStale: (path: string) => boolean;
-  readonly setFileViewed: (fileKey: string, path: string, viewed: boolean) => void;
-}
-
-// Context updates viewed toggles without invalidating memoized header portals.
-const FileViewedToggleContext = createContext<FileViewedToggleState | null>(null);
-
-function FileViewedToggle({
-  fileKey,
-  path,
-  stat,
-}: {
-  readonly fileKey: string;
-  readonly path: string;
-  readonly stat: ReactNode;
-}) {
-  const viewedFiles = use(FileViewedToggleContext);
-  if (viewedFiles === null || !viewedFiles.enabled) return stat;
-  const viewed = viewedFiles.isViewed(path);
-  const stale = viewedFiles.isStale(path);
-  return (
-    <span className="flex items-center gap-3">
-      {stat}
-      <label
-        data-viewed-toggle=""
-        className="flex cursor-pointer select-none items-center gap-1.5 text-2xs text-muted-foreground"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <Checkbox
-          aria-label={stale ? "Changed" : "Viewed"}
-          checked={viewed}
-          onCheckedChange={(next) => viewedFiles.setFileViewed(fileKey, path, next === true)}
-        />
-        {stale ? (
-          <Tooltip>
-            <TooltipTrigger render={<span className="text-warning-foreground" />}>
-              Changed
-            </TooltipTrigger>
-            <TooltipPopup side="bottom">
-              This file has been pushed to since you marked it viewed.
-            </TooltipPopup>
-          </Tooltip>
-        ) : (
-          <span className="@max-xs:hidden">Viewed</span>
-        )}
-      </label>
-    </span>
-  );
 }
 
 interface MutableAnnotationGroup {
@@ -288,6 +228,7 @@ function PullRequestCodeTab({
     wordWrap: settings.wordWrap,
   }));
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
+  const [lastViewedFileKey, setLastViewedFileKey] = useState<string | null>(null);
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   const [foldOverride, setFoldOverride] = useState<DiffFoldOverride>(null);
   const effectiveFoldOverride =
@@ -327,6 +268,7 @@ function PullRequestCodeTab({
   const [stateScopeKey, setStateScopeKey] = useState(scopeKey);
   if (stateScopeKey !== scopeKey) {
     setStateScopeKey(scopeKey);
+    setLastViewedFileKey(null);
     setDraft(null);
     setSelectedLines(null);
     setToggledFiles(new Set());
@@ -680,10 +622,20 @@ function PullRequestCodeTab({
       return next;
     });
 
-  const setFileViewed = (fileKey: string, path: string, viewed: boolean) => {
-    setViewed(path, viewed);
+  const setFileViewed = (fileKey: string, viewed: boolean, extendRange: boolean) => {
+    const range = getFileViewedRange(
+      annotatedFiles,
+      fileKey,
+      extendRange ? lastViewedFileKey : null,
+    );
+    setLastViewedFileKey(fileKey);
+    for (const file of range) setViewed(file.path, viewed);
     setToggledFiles((current) =>
-      toggleFileDiffFoldForViewed(fileKey, viewed, effectiveFoldOverride, current),
+      range.reduce(
+        (next, file) =>
+          toggleFileDiffFoldForViewed(file.fileKey, viewed, effectiveFoldOverride, next),
+        current,
+      ),
     );
   };
   const fileViewedToggle = {

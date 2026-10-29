@@ -2,6 +2,7 @@
 
 import * as NodePath from "node:path";
 
+import { poolError } from "./device.ts";
 import type { StepResult } from "./journey.ts";
 import type { Pose } from "./poses.ts";
 
@@ -17,6 +18,11 @@ export interface PoseResult {
   readonly error?: string;
   /** Screenshot taken when the journey stopped early. */
   readonly stopped?: string;
+  /**
+   * Labels on the screen when the journey stopped. Diagnosis only and kept apart from `error`,
+   * so text the app shows can never make an app failure read as the pool's.
+   */
+  readonly screen?: string;
   readonly findings?: ReadonlyArray<Finding>;
 }
 
@@ -27,6 +33,31 @@ export const failedChecks = (result: PoseResult) =>
 
 export const poseFailed = (result: PoseResult) =>
   result.error !== undefined || failedChecks(result).length > 0;
+
+/** The pool never let the pose finish, so it says nothing about the app. */
+export const poolBlocked = (result: PoseResult) =>
+  result.error !== undefined && poolError(result.error) && failedChecks(result).length === 0;
+
+/** A pose whose journey stopped on `error`, with what the device showed at that moment. */
+export function stoppedResult(input: {
+  readonly pose: Pose;
+  readonly steps: ReadonlyArray<StepResult>;
+  readonly error: unknown;
+  readonly labels?: string;
+  readonly stopped?: string;
+}): PoseResult {
+  return {
+    pose: input.pose,
+    steps: input.steps,
+    error: input.error instanceof Error ? input.error.message : String(input.error),
+    ...(input.labels ? { screen: input.labels } : {}),
+    ...(input.stopped ? { stopped: input.stopped } : {}),
+  };
+}
+
+/** The error as people read it, with the stopped screen's labels after it. */
+export const describeError = (result: PoseResult) =>
+  result.error && result.screen ? `${result.error} (screen: ${result.screen})` : result.error;
 
 const escapeHtml = (value: string) =>
   value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -75,16 +106,17 @@ export function renderReport(results: ReadonlyArray<PoseResult>, outputDirectory
         })
         .join("");
       const error = result.error
-        ? `<td class="bad"><h3>stopped</h3>${result.stopped ? `<a href="${relative(result.stopped)}"><img src="${relative(result.stopped)}"></a>` : ""}<p class="fail">${escapeHtml(result.error)}</p></td>`
+        ? `<td class="bad"><h3>${poolBlocked(result) ? "blocked by the pool" : "stopped"}</h3>${result.stopped ? `<a href="${relative(result.stopped)}"><img src="${relative(result.stopped)}"></a>` : ""}<p class="fail">${escapeHtml(describeError(result) ?? "")}</p></td>`
         : "";
       return `<tr><th>${escapeHtml(result.pose.id)}<br><small>${escapeHtml(describePose(result.pose))}</small></th>${cells}${error}</tr>`;
     })
     .join("");
-  const failed = results.filter(poseFailed).length;
+  const failed = results.filter((result) => poseFailed(result) && !poolBlocked(result)).length;
+  const blocked = results.filter(poolBlocked).length;
   const findings = results.reduce((count, result) => count + (result.findings?.length ?? 0), 0);
   return `<!doctype html><meta charset="utf-8"><title>Mobile E2E</title>
 <style>body{font:14px system-ui;margin:24px}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:8px;vertical-align:top;text-align:left}td{width:190px}td.bad{background:#fff5f4}h3{margin:0 0 6px;font-size:13px}img{width:180px;display:block;margin:0 0 6px}img.lag{outline:3px solid #b42318}.pass{color:#16794a}.fail{color:#b42318}.review{color:#7a4b00}.review.high{color:#b42318}ul{padding-left:16px;margin:4px 0}small{color:#666}</style>
-<h1>Mobile E2E · ${results.length} poses · ${failed === 0 ? "all checks passed" : `${failed} with failing checks`} · ${findings} review findings</h1>
+<h1>Mobile E2E · ${results.length} poses · ${failed === 0 ? "all checks passed" : `${failed} with failing checks`}${blocked ? ` · ${blocked} blocked by the pool` : ""} · ${findings} review findings</h1>
 <p><span class="fail">✗</span> failed check <span class="review">◆</span> agent review finding</p>
 <table>${rows}</table>`;
 }

@@ -69,9 +69,11 @@ const PARENT = ThreadId.make("thread:compact-transport:parent");
 const FORK = ThreadId.make("thread:compact-transport:fork");
 const LONG = ThreadId.make("thread:compact-transport:long");
 const BODIES = ThreadId.make("thread:compact-transport:bodies");
+const WORK = ThreadId.make("thread:compact-transport:work");
 const parentRun = RunId.make("run:compact-transport:parent");
 const longRun = RunId.make("run:compact-transport:long");
 const bodiesRun = RunId.make("run:compact-transport:bodies");
+const workRun = RunId.make("run:compact-transport:work");
 
 const store = Layer.mergeAll(
   ProjectionStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemory)),
@@ -85,9 +87,9 @@ const management = Layer.unwrap(
       getThreadSnapshot: (id) => projections.getThreadSnapshot(id).pipe(Effect.orDie),
       getThreadSnapshotWindow: (id, options) =>
         projections.getThreadSnapshotWindow(id, options).pipe(Effect.orDie),
-      getThreadHistoryPage: (id, cursor, throughEntryId, conversationOnly) =>
+      getThreadHistoryPage: (id, cursor, throughEntryId, conversationOnly, workMode) =>
         projections
-          .getThreadHistoryPage(id, cursor, throughEntryId, conversationOnly)
+          .getThreadHistoryPage(id, cursor, throughEntryId, conversationOnly, workMode)
           .pipe(Effect.orDie),
       streamStoredEventsFrom: (input) =>
         input?.threadId === BODIES ? Stream.fromIterable(bodiesLiveTail()) : Stream.empty,
@@ -370,6 +372,48 @@ function bodiesLiveTail(): OrchestrationV2StoredEvent[] {
   ].map((event, index) => ({ sequence: 1_000 + index, commandId: null, event }));
 }
 
+// One finished turn with more completed commands than a client shows inline.
+function workEvents(at: DateTime.Utc): OrchestrationV2DomainEvent[] {
+  const prompt = {
+    id: EventId.make(`event:${WORK}:prompt`),
+    type: "turn-item.updated",
+    threadId: WORK,
+    runId: workRun,
+    occurredAt: at,
+    payload: {
+      id: TurnItemId.make(`turn-item:${WORK}:prompt`),
+      threadId: WORK,
+      runId: workRun,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal: 1,
+      status: "completed",
+      title: null,
+      startedAt: at,
+      completedAt: at,
+      updatedAt: at,
+      type: "user_message",
+      messageId: MessageId.make(`message:${workRun}`),
+      inputIntent: "turn_start",
+      text: "Run the checks.",
+      attachments: [],
+      createdBy: "user",
+      creationSource: "web",
+    },
+  } as OrchestrationV2DomainEvent;
+  return [
+    threadCreated(WORK, at),
+    runCreated(WORK, workRun, at),
+    prompt,
+    ...Array.from({ length: 160 }, (_, index) =>
+      itemUpdated(WORK, workRun, `work-${index}`, index + 2, at),
+    ),
+  ];
+}
+
 const seed = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const at = yield* DateTime.now;
@@ -387,6 +431,7 @@ const seed = Effect.gen(function* () {
     ),
     itemUpdated(LONG, longRun, "result", 92, at, "run_interrupt_result"),
     ...bodiesEvents(at),
+    ...workEvents(at),
   ];
   for (const event of events) yield* projections.apply(event);
 });
@@ -569,6 +614,81 @@ it.layer(TestLayer)("compact bounded snapshot transport", (it) => {
             turnItemsOmitLocalVisible: undefined,
           },
           { ...legacy.decoded, turnItemsOmitLocalVisible: undefined },
+        );
+      }),
+    );
+  });
+
+  describe("deferred work", () => {
+    const thread = `/api/orchestration/threads/${encodeURIComponent(WORK)}`;
+
+    it.effect("HTTP: only clients that ask for deferred work get a collapsed work group", () =>
+      withHttp(async (get) => {
+        const legacyBody = await (await get(`${thread}/bounded`)).text();
+        assert.strictEqual(await (await get(`${thread}/bounded?deferWork=yes`)).text(), legacyBody);
+        assert.notInclude(legacyBody, "deferredWork");
+        assert.lengthOf(decodeBounded(legacyBody).projection.visibleTurnItems, 161);
+
+        const deferred = decodeBounded(await (await get(`${thread}/bounded?deferWork=1`)).text());
+        const anchors = deferred.projection.visibleTurnItems.filter(
+          (row) => row.item.deferredWork !== undefined,
+        );
+        assert.lengthOf(anchors, 1);
+        assert.lengthOf(deferred.projection.visibleTurnItems, 2);
+        const anchor = anchors[0]!;
+        assert.strictEqual(anchor.item.deferredWork?.itemCount, 160);
+        // The client's compact encodings carry the same anchor.
+        const compact = decodeBounded(
+          await (
+            await get(
+              `${thread}/bounded?deferWork=1&compactTurnItems=1&dedupeBodies=1&compactIds=1`,
+            )
+          ).text(),
+        );
+        assert.deepStrictEqual(
+          boundedSnapshotProjection(compact).visibleTurnItems.map((row) => row.item.deferredWork),
+          deferred.projection.visibleTurnItems.map((row) => row.item.deferredWork),
+        );
+
+        const loaded = new Set<string>();
+        let cursor: string | null = anchor.item.deferredWork?.cursor ?? null;
+        for (let pages = 0; cursor !== null; pages += 1) {
+          assert.isBelow(pages, 5);
+          const page = decodeHistoryPage(
+            await (
+              await get(
+                `${thread}/history?view=work&cursor=${encodeURIComponent(cursor)}&throughEntryId=${encodeURIComponent(anchor.sourceItemId)}`,
+              )
+            ).text(),
+          );
+          assert.isAtMost(page.items.length, 75);
+          for (const row of page.items) loaded.add(String(row.sourceItemId));
+          cursor = page.nextCursor;
+        }
+        assert.strictEqual(loaded.size, 160);
+      }),
+    );
+
+    it.effect("WS: only clients that ask for deferred work get a collapsed work group", () =>
+      Effect.gen(function* () {
+        const legacy = yield* firstSnapshot({ threadId: WORK, acceptBoundedSnapshot: true });
+        const deferred = yield* firstSnapshot({
+          threadId: WORK,
+          acceptBoundedSnapshot: true,
+          acceptDeferredWork: true,
+        });
+
+        assert.lengthOf(legacy.decoded.projection.visibleTurnItems, 161);
+        assert.isFalse(
+          legacy.decoded.projection.visibleTurnItems.some(
+            (row) => row.item.deferredWork !== undefined,
+          ),
+        );
+        assert.deepStrictEqual(
+          deferred.decoded.projection.visibleTurnItems.map(
+            (row) => row.item.deferredWork?.itemCount,
+          ),
+          [undefined, 160],
         );
       }),
     );

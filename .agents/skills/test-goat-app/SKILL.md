@@ -35,6 +35,16 @@ Test with meaningful project and thread data. Read
 [references/sqlite-fixtures.md](references/sqlite-fixtures.md) only when
 inspecting or seeding SQLite. Stop the test server before direct fixture writes.
 
+## Drive agent turns for free
+
+Do not spend a paid model to see a turn render. `vp run dev` in a worktree registers
+the `Replay (dev)` provider, which replays recorded turns with simulated streaming
+through the real adapter and orchestration. Its models are scenarios: `showcase`
+covers thinking, a plan, tool calls, an approval, and markdown. Press
+`Ctrl+Alt+Shift+R` for a picker, or call `window.goatdev.replay("showcase")` from
+the page. When the test needs real provider behavior, use that provider's cheapest
+model, such as Haiku for Claude or Luna for Codex.
+
 For the desktop client, start `GOAT_DEV_INSECURE_SECRET_STORAGE=1 vp run dev:desktop`
 in the worktree, which keeps its isolated home. Without the flag, the unsigned dev
 build makes macOS ask for the login keychain password on start, and that prompt

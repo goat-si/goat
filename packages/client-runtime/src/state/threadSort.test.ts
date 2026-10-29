@@ -105,6 +105,30 @@ describe("sortSettledThreads", () => {
 });
 
 describe("sortThreads", () => {
+  it("orders recent project threads by the latest user message, not assistant updates", () => {
+    const threads = [
+      makeThread({
+        id: "earlier-send",
+        createdAt: "2026-03-09T09:30:00.000Z",
+        latestUserMessageAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T12:00:00.000Z",
+      }),
+      makeThread({
+        id: "later-send",
+        createdAt: "2026-03-09T09:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T11:00:00.000Z",
+        updatedAt: "2026-03-09T11:00:00.000Z",
+      }),
+    ];
+    expect(sortThreads(threads, "updated_at").map((thread) => thread.id)).toEqual([
+      "later-send",
+      "earlier-send",
+    ]);
+    expect(sortThreads(threads, "created_at").map((thread) => thread.id)).toEqual([
+      "earlier-send",
+      "later-send",
+    ]);
+  });
   it.each(["created_at", "updated_at"] as const)(
     "preserves references, input order and descending id ties for %s",
     (sortOrder) => {

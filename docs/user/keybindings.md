@@ -48,7 +48,7 @@ in Settings.
 
 With a PR open in the right panel or on the Pull requests page, use `mod+shift+c`
 to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
-Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
+Both shortcuts can be changed in Settings. Search for “Copy Link or Thread”
 or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
 ## Files panel and open files

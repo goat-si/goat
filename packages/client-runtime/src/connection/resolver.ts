@@ -163,11 +163,11 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
       });
     }
     if (profile.authorization === "t3-connect") {
-      const authorized = yield* remote.authorizeDpop({
+      const { verifiedEndpoint, ...authorized } = yield* remote.authorizeDpop({
         expectedEnvironmentId: target.environmentId,
         directEndpoint: { httpBaseUrl: profile.httpBaseUrl, wsBaseUrl: profile.wsBaseUrl },
       });
-      return { ...authorized, target } satisfies PreparedConnection;
+      return { prepared: { ...authorized, target } satisfies PreparedConnection, verifiedEndpoint };
     }
     const credential = yield* credentials.get(credentialConnectionId(target.connectionId)).pipe(
       Effect.flatMap(
@@ -188,13 +188,16 @@ const makeBearerBroker = Effect.fn("clientRuntime.connection.broker.makeBearer")
       connectionMethod: "direct",
     });
     return {
-      environmentId: authorized.environmentId,
-      label: authorized.label,
-      httpBaseUrl: authorized.httpBaseUrl,
-      socketUrl: authorized.socketUrl,
-      httpAuthorization: authorized.httpAuthorization,
-      target,
-    } satisfies PreparedConnection;
+      prepared: {
+        environmentId: authorized.environmentId,
+        label: authorized.label,
+        httpBaseUrl: authorized.httpBaseUrl,
+        socketUrl: authorized.socketUrl,
+        httpAuthorization: authorized.httpAuthorization,
+        target,
+      } satisfies PreparedConnection,
+      verifiedEndpoint: authorized.verifiedEndpoint,
+    };
   });
 });
 
@@ -391,9 +394,7 @@ export const make = Effect.gen(function* () {
             Effect.map((prepared) => ({ prepared, verifiedEndpoint: undefined })),
           );
         case "BearerConnectionTarget":
-          return bearer({ ...entry, target }).pipe(
-            Effect.map((prepared) => ({ prepared, verifiedEndpoint: undefined })),
-          );
+          return bearer({ ...entry, target });
         case "RelayConnectionTarget":
           return relay(target).pipe(
             Effect.map((prepared) => ({ prepared, verifiedEndpoint: undefined })),

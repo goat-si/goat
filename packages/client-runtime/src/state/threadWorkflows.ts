@@ -26,6 +26,7 @@ export interface QueuedThreadRun {
   readonly text: string;
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly messageId: Message["id"];
+  readonly message: Message | undefined;
   readonly context?: Message["context"];
 }
 
@@ -153,6 +154,7 @@ export function deriveThreadQueueWorkflowState(projection: Projection): ThreadQu
       text: message?.context?.guest?.text ?? message?.text ?? "Queued message",
       attachments: message?.attachments ?? [],
       messageId: run.userMessageId,
+      message,
       ...(message?.context ? { context: message.context } : {}),
     };
   });

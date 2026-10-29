@@ -35,6 +35,7 @@ import {
   ServerSettingsPatch,
   withIdleCompaction,
 } from "./settings.ts";
+import { DEFAULT_SNOOZE_PRESETS, MAX_SNOOZE_PRESETS } from "./snoozePresets.ts";
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
@@ -372,6 +373,35 @@ describe("provider enabled defaults", () => {
 });
 
 describe("ServerSettings worktree defaults", () => {
+  it("decodes settings saved before snooze options with today's snooze choices", () => {
+    expect(decodeServerSettings({}).snoozePresets).toEqual([
+      { kind: "after", minutes: 60 },
+      { kind: "after", minutes: 180 },
+      { kind: "at", day: "today", time: "18:00" },
+      { kind: "at", day: "tomorrow", time: "09:00" },
+      { kind: "at", day: "monday", time: "09:00" },
+    ]);
+    expect(DEFAULT_SERVER_SETTINGS.snoozePresets).toEqual(DEFAULT_SNOOZE_PRESETS);
+    expect(decodeServerSettings({ snoozePresets: [] }).snoozePresets).toEqual([]);
+  });
+
+  it("rejects snooze options the menu cannot resolve", () => {
+    expect(() =>
+      decodeServerSettingsPatch({ snoozePresets: [{ kind: "at", day: "today", time: "24:00" }] }),
+    ).toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({ snoozePresets: [{ kind: "after", minutes: 0 }] }),
+    ).toThrow();
+    expect(() =>
+      decodeServerSettingsPatch({
+        snoozePresets: Array.from({ length: MAX_SNOOZE_PRESETS + 1 }, (_, index) => ({
+          kind: "after",
+          minutes: index + 1,
+        })),
+      }),
+    ).toThrow();
+  });
+
   it("defaults the thread env mode to inherit and keeps stored values", () => {
     expect(decodeServerSettings({}).defaultThreadEnvMode).toBeNull();
     expect(decodeServerSettings({ defaultThreadEnvMode: "worktree" }).defaultThreadEnvMode).toBe(

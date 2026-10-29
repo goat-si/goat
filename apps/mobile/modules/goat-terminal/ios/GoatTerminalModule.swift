@@ -63,7 +63,9 @@ public class GoatTerminalModule: Module {
       Prop("captureRequest") { (view: GoatTerminalView, request: Double) in
         view.captureRequest = request
       }
+      Prop("sharedGrid") { (view: GoatTerminalView, grid: [Int]) in view.sharedGrid = grid }
       Events("onInput", "onResize", "onCapture")
+      OnViewDidUpdateProps { (view: GoatTerminalView) in view.applyPendingBuffer() }
     }
   }
 }

@@ -106,6 +106,8 @@ vi.mock("../components/Sidebar.snooze", () => ({
   resolveSnoozePresets: () => [
     { id: "hour", label: "In 1 hour", whenLabel: "3 PM", snoozedUntil: "2099-01-01T00:00:00Z" },
   ],
+  pickSnoozePreset: (shown: ReadonlyArray<{ readonly id: string }>, id: string) =>
+    shown.find((preset) => preset.id === id),
   snoozeWakeDescription: () => "later",
 }));
 vi.mock("../components/Sidebar.logic", () => ({ canPromoteThread: () => false }));

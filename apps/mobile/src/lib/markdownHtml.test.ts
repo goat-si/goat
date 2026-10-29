@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   markdownForNativeRendering,
   markdownHtmlContent,
@@ -73,6 +73,25 @@ describe("HTML in native Markdown", () => {
     const result = markdownWithHtml(markdown);
     expect(result).toContain('```html\n<img src="literal.png">\n```');
     expect(result).toContain('`<img src="inline.png">`');
+  });
+
+  it("treats an unclosed fence in an HTML block as code through the end", () => {
+    const fences = Array.from({ length: 200 }, () => "```x y").join("\n");
+    const markdown = `<details>\n<img src="before.png">\n${fences}\n<img src="after.png">\n</details>`;
+    const original = String.prototype.lastIndexOf;
+    let scans = 0;
+    using _spy = vi.spyOn(String.prototype, "lastIndexOf").mockImplementation(function (
+      this: string,
+      ...args
+    ) {
+      if (String(this) === markdown) scans += 1;
+      return original.apply(this, args);
+    });
+    const result = markdownHtmlContent(markdown);
+    expect(scans).toBeLessThan(500);
+    expect(result).toContain("![](<before.png>)");
+    expect(result).not.toContain("<details>");
+    expect(result).toContain('<img src="after.png">\n</details>');
   });
 
   it("links HTML anchors in a table cell without breaking the row at <br>", () => {
@@ -329,4 +348,12 @@ describe("Windows paths in native Markdown", () => {
     expect(urls).toEqual([image, paren, link, image, amp, htmlAmp, image]);
     expect(markdownImageSources(markdown)).toEqual([image, paren, amp, htmlAmp]);
   });
+});
+
+it("keeps backslashes in drive paths in mobile Markdown prose", () => {
+  const path = String.raw`Saved to C:\Users\me\.t3\_build\shot.png and C:/work\.config.`;
+
+  expect(parseMarkdownDocument(String.raw`${path} Then \*this\*.`).children).toMatchObject([
+    { type: "paragraph", children: [{ type: "text", value: `${path} Then *this*.` }] },
+  ]);
 });

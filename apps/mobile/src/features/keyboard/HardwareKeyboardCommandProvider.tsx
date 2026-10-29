@@ -1,7 +1,10 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { deriveCloudTaskState } from "@goat/client-runtime/state/cloud-task";
 import { Platform } from "react-native";
-import { resolveThreadReferenceCopyTarget } from "@goat/client-runtime/thread-reference";
+import {
+  resolveThreadReferenceCopyTarget,
+  threadChipCopyTarget,
+} from "@goat/client-runtime/thread-reference";
 import {
   createContext,
   use,
@@ -15,7 +18,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
+import { copyThreadReference } from "../../lib/copyThreadReference";
 import {
   firstWorkspaceDetailOpen,
   workspaceHasColumns,
@@ -149,9 +152,11 @@ export function HardwareKeyboardCommandProvider({
       if (command === "copyThreadReference") {
         if (copyTarget === null) return;
         const requestId = ++copyRequestIdRef.current;
-        void tryCopyTextWithHaptic(copyTarget.value, {
-          target: copyTarget.clipboardTarget,
-        }).then((didCopy) => {
+        const target =
+          copyTarget.kind === "thread" && activeThreadRef !== null
+            ? threadChipCopyTarget(activeThreadRef, activeThread?.title ?? "Thread")
+            : copyTarget;
+        void copyThreadReference(target).then((didCopy) => {
           if (requestId !== copyRequestIdRef.current) return;
           showCopyFeedback(
             didCopy
@@ -198,7 +203,15 @@ export function HardwareKeyboardCommandProvider({
         navigation.navigate("ThreadReview", thread);
       }
     },
-    [copyTarget, navigation, pathname, showCopyFeedback, showLocalWorkspace],
+    [
+      activeThread,
+      activeThreadRef,
+      copyTarget,
+      navigation,
+      pathname,
+      showCopyFeedback,
+      showLocalWorkspace,
+    ],
   );
 
   const palette = useMemo(

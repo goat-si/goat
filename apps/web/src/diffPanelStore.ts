@@ -1,4 +1,6 @@
 import type { GitReviewScope } from "@goat/client-runtime/state/review";
+import type { ThreadStructureVisibleTurnItem } from "@goat/client-runtime/state/shell";
+import { turnItemDetailRevision } from "@goat/client-runtime/work-log/item-detail";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import type { RunId, ScopedThreadRef, ThreadId, TurnItemId } from "@goat/contracts";
 import { create } from "zustand";
@@ -6,13 +8,14 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-/** An edit whose own patch the server holds, read with getTurnItem. */
+/** A tool call whose own patch the server holds, read with getTurnItem. */
 export interface DiffPanelSourceItem {
   readonly threadId: ThreadId;
   readonly itemId: TurnItemId;
   readonly revision: string;
 }
 
+/** Opens a turn's diff, or the edit's own patch when the server holds one. */
 export type OpenTurnDiff = (
   runId: RunId,
   filePath?: string,
@@ -22,14 +25,8 @@ export type OpenTurnDiff = (
 export type DiffPanelSelection =
   | { kind: "branch"; baseRef: string | null }
   | { kind: "uncommitted" | "staged" | "unstaged" }
-  | {
-      kind: "turn";
-      turnId: RunId;
-      filePath: string | null;
-      revealRequestId: number;
-      // Absent in selections persisted before edits could be opened mid-turn.
-      sourceItem?: DiffPanelSourceItem | null;
-    };
+  | { kind: "turn"; turnId: RunId; filePath: string | null; revealRequestId: number }
+  | ({ kind: "tool-call"; filePath: string | null; revealRequestId: number } & DiffPanelSourceItem);
 
 const DEFAULT_SELECTION: DiffPanelSelection = { kind: "branch", baseRef: null };
 
@@ -38,12 +35,8 @@ interface DiffPanelStoreState {
   branchBaseRefByThreadKey: Record<string, string | null>;
   selectGitScope: (ref: ScopedThreadRef, scope: GitReviewScope) => void;
   selectBranchBaseRef: (ref: ScopedThreadRef, baseRef: string | null) => void;
-  selectTurn: (
-    ref: ScopedThreadRef,
-    turnId: RunId,
-    filePath?: string,
-    sourceItem?: DiffPanelSourceItem,
-  ) => void;
+  selectTurn: (ref: ScopedThreadRef, turnId: RunId, filePath?: string) => void;
+  selectToolCall: (ref: ScopedThreadRef, target: DiffPanelSourceItem, filePath?: string) => void;
   reconcileTurnSelection: (ref: ScopedThreadRef, availableTurnIds: ReadonlyArray<RunId>) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -51,6 +44,12 @@ interface DiffPanelStoreState {
 function normalizeBaseRef(baseRef: string | null): string | null {
   const normalized = baseRef?.trim();
   return normalized ? normalized : null;
+}
+
+function nextRevealRequestId(previous: DiffPanelSelection | undefined): number {
+  return previous?.kind === "turn" || previous?.kind === "tool-call"
+    ? previous.revealRequestId + 1
+    : 1;
 }
 
 export const useDiffPanelStore = create<DiffPanelStoreState>()(
@@ -93,10 +92,9 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
             },
           };
         }),
-      selectTurn: (ref, turnId, filePath, sourceItem) =>
+      selectTurn: (ref, turnId, filePath) =>
         set((state) => {
           const threadKey = scopedThreadKey(ref);
-          const previous = state.byThreadKey[threadKey];
           return {
             byThreadKey: {
               ...state.byThreadKey,
@@ -104,8 +102,24 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
                 kind: "turn",
                 turnId,
                 filePath: filePath?.trim() || null,
-                revealRequestId: previous?.kind === "turn" ? previous.revealRequestId + 1 : 1,
-                sourceItem: sourceItem ?? null,
+                revealRequestId: nextRevealRequestId(state.byThreadKey[threadKey]),
+              },
+            },
+          };
+        }),
+      selectToolCall: (ref, target, filePath) =>
+        set((state) => {
+          const threadKey = scopedThreadKey(ref);
+          return {
+            byThreadKey: {
+              ...state.byThreadKey,
+              [threadKey]: {
+                kind: "tool-call",
+                threadId: target.threadId,
+                itemId: target.itemId,
+                revision: target.revision,
+                filePath: filePath?.trim() || null,
+                revealRequestId: nextRevealRequestId(state.byThreadKey[threadKey]),
               },
             },
           };
@@ -125,7 +139,7 @@ export const useDiffPanelStore = create<DiffPanelStoreState>()(
           return {
             byThreadKey: {
               ...state.byThreadKey,
-              [threadKey]: { ...previous, turnId: latestTurnId, sourceItem: null },
+              [threadKey]: { ...previous, turnId: latestTurnId },
             },
           };
         }),
@@ -199,4 +213,17 @@ export function selectThreadDiffPanelSelection(
 ): DiffPanelSelection {
   if (!ref) return DEFAULT_SELECTION;
   return byThreadKey[scopedThreadKey(ref)] ?? DEFAULT_SELECTION;
+}
+
+/** A tool call opened while it ran keeps the live revision; read it again once it settles. */
+export function resolveToolCallDiffTarget<T extends DiffPanelSourceItem>(
+  target: T,
+  items: ReadonlyArray<ThreadStructureVisibleTurnItem>,
+): T {
+  const row = items.find(
+    (row) => row.sourceThreadId === target.threadId && row.sourceItemId === target.itemId,
+  );
+  if (row?.item.type !== "file_change") return target;
+  const revision = turnItemDetailRevision(row.item);
+  return revision === target.revision ? target : { ...target, revision };
 }

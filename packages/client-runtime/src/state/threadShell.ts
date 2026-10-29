@@ -75,7 +75,7 @@ export function pendingSubagentRequestsByThread(
   let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
   for (const child of threads) {
     const request = subagentRequest(child);
-    if (request === null) continue;
+    if (request === null || request === "user_input") continue;
     byId ??= new Map(threads.map((thread) => [thread.id, thread] as const));
     const seen = new Set<ThreadId>([child.id]);
     let current: OrchestrationV2ThreadShell | undefined = child;
@@ -379,6 +379,18 @@ export function createEnvironmentThreadShellAtoms(input: {
     return refs;
   }).pipe(Atom.withLabel("environment-thread-refs"));
 
+  let previousThreadEnvironmentIds: ReadonlySet<EnvironmentId> = new Set();
+  const threadEnvironmentIdsAtom = Atom.make((get) => {
+    const next = new Set(get(threadRefsAtom).map((ref) => ref.environmentId));
+    if (
+      next.size === previousThreadEnvironmentIds.size &&
+      [...next].every((id) => previousThreadEnvironmentIds.has(id))
+    )
+      return previousThreadEnvironmentIds;
+    previousThreadEnvironmentIds = next;
+    return next;
+  }).pipe(Atom.withLabel("environment-thread-environment-ids"));
+
   let previousThreadShells: ReadonlyArray<EnvironmentThreadShell> = [];
   const threadShellsAtom = Atom.make((get) => {
     const next: EnvironmentThreadShell[] = [];
@@ -448,6 +460,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     environmentThreadRefsAtom,
     environmentThreadRefsByProjectAtom,
     threadRefsAtom,
+    threadEnvironmentIdsAtom,
     threadShellsAtom,
     quietThreadShellsAtom,
     navigationThreadShellsAtom,

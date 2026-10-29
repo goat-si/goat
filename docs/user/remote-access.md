@@ -86,9 +86,18 @@ goat pair
 ```
 
 Scan the QR code from the GOAT app on your phone, or paste the pairing URL into
-**Add device → Tailscale (GOAT server)** on web and desktop. Connection settings are under **Settings → Connections**
-on web and desktop and **Settings → Environments** on mobile. A loopback address
+**Settings → Connections → Add device → Tailscale (GOAT server)** on web and desktop. On mobile,
+saved servers are under **Settings → Environments**. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
+
+On a computer with the GOAT desktop app, you can open the `App link` that
+`goat pair` and `goat serve` print (a `goat://pair` link) instead. The desktop
+app asks you to confirm the server address, then adds it. `t3code://pair` links
+from older T3 Code versions work the same way.
+
+If your HTTPS endpoint uses a certificate from your own certificate authority,
+install that CA on Android as a **CA certificate** in its security settings; the
+Android app then trusts it.
 
 Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
@@ -103,9 +112,10 @@ URL, or SSH. Tailscale shares its `100.64.0.0/10` address range with
 other VPNs such as Cloudflare WARP, so an address in that range shows as VPN
 unless the machine confirms it is on Tailscale. To add a route, choose **Add
 route** in the machine's route list.
-Pairing the same machine again over another address also adds a route instead
-of a second machine. A new route is placed by speed, in that order, and you can
-reorder routes at any time.
+A pairing link for a saved machine is refused when it comes from an address
+that machine does not have yet; add that address with **Add route** instead.
+Pairing again over an address the machine already has still works. A new route
+is placed by speed, in that order, and you can reorder routes at any time.
 
 While connected through a paired address, GOAT also learns the
 machine's current LAN and Tailscale addresses and adds them as routes. When the
@@ -551,7 +561,7 @@ answer approval requests, and folder browsing and runtime updates still need SSH
 
 A link lasts 30 days; link again with a new code to renew it. Removing a link
 forgets it here. To end it on the other machine at once, revoke **GOAT on …** in
-that machine's **Settings → Connections**. To watch its threads yourself, add
+that machine's **Settings → Connections → Authorized clients**. To watch its threads yourself, add
 the machine under **Settings → Connections** with a pairing URL from `goat pair`.
 
 <a id="devices-on-this-hub"></a>

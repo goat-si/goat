@@ -343,8 +343,9 @@ the matching message; on an iPad with a keyboard, `Cmd+K` opens the same
 palette.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
-and copying a thread reference. A copied reference uses the thread's pull request
-link when available, otherwise its thread ID. See [keybindings](./keybindings.md)
+and copying a thread reference. The shortcut copies the thread's pull request
+link when available, otherwise a thread chip that can be pasted into a composer.
+The thread menu also offers a separate **Thread ID** copy. See [keybindings](./keybindings.md)
 for custom configuration.
 
 ## Inspect agent work
@@ -412,6 +413,12 @@ Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
 ## Snooze until later
+
+To change the choices in the snooze menu, open **Settings → General → Snooze options**.
+Each option is a duration, such as 3 hours, or a time on a day, such as 9:00 PM
+tomorrow. A weekday means the next one after today. Menus list the options soonest
+first and hide a today option after its time passes. Saved with **All environments**
+selected, the options apply to every connected environment, and the mobile app uses them too.
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
 local time zone, or a duration in minutes, hours, or days. Durations start when

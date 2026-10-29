@@ -335,14 +335,16 @@ describe("root reopen shortcut", () => {
   it("always forwards the layout toggles out of a focused desktop browser", async () => {
     setup();
     await using _view = await renderShortcut();
-    expect(state.setShortcuts).toHaveBeenLastCalledWith([
-      expect.objectContaining({ command: "sidebar.toggle" }),
-      expect.objectContaining({
-        command: "sidebar.toggleActivity",
-        shortcut: parseKeybindingShortcut("mod+alt+u"),
-      }),
-      expect.objectContaining({ command: "rightPanel.toggle" }),
-    ]);
+    expect(state.setShortcuts).toHaveBeenLastCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ command: "sidebar.toggle" }),
+        expect.objectContaining({
+          command: "sidebar.toggleActivity",
+          shortcut: parseKeybindingShortcut("mod+alt+u"),
+        }),
+        expect.objectContaining({ command: "rightPanel.toggle" }),
+      ]),
+    );
   });
 
   it("toggles the activity view and back when the guest forwards its command", async () => {

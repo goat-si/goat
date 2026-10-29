@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { DEFAULT_SERVER_SETTINGS, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
-import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
 import * as Deferred from "effect/Deferred";
@@ -10,7 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcess from "effect/process/ChildProcess";
@@ -18,122 +17,18 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 
-const registryUrl = "https://registry.test/registry.json";
-
-const archiveUrl = "https://registry.test/example-agent.bin";
-
-const decodeAcpRegistrySettings = Schema.decodeSync(AcpRegistrySettings);
-
-const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-
-function makeAgent(
-  distribution: AcpRegistrySupport.AcpRegistryAgent["distribution"],
-): AcpRegistrySupport.AcpRegistryAgent {
-  return {
-    id: "example-agent",
-    name: "Example Agent",
-    version: "1.2.3",
-    description: "ACP Registry test agent",
-    distribution,
-  };
-}
-
-function makeRegistry(agent: AcpRegistrySupport.AcpRegistryAgent): string {
-  return JSON.stringify({ version: "1.0.0", agents: [agent] });
-}
-
-function settings(input: Partial<AcpRegistrySettings> = {}): AcpRegistrySettings {
-  return decodeAcpRegistrySettings({
-    agentId: "example-agent",
-    ...input,
-  });
-}
-
-function layerResolver(
-  execute: Parameters<typeof HttpClient.make>[0],
-  environment: NodeJS.ProcessEnv = process.env,
-) {
-  return Layer.mergeAll(
-    NodeServices.layer,
-    TestProviderHost.layer().pipe(Layer.provide(NodeServices.layer)),
-    Layer.succeed(HostProcess.Platform, "linux"),
-    Layer.succeed(HostProcess.Architecture, "x64"),
-    Layer.succeed(HostProcess.Environment, environment),
-    Layer.succeed(HttpClient.HttpClient, HttpClient.make(execute)),
-  );
-}
-
-const makeFakeNpmToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeNpmToolchain")(function* (
-  rootDirectory: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const toolchainBin = path.join(rootDirectory, "fake-node", "bin");
-  const globalPrefix = path.join(rootDirectory, "tools", "example-agent", "1.2.3", "npm");
-  const globalBin = path.join(globalPrefix, "bin");
-  const executablePath = path.join(globalBin, "example-agent");
-  const npmPath = path.join(toolchainBin, "npm");
-  const logPath = path.join(rootDirectory, "npm.log");
-  yield* fileSystem.makeDirectory(toolchainBin, { recursive: true });
-  yield* fileSystem.makeDirectory(globalPrefix, { recursive: true });
-  yield* fileSystem.writeFileString(logPath, "");
-  yield* fileSystem.copyFile(
-    yield* path.fromFileUrl(
-      new URL("./testing/AcpRegistrySupport.npm.fixture.sh", import.meta.url),
-    ),
-    npmPath,
-  );
-  yield* fileSystem.chmod(npmPath, 0o755);
-  return {
-    environment: {
-      ...process.env,
-      PATH: `${toolchainBin}:${process.env.PATH ?? ""}`,
-      FAKE_NPM_LOG: logPath,
-      FAKE_NPM_PREFIX: path.join(rootDirectory, "external-npm-global"),
-      FAKE_NPM_MANIFEST: encodeUnknownJson({
-        name: "@example/acp",
-        version: "1.2.3",
-        bin: { "example-agent": "dist/cli.js" },
-      }),
-    } satisfies NodeJS.ProcessEnv,
-    executablePath,
-    globalBin,
-    logPath,
-    npmPath,
-  };
-});
-
-const makeFakeUvToolchain = Effect.fn("AcpRegistrySupport.test.makeFakeUvToolchain")(function* (
-  rootDirectory: string,
-) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const toolchainBin = path.join(rootDirectory, "fake-uv", "bin");
-  const globalBin = path.join(rootDirectory, "tools", "example-agent", "1.2.3", "python", "bin");
-  const executablePath = path.join(globalBin, "fast-agent");
-  const uvPath = path.join(toolchainBin, "uv");
-  const logPath = path.join(rootDirectory, "uv.log");
-  yield* fileSystem.makeDirectory(toolchainBin, { recursive: true });
-  yield* fileSystem.writeFileString(logPath, "");
-  yield* fileSystem.copyFile(
-    yield* path.fromFileUrl(new URL("./testing/AcpRegistrySupport.uv.fixture.sh", import.meta.url)),
-    uvPath,
-  );
-  yield* fileSystem.chmod(uvPath, 0o755);
-  return {
-    environment: {
-      ...process.env,
-      PATH: `${toolchainBin}:${process.env.PATH ?? ""}`,
-      FAKE_UV_LOG: logPath,
-      FAKE_UV_BIN: path.join(rootDirectory, "external-uv-bin"),
-      FAKE_UV_EXECUTABLE: executablePath,
-    } satisfies NodeJS.ProcessEnv,
-    executablePath,
-    globalBin,
-    logPath,
-    uvPath,
-  };
-});
+import {
+  archiveUrl,
+  decodeAcpRegistrySettings,
+  encodeUnknownJson,
+  layerResolver,
+  makeAgent,
+  makeFakeNpmToolchain,
+  makeFakeUvToolchain,
+  makeRegistry,
+  registryUrl,
+  settings,
+} from "./AcpRegistrySupport.testkit.ts";
 
 describe("AcpRegistrySupport", () => {
   it("selects the preferred compatible distribution", () => {
@@ -823,7 +718,7 @@ describe("AcpRegistrySupport", () => {
     );
   });
 
-  it.effect("refreshes explicit searches and coalesces concurrent refreshes", () => {
+  it.effect("searches reuse an index fetched in the last five minutes", () => {
     const agent = makeAgent({ npx: { package: "@example/acp@1.2.3" } });
     let requests = 0;
     return Effect.gen(function* () {
@@ -842,6 +737,11 @@ describe("AcpRegistrySupport", () => {
       );
       expect(requests).toBe(1);
 
+      yield* TestClock.adjust("4 minutes");
+      yield* resolver.search({ query: "other" });
+      expect(requests).toBe(1);
+
+      yield* TestClock.adjust("1 minute");
       yield* resolver.search({ query: "example" });
       expect(requests).toBe(2);
     }).pipe(
@@ -851,6 +751,96 @@ describe("AcpRegistrySupport", () => {
           requests += 1;
           return Effect.yieldNow.pipe(
             Effect.as(HttpClientResponse.fromWeb(request, new Response(makeRegistry(agent)))),
+          );
+        }),
+      ),
+    );
+  });
+
+  it.effect("searches retry the network after falling back to the cached index", () => {
+    const agent = makeAgent({
+      binary: { "linux-x86_64": { archive: archiveUrl, cmd: "./bin/example-agent" } },
+    });
+    let requests = 0;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-acp-registry-retry-",
+      });
+      yield* fileSystem.makeDirectory(`${cacheDir}/acp-registry`, { recursive: true });
+      yield* fileSystem.writeFileString(
+        `${cacheDir}/acp-registry/registry.json`,
+        makeRegistry(agent),
+      );
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      });
+      const offline = yield* resolver.search({ query: "example" });
+      expect(offline.agents.map((result) => result.id)).toEqual([agent.id]);
+      expect(requests).toBe(1);
+
+      yield* resolver.search({ query: "example" });
+      expect(requests).toBe(2);
+      yield* resolver.search({ query: "example" });
+      expect(requests).toBe(2);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerResolver((request) => {
+          requests += 1;
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              requests === 1
+                ? new Response("unavailable", { status: 503 })
+                : new Response(makeRegistry(agent)),
+            ),
+          );
+        }),
+      ),
+    );
+  });
+
+  it.effect("searches retry the network after a refresh falls back within the reuse window", () => {
+    const agent = makeAgent({ npx: { package: "@example/acp@1.2.3" } });
+    let requests = 0;
+    let online = true;
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-acp-registry-refresh-fallback-",
+      });
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      });
+      yield* resolver.search({ query: "example" });
+      expect(requests).toBe(1);
+
+      // Prepare always refreshes; an unknown agent stops it right after the refresh.
+      online = false;
+      const missing = yield* resolver.prepare({ agentId: "missing-agent" }).pipe(Effect.flip);
+      expect(missing.reason).toBe("agent_not_found");
+      expect(requests).toBe(2);
+
+      online = true;
+      yield* resolver.search({ query: "example" });
+      expect(requests).toBe(3);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        layerResolver((request) => {
+          requests += 1;
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              online
+                ? new Response(makeRegistry(agent))
+                : new Response("unavailable", { status: 503 }),
+            ),
           );
         }),
       ),

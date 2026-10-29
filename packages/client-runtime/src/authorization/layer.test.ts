@@ -5,7 +5,11 @@ vi.mock("@goat/shared/goatConnect", async (importOriginal) => ({
   isGoatConnectEnabled: () => true,
 }));
 
-import { AuthStandardClientScopes, EnvironmentId } from "@goat/contracts";
+import {
+  AuthStandardClientScopes,
+  EnvironmentId,
+  ORCHESTRATION_PROTOCOL_VERSION,
+} from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -17,6 +21,12 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ManagedRelay from "../relay/managedRelay.ts";
+import * as ClientCapabilities from "../platform/capabilities.ts";
+import { BearerConnectionCredential, BearerConnectionProfile } from "../connection/catalog.ts";
+import * as ConnectionCredentialStore from "../connection/credentialStore.ts";
+import { BearerConnectionTarget } from "../connection/model.ts";
+import * as ConnectionProfileStore from "../connection/profileStore.ts";
+import * as ConnectionResolver from "../connection/resolver.ts";
 import * as RemoteEnvironmentAuthorization from "./service.ts";
 import * as TokenStore from "./tokenStore.ts";
 
@@ -32,7 +42,115 @@ import {
   makeHarness,
 } from "./remoteAuthorization.testkit.ts";
 
+const prepareDirectBearer = Effect.fn("TestRemoteAuthorization.prepareDirectBearer")(function* (
+  harness: Effect.Success<ReturnType<typeof makeHarness>>,
+  times: number,
+) {
+  const target = new BearerConnectionTarget({
+    environmentId: ENVIRONMENT_ID,
+    label: DESCRIPTOR.label,
+    connectionId: "direct-1",
+  });
+  const entry = {
+    target,
+    profile: Option.some(
+      new BearerConnectionProfile({
+        connectionId: target.connectionId,
+        environmentId: ENVIRONMENT_ID,
+        label: target.label,
+        httpBaseUrl: ENDPOINT.httpBaseUrl,
+        wsBaseUrl: ENDPOINT.wsBaseUrl,
+      }),
+    ),
+    enabled: true,
+  };
+  const unused = () => Effect.die("unused");
+  const layer = ConnectionResolver.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        harness.layer,
+        Layer.succeed(ConnectionProfileStore.ConnectionProfileStore, {
+          get: unused,
+          put: unused,
+          remove: unused,
+        }),
+        Layer.succeed(ConnectionCredentialStore.ConnectionCredentialStore, {
+          get: () => Effect.succeedSome(new BearerConnectionCredential({ token: "bearer-token" })),
+          put: unused,
+          remove: unused,
+        }),
+        Layer.succeed(ClientCapabilities.PrimaryEnvironmentAuth, {
+          bearerToken: Effect.succeedNone,
+        }),
+        Layer.succeed(ClientCapabilities.SshEnvironmentGateway, {
+          provision: unused,
+          prepare: unused,
+          disconnect: unused,
+        }),
+      ),
+    ),
+  );
+  const resolver = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(layer));
+  return yield* Effect.forEach(Array.from({ length: times }), () =>
+    resolver.prepare(entry).pipe(Effect.result),
+  );
+});
+
+const compatibleDescriptor = (environmentId = ENVIRONMENT_ID) =>
+  Response.json({
+    ...DESCRIPTOR,
+    environmentId,
+    orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+  });
+
 describe("RemoteEnvironmentAuthorization", () => {
+  it.effect("prepares a cold direct bearer connection with one descriptor request", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        responses: [compatibleDescriptor(), websocketTicket("cold-ticket")],
+      });
+
+      const [prepared] = yield* prepareDirectBearer(harness, 1);
+
+      expect(prepared).toMatchObject({
+        _tag: "Success",
+        success: { socketUrl: expect.stringContaining("wsTicket=cold-ticket") },
+      });
+      expect(harness.fetch.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+        "/.well-known/goat/environment",
+        "/api/auth/websocket-ticket/rpc",
+      ]);
+    }),
+  );
+
+  it.effect("blocks a warm direct bearer prepare when the address changes identity", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        responses: [
+          compatibleDescriptor(),
+          websocketTicket("first-ticket"),
+          websocketTicket("second-ticket"),
+          compatibleDescriptor(EnvironmentId.make("another-environment")),
+        ],
+      });
+
+      const [first, second] = yield* prepareDirectBearer(harness, 2);
+
+      expect(first?._tag).toBe("Success");
+      expect(second).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ConnectionBlockedError", reason: "configuration" },
+      });
+      // The cached check skips the address probe; the resolver still verifies identity before use.
+      expect(harness.fetch.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+        "/.well-known/goat/environment",
+        "/api/auth/websocket-ticket/rpc",
+        "/api/auth/websocket-ticket/rpc",
+        "/.well-known/goat/environment",
+      ]);
+    }),
+  );
+
   it.effect("revalidates the SSH attachment before a ticket and reuses that fresh descriptor", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
@@ -238,6 +356,7 @@ describe("RemoteEnvironmentAuthorization", () => {
       }).pipe(Effect.provide(harness.layer));
 
       expect(authorized.httpBaseUrl).toBe("http://192.168.1.10:3773/");
+      expect(authorized.verifiedEndpoint?.httpBaseUrl).toBe(authorized.httpBaseUrl);
       expect(authorized.socketUrl).toMatch(/^ws:\/\/192\.168\.1\.10:3773\/ws\?/);
       expect(yield* Ref.get(harness.bootstrapCalls)).toBe(0);
       expect(harness.fetch.calls.map(([url]) => String(url))).toEqual([

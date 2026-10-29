@@ -57,8 +57,7 @@ interface V2ItemInspectorProps {
 
 /**
  * The diff a file-change summary opens: the whole run for multi-file edits, else that file. An
- * edit whose patch the server holds names itself too, so the panel can show it before the run's
- * checkpoint exists.
+ * edit whose patch the server holds names itself too, so the panel shows that edit's own patch.
  */
 export function fileChangeDiffTarget(projectedItem: OrchestrationV2ProjectedTurnItem): {
   readonly runId: RunId;

@@ -83,6 +83,7 @@ import {
 } from "./settingsFontSizes.ts";
 import { AgentToolListing, DEFAULT_AGENT_TOOL_LISTING } from "./agentSurface/listing.ts";
 import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings.ts";
+import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 
 export * from "./settingsFontSizes.ts";
@@ -1483,7 +1484,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   idleCompaction: Schema.optionalKey(IdleCompactionMode),
-  snoozeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  ...SnoozeSettingsFields,
   autoResumeLimitedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   goatclaw: GoatclawSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   hub: HubSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
@@ -1951,7 +1952,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
-  snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
+  ...SnoozeSettingsPatchFields,
   /** Each top-level key it names replaces the stored one (see FleetSettings). */
   fleet: Schema.optionalKey(FleetSettings),
   goatclaw: Schema.optionalKey(GoatclawSettingsPatch),

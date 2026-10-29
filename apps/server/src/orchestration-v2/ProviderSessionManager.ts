@@ -1,4 +1,5 @@
 import { repairSchedule } from "../retryJitter.ts";
+import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import type { MemorySnapshotPolicy } from "../memory/MemorySnapshot.ts";
@@ -1055,12 +1056,8 @@ export const layerWithOptions = (
             ["runtimeRequests", "nodes", "turnItems"],
             { turnItemTypes: ["approval_request", "user_input_request"] },
           );
-          const releasedRequests = projection.runtimeRequests.filter(
-            (request) =>
-              request.status === "pending" &&
-              request.responseCapability.type === "live" &&
-              request.responseCapability.providerSessionId === providerSessionId &&
-              DateTime.isLessThanOrEqualTo(request.createdAt, input.releasedAt),
+          const releasedRequests = projection.runtimeRequests.filter((request) =>
+            isReleasedRuntimeRequest(request, providerSessionId, input.releasedAt, input.reason),
           );
 
           for (const request of releasedRequests) {

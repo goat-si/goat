@@ -1,9 +1,10 @@
-import type { TerminalOutputState } from "@goat/client-runtime/state/terminal";
+import type { TerminalGrid, TerminalOutputState } from "@goat/client-runtime/state/terminal";
 import {
   memo,
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
   type Ref,
@@ -57,6 +58,7 @@ interface TerminalSurfaceProps extends ViewProps {
   readonly buffer: string | null;
   readonly output: TerminalOutputState | null;
   readonly fontSize?: number;
+  readonly grid?: TerminalGrid | null;
   readonly isRunning: boolean;
   readonly readOnly?: boolean;
   readonly autoFocus?: boolean;
@@ -215,6 +217,12 @@ const ReadyTerminalSurface = memo(function ReadyTerminalSurface(props: ReadyTerm
   const { onInput, onResize } = props;
   const NativeTerminalSurfaceView = resolveNativeTerminalSurfaceView();
   const hasNativeSurface = Boolean(NativeTerminalSurfaceView);
+  const gridCols = props.grid?.cols;
+  const gridRows = props.grid?.rows;
+  const sharedGrid = useMemo(
+    () => (gridCols !== undefined && gridRows !== undefined ? [gridCols, gridRows] : []),
+    [gridCols, gridRows],
+  );
   const streaming = supportsNativeTerminalOutput();
   const nativeRef = useRef<NativeTerminalSurfaceHandle>(null);
   const writerRef = useRef<ReturnType<typeof createTerminalOutputWriter> | null>(null);
@@ -287,6 +295,7 @@ const ReadyTerminalSurface = memo(function ReadyTerminalSurface(props: ReadyTerm
           terminalKey={props.terminalKey}
           initialBuffer={streaming ? "" : props.buffer}
           fontSize={fontSize}
+          sharedGrid={sharedGrid}
           style={{ flex: 1 }}
           themeConfig={buildGhosttyThemeConfig(theme)}
           onInput={handleNativeInput}
