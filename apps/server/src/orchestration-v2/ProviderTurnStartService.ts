@@ -49,6 +49,7 @@ import { cloudTaskResultText, isCloudExecution } from "@goat/provider-core/serve
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import {
   ContextHandoffBackgroundWorkError,
+  ContextHandoffBudgetError,
   knownProviderFailureMessage,
   makeProviderFailure,
 } from "@goat/provider-core/server/failure";
@@ -1089,6 +1090,19 @@ export const layer: Layer.Layer<
           }),
         );
         if (replacement === undefined) return undefined;
+        if (replacement.nativeThreadRef?.nativeId === providerThread.nativeThreadRef.nativeId) {
+          return yield* loadFromProvider(
+            Effect.fail(
+              new ProviderAdapter.ProviderAdapterTurnStartError({
+                driver: session.driver,
+                threadId: projection.thread.id,
+                providerThreadId: providerThread.id,
+                runId,
+                cause: new ContextHandoffBudgetError(),
+              }),
+            ),
+          );
+        }
         const { handoff, transferId, createdAt } = yield* recoveryHandoff;
         effectiveHandoffs = withRecoveryHandoff(handoff, effectiveHandoffs);
         resumeFellBack = true;

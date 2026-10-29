@@ -48,7 +48,7 @@ import * as EffectOutbox from "../EffectOutbox.ts";
 import * as ProjectionMaintenance from "../ProjectionMaintenance.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
-import { makeProviderFailure } from "@goat/provider-core/server/failure";
+import { ContextHandoffBudgetError, makeProviderFailure } from "@goat/provider-core/server/failure";
 import {
   CLAUDE_MODEL_SELECTION,
   CODEX_MODEL_SELECTION,
@@ -110,6 +110,7 @@ describe("orchestration v2 provider switching", () => {
     "screenshot-reported-capacity-native",
     "screenshot-option-change-retry-native",
     "screenshot-exhausted-target-native",
+    "screenshot-exhausted-target-reused-native",
     "screenshot-exhausted-target-fallback",
     "screenshot-exhausted-target-estimate-native",
     "screenshot-exhausted-target-oversized-native",
@@ -138,6 +139,7 @@ describe("orchestration v2 provider switching", () => {
         const pendingBackgroundWork = yield* Ref.make(false);
         const priorImages = scenario.includes("prior-images");
         const exhaustedTarget = scenario.includes("exhausted-target");
+        const reusedNative = scenario.includes("target-reused");
         const replaceNative = scenario.includes("replacement");
         const capacityScenario = modelScenario || scenario.includes("reported-capacity");
         const returning =
@@ -175,7 +177,7 @@ describe("orchestration v2 provider switching", () => {
             capturedTurns,
             ...(scenario.includes("retry") || scenario.includes("unsent") ? { failStartOnce } : {}),
             ...(replaceNative ? { failResumeOnce, nativeThreadGeneration: generation } : {}),
-            ...(exhaustedTarget ? { nativeThreadGeneration: generation } : {}),
+            ...(exhaustedTarget && !reusedNative ? { nativeThreadGeneration: generation } : {}),
             ...(scenario.includes("target-background") || scenario.includes("target-subagent")
               ? {
                   pendingBackgroundWork,
@@ -443,8 +445,47 @@ describe("orchestration v2 provider switching", () => {
           if (scenario.includes("retry")) yield* Ref.set(failStartOnce, true);
           if (scenario.includes("target-background") || scenario.includes("target-subagent"))
             yield* Ref.set(pendingBackgroundWork, true);
+          const beforeRecovery = reusedNative
+            ? yield* orchestrator.getThreadProjection(threadId)
+            : undefined;
+          const historyBeforeRecovery = yield* Ref.get(injectedHistory);
           yield* dispatch(targetOrdinal, current, targetSelection);
           yield* wait(targetOrdinal);
+          if (beforeRecovery !== undefined) {
+            const projection = yield* orchestrator.getThreadProjection(threadId);
+            const latestRun = projection.runs.at(-1)!;
+            const throughSequence = yield* eventSink.latestSequence();
+            const events = yield* orchestrator.streamStoredEvents.pipe(
+              Stream.takeUntil(({ sequence }) => sequence === throughSequence),
+              Stream.filter(({ event }) => event.runId === latestRun.id),
+              Stream.runCollect,
+            );
+            assert.isEmpty(
+              events.filter(
+                ({ event }) =>
+                  (event.type === "context-handoff.updated" &&
+                    event.payload.strategy === "full_thread_summary") ||
+                  (event.type === "context-transfer.updated" &&
+                    event.payload.createdBy === "system"),
+              ),
+            );
+            assert.equal(latestRun.status, "failed");
+            const failure = projection.turnItems.findLast((item) => item.type === "error");
+            assert.equal(
+              failure?.type === "error" ? failure.failure.message : null,
+              new ContextHandoffBudgetError().message,
+            );
+            assert.deepEqual(
+              projection.providerThreads.map((thread) => [thread.id, thread.nativeThreadRef]),
+              beforeRecovery.providerThreads.map((thread) => [thread.id, thread.nativeThreadRef]),
+            );
+            assert.deepEqual(yield* Ref.get(injectedHistory), historyBeforeRecovery);
+            assert.lengthOf(yield* Ref.get(capturedTurns), 3);
+            assert.deepEqual(projection.messages.slice(0, -1), beforeRecovery.messages);
+            assert.equal(projection.messages.at(-1)!.text, current);
+            assert.deepEqual(projection.messages.at(-1)!.attachments, screenshots);
+            return;
+          }
           if (scenario.includes("retry")) {
             const failed = yield* orchestrator.getThreadProjection(threadId);
             assert.equal(failed.runs.at(-1)?.status, "failed");
