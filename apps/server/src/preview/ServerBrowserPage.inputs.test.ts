@@ -28,6 +28,14 @@ const settledLater = <A>(work: Promise<A>) => {
 it("waits for a disabled button to become enabled before answering", () =>
   fixture(async (page) => {
     await page.setContent('<button id="go" disabled>Continue</button>');
+    // While it stays disabled the wait times out naming the condition, rather than answering met.
+    await expect(
+      ServerBrowserPage.waitFor(page, {
+        locator: 'role=button[name="Continue" s]',
+        enabled: true,
+        timeoutMs: 200,
+      }),
+    ).rejects.toThrow("enabled=true");
     const waiting = ServerBrowserPage.waitFor(page, {
       locator: 'role=button[name="Continue" s]',
       enabled: true,
@@ -72,6 +80,22 @@ it("waits for an exact value, a checked box and a selected option, and names wha
     ).rejects.toThrow("checked=false");
   }));
 
+it("never matches conditions that only hold at different moments", () =>
+  fixture(async (page) => {
+    // Enabled while the value is "a", disabled while it is "b": enabled with "b" never holds.
+    await page.setContent(
+      '<input id="x" value="a"><script>setInterval(() => { const b = x.value === "a"; x.value = b ? "b" : "a"; x.disabled = b; }, 5)</script>',
+    );
+    await expect(
+      ServerBrowserPage.waitFor(page, {
+        selector: "#x",
+        enabled: true,
+        value: "b",
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow('enabled=true, value="b"');
+  }));
+
 it("refuses an element condition on several matches instead of picking one", () =>
   fixture(async (page) => {
     await page.setContent('<button class="m">A</button><button class="m">B</button>');
@@ -101,6 +125,16 @@ it("answers a scroll once the nested container and the window stopped moving", (
     });
     await expect(ServerBrowserPage.scroll(page, { x: 20, y: 20, deltaY: 50 })).resolves.toEqual({
       settled: true,
+    });
+  }));
+
+it("answers settled: false when the gate's deadline leaves no time to watch the scroll", () =>
+  fixture(async (page) => {
+    await page.setContent('<div style="height:3000px"></div>');
+    // The gate's deadline is on the performance.now() clock; 0 has long passed.
+    const gate = Object.assign(() => undefined, { deadline: 0 });
+    await expect(ServerBrowserPage.scroll(page, { deltaY: 100 }, gate)).resolves.toEqual({
+      settled: false,
     });
   }));
 

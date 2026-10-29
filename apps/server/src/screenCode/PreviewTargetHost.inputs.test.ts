@@ -161,3 +161,24 @@ it.effect("an observed slider takes setValue by its number, while a button still
     });
   }),
 );
+
+it.effect(
+  "a click asked to wait 20 s for its target keeps the browser request open that long",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      yield* fixture.dispatch("claim_tab");
+      const ref = (yield* fixture.observe()).elements[0]!.ref;
+      yield* fixture.bridge.handle(
+        {
+          ...call("click", 901, { ref, timeoutMs: 20_000 }, fixture.ref),
+          cellId: "long",
+          deadlineMillis: 30_000,
+        },
+        { ...context, cellId: "long", limits: { ...context.limits, cellWallMs: 30_000 } },
+      );
+      const click = fixture.requests.find((request) => request.operation === "click");
+      expect((click?.input as { timeoutMs?: number } | undefined)?.timeoutMs).toBe(20_000);
+      expect(click?.timeoutMs).toBeGreaterThanOrEqual(20_500);
+    }),
+);

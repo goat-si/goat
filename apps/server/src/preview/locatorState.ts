@@ -14,43 +14,46 @@ export const stateConditions = (input: StateInput): ReadonlyArray<string> =>
     input[key] === undefined ? [] : [`${key}=${JSON.stringify(input[key])}`],
   );
 
-// Not a checkbox, radio or switch: it has no checked state, so it never matches one.
-const checkedOf = (locator: Locator, timeout: number) =>
-  locator.isChecked({ timeout }).catch(() => undefined);
-
-const selectedOf = async (locator: Locator, timeout: number) => {
-  const own = await locator.evaluate(
+/**
+ * Whether the one element a strict locator names holds every condition at once: they are read
+ * together in one page task, so conditions that only alternate never match. An element without a
+ * checked or selected state never matches one.
+ */
+export const matchesState = async (locator: Locator, input: StateInput, budgetMs: number) => {
+  const state = await locator.evaluate(
     (element) => {
-      const node = element as unknown as {
+      type Node = {
         readonly tagName: string;
-        readonly selected?: boolean;
+        readonly value?: unknown;
+        readonly checked?: unknown;
+        readonly selected?: unknown;
+        readonly type?: unknown;
+        readonly textContent: string | null;
+        matches(selector: string): boolean;
+        closest(selector: string): unknown;
         hasAttribute(name: string): boolean;
         getAttribute(name: string): string | null;
       };
-      if (node.tagName === "OPTION") return node.selected === true;
-      if (node.hasAttribute("aria-selected")) return node.getAttribute("aria-selected") === "true";
-      return null;
+      const node = element as unknown as Node;
+      const aria = (name: string) =>
+        node.hasAttribute(name) ? node.getAttribute(name) === "true" : undefined;
+      const checkable =
+        node.tagName === "INPUT" && (node.type === "checkbox" || node.type === "radio");
+      const checked = checkable ? node.checked === true : aria("aria-checked");
+      const selected = node.tagName === "OPTION" ? node.selected === true : aria("aria-selected");
+      const form = ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName);
+      return {
+        enabled: !node.matches(":disabled") && node.closest('[aria-disabled="true"]') === null,
+        checked: checked ?? null,
+        selected: selected ?? checked ?? null,
+        value:
+          form && typeof node.value === "string" ? node.value : (node.textContent ?? "").trim(),
+      };
     },
     undefined,
-    { timeout },
+    { timeout: Math.max(1, Math.min(budgetMs, 1_000)) },
   );
-  return own ?? (await checkedOf(locator, timeout));
-};
-
-// A form control's value; any other element's trimmed text.
-const valueOf = (locator: Locator, timeout: number) =>
-  locator
-    .inputValue({ timeout })
-    .catch(async () => (await locator.textContent({ timeout }))?.trim());
-
-/** Whether the one element a strict locator names holds every condition now. */
-export const matchesState = async (locator: Locator, input: StateInput, budgetMs: number) => {
-  const timeout = Math.max(1, Math.min(budgetMs, 1_000));
-  if (input.enabled !== undefined && (await locator.isEnabled({ timeout })) !== input.enabled)
-    return false;
-  if (input.checked !== undefined && (await checkedOf(locator, timeout)) !== input.checked)
-    return false;
-  if (input.selected !== undefined && (await selectedOf(locator, timeout)) !== input.selected)
-    return false;
-  return input.value === undefined || (await valueOf(locator, timeout)) === input.value;
+  return (["enabled", "value", "checked", "selected"] as const).every(
+    (key) => input[key] === undefined || state[key] === input[key],
+  );
 };

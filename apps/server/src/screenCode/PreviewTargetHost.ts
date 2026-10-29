@@ -791,7 +791,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       let cellBudgetMs: number | undefined;
       if (["select", "type", "click", "hover", "drag", "scroll"].includes(operation)) {
         const now = yield* Clock.currentTimeMillis;
-        cellBudgetMs = Math.max(1, Math.min(15_000, call.deadlineMillis - now));
+        // A click or hover asked to wait longer for its target keeps the request open for it.
+        const asked =
+          operation === "click" || operation === "hover" ? Number(input.timeoutMs) + 500 : 0;
+        cellBudgetMs = Math.max(1, Math.min(Math.max(15_000, asked), call.deadlineMillis - now));
         if (operation === "select" || operation === "type")
           input = { ...input, timeoutMs: cellBudgetMs };
       }
