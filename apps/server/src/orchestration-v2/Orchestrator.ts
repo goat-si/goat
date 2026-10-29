@@ -82,7 +82,6 @@ import {
   ThreadLinkedPullRequest,
   ThreadId,
   TurnItemId,
-  TrimmedNonEmptyString,
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import { recordThreadOpen } from "@goat/shared/paletteSearch";
@@ -212,19 +211,16 @@ import { makeQueuedCommandInterruption } from "./goat/QueuedCommandInterruption.
 import { isOwnedDelegatedTask, makeThreadPromotion } from "./goat/ThreadPromotion.ts";
 import {
   OrchestratorQuestionAlreadyAnsweredError,
+  messageAnswerAttribution,
   questionAlreadyAnswered,
 } from "./goat/QuestionAnswers.ts";
 
 export { OrchestratorQuestionAlreadyAnsweredError };
-import { canonicalUserInputAnswers, userInputAnswerText } from "./userInputAnswers.ts";
+import { canonicalUserInputAnswers, messageQuestionReplies } from "./userInputAnswers.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
-
-const isMessageQuestionAnswer = Schema.is(
-  Schema.Union([TrimmedNonEmptyString, Schema.NonEmptyArray(TrimmedNonEmptyString)]),
-);
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -8480,41 +8476,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             cause: "The provider for this project is disabled.",
           });
         }
-        const questionIds = new Set(approvalTurnItem.questions.map((question) => question.id));
-        if (
-          !Object.entries(answers ?? {}).every(
-            ([questionId, answer]) =>
-              questionIds.has(questionId) || isMessageQuestionAnswer(answer),
-          )
-        ) {
+        const result = messageQuestionReplies(approvalTurnItem.questions, answers);
+        if (result.error !== undefined) {
           return yield* new OrchestratorDispatchError({
             commandId: command.commandId,
             commandType: command.type,
-            cause: "Answer each question before sending.",
+            cause: result.error,
           });
         }
-        for (const question of approvalTurnItem.questions) {
-          const answer = answers?.[question.id];
-          const answered = isMessageQuestionAnswer(answer);
-          // Clients send "" for a skipped optional question, such as an attachment-only answer.
-          if (!answered && question.required === false) continue;
-          if (!answered) {
-            return yield* new OrchestratorDispatchError({
-              commandId: command.commandId,
-              commandType: command.type,
-              cause: "Answer each question before sending.",
-            });
-          }
-          const text = userInputAnswerText(question, answer);
-          replies.push(`${question.question}\n${text}`);
-        }
-        if (replies.length === 0) {
-          return yield* new OrchestratorDispatchError({
-            commandId: command.commandId,
-            commandType: command.type,
-            cause: "Enter an answer before sending.",
-          });
-        }
+        replies.push(...result.replies);
       }
 
       const now = yield* DateTime.now;
@@ -8707,22 +8677,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             dispatchMode = { type: "steer_active", targetRunId: activeRun.id };
           }
         }
-        const responder = command.respondedBy?.type === "user" ? undefined : command.respondedBy;
-        const localAgent =
-          responder?.type === "agent" && responder.environmentId === null ? responder : undefined;
-        const answerText = replies.join("\n\n");
         const answer = {
           type: "message.dispatch" as const,
           commandId: command.commandId,
           threadId: command.threadId,
           messageId: MessageId.make(`async-answer:${command.requestId}`),
-          text:
-            responder === undefined
-              ? answerText
-              : `Answered by ${describeUserInputResponder({ respondedBy: responder })}${localAgent === undefined ? "" : ` (${localAgent.threadId})`}: ${responder.reason}\n\n${answerText}`,
+          ...messageAnswerAttribution(command.respondedBy, replies),
           attachments: [],
-          createdBy: responder === undefined ? ("user" as const) : ("agent" as const),
-          ...(localAgent === undefined ? {} : { senderThreadId: localAgent.threadId }),
           creationSource: "server" as const,
           dispatchMode,
         };
