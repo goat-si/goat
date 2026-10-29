@@ -1,3 +1,4 @@
+import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
   managedWorktreesDir,
   makeWorktreeStartHarness,
@@ -12,6 +13,7 @@ import { it as effectIt } from "@effect/vitest";
 import {
   CommandId,
   GitCommandError,
+  ProviderDriverKind,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -869,6 +871,34 @@ effectIt.effect("keeps a session-open failure retryable when terminal persistenc
     expect(harness.startRootRun).not.toHaveBeenCalled();
     expect(harness.projection().runs.at(-1)?.status).toBe("starting");
     expect(harness.events).toEqual([]);
+  }),
+);
+
+effectIt.effect("fails the run without a retry when the provider needs sign-in", () =>
+  Effect.gen(function* () {
+    const harness = makeLocalCommandHarness({
+      text: "Continue",
+      openFailure: new ProviderAdapter.ProviderAdapterOpenSessionError({
+        driver: ProviderDriverKind.make("antigravity"),
+        providerSessionId: ProviderSessionId.make("new-provider-session"),
+        requiresSignIn: true,
+      }),
+    });
+
+    yield* harness.startWithRetry;
+
+    expect(harness.open).toHaveBeenCalledOnce();
+    expect(harness.projection().runs.at(-1)?.status).toBe("failed");
+    expect(harness.projection().turnItems).toMatchObject([
+      {
+        type: "error",
+        status: "failed",
+        failure: {
+          class: "provider_error",
+          message: "Failed to open antigravity provider session new-provider-session.",
+        },
+      },
+    ]);
   }),
 );
 

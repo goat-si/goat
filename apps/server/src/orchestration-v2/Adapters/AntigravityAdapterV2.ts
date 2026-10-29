@@ -34,6 +34,7 @@ import {
   makeAntigravityUserInputResponse,
   normalizeAntigravityToolCall,
 } from "../../provider/acp/AntigravityProtocol.ts";
+import { isAntigravitySignInRequiredError } from "../../provider/antigravityAuthSupport.ts";
 import {
   AcpProviderCapabilitiesV2,
   makeAcpAdapterV2,
@@ -242,6 +243,7 @@ export function makeAntigravityAcpAdapterFlavor(
     supportsImagePrompts: true,
     // ACP has no native compact operation for this flavor.
     supportsCompaction: false,
+    requiresSignIn: isAntigravitySignInRequiredError,
   };
 }
 

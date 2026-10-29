@@ -82,6 +82,9 @@ export class WorkspaceLeaseBusyError extends Schema.TaggedError<WorkspaceLeaseBu
 
 const isProviderTurnStartError = Schema.is(ProviderTurnStartError);
 const isCloudTaskSourceError = Schema.is(CloudSource.CloudTaskSourceError);
+const isProviderAdapterOpenSessionError = Schema.is(
+  ProviderAdapter.ProviderAdapterOpenSessionError,
+);
 
 export interface ProviderTurnStartServiceV2Shape {
   /**
@@ -849,7 +852,12 @@ export const layer: Layer.Layer<
       );
       if (sessionResult._tag === "Failure") {
         if (input.reattach === true) return yield* sessionResult.failure;
-        if (input.willRetry === true) return yield* sessionResult.failure;
+        const failure = sessionResult.failure;
+        const requiresSignIn =
+          "cause" in failure &&
+          isProviderAdapterOpenSessionError(failure.cause) &&
+          failure.cause.requiresSignIn === true;
+        if (input.willRetry === true && !requiresSignIn) return yield* failure;
         yield* settleStartFailure({
           signal: "provider-session-open-failure",
           title: "Provider session failed to open",
