@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { deadlineStore, minuteTick } from "@goat/client-runtime/clock";
 import { Atom } from "effect/reactivity";
 
+import { hiddenGoatBotThreadKeysAtom } from "../features/threads/goatBotThreadVisibility";
 import {
   reconcilePendingThreadOrder,
   type PendingThreadOrder,
@@ -71,6 +72,7 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
       section: current.section,
       now: new Date(nowMs).toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
+      hiddenBotThreadKeys: appAtomRegistry.get(hiddenGoatBotThreadKeysAtom),
       settlementEnvironmentIds: new Set(
         [...configs].flatMap(([id, config]) =>
           config.environment.capabilities.threadSettlement === true ? [id] : [],
@@ -94,10 +96,13 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
   refreshPendingOrder = refresh;
   teardownPendingOrder = teardown;
   appAtomRegistry.set(pendingThreadOrderAtom, pending);
+  // A derived atom tells its listeners about changes only once it has been computed.
+  appAtomRegistry.get(hiddenGoatBotThreadKeysAtom);
   unsubscribers.push(
     appAtomRegistry.subscribe(environmentThreadShells.threadShellsAtom, refresh),
     appAtomRegistry.subscribe(environmentServerConfigsAtom, refresh),
     appAtomRegistry.subscribe(queuedThreadKeysAtom, refresh),
+    appAtomRegistry.subscribe(hiddenGoatBotThreadKeysAtom, refresh),
     minuteTick.subscribe(refresh),
   );
   armWake(

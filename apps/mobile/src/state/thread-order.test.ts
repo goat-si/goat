@@ -1,8 +1,10 @@
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import { goatBotObservationThreadKeys } from "@goat/client-runtime/state/threads";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
-import type { Atom } from "effect/reactivity";
+import { AsyncResult, type Atom } from "effect/reactivity";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { Preferences } from "../persistence/mobile-preferences";
 import { createPendingThreadOrder } from "../features/threads/threadOrder";
 import { makeThreadShellFixture } from "../test-fixtures";
 import { appAtomRegistry } from "./atom-registry";
@@ -11,6 +13,7 @@ import {
   getPendingThreadOrder,
   pendingThreadOrderAtom,
 } from "./thread-order";
+import { mobilePreferencesAtom } from "./preferences";
 import { environmentServerConfigsAtom } from "./server";
 import { environmentThreadShells } from "./threads";
 
@@ -20,7 +23,16 @@ vi.mock("./atom-registry", async () => {
 });
 vi.mock("./threads", async () => {
   const { Atom } = await import("effect/reactivity");
-  return { environmentThreadShells: { threadShellsAtom: Atom.make([]).pipe(Atom.keepAlive) } };
+  return {
+    environmentThreadShells: {
+      threadShellsAtom: Atom.make([]).pipe(Atom.keepAlive),
+      goatBotObservationThreadKeysAtom: Atom.make(new Set<string>()).pipe(Atom.keepAlive),
+    },
+  };
+});
+vi.mock("./preferences", async () => {
+  const { AsyncResult, Atom } = await import("effect/reactivity");
+  return { mobilePreferencesAtom: Atom.make(AsyncResult.success({})).pipe(Atom.keepAlive) };
 });
 vi.mock("./server", async () => {
   const { Atom } = await import("effect/reactivity");
@@ -37,6 +49,15 @@ const configsAtom = environmentServerConfigsAtom as Atom.Writable<ServerConfigs,
 const shellsAtom = environmentThreadShells.threadShellsAtom as Atom.Writable<
   readonly EnvironmentThreadShell[],
   readonly EnvironmentThreadShell[]
+>;
+const observationKeysAtom =
+  environmentThreadShells.goatBotObservationThreadKeysAtom as Atom.Writable<
+    ReadonlySet<string>,
+    ReadonlySet<string>
+  >;
+const preferencesAtom = mobilePreferencesAtom as Atom.Writable<
+  AsyncResult.AsyncResult<Preferences>,
+  AsyncResult.AsyncResult<Preferences>
 >;
 
 function fixture() {
@@ -67,6 +88,21 @@ function fixture() {
     );
   };
   return { rows, start, upsert };
+}
+
+/** The fixture's move, with a GOAT Bot session listed between its two rows. */
+function fixtureWithHiddenSession() {
+  const moving = fixture();
+  const [a, b] = moving.rows;
+  const session = makeThreadShellFixture({
+    id: ThreadId.make("goat-bot-session:conversation"),
+    environmentId: EnvironmentId.make("env"),
+    createdAt: "2026-06-01T01:30:00.000Z",
+  });
+  const threads = [a!, session, b!];
+  appAtomRegistry.set(shellsAtom, threads);
+  appAtomRegistry.set(observationKeysAtom, goatBotObservationThreadKeys({ threads }));
+  return moving;
 }
 
 afterEach(() => appAtomRegistry.reset());
@@ -163,5 +199,27 @@ describe("shared mobile pending move", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("mobile pending move with GOAT Bot threads", () => {
+  it("holds a move across a hidden GOAT Bot thread until its own keys land", () => {
+    const { start, upsert } = fixtureWithHiddenSession();
+    const move = start();
+    move.complete();
+    expect(getPendingThreadOrder()).not.toBeNull();
+    upsert("b", "aa");
+    expect(getPendingThreadOrder()).not.toBeNull();
+    upsert("a", "bb");
+    expect(getPendingThreadOrder()).toBeNull();
+  });
+
+  it("retires the hold when this device starts showing GOAT Bot threads", () => {
+    const { start } = fixtureWithHiddenSession();
+    start();
+
+    appAtomRegistry.set(preferencesAtom, AsyncResult.success({ showGoatBotThreads: true }));
+
+    expect(appAtomRegistry.get(pendingThreadOrderAtom)).toBeNull();
   });
 });

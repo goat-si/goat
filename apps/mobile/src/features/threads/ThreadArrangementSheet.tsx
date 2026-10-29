@@ -2,8 +2,6 @@ import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
-import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
-import { sortInboxThreadsByReturn } from "@goat/client-runtime/state/thread-inbox";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Animated, FlatList, Modal, Pressable, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
@@ -16,7 +14,6 @@ import { SymbolView } from "../../components/ui/AppSymbol";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { environmentThreadShells } from "../../state/threads";
-import { sortSettledThreads } from "@goat/client-runtime/state/thread-sort";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import {
   pendingThreadOrderAtom,
@@ -25,16 +22,16 @@ import {
 } from "../../state/thread-order";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useThreadListActions } from "../home/useThreadListActions";
+import { hiddenGoatBotThreadKeysAtom } from "./goatBotThreadVisibility";
+import { threadArrangementSections } from "./threadArrangementSections";
 import {
   createThreadMovePlanner,
   threadDragAction,
   type ThreadMoveDestination,
 } from "./threadOrder";
 import {
-  getThreadListV2OrderedSection,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
-  threadListInboxReturns,
 } from "./threadListV2";
 import { useThreadListV2ShelfPreferences } from "./use-thread-list-v2-shelf-preferences";
 
@@ -162,6 +159,7 @@ function DragHandle(props: {
 
 export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+  const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);
@@ -193,38 +191,36 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     );
     return () => clearTimeout(timer);
   }, [threads, now]);
-  const sections = useMemo(() => {
-    const shared = {
+  const sections = useMemo(
+    () =>
+      threadArrangementSections({
+        threads,
+        now,
+        queuedThreadKeys,
+        pendingOrder,
+        hiddenBotThreadKeys,
+        workingShelfEnabled,
+        settlementEnvironmentIds: new Set(
+          [...configs].flatMap(([id, config]) =>
+            config.environment.capabilities.threadSettlement ? [id] : [],
+          ),
+        ),
+        snoozeEnvironmentIds: new Set(
+          [...configs].flatMap(([id, config]) =>
+            config.environment.capabilities.threadSnooze ? [id] : [],
+          ),
+        ),
+      }),
+    [
       threads,
+      configs,
       now,
       queuedThreadKeys,
       pendingOrder,
-      settlementEnvironmentIds: new Set(
-        [...configs].flatMap(([id, config]) =>
-          config.environment.capabilities.threadSettlement ? [id] : [],
-        ),
-      ),
-      snoozeEnvironmentIds: new Set(
-        [...configs].flatMap(([id, config]) =>
-          config.environment.capabilities.threadSnooze ? [id] : [],
-        ),
-      ),
-    };
-    const pinned = getThreadListV2OrderedSection({ ...shared, section: "pinned" });
-    const active = getThreadListV2OrderedSection({ ...shared, section: "active" });
-    const visible = new Set([...pinned, ...active].map(keyOf));
-    const parked = threads.filter(
-      (thread) => thread.archivedAt === null && !visible.has(keyOf(thread)),
-    );
-    return {
-      pinned,
-      active: workingShelfEnabled
-        ? sortInboxThreadsByReturn(active, threadListInboxReturns.returnedAt)
-        : active,
-      snoozed: parked.filter((thread) => effectiveSnoozed(thread, { now })),
-      settled: sortSettledThreads(parked.filter((thread) => !effectiveSnoozed(thread, { now }))),
-    };
-  }, [threads, configs, now, queuedThreadKeys, pendingOrder, workingShelfEnabled]);
+      workingShelfEnabled,
+      hiddenBotThreadKeys,
+    ],
+  );
   const listedSettled = sections.settled.filter(olderSettledShelf.isListed);
   useOlderSettledShelfGrowth(olderSettledShelf, listedSettled);
   const visibleSettled = listedSettled.slice(0, settledVisibleCount);
