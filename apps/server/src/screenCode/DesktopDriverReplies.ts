@@ -83,9 +83,30 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
       : structured.effect === "refused")
   ) {
     const code = string(object(structured.refusal)?.code) ?? string(structured.code);
+    if (
+      code === "window_geometry_changed" ||
+      code === "capture_frame_mismatch" ||
+      code === "capture_not_found" ||
+      code === "capture_expired" ||
+      code === "capture_generation_mismatch" ||
+      code === "capture_target_mismatch" ||
+      code === "capture_action_refused"
+    )
+      return {
+        ...fail(
+          "stale_reference",
+          "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).",
+        ),
+        ...refusalOf(structured),
+      };
+    const isInvalidCoord =
+      code === "invalid_arguments" ||
+      code === "point_outside_window" ||
+      code === "capture_coordinate_invalid" ||
+      code === "capture_id_invalid";
     return {
       ...fail(
-        code === "invalid_arguments"
+        isInvalidCoord
           ? "invalid_argument"
           : code === "stale_element_token"
             ? "stale_reference"

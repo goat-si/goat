@@ -210,5 +210,7 @@ export const fixture = (
       platform,
     }),
     sent,
+    channel,
+    leases,
   };
 };

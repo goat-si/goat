@@ -187,6 +187,17 @@ const imageFields = {
   pixelWidth: positive(Number.MAX_SAFE_INTEGER),
   pixelHeight: positive(Number.MAX_SAFE_INTEGER),
   scale: Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+  /** Raw display backing scale (e.g. 2 on Retina), when the delivered image was downscaled. */
+  backingScale: Schema.optionalKey(
+    Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+  ),
+  /** Window points per image pixel (region.width / pixelWidth, region.height / pixelHeight). */
+  pointsPerPixel: Schema.optionalKey(
+    Schema.Struct({
+      x: Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+      y: Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+    }),
+  ),
   mimeType: Schema.Literals(["image/png", "image/jpeg"]),
 };
 export const ScreenImageMetadata = Schema.Struct({

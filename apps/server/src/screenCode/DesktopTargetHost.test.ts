@@ -284,34 +284,26 @@ it.effect("desktop actions map only to allowed driver primitives", () =>
   }),
 );
 
-it.effect(
-  "a point is refused after any input until a new screenshot, whatever call form sent it",
-  () =>
-    Effect.gen(function* () {
-      const { host, sent } = fixture({ get_window_state: goat2WindowState });
-      const bound = yield* host.bindApp(
-        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-        context,
-      );
-      const ref = bound.value as ScreenTargetRef;
-      yield* host.observe(call("screenshot", {}, ref), context);
-      yield* host.invoke(call("type_text", { text: "changes the window" }, ref), context);
-      for (const aimed of [
-        call("click", { x: 10, y: 10 }, ref),
-        call("drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, ref),
-        call("scroll", { x: 10, y: 10, direction: "down" }, ref),
-      ]) {
-        const refused = yield* host.invoke(aimed, context).pipe(Effect.result);
-        expect(refused._tag === "Failure" && refused.failure).toMatchObject({
-          code: "stale_reference",
-          effectStarted: false,
-        });
-      }
-      expect(sent.map((entry) => entry.tool)).not.toContain("click");
-      yield* host.observe(call("screenshot", {}, ref), context);
-      yield* host.invoke(call("click", { x: 10, y: 10 }, ref), context);
-      expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
-    }),
+it.effect("desktop points stay usable after input in the same window", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({ get_window_state: goat2WindowState });
+    const bound = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    const ref = bound.value as ScreenTargetRef;
+    yield* host.observe(call("screenshot", {}, ref), context);
+    yield* host.invoke(call("type_text", { text: "changes the window" }, ref), context);
+    for (const aimed of [
+      call("click", { x: 10, y: 10 }, ref),
+      call("drag", { from_x: 1, from_y: 2, to_x: 3, to_y: 4 }, ref),
+      call("scroll", { x: 10, y: 10, direction: "down" }, ref),
+    ]) {
+      const outcome = yield* host.invoke(aimed, context);
+      expect(outcome.category).toBe("confirmed");
+    }
+    expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
+  }),
 );
 
 type Observed = {

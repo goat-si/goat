@@ -109,32 +109,59 @@ const __keys = (key, tab) => {
   });
   return { key: last, ...(modifiers.length ? { modifiers } : {}) };
 };
-const __legacy = (arg) =>
+const __winPt = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) &&
+  Array.isArray(arg.window) && arg.window.length === 2;
+const __legacy = (arg) =>
+  arg !== null && typeof arg === 'object' && !Array.isArray(arg) && !__winPt(arg) &&
   ('ref' in arg || 'elementRef' in arg || 'point' in arg || 'x' in arg || 'selector' in arg || 'targetRef' in arg ||
     'sourceRef' in arg || 'deltaY' in arg || 'deltaX' in arg || 'mode' in arg || 'baseObservationId' in arg || 'urlIncludes' in arg || 'loadState' in arg);
+const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
 const __inputs = new Set(['click', 'right_click', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
 const __target = (binding, note, owner) => {
   const ref = binding.targetRef ?? binding;
   const tab = ref.kind === 'tab';
   const seen = { observation: undefined, image: undefined };
-  // Older call forms reach the host directly; any that sends input also ends the screenshot.
+  // Older call forms reach the host directly; tab input ends the tab screenshot, app points stay usable.
   const call = (method, arg = {}) => {
-    if (__inputs.has(method)) seen.image = undefined;
-    return __call(method, { ...arg, targetRef: ref });
+    if (tab && __inputs.has(method)) seen.image = undefined;
+    const withRegion =
+      !tab &&
+      __pointerMethods.has(method) &&
+      seen.image &&
+      arg &&
+      typeof arg === 'object' &&
+      ('x' in arg || 'from_x' in arg) &&
+      !('regionId' in arg) &&
+      !('coordinate_space' in arg)
+        ? { ...arg, regionId: seen.image.regionId }
+        : arg;
+    return __call(method, { ...withRegion, targetRef: ref });
   };
   const act = async (name, method, arg) => {
-    // Input can change what is under a pixel, so screenshot points end with it; refs do not.
-    seen.image = undefined;
+    if (tab) seen.image = undefined;
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && arg.elementRef !== undefined);
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
-    return reply.v === undefined ? { verdict } : { verdict, result: reply.v };
+    if (reply.v === undefined) return { verdict };
+    const extra =
+      reply.v && typeof reply.v === 'object'
+        ? {
+            ...('point' in reply.v ? { point: reply.v.point } : {}),
+            ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
+          }
+        : {};
+    return { verdict, ...extra, result: reply.v };
   };
   const element = (target) => {
     const observation = seen.observation;
-    if (!observation) throw new ScreenError('stale_reference', 'Observe before naming an element.', true);
+    if (!observation)
+      throw new ScreenError(
+        'stale_reference',
+        typeof target === 'number' ? 'Numbers come from observe(); call it first.' : 'Observe before naming an element.',
+        true,
+      );
     if (typeof target === 'number') {
       const found = observation.elements.find((item) => item.index === target);
       if (!found) throw new ScreenError('stale_reference', 'No [' + target + '] in the latest observe; observe again.', true);
@@ -162,21 +189,47 @@ const __target = (binding, note, owner) => {
         (found.length ? found.length + ' elements match ' : 'Nothing matches ') + JSON.stringify(target) + '; use a number from observe.', true);
     return found[0];
   };
-  // A point is a pixel of the latest screenshot; input may move what is under it, so it ends there.
   const shot = () => {
-    if (!seen.image) throw new ScreenError('invalid_argument', 'Points need a current screenshot: observe({screenshot:true}) first.', true);
+    if (!seen.image)
+      throw new ScreenError(
+        'invalid_argument',
+        tab
+          ? 'Points need a current screenshot: observe({screenshot:true}) first.'
+          : '[x, y] are screenshot pixels and this cell has no screenshot; use { window: [x, y] } window points, or take a screenshot.',
+        true,
+      );
     return seen.image;
   };
   const point = (target) => {
+    if (__winPt(target)) {
+      if (tab) throw new ScreenError('invalid_argument', 'Tabs use [x, y] viewport pixels.', true);
+      return { x: target.window[0], y: target.window[1], coordinate_space: 'window_points' };
+    }
     const image = shot();
-    if (!tab) return { x: target[0], y: target[1] };
+    if (!tab) return { x: target[0], y: target[1], regionId: image.regionId };
     return { point: { observationId: image.observationId, regionId: image.regionId, x: target[0], y: target[1] } };
   };
   const aim = (target) => {
-    if (Array.isArray(target)) return point(target);
+    if (Array.isArray(target) || __winPt(target)) return point(target);
     if (tab && typeof target === 'string') return { selector: target };
     const found = element(target);
     return tab ? { ref: found.ref } : { elementRef: found.ref };
+  };
+  const needsImplicitObserve = (target) =>
+    !tab &&
+    !seen.observation &&
+    target !== null &&
+    target !== undefined &&
+    typeof target !== 'number' &&
+    !Array.isArray(target) &&
+    !__winPt(target) &&
+    !__legacy(target) &&
+    (typeof target === 'string' || (typeof target === 'object' && ('name' in target || 'role' in target || 'id' in target)));
+  let implicitRead;
+  const ensureObserved = () => {
+    if (seen.observation) return Promise.resolve();
+    if (!implicitRead) implicitRead = observe().finally(() => { implicitRead = undefined; });
+    return implicitRead;
   };
   const remember = (observation) => {
     if (observation && Array.isArray(observation.elements)) seen.observation = observation;
@@ -252,20 +305,25 @@ const __target = (binding, note, owner) => {
       if (__legacy(target)) return call('click', target);
       if (tab && options.count !== undefined && options.count !== 1)
         throw new ScreenError('unsupported', 'Tabs click once per call.', true);
-      return act('click', options.button === 'right' ? 'right_click' : 'click', {
-        ...aim(target),
-        ...(!tab && options.count !== undefined ? { count: options.count } : {}),
-        ...(!tab && options.send === true ? { send: true } : {}),
-      });
+      const run = () =>
+        act('click', options.button === 'right' ? 'right_click' : 'click', {
+          ...aim(target),
+          ...(!tab && options.count !== undefined ? { count: options.count } : {}),
+          ...(!tab && options.send === true ? { send: true } : {}),
+        });
+      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     type: (text, target, options = {}) => {
-      if (Array.isArray(target))
+      if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Click the point first, then type without a target.', true);
-      return act('type', 'type_text', {
-        text,
-        ...(target === undefined ? {} : aim(target)),
-        ...(!tab && options && options.send === true ? { send: true } : {}),
-      });
+      const run = () =>
+        act('type', 'type_text', {
+          text,
+          ...(target === undefined ? {} : aim(target)),
+          ...(!tab && options && options.replace === true ? { replace: true } : {}),
+          ...(!tab && options && options.send === true ? { send: true } : {}),
+        });
+      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     press: async (key, target, options = {}) => {
       const targetIsSendOpts =
@@ -273,6 +331,9 @@ const __target = (binding, note, owner) => {
         'send' in target && !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
       const actualOpts = targetIsSendOpts ? target : (options ?? {});
+      if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
+        throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
+      if (needsImplicitObserve(actualTarget)) await ensureObserved();
       if (tab && actualTarget !== undefined) await common.click(actualTarget);
       return act('press', 'press_key', {
         ...__keys(key, tab),
@@ -290,19 +351,22 @@ const __target = (binding, note, owner) => {
           ...(direction === 'left' || direction === 'right' ? { deltaX: delta } : { deltaY: delta }),
         });
       }
-      if (!Array.isArray(target) && target !== null && target !== undefined)
-        throw new ScreenError('invalid_argument', 'App scroll needs a point [x, y] from a screenshot.', true);
-      const image = shot();
-      const at = Array.isArray(target) ? target : [Math.floor(image.pixelWidth / 2), Math.floor(image.pixelHeight / 2)];
-      return act('scroll', 'scroll', { x: at[0], y: at[1], direction, amount });
+      const run = () => {
+        if (target === null || target === undefined)
+          return act('scroll', 'scroll', { scrollCenter: true, direction, amount });
+        return act('scroll', 'scroll', { ...aim(target), direction, amount });
+      };
+      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     setValue: (target, value) => {
       if (value === undefined) return call('set_value', target ?? {});
-      if (Array.isArray(target))
+      if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Name the field by number, selector or role and name; a point cannot hold a value.', true);
-      return act('setValue', 'set_value', tab ? { ...aim(target), text: value } : { ...aim(target), value });
+      const run = () =>
+        act('setValue', 'set_value', tab ? { ...aim(target), text: value } : { ...aim(target), value });
+      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
-    drag: (from, to) => {
+    drag: (from, to, options = {}) => {
       if (to === undefined) return call('drag', from ?? {});
       if (tab) {
         const source = aim(from);
@@ -316,10 +380,15 @@ const __target = (binding, note, owner) => {
           ...(target.ref ? { destinationRef: target.ref } : { destinationSelector: target.selector }),
         });
       }
-      if (!Array.isArray(from) || !Array.isArray(to))
-        throw new ScreenError('invalid_argument', 'App drag goes between points [x, y].', true);
-      shot();
-      return act('drag', 'drag', { from_x: from[0], from_y: from[1], to_x: to[0], to_y: to[1] });
+      const run = () =>
+        act('drag', 'drag', {
+          fromEnd: aim(from),
+          toEnd: aim(to),
+          ...(options && options.send === true ? { send: true } : {}),
+        });
+      return needsImplicitObserve(from) || needsImplicitObserve(to)
+        ? ensureObserved().then(run)
+        : run();
     },
     // The timeout comes as a number, waitFor(c, 5000), or as options, waitFor(c, {timeoutMs: 5000}).
     waitFor: (wanted = {}, options = {}) => wait(wanted, typeof options === 'number' ? options : options.timeoutMs),

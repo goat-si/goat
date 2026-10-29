@@ -248,11 +248,14 @@ class ObservationIndex {
       bounds.height <= 0
     )
       return false;
+    const scale = bounds.scale ?? 1;
+    const pixelWidth = bounds.pixelWidth ?? bounds.width * scale;
+    const pixelHeight = bounds.pixelHeight ?? bounds.height * scale;
     entry.regions.set(regionId, {
       ...bounds,
-      pixelWidth: bounds.pixelWidth ?? bounds.width,
-      pixelHeight: bounds.pixelHeight ?? bounds.height,
-      scale: bounds.scale ?? 1,
+      pixelWidth,
+      pixelHeight,
+      scale,
     });
     return true;
   }
@@ -274,8 +277,8 @@ class ObservationIndex {
         return undefined;
       return {
         targetId,
-        x: bounds.x + ref.x / bounds.scale,
-        y: bounds.y + ref.y / bounds.scale,
+        x: bounds.x + (ref.x * bounds.width) / bounds.pixelWidth,
+        y: bounds.y + (ref.y * bounds.height) / bounds.pixelHeight,
         ...(bounds.kind === "document" ? { kind: "document" as const } : {}),
       };
     }
