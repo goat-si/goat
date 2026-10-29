@@ -76,6 +76,37 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
     expect(snapshot.url).toContain(`${origin}/?echo=`);
   });
 
+  it("keeps phone, email and one-time-code field values out of a snapshot, leaving plain fields shown", async () => {
+    const phone = `010${NodeCrypto.randomInt(10_000_000, 99_999_999)}`;
+    const email = `user_${NodeCrypto.randomUUID().slice(0, 8)}@example.test`;
+    const code = `${NodeCrypto.randomInt(100_000, 999_999)}`;
+    const plain = `Pizza ${NodeCrypto.randomUUID().slice(0, 8)}`;
+    const page = await context.newPage();
+    await page.setContent(
+      '<input id="tel" type="tel" aria-label="Phone"><input id="mail" type="email" aria-label="Email">' +
+        '<input id="otp" autocomplete="one-time-code" aria-label="Code">' +
+        '<input id="plain" aria-label="Topping"><p id="echo"></p>',
+    );
+    await page.locator("#tel").fill(phone);
+    await page.locator("#mail").fill(email);
+    await page.locator("#otp").fill(code);
+    await page.locator("#plain").fill(plain);
+    await page.evaluate(`echo.textContent = [tel.value, mail.value, otp.value].join(" ")`);
+    const snapshot = await ServerBrowserPage.snapshot({
+      page,
+      cdp: await context.newCDPSession(page),
+      renderScale: 1,
+      captureImage: false,
+      consoleEntries: [],
+      networkEntries: [],
+      actionTimeline: [],
+      timeoutMs: 30_000,
+    });
+    const text = JSON.stringify(snapshot);
+    for (const value of [phone, email, code]) expect(text).not.toContain(value);
+    expect(snapshot.accessibilityTree).toContain(plain);
+  });
+
   it("masks a filled secret before the snapshot's text limit can cut it", async () => {
     const filled = "alpha beta gamma";
     const page = await context.newPage();

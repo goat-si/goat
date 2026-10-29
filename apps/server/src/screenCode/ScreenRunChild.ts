@@ -39,6 +39,7 @@ const FRAME_MAX = 96 * 1024;
 const methods = [
   "list_apps",
   "list_windows",
+  "list_menu_bar_extras",
   "bind_app",
   "get_window_state",
   "get_accessibility_tree",
@@ -465,6 +466,7 @@ export async function runScreenChild(
               t: "result",
               cellId,
               status: "deadline",
+              ...partialValue(),
               console: linesOut,
               truncated,
               unawaitedCallIds: [...pending.keys()],
@@ -574,6 +576,7 @@ export async function runScreenChild(
                 t: "result",
                 cellId,
                 status: Date.now() >= deadline ? "deadline" : "failed",
+                ...partialValue(),
                 console: linesOut,
                 truncated,
               });

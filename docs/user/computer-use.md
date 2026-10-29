@@ -89,7 +89,10 @@ browser of the GOAT environment. Agents can use it only there, and GOAT tells th
 that place is not available.
 
 When an agent fills a password, it hears that the sign-in finished only after you hand the
-tab back. Screenshots and recordings of that site stay off for the rest of the thread.
+tab back. Screenshots and recordings of that site stay off for the rest of the thread, and for
+other threads that use the same profile. GOAT hides the password in what agents read when the
+page shows it as typed or in the usual web encodings; a site that changes it some other way can
+still show it, so give passwords only for sites you trust.
 
 ## Approving apps
 

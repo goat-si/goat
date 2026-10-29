@@ -130,6 +130,9 @@ export const fixture = (
   override: Partial<Record<string, unknown>> = {},
   connection = { id: "driver:1" },
   observations?: ScreenObservations,
+  labelTarget?: Parameters<typeof createDesktopTargetHost>[0]["labelTarget"],
+  // Launch arguments depend on the platform; tests pin macOS so they read the same on every runner.
+  platform: NodeJS.Platform = "darwin",
 ) => {
   const sent: Array<{
     tool: string;
@@ -203,7 +206,11 @@ export const fixture = (
       primitiveChannel: channel,
       leases,
       ...(observations ? { observations } : {}),
+      ...(labelTarget ? { labelTarget } : {}),
+      platform,
     }),
     sent,
+    channel,
+    leases,
   };
 };

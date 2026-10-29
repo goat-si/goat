@@ -232,6 +232,28 @@ const pushCursorState = (
 export const nextPointerSequence = (previous: number, cursor?: AgentCursorSnapshot): number =>
   Math.max(previous + 1, cursor?.identity.sequence ?? 0);
 
+const sameCursorOwner = (a: AgentCursorSnapshot, b: AgentCursorSnapshot) =>
+  a.identity.environmentId === b.identity.environmentId &&
+  a.identity.runId === b.identity.runId &&
+  a.identity.turnId === b.identity.turnId &&
+  a.identity.targetId === b.identity.targetId &&
+  a.identity.generation === b.identity.generation;
+
+const acceptServerCursorState = (
+  previous: AgentCursorSnapshot,
+  next: AgentCursorSnapshot,
+): boolean =>
+  sameCursorOwner(previous, next)
+    ? next.identity.sequence > previous.identity.sequence &&
+      !(
+        (previous.phase === "hidden" || previous.phase === "yielded") &&
+        next.phase !== "hidden" &&
+        next.phase !== "yielded"
+      )
+    : previous.phase === "hidden" ||
+      previous.phase === "yielded" ||
+      next.identity.generation > previous.identity.generation;
+
 /** The agent pointer as the desktop host and a recording take it. */
 export interface AgentPointer {
   readonly phase: "move" | "click";
@@ -314,6 +336,8 @@ export const makeSurface = <Tab extends ScreenTab>(
     Effect.sync(() => {
       const tab = findTab(input.threadId, input.tabId);
       if (!tab) return false;
+      const previous = cursorByTab.get(tab);
+      if (previous !== undefined && !acceptServerCursorState(previous, input.cursor)) return false;
       const key = { threadId: tab.threadId, tabId: tab.tabId };
       const sent = pushCursorState(tab, input.cursor, (cursor) => pushDesktop(key, cursor));
       if (sent) cursorByTab.set(tab, input.cursor);

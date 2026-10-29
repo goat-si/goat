@@ -491,6 +491,14 @@
       "types": "./src/usageLimitsOpenCodex.ts",
       "import": "./src/usageLimitsOpenCodex.ts"
     },
+    "./usageLimitsBoard": {
+      "types": "./src/usageLimitsBoard.ts",
+      "import": "./src/usageLimitsBoard.ts"
+    },
+    "./quotaAccountName": {
+      "types": "./src/quotaAccountName.ts",
+      "import": "./src/quotaAccountName.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

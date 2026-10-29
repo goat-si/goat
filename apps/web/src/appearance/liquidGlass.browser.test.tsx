@@ -2,6 +2,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../test/render";
 import { ComposerBanner } from "../components/chat/ComposerBanner";
 import { ComposerSurface } from "../components/chat/ComposerSurface";
+import { Sheet, SheetPopup, SheetTitle } from "../components/ui/sheet";
 import "../index.css";
 
 function fixtureAttributes(attributes: Record<string, string>): Disposable {
@@ -152,5 +153,29 @@ it("keeps floating surfaces over the transcript near-opaque at the lowest glass 
         selector,
       ).toBeGreaterThanOrEqual(floor);
     }
+  });
+});
+
+it("keeps a sheet over the transcript opaque, so the narrow right panel never shows the chat through it", async () => {
+  using _attributes = fixtureAttributes({
+    "data-appearance-preset": "liquid-glass",
+    style: "--glass-opacity: 40%",
+  });
+  await using screen = await render(
+    <div data-glass-pane="pane" className="bg-background">
+      <p>Transcript text under the sheet</p>
+      <Sheet open>
+        <SheetPopup keepMounted transitionDurationMs={0} showCloseButton={false}>
+          <SheetTitle>Right panel</SheetTitle>
+          <div data-glass-layer data-testid="sheet-content" className="bg-background" />
+        </SheetPopup>
+      </Sheet>
+    </div>,
+  );
+  await vi.waitFor(() => {
+    expect(alpha(element(screen.container, '[data-glass-pane="pane"]'))).toBeLessThan(128);
+    // Panel content clears its own floor under glass, so the popup is the only floor left.
+    expect(alpha(element(document.body, '[data-testid="sheet-content"]'))).toBe(0);
+    expect(alpha(element(document.body, '[data-slot="sheet-popup"]'))).toBe(255);
   });
 });

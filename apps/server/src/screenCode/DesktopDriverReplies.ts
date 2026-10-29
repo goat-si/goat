@@ -1,6 +1,5 @@
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
-/** Driver replies read as host results: one call's, or each step of a run_steps batch. */
-import * as Exit from "effect/Exit";
+/** Driver replies read as host results. */
 import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
@@ -84,8 +83,36 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
       : structured.effect === "refused")
   ) {
     const code = string(object(structured.refusal)?.code) ?? string(structured.code);
+    if (
+      code === "window_geometry_changed" ||
+      code === "capture_frame_mismatch" ||
+      code === "capture_not_found" ||
+      code === "capture_expired" ||
+      code === "capture_generation_mismatch" ||
+      code === "capture_target_mismatch" ||
+      code === "capture_action_refused"
+    )
+      return {
+        ...fail(
+          "stale_reference",
+          "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).",
+        ),
+        ...refusalOf(structured),
+      };
+    const isInvalidCoord =
+      code === "invalid_arguments" ||
+      code === "point_outside_window" ||
+      code === "capture_coordinate_invalid" ||
+      code === "capture_id_invalid";
     return {
-      ...fail(code === "invalid_arguments" ? "invalid_argument" : "permission_denied", said),
+      ...fail(
+        isInvalidCoord
+          ? "invalid_argument"
+          : code === "stale_element_token"
+            ? "stale_reference"
+            : "permission_denied",
+        said,
+      ),
       ...refusalOf(structured),
     };
   }
@@ -121,60 +148,4 @@ export const driverResult = (
           : driverEvidence(object(value)),
     safety: driverOutcomeSafety(tool, reply),
   };
-};
-
-/** Element input run_steps takes as steps: the driver's own tools, aimed by element token. */
-export const BATCH_METHODS: ReadonlySet<string> = new Set([
-  "click",
-  "right_click",
-  "type_text",
-  "set_value",
-]);
-export const POINT_KEYS = ["x", "y", "from_x", "from_y", "to_x", "to_y"];
-
-/**
- * Each step's outcome from a run_steps reply, read as the same call alone would be: its own
- * effect and code, never better than the driver said. Steps past the reply's list did not run.
- * A reply that does not account for its steps leaves every step possibly run.
- */
-export const batchOutcomes = (reply: ComputerUsePrimitiveReply, tools: ReadonlyArray<string>) => {
-  const structured = object(object(reply.result)?.structuredContent);
-  const steps = array(structured?.steps).map(object);
-  // The driver stops at its first failed step and reports it last; only that proves the steps
-  // after it never ran. Any other shape leaves them all possibly run.
-  const last = steps.length - 1;
-  const stopped = structured?.failed_step === last && steps[last]?.ok === false;
-  const accounted =
-    structured?.executed === steps.length &&
-    steps.slice(0, stopped ? last : steps.length).every((step) => step?.ok === true) &&
-    (stopped || (steps.length === tools.length && structured.failed_step == null));
-  if (
-    reply.status !== "settled" ||
-    structured?.total !== tools.length ||
-    !accounted ||
-    steps.length > tools.length ||
-    steps.some((step, index) => step?.index !== index)
-  ) {
-    const safety = driverOutcomeSafety("run_steps", reply);
-    const error = { ...(driverError(reply) ?? fail("downstream_failure")), safety };
-    const failed = Exit.fail({ ...error, effectStarted: safety.possibleCommit });
-    return safety.possibleCommit ? tools.map(() => failed) : [failed];
-  }
-  return steps.map((step, index) => {
-    const tool = tools[index] ?? "run_steps";
-    const stepReply = {
-      ...reply,
-      result: { ...(step?.ok === false ? { isError: true } : {}), structuredContent: step },
-    } as ComputerUsePrimitiveReply;
-    const safety = driverOutcomeSafety(tool, stepReply);
-    const error = driverError(stepReply);
-    if (error) return Exit.fail({ ...error, safety, effectStarted: safety.possibleCommit });
-    const result = driverResult(tool, stepReply);
-    // The driver acted on the element found again by role and name after the token went stale.
-    return Exit.succeed(
-      step?.refound === undefined
-        ? result
-        : { ...result, evidence: [...(result.evidence ?? []), "driver:refound"] },
-    );
-  });
 };

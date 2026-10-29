@@ -22,7 +22,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as HttpClient from "effect/http/HttpClient";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServer from "effect/http/HttpServer";
 import * as HttpApi from "effect/http-api/HttpApi";
@@ -43,6 +42,7 @@ import { ClientKeys } from "../auth/ClientKeys.ts";
 import { AgentActivityRows } from "../agentActivity/AgentActivityRows.ts";
 import * as Api from "./Api.ts";
 import { dpopKey, httpServices, issuer, signingKey, signJwt } from "./RateLimitHttp.testkit.ts";
+import { policyWorkerHttpClient } from "../accounts/test/PolicyWorkerClient.testkit.ts";
 
 vi.mock("@clerk/backend", () => ({ verifyToken: vi.fn(), createClerkClient: vi.fn() }));
 
@@ -76,7 +76,7 @@ test.provider("HTTP budgets deny Connect writes and disabled mobile scopes", (st
           hostname.endsWith(".localhost") ||
           hostname === "[::1]",
       ).toBe(true);
-      const http = yield* HttpClient.HttpClient;
+      const http = yield* policyWorkerHttpClient;
       const read = (path: string, key: string, operation?: string) => {
         const request = new URL(path, url);
         request.searchParams.set("account", key);

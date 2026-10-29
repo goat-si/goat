@@ -3,6 +3,7 @@ import {
   PreviewAutomationExecutionError,
   PreviewAutomationConnectionId,
   PreviewAutomationControlInterruptedError,
+  PreviewAutomationTimeoutError,
   DEFAULT_SCREEN_RUN_LIMITS,
   PreviewTabId,
   PreviewAutomationInvalidSelectorError,
@@ -84,8 +85,9 @@ it.effect("in-page actions keep refs and the last complete tree for a diff", () 
     expect(again?.outcome).toBe("ok");
     const diff = yield* fixture.observe({ mode: "diff" });
     expect(diff.mode).toBe("diff");
-    expect(diff.indexedText).toBe("+ - button Cancel [0]");
-    expect(diff.elements).toHaveLength(1);
+    // The diff's text shows the change; its elements are every current one, numbered as a full read.
+    expect(diff.indexedText).toBe("+ - button Cancel [1]");
+    expect(diff.elements.map((element) => element.index)).toEqual([0, 1]);
     const stale = yield* fixture.dispatch("click", { ref });
     expect(stale?.error).toMatchObject({ code: "stale_reference", effectStarted: false });
     const receipt = fixture.bridge
@@ -106,15 +108,15 @@ it.effect("typing and selecting from a cell wait no longer than the cell has lef
     const first = yield* fixture.observe();
     yield* fixture.dispatch("type_text", { ref: first.elements[0]!.ref, text: "x" });
     const typed = fixture.requests.find((entry) => entry.operation === "type");
-    expect(typed?.input).toMatchObject({ text: "x", timeoutMs: 1000 });
+    expect(typed?.input).toMatchObject({ text: "x", timeoutMs: 10_000 });
     // The request deadline also covers time queued behind other browser work on the server.
-    expect(typed?.timeoutMs).toBe(1000);
+    expect(typed?.timeoutMs).toBe(10_000);
     yield* TestClock.adjust("400 millis");
     const second = yield* fixture.observe();
     yield* fixture.dispatch("select", { ref: second.elements[0]!.ref, values: ["a"] });
     const selected = fixture.requests.find((entry) => entry.operation === "select");
-    expect(selected?.input).toMatchObject({ values: ["a"], timeoutMs: 600 });
-    expect(selected?.timeoutMs).toBe(600);
+    expect(selected?.input).toMatchObject({ values: ["a"], timeoutMs: 9_600 });
+    expect(selected?.timeoutMs).toBe(9_600);
   }),
 );
 
@@ -177,34 +179,57 @@ it.effect("a wait reads a page that moved to another origin by itself", () =>
   }),
 );
 
+it.effect("a wait answers inside its cell or is refused with nothing sent", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const inCell = (
+      method: ScreenHostCall["method"],
+      callId: number,
+      args: ScreenHostCall["args"],
+      deadlineMillis: number,
+    ) =>
+      fixture.bridge.handle(
+        { ...call(method, callId, args, fixture.ref), cellId: "budget", deadlineMillis },
+        { ...context, cellId: "budget" },
+      );
+    const waits = () => fixture.requests.filter((request) => request.operation === "waitFor");
+    // The browser itself reports the unmet condition; with no timeout it waits its usual 15 s.
+    const unmet = yield* inCell("wait_for", 80, { text: "Missing" }, 60_000);
+    expect(unmet?.value).toEqual({ status: "timeout" });
+    expect(waits().at(-1)?.timeoutMs).toBe(15_000);
+    // The browser watchdog's 500 ms and the broker's 1,000 ms grace both still end inside the cell.
+    yield* inCell("wait_for", 81, { text: "Missing", timeoutMs: 5_000 }, 4_000);
+    const budgeted = waits().at(-1)?.timeoutMs ?? Number.NaN;
+    expect(budgeted).toBe(2_500);
+    expect(budgeted + 500).toBeLessThanOrEqual(4_000 - 1_000);
+    expect(budgeted + 1_000).toBeLessThanOrEqual(4_000 - 500);
+    yield* inCell("wait_for", 82, { text: "Missing" }, 1_501);
+    expect(waits().at(-1)?.timeoutMs).toBe(1);
+    // A positive timeout under a millisecond is still a wait, not a cell out of time.
+    const before = waits().length;
+    const tiny = yield* inCell("wait_for", 83, { text: "Missing", timeoutMs: 0.5 }, 60_000);
+    expect(tiny?.value).toEqual({ status: "timeout" });
+    expect(waits()).toHaveLength(before + 1);
+    expect(waits().at(-1)?.timeoutMs).toBe(1);
+    const sent = waits().length;
+    const refused = yield* inCell("wait_for", 84, { text: "Missing" }, 1_500);
+    expect(refused?.error).toMatchObject({ code: "deadline", effectStarted: false });
+    expect(waits()).toHaveLength(sent);
+    expect((yield* inCell("press_key", 85, { key: "Enter" }, 60_000))?.outcome).toBe("ok");
+  }),
+);
+
 it.effect(
-  "a wait answers before its cell's deadline, so it never holds the tab into the next cell",
+  "a wait the browser host never answered fails instead of reading as an unmet condition",
   () =>
     Effect.gen(function* () {
       const fixture = yield* browserFixture();
-      const wait = (
-        callId: number,
-        args: { text: string; timeoutMs?: number },
-        deadlineMillis: number,
-      ) =>
-        fixture.bridge.handle(
-          {
-            ...call("wait_for", callId, args, fixture.ref),
-            cellId: `wait-${callId}`,
-            deadlineMillis,
-          },
-          { ...context, cellId: `wait-${callId}` },
-        );
-      expect((yield* wait(80, { text: "Missing" }, 60_000))?.value).toEqual({ status: "timeout" });
-      yield* wait(81, { text: "Missing", timeoutMs: 5_000 }, 1_000);
-      yield* wait(82, { text: "Missing" }, 1_000);
-      const waits = fixture.requests.filter((request) => request.operation === "waitFor");
-      // No timeout means the browser's usual 15 s; either way it ends with time left to answer.
-      expect(waits[0]?.timeoutMs).toBe(15_000);
-      for (const late of waits.slice(1)) {
-        expect(late.timeoutMs).toBeGreaterThan(0);
-        expect(late.timeoutMs).toBeLessThan(1_000);
-      }
+      // The broker's own response timeout carries no remote tag; only the browser's answer does.
+      const { remoteTag: _remoteTag, remoteMessageLength: _length, ...local } = actionErrorContext;
+      fixture.state.failure = new PreviewAutomationTimeoutError({ ...local, operation: "waitFor" });
+      const waited = yield* fixture.dispatch("wait_for", { text: "Ready" });
+      expect(waited?.error).toMatchObject({ code: "downstream_failure", effectStarted: false });
     }),
 );
 
@@ -906,4 +931,18 @@ it.effect("a turn with no tab yet reports tabs available when this server can op
       { kind: "tab", available: false, reason: "no_host" },
     ]);
   }),
+);
+
+it.effect(
+  "rebinding the same tab increments its cursor generation while keeping both bindings usable",
+  () =>
+    Effect.gen(function* () {
+      const { bridge, rebind, ref, dispatch } = yield* browserFixture();
+      const second = yield* rebind();
+      expect(second.generation).toBeGreaterThan(ref.generation);
+      const firstObs = yield* dispatch("observe");
+      expect(firstObs?.outcome).toBe("ok");
+      const fresh = yield* bridge.handle(call("observe", 99, {}, second), context);
+      expect(fresh?.outcome).toBe("ok");
+    }),
 );

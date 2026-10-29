@@ -618,3 +618,44 @@ it.live("keeps the fence while an edited filled field still holds part of the va
     );
   });
 });
+it.live("masks a password filled after another thread's read began, in that read's answer", () => {
+  const shared = {};
+  const { tab } = makeTab({}, shared);
+  const { tab: other } = makeTab({}, shared);
+  return withFill(async (fill) => {
+    const read = { ...request("signInState", {}), threadId: otherThread };
+    await fill.guard(other, read);
+    await fill.fill(tab, fillRequest, later(), record);
+    const answer = fill.mask(read)({ ok: true, result: { validation: ["shown " + PASSWORD] } });
+    expect(JSON.stringify(answer)).not.toContain(PASSWORD);
+  });
+});
+
+it.live(
+  "masks a tab's own records with a password another thread fills in its context later",
+  () => {
+    const shared = {};
+    const { tab } = makeTab({}, shared);
+    const { tab: other } = makeTab({}, shared);
+    return withFill(async (fill) => {
+      const records = fill.maskText(otherThread, other.page);
+      await fill.fill(tab, fillRequest, later(), record);
+      // The console cut sits right inside the password.
+      const logged = records("x".repeat(1990) + PASSWORD, 2000).slice(0, 2000);
+      expect(logged).not.toContain(PASSWORD.slice(0, 4));
+    });
+  },
+);
+
+it.live("drops an image a tab sharing sign-ins took while a password was filled", () => {
+  const shared = {};
+  const { tab } = makeTab({}, shared);
+  const { tab: other } = makeTab({}, shared);
+  return withFill(async (fill) => {
+    const picture = { ...request("snapshot", { captureImage: true }), threadId: otherThread };
+    await fill.guard(other, picture);
+    await fill.fill(tab, fillRequest, later(), record);
+    const answer = fill.mask(picture)({ ok: true, result: { screenshot: { data: "image" } } });
+    expect(answer.ok).toBe(false);
+  });
+});

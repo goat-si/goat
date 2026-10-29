@@ -83,6 +83,7 @@ export const ScreenMethod = Schema.Literals([
   "wait_for",
   "invoke_menu",
   "fetch_tab",
+  "list_menu_bar_extras",
 ]);
 export type ScreenMethod = typeof ScreenMethod.Type;
 
@@ -187,6 +188,17 @@ const imageFields = {
   pixelWidth: positive(Number.MAX_SAFE_INTEGER),
   pixelHeight: positive(Number.MAX_SAFE_INTEGER),
   scale: Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+  /** Raw display backing scale (e.g. 2 on Retina), when the delivered image was downscaled. */
+  backingScale: Schema.optionalKey(
+    Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+  ),
+  /** Window points per image pixel (region.width / pixelWidth, region.height / pixelHeight). */
+  pointsPerPixel: Schema.optionalKey(
+    Schema.Struct({
+      x: Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+      y: Schema.Number.check(Schema.makeFilter((value) => Number.isFinite(value) && value > 0)),
+    }),
+  ),
   mimeType: Schema.Literals(["image/png", "image/jpeg"]),
 };
 export const ScreenImageMetadata = Schema.Struct({
@@ -236,6 +248,8 @@ export const ScreenObservation = Schema.Struct({
       range: Schema.optionalKey(Schema.Struct({ min: finite, max: finite })),
       /** The index of the element that contains this one, in the same observation. */
       parent: Schema.optionalKey(natural),
+      /** The element's accessibility identifier, when the app sets one; stable across languages. */
+      id: Schema.optionalKey(text(400)),
       ref: ScreenElementRef,
     }),
   ).check(Schema.isMaxLength(4096)),
@@ -328,6 +342,8 @@ export const ScreenRunError = Schema.Struct({
   ...refusalFields,
   callId: Schema.optionalKey(natural),
   targetId: Schema.optionalKey(id),
+  /** The cell that failed, as a result names its cell. */
+  cellId: Schema.optionalKey(id),
   effectStarted: Schema.Boolean,
   lastObservationId: Schema.optionalKey(id),
   limit: Schema.optionalKey(Schema.Struct({ name: text(80), maximum: natural })),

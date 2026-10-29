@@ -118,6 +118,16 @@ export const TURN_ENDED: Interruption = {
   message: "This thread's turn has ended. Computer use is idle until its next turn.",
 };
 
+/** A window GOAT used turned private or a person took it over; the proxy replaced its driver. */
+export const targetClosedInterruption = (reason: "private" | "takeover"): Interruption => ({
+  _tag: "other",
+  detail: "helper_restarted",
+  message:
+    reason === "private"
+      ? "A window GOAT was using became private, so GOAT is restarting its driver. Observe again before acting."
+      : "A person took over a window GOAT was using, so GOAT is restarting its driver. Observe again before acting.",
+});
+
 /**
  * Reads allowed while the lease stream reconnects. None shows window content or pixels: a Stop,
  * pause or private field that happened meanwhile cannot reach the proxy until it reconnects.
@@ -144,6 +154,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_guide",
   "list_apps",
   "list_windows",
+  "list_menu_bar_extras",
   "get_accessibility_tree",
   "get_window_state",
   "wait_for_window_settle",

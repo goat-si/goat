@@ -106,7 +106,6 @@ function SheetPopup({
             className,
           )}
           data-slot="sheet-popup"
-          data-glass-pane="pane"
           render={keepMounted ? undefined : renderRetainedPopup}
           style={{ ...transitionStyle, ...style }}
           {...props}

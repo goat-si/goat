@@ -147,7 +147,7 @@ describe("ServerBrowserContexts", () => {
     launches.persistent.mockImplementation(async () => makeContext() as unknown as BrowserContext);
     const configuration = options();
     const pool = new ServerBrowserContexts(configuration);
-    await pool.contextFor("work/team");
+    const original = await pool.contextFor("work/team");
     const removing = Promise.withResolvers<void>();
     const removed = Promise.withResolvers<void>();
     let deleted = false;
@@ -165,8 +165,76 @@ describe("ServerBrowserContexts", () => {
     const reopening = pool.contextFor("work/team");
     await removing.promise;
     removed.resolve();
-    await Promise.all([clearing, reopening]);
+    const [, reopened] = await Promise.all([clearing, reopening]);
+    expect(reopened).not.toBe(original);
     expect(launchedAfterDelete).toEqual([true]);
+    await pool.close();
+  });
+
+  it("finishes an already running profile open before clearing and reopening its storage", async () => {
+    const order: string[] = [];
+    launches.persistent.mockImplementation(async () => makeContext() as unknown as BrowserContext);
+    launches.rm.mockImplementationOnce(async () => {
+      order.push("deleted");
+    });
+    const pool = new ServerBrowserContexts(options());
+    const started = Promise.withResolvers<void>();
+    const proceed = Promise.withResolvers<void>();
+    const opening = pool.withProfile("work", async () => {
+      started.resolve();
+      await proceed.promise;
+      const context = await pool.contextFor("work");
+      context.on("close", () => {
+        order.push("closed");
+      });
+      order.push("opened");
+      return context;
+    });
+    await started.promise;
+    const clearing = pool.clearProfile("work");
+    proceed.resolve();
+    const original = await opening;
+    await clearing;
+    const reopened = await pool.contextFor("work");
+    expect(reopened).not.toBe(original);
+    expect(order).toEqual(["opened", "closed", "deleted"]);
+    await pool.close();
+  });
+
+  it("keeps an outside open behind the last clear when a profile open runs between clears", async () => {
+    const order: string[] = [];
+    launches.persistent.mockImplementation(async () => makeContext() as unknown as BrowserContext);
+    launches.rm
+      .mockImplementationOnce(async () => {
+        order.push("first delete");
+      })
+      .mockImplementationOnce(async () => {
+        order.push("second delete");
+      });
+    const pool = new ServerBrowserContexts(options());
+    const opened = Promise.withResolvers<BrowserContext>();
+    const releaseOpen = Promise.withResolvers<void>();
+    const firstClear = pool.clearProfile("work");
+    const opening = pool.withProfile("work", async () => {
+      const context = await pool.contextFor("work");
+      context.on("close", () => {
+        order.push("closed");
+      });
+      opened.resolve(context);
+      await releaseOpen.promise;
+    });
+    const lastClear = pool.clearProfile("work");
+    await firstClear;
+    const middleContext = await opened.promise;
+    const outside = pool.contextFor("work").then((context) => {
+      order.push("outside opened");
+      return context;
+    });
+    releaseOpen.resolve();
+    await Promise.all([opening, lastClear]);
+    const fresh = await outside;
+    expect(fresh).not.toBe(middleContext);
+    expect(order).toEqual(["first delete", "closed", "second delete", "outside opened"]);
     await pool.close();
   });
 

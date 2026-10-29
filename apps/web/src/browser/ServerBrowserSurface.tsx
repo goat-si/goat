@@ -205,11 +205,12 @@ export function ServerBrowserSurface(props: {
   const [promptText, setPromptText] = useState("");
   const [fileChooser, setFileChooser] = useState<PreviewStreamFileChooser | null>(null);
   const [agentCursor, setAgentCursor] = useState<AgentCursorPlacement | null>(null);
-  /** The agent pointer last drawn, with the canvas size it was placed at. */
+  /** The agent pointer last drawn, with the canvas size and viewport it was placed at. */
   const agentPointerRef = useRef<{
     pointer: PreviewStreamPointer;
     width: number;
     height: number;
+    viewport: PreviewStreamViewport | null;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const answerFileChooser = (files: ReadonlyArray<File>) => {
@@ -244,6 +245,23 @@ export function ServerBrowserSurface(props: {
   const probeRef = useRef<TouchProbe | null>(null);
   const lastProbeRef = useRef<{ x: number; y: number; editable: boolean; at: number } | null>(null);
   const firstFrame = useEffectEvent(() => onFirstFrame?.());
+  // The cursor's spot depends on the canvas box, the painted frame size and the page viewport.
+  const replaceDrawnCursor = useEffectEvent(() => {
+    const canvas = canvasRef.current;
+    const drawn = agentPointerRef.current;
+    if (!canvas || !drawn || privateRef.current) return;
+    const { width, height, clientWidth, clientHeight } = canvas;
+    const viewport = viewportRef.current;
+    agentPointerRef.current = { ...drawn, width, height, viewport };
+    setAgentCursor((current) =>
+      replaceAgentCursor(
+        current,
+        drawn.pointer,
+        { width, height, clientWidth, clientHeight },
+        viewport,
+      ),
+    );
+  });
   const viewportChanged = useEffectEvent((viewport: PreviewStreamViewport) =>
     onViewport?.(viewport),
   );
@@ -385,6 +403,7 @@ export function ServerBrowserSurface(props: {
       capTimer = setTimeout(growCap, previous === null ? 0 : RESIZE_THROTTLE_MS * 2);
     };
     const stopObserving = observeResize(element, () => {
+      replaceDrawnCursor();
       if (timer !== null) return;
       timer = setTimeout(measure, sizeRef.current === null ? 0 : RESIZE_THROTTLE_MS);
     });
@@ -401,11 +420,14 @@ export function ServerBrowserSurface(props: {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     const painter = createPreviewFramePainter(canvas, () => {
       const drawn = agentPointerRef.current;
-      if (drawn && (drawn.width !== canvas.width || drawn.height !== canvas.height)) {
-        agentPointerRef.current = { ...drawn, width: canvas.width, height: canvas.height };
-        setAgentCursor((current) =>
-          replaceAgentCursor(current, drawn.pointer, canvas, viewportRef.current),
-        );
+      // A new viewport moves the cursor with the first frame painted after it, not before.
+      if (
+        drawn &&
+        (drawn.width !== canvas.width ||
+          drawn.height !== canvas.height ||
+          drawn.viewport !== viewportRef.current)
+      ) {
+        replaceDrawnCursor();
       }
       if (hasFrameRef.current) return;
       hasFrameRef.current = true;
@@ -442,13 +464,19 @@ export function ServerBrowserSurface(props: {
           else inputRef.current?.blur();
         },
         onPointer: (pointer) => {
+          if (privateRef.current) return;
           // A thumbnail shows where the agent points, without the click marker's repainting ping.
           const shown: PreviewStreamPointer =
             thumbnailFrameMs === undefined ? pointer : { ...pointer, phase: "move" };
           const placed = placeAgentCursor(shown, canvas, viewportRef.current);
           if (!placed) return;
           setAgentCursor(placed);
-          agentPointerRef.current = { pointer: shown, width: canvas.width, height: canvas.height };
+          agentPointerRef.current = {
+            pointer: shown,
+            width: canvas.width,
+            height: canvas.height,
+            viewport: viewportRef.current,
+          };
         },
         onCursorState: (state) =>
           setAgentCursor((current) => agentCursorAfterState(current, state)),

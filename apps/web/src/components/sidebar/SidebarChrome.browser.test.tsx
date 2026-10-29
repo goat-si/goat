@@ -39,20 +39,25 @@ import {
 const brandState = vi.hoisted(() => ({
   channel: "stable" as "stable" | "dev" | "nightly",
   mode: "pill" as "pill" | "none",
+  realToggles: false,
 }));
 vi.mock("./brandChannel", () => ({ useBrandChannel: () => brandState.channel }));
 vi.mock("../../hooks/useSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useSettings")>()),
   useEnvironmentIdentificationMode: () => brandState.mode,
+  useLegacySidebarEnabled: () => false,
 }));
 vi.mock("../ui/sidebar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../ui/sidebar")>()),
   SidebarTrigger: () => <button aria-label="Toggle main sidebar" />,
 }));
-vi.mock("./SidebarViewToggles", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./SidebarViewToggles")>()),
-  SidebarViewToggles: () => null,
-}));
+vi.mock("./SidebarViewToggles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./SidebarViewToggles")>();
+  return {
+    ...actual,
+    SidebarViewToggles: () => (brandState.realToggles ? <actual.SidebarViewToggles /> : null),
+  };
+});
 
 let root: Root | undefined;
 let container: HTMLDivElement;
@@ -62,6 +67,7 @@ beforeEach(() => {
   botState.count = undefined;
   brandState.channel = "stable";
   brandState.mode = "pill";
+  brandState.realToggles = false;
   publishSidebarPriorityCount(0);
 });
 
@@ -150,12 +156,26 @@ it("updates the width probe badge when Priority gains, changes and loses threads
   await renderBrand(false);
   await act(() => root?.render(<SidebarBrandWidthProbe onWidthChange={() => {}} />));
   expect(container.textContent).toBe("GOAT");
+  expect(container.querySelectorAll(".size-8")).toHaveLength(1);
   await act(() => publishSidebarPriorityCount(9));
   expect(container.textContent).toBe("GOAT9");
   await act(() => publishSidebarPriorityCount(101));
   expect(container.textContent).toBe("GOAT101");
   await act(() => publishSidebarPriorityCount(0));
   expect(container.textContent).toBe("GOAT");
+});
+
+it("renders only the activity bell toggle and priority count in the header", async () => {
+  brandState.realToggles = true;
+  publishSidebarPriorityCount(3);
+  await renderBrand(false);
+  await act(() => root?.render(<SidebarChromeHeader isElectron />));
+  const buttons = Array.from(container.querySelectorAll("button")).map((button) =>
+    button.getAttribute("aria-label"),
+  );
+  expect(buttons).toEqual(["Toggle main sidebar", "Turn off activity view, 3 in Priority"]);
+  expect(container.querySelector('[aria-label*="GOAT Bot"]')).toBeNull();
+  expect(container.querySelector('[aria-label="Search threads"]')).toBeNull();
 });
 
 it.each([

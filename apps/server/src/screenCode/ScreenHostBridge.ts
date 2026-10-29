@@ -1,4 +1,5 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import type * as Exit from "effect/Exit";
@@ -23,7 +24,9 @@ import {
 } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
+import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
+import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
@@ -60,17 +63,20 @@ export interface ScreenHostDispatcher {
   ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
   /**
    * Calls of one batch group, in order, as one trip where the host can. It returns an outcome for
-   * each call from the first that ran; calls past the end of the list did not run.
+   * each call from the first that ran; calls past the end of the list did not run. It marks each
+   * call dispatched right before that call can reach the driver.
    */
   readonly dispatchBatch?: (
     calls: ReadonlyArray<ScreenHostCall>,
     context: ScreenHostContext,
+    markDispatched: (index: number) => void,
   ) => Effect.Effect<ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>>>;
 }
 
 interface CellState {
   closed: boolean;
   cutoffReason?: ScreenRunError["code"];
+  paused?: boolean;
   readonly cutoff: AbortController;
   calls: number;
   pending: number;
@@ -102,7 +108,7 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   error,
 });
 /** Results that did not do what was asked; a write that answers one fails its call. */
-export const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
+const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
   "refused",
@@ -112,8 +118,24 @@ const notRun = (callId: number, haltedBy: number): ScreenRunError => ({
   nextStep: `Call ${haltedBy} in this cell failed, so this call did not run. Observe in a new cell before acting again.`,
 });
 const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
+// A tab wait's deadline answer must still reach the cell process before the cell ends.
+const WAIT_REPLY_RESERVE_MS = 100;
 const key = (runId: string, turnId: string, cellId: string) =>
   `${runId}\u0000${turnId}\u0000${cellId}`;
+
+/** The target a bind_app reply (a ref) or a tab reply ({targetRef}) hands back. */
+const replyTargetId = (value: unknown): string | undefined => {
+  const reply = typeof value === "object" && value !== null ? value : undefined;
+  const ref = reply && "targetRef" in reply ? reply.targetRef : reply;
+  return typeof ref === "object" &&
+    ref !== null &&
+    "id" in ref &&
+    typeof ref.id === "string" &&
+    "kind" in ref &&
+    (ref.kind === "app" || ref.kind === "tab")
+    ? ref.id
+    : undefined;
+};
 
 /** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
 export const observationReplyBudget = (
@@ -141,8 +163,14 @@ export class ScreenHostBridge {
   private readonly turnTargets = new Map<string, Set<string>>();
   private readonly targetRefs = new Map<string, ScreenTargetRef>();
   private readonly cellTargets = new Map<string, Set<string>>();
-  /** Each cell's targets in first-use order, kept past a cut until the cell's result takes them. */
-  private readonly cellTargetOrder = new Map<string, string[]>();
+  /**
+   * Each cell's targets in first-use order and the shortcut labels of its key presses, kept past a
+   * cut until the cell's result takes them, for its timeline row.
+   */
+  private readonly cellFacts = new Map<
+    string,
+    { readonly targets: string[]; readonly keys: Map<number, string> }
+  >();
   private readonly closedCells = new Map<string, Set<string>>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
@@ -267,7 +295,10 @@ export class ScreenHostBridge {
       call.turnId !== context.turnId ||
       call.cellId !== context.cellId
     )
-      return deny(failure("stopped", call.callId));
+      return deny({
+        ...failure("stopped", call.callId),
+        ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
+      });
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
     if (joined !== undefined && "late" in joined) return deny(notRun(call.callId, joined.late));
@@ -308,6 +339,7 @@ export class ScreenHostBridge {
       ![
         "list_apps",
         "list_windows",
+        "list_menu_bar_extras",
         "bind_app",
         "launch_app",
         "list_tabs",
@@ -332,9 +364,11 @@ export class ScreenHostBridge {
       let cellTargets = this.cellTargets.get(cellId);
       if (!cellTargets) this.cellTargets.set(cellId, (cellTargets = new Set()));
       cellTargets.add(call.targetRef.id);
-      const order = this.cellTargetOrder.get(cellId) ?? [];
-      if (!order.includes(call.targetRef.id) && order.length < 64) order.push(call.targetRef.id);
-      this.cellTargetOrder.set(cellId, order);
+      this.noteCellTarget(context, call.targetRef.id);
+    }
+    if (call.method === "press_key") {
+      const label = shortcutLabel(Array.isArray(call.args) ? call.args[0] : undefined);
+      if (label !== undefined) this.factsOf(context).keys.set(call.callId, label);
     }
     if (
       call.targetRef &&
@@ -408,12 +442,41 @@ export class ScreenHostBridge {
         return yield* Effect.fail(notRun(call.callId, state.haltedBy));
       if (call.targetRef?.kind === "tab") {
         if (!context.invocation.reauthorize) {
+          for (const targetId of bridge.turnTargets.get(turn) ?? [])
+            bridge.invalidateTargetNow(
+              context.runId,
+              context.turnId,
+              targetId,
+              "permission_denied",
+            );
           bridge.cutCellNow(context.runId, context.turnId, context.cellId, "permission_denied");
           return yield* Effect.fail(failure("permission_denied", call.callId));
         }
         const check = yield* context.invocation.reauthorize([]).pipe(Effect.result);
-        if (check._tag === "Failure" || !context.invocation.capabilities.has("preview")) {
+        if (check._tag === "Failure") {
+          for (const targetId of bridge.turnTargets.get(turn) ?? [])
+            bridge.invalidateTargetNow(
+              context.runId,
+              context.turnId,
+              targetId,
+              "permission_denied",
+            );
           bridge.cutCellNow(context.runId, context.turnId, context.cellId, "permission_denied");
+          return yield* Effect.fail(failure("permission_denied", call.callId));
+        }
+        if (!context.invocation.capabilities.has("preview")) {
+          bridge.invalidateTargetNow(
+            context.runId,
+            context.turnId,
+            call.targetRef.id,
+            "permission_denied",
+          );
+          bridge.cutCellNow(
+            context.runId,
+            context.turnId,
+            context.cellId,
+            "target_permission_denied",
+          );
           return yield* Effect.fail(failure("permission_denied", call.callId));
         }
       }
@@ -444,11 +507,15 @@ export class ScreenHostBridge {
                 : state.haltedBy === undefined
                   ? undefined
                   : notRun(callId, state.haltedBy),
-            dispatch: (calls) =>
-              dispatcher.dispatchBatch?.(calls, context) ??
+            dispatch: (calls, mark) =>
+              dispatcher.dispatchBatch?.(calls, context, mark) ??
               dispatchInTurn(
                 calls,
-                (each) => dispatcher.dispatch(each, context),
+                (each, index) =>
+                  Effect.suspend(() => {
+                    mark(index);
+                    return dispatcher.dispatch(each, context);
+                  }),
                 FAILED_CATEGORIES,
               ),
             notRun,
@@ -512,9 +579,17 @@ export class ScreenHostBridge {
         gate = Semaphore.makeUnsafe(1);
         this.targetGates.set(call.targetRef.id, gate);
       }
-      // A group's first call holds the gate for all of it; its other members wait on that call.
-      if (slot === undefined || slot.index === 0) effect = gate.withPermits(1)(guardedDispatch);
-      if (this.cursorPhases) effect = this.cursorPhases.track(call.targetRef, call.callId, effect);
+      // A group's first call holds the gate and the cursor phase for all of it; its other members
+      // wait on that call so no queued member starts a phase before the group enters the gate.
+      if (slot === undefined || slot.index === 0) {
+        if (this.cursorPhases)
+          effect = this.cursorPhases.track(
+            call.targetRef,
+            `${call.cellId}\u0000${call.callId}`,
+            effect,
+          );
+        effect = gate.withPermits(1)(effect);
+      }
     }
     // A batch group holds one pending place, its first call's, until that call settles.
     const holdsPlace = slot === undefined || slot.index === 0;
@@ -525,7 +600,28 @@ export class ScreenHostBridge {
       else state.cutoff.signal.addEventListener("abort", onAbort, { once: true });
       return Effect.sync(() => state.cutoff.signal.removeEventListener("abort", onAbort));
     });
-    const result = yield* Effect.raceFirst(effect, cutoff).pipe(
+    // A tab wait stuck behind its tab's other calls, its authorization or a browser that never
+    // answers still answers inside its cell; it only reads, so it settles as a failed read.
+    const waitDeadline =
+      call.method === "wait_for" && call.targetRef?.kind === "tab"
+        ? Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) =>
+              Effect.sleep(Math.max(0, call.deadlineMillis - WAIT_REPLY_RESERVE_MS - now)),
+            ),
+            Effect.andThen(
+              Effect.suspend(() =>
+                Effect.fail({
+                  ...failure("deadline", call.callId),
+                  nextStep: callDispatched
+                    ? "The wait did not answer before this cell ends; the browser may still be checking. Observe in a new cell."
+                    : "The wait could not start before this cell ends; observe or wait in a new cell.",
+                  ...(callDispatched ? { evidence: ["wait_deadline:after_dispatch"] } : {}),
+                }),
+              ),
+            ),
+          )
+        : Effect.never;
+    const result = yield* Effect.raceFirst(Effect.raceFirst(effect, cutoff), waitDeadline).pipe(
       Effect.result,
       Effect.ensuring(
         Effect.sync(() => {
@@ -552,6 +648,9 @@ export class ScreenHostBridge {
         ...failure(dispatched ? "unknown_outcome" : (state.cutoffReason ?? "stopped"), call.callId),
         effectStarted: dispatched,
         safety,
+        nextStep: state.paused
+          ? outcomeSentence(dispatched ? "paused_dispatched" : "paused_unsent")
+          : outcomeSentence(dispatched ? "unknown_outcome" : "refused"),
       });
     }
     if (result._tag === "Failure") {
@@ -569,6 +668,9 @@ export class ScreenHostBridge {
       return refused(call, { ...result.failure, safety, callId: call.callId });
     }
     let value = result.success.value;
+    // A bind or an opened tab names its target only in the reply.
+    const boundRef = replyTargetId(value);
+    if (boundRef !== undefined) this.noteCellTarget(context, boundRef);
     const image = result.success.image;
     const metadata = result.success.imageMetadata;
     if (image && metadata) {
@@ -684,12 +786,27 @@ export class ScreenHostBridge {
     return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
   }
 
-  /** The targets a finished cell acted on, in first-use order, even when its cell was cut. */
-  takeCellTargets(runId: string, turnId: string, cellId: string): readonly string[] {
+  private factsOf(context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">) {
+    const id = key(context.runId, context.turnId, context.cellId);
+    let facts = this.cellFacts.get(id);
+    if (!facts) this.cellFacts.set(id, (facts = { targets: [], keys: new Map() }));
+    return facts;
+  }
+
+  private noteCellTarget(
+    context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">,
+    targetId: string,
+  ) {
+    const { targets } = this.factsOf(context);
+    if (!targets.includes(targetId) && targets.length < 64) targets.push(targetId);
+  }
+
+  /** What a finished cell acted on, in first-use order, and its key labels, even after a cut. */
+  takeCellFacts(runId: string, turnId: string, cellId: string) {
     const id = key(runId, turnId, cellId);
-    const order = this.cellTargetOrder.get(id) ?? [];
-    this.cellTargetOrder.delete(id);
-    return order;
+    const facts = this.cellFacts.get(id) ?? { targets: [], keys: new Map<number, string>() };
+    this.cellFacts.delete(id);
+    return facts;
   }
 
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
@@ -707,8 +824,10 @@ export class ScreenHostBridge {
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
-      if (reason === "permission_denied") state.cutoffReason = reason;
-      state.cutoff.abort();
+      if (reason === "permission_denied" || reason === "target_permission_denied")
+        state.cutoffReason = "permission_denied";
+      if (reason === "pause" || reason === "takeover" || reason === "waiting_for_human")
+        state.paused = true;
     }
     const turn = `${runId}\u0000${turnId}`;
     let closed = this.closedCells.get(turn);
@@ -719,6 +838,7 @@ export class ScreenHostBridge {
     if (closed.size >= 4096) this.fencedTurns.add(turn);
     else closed.add(cellId);
     this.endCellTargets(runId, turnId, cellId, reason);
+    state?.cutoff.abort();
   }
 
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
@@ -734,11 +854,9 @@ export class ScreenHostBridge {
   discardCellNow(runId: string, turnId: string, cellId: string): void {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
-    if (state) {
-      state.closed = true;
-      state.cutoff.abort();
-    }
+    if (state) state.closed = true;
     this.endCellTargets(runId, turnId, cellId);
+    state?.cutoff.abort();
     this.cells.delete(id);
     const turn = `${runId}\u0000${turnId}`;
     let closed = this.closedCells.get(turn);
@@ -817,8 +935,8 @@ export class ScreenHostBridge {
     this.cursorPhases?.finishTurn(runId, turnId);
     for (const cellId of this.cellTargets.keys())
       if (cellId.startsWith(`${turn}\u0000`)) this.cellTargets.delete(cellId);
-    for (const cellId of this.cellTargetOrder.keys())
-      if (cellId.startsWith(`${turn}\u0000`)) this.cellTargetOrder.delete(cellId);
+    for (const cellId of this.cellFacts.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.cellFacts.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
     this.fencedTurns.delete(turn);
@@ -830,9 +948,13 @@ export class ScreenHostBridge {
 
   private endCellTargets(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
+    const nonterminal =
+      reason === undefined || reason === "unawaited" || reason === "target_permission_denied";
     for (const targetId of this.cellTargets.get(id) ?? []) {
       const ref = this.targetRefs.get(targetId);
-      if (ref)
+      if (!ref) continue;
+      if (nonterminal) this.cursorPhases?.endCell(ref, cellId);
+      else
         this.cursorPhases?.ended(
           ref,
           reason === "takeover" ? "takeover" : reason === "private" ? "private" : "ended",

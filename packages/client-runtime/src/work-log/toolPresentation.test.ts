@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { extractToolActivityPresentation } from "./toolPresentation.ts";
+import { extractToolActivityPresentation, workEntryToolSummary } from "./toolPresentation.ts";
 
 describe("extractToolActivityPresentation", () => {
   it("recovers computer-use presentation for retained calls without result metadata", () => {
@@ -76,5 +76,16 @@ describe("extractToolActivityPresentation", () => {
         },
       }),
     ).toEqual({});
+  });
+});
+
+describe("workEntryToolSummary", () => {
+  it("shows the server's one-line outcome for a row, and nothing that isn't one line", () => {
+    expect(
+      workEntryToolSummary({ type: "dynamic_tool", toolSummary: " 2 confirmed · 820 ms " }),
+    ).toBe("2 confirmed · 820 ms");
+    for (const toolSummary of [undefined, "", "two\nlines", "x".repeat(201), 3])
+      expect(workEntryToolSummary({ type: "dynamic_tool", toolSummary })).toBeUndefined();
+    expect(workEntryToolSummary(undefined)).toBeUndefined();
   });
 });

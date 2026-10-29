@@ -44,6 +44,15 @@ const INPUT_POINTS: Readonly<Record<string, readonly [string, string] | null>> =
   invoke_menu: null,
 };
 
+/** Window inputs that act at the current focus when given neither coordinates nor an element. */
+const NON_SPATIAL_INPUTS: ReadonlySet<string> = new Set([
+  "press_key",
+  "hotkey",
+  "type_text",
+  "set_value",
+  "invoke_menu",
+]);
+
 /** Calls whose answer can carry pixels of the screen. */
 const CAPTURES: ReadonlySet<string> = new Set([
   "get_window_state",
@@ -60,12 +69,14 @@ const CAPTURES: ReadonlySet<string> = new Set([
 
 export const overlayCallCaptures = (name: string, args: unknown): boolean =>
   CAPTURES.has(name) &&
-  !(name === "get_window_state" && record(args)?.include_screenshot === false);
+  !(name === "get_window_state" && record(args)?.include_screenshot === false) &&
+  !(name === "verify_state" && record(args)?.include_screenshot !== true);
 
 interface Target {
   readonly pid: number;
   readonly windowId: number;
   readonly point?: ComputerUseOverlayPoint;
+  readonly owner?: AgentCursorOwner;
 }
 
 export interface OverlayState {
@@ -165,7 +176,9 @@ function hideReason(state: OverlayState): ComputerUseOverlayHideReason | undefin
   if (state.ended) return "ended";
   if (state.pause) return state.pause;
   if (state.capturing.size > 0 || state.recording) return "capture";
-  if (state.scoped?.op === "hide") return state.scoped.reason;
+  // The macOS helper ends its MCP session on a pause or end reason; only the lease's own pause and
+  // end may send one. A target's cursor ending, turning private or being taken over only hides.
+  if (state.scoped?.op === "hide") return "idle";
   if (!state.target) return "idle";
   return undefined;
 }
@@ -176,6 +189,12 @@ const sameOwner = (a: AgentCursorOwner, b: AgentCursorOwner) =>
   a.turnId === b.turnId &&
   a.targetId === b.targetId &&
   a.generation === b.generation;
+
+const sameAuthority = (a: AgentCursorOwner, b: AgentCursorOwner) =>
+  a.environmentId === b.environmentId &&
+  a.runId === b.runId &&
+  a.turnId === b.turnId &&
+  b.generation >= a.generation;
 
 /**
  * The owner a code-mode call names, when its own phase events have not reached the proxy yet:
@@ -227,29 +246,41 @@ function desired(state: OverlayState): ComputerUseOverlayCommand {
 const same = (a: ComputerUseOverlayCommand | undefined, b: ComputerUseOverlayCommand) =>
   a !== undefined && JSON.stringify(a) === JSON.stringify(b);
 
+/** Whether the overlay takes a scoped cursor event over the owner it holds. */
+export function cursorAccepted(state: OverlayState, event: AgentCursorEvent): boolean {
+  const previous = state.scoped?.identity;
+  const next = event.identity;
+  if (previous === undefined) return true;
+  const sameOwner =
+    previous.environmentId === next.environmentId &&
+    previous.runId === next.runId &&
+    previous.turnId === next.turnId &&
+    previous.targetId === next.targetId &&
+    previous.generation === next.generation;
+  return sameOwner
+    ? next.sequence > previous.sequence && !(state.scoped?.op === "hide" && event.op === "show")
+    : state.scoped?.op === "hide" || next.generation > previous.generation;
+}
+
 function apply(state: OverlayState, event: OverlayEvent): OverlayState {
   switch (event.type) {
     case "cursor": {
-      const previous = state.scoped?.identity;
-      const next = event.event.identity;
-      if (previous !== undefined) {
-        const sameOwner =
-          previous.environmentId === next.environmentId &&
-          previous.runId === next.runId &&
-          previous.turnId === next.turnId &&
-          previous.targetId === next.targetId &&
-          previous.generation === next.generation;
-        if (
-          sameOwner
-            ? next.sequence <= previous.sequence ||
-              (state.scoped?.op === "hide" && event.event.op === "show")
-            : state.scoped?.op !== "hide" && next.generation <= previous.generation
-        )
-          return state;
-      }
+      if (!cursorAccepted(state, event.event)) return state;
+      const next = event.event;
+      const target =
+        next.op !== "show"
+          ? state.target
+          : next.pid !== undefined && next.windowId !== undefined && next.point !== undefined
+            ? { pid: next.pid, windowId: next.windowId, point: next.point, owner: next.identity }
+            : state.target?.owner !== undefined && sameAuthority(state.target.owner, next.identity)
+              ? { ...state.target, owner: next.identity }
+              : state.directActing.size > 0
+                ? state.target
+                : undefined;
       return {
         ...state,
-        scoped: event.event,
+        scoped: next,
+        target,
         legacyTargetActive: state.directActing.size > 0 ? state.legacyTargetActive : false,
       };
     }
@@ -269,13 +300,44 @@ function apply(state: OverlayState, event: OverlayEvent): OverlayState {
         return { ...state, capturing: new Set(state.capturing).add(event.id), snapshots };
       }
       if (!(event.name in INPUT_POINTS) || !window) return state;
-      const point = event.cursor?.point ?? pointOf(state, event.name, args, window.windowId);
+      if (
+        event.codeMode &&
+        state.scoped !== undefined &&
+        state.scoped.op !== "hide" &&
+        (event.cursor?.owner === undefined ||
+          (!sameOwner(state.scoped.identity, event.cursor.owner) &&
+            event.cursor.owner.generation <= state.scoped.identity.generation))
+      )
+        return state;
+      const supplied = event.cursor?.point ?? pointOf(state, event.name, args, window.windowId);
+      const keepsTarget =
+        supplied === undefined &&
+        NON_SPATIAL_INPUTS.has(event.name) &&
+        args?.element_token === undefined &&
+        args?.from_zoom !== true &&
+        args?.x === undefined &&
+        args?.y === undefined &&
+        state.target?.point !== undefined &&
+        (event.codeMode
+          ? !state.legacyTargetActive &&
+            event.cursor?.owner !== undefined &&
+            state.scoped?.op === "show" &&
+            state.target.owner !== undefined &&
+            sameAuthority(state.target.owner, event.cursor.owner)
+          : state.legacyTargetActive && state.target.owner === undefined);
+      const targetWindow = keepsTarget && state.target ? state.target : window;
+      const point = supplied ?? (keepsTarget ? state.target?.point : undefined);
       return {
         ...state,
         scoped: event.codeMode
-          ? callOwner(state, event.cursor?.owner, window, point)
+          ? callOwner(state, event.cursor?.owner, targetWindow, point)
           : state.scoped,
-        target: { ...window, ...(point ? { point } : {}) },
+        target: {
+          pid: targetWindow.pid,
+          windowId: targetWindow.windowId,
+          ...(point ? { point } : {}),
+          ...(event.codeMode && event.cursor?.owner ? { owner: event.cursor.owner } : {}),
+        },
         acting: new Set(state.acting).add(event.id),
         directActing: event.codeMode
           ? state.directActing

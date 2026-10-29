@@ -648,7 +648,10 @@ const make = Effect.gen(function* () {
       ServerBrowserPage.invalidateRefs(page),
     );
     control.onDispatchCut(inputFence(cdp));
-    const diagnostics = new ServerBrowserDiagnostics(page, secretFill.maskText(snapshot.threadId));
+    const diagnostics = new ServerBrowserDiagnostics(
+      page,
+      secretFill.maskText(snapshot.threadId, page),
+    );
     const tab: ServerTab = {
       threadId: ThreadId.make(snapshot.threadId),
       tabId: snapshot.tabId,

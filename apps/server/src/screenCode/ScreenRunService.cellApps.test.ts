@@ -7,6 +7,9 @@ import * as Layer from "effect/Layer";
 import * as NodeURL from "node:url";
 
 import { ComputerUseCallApps, makeCallApps } from "../cua/ComputerUseCallApps.ts";
+import { ScreenCursorPublisher } from "../cua/ScreenCursorPublisher.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { fixture as desktopFixture } from "./DesktopTargetHost.testkit.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
@@ -134,4 +137,151 @@ it.live("a refused repeat of a cell's code does not take the earlier cell's targ
       expect(callApps.present(row)).toBe(row);
     }),
   ),
+);
+
+it.live(
+  "serializes cursor publications per route across rebinds, keeps the cursor across a failed cell, and drains at turn end",
+  () => {
+    const events: string[] = [];
+    let nextId = 0;
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const failed = yield* service.runCell({
+        ...request,
+        source: `${bindAndObserve} throw new Error("boom");`,
+      });
+      expect(failed.status).toBe("failed");
+      expect(events).toEqual(["t-1:1:thinking", "t-1:1:resting"]);
+      const second = yield* service.runCell({
+        ...request,
+        source: `${bindAndObserve} return true;`,
+      });
+      expect(second.status).toBe("completed");
+      yield* service.finishTurn({ ...request, reason: "test" });
+      expect(events).toEqual([
+        "t-1:1:thinking",
+        "t-1:1:resting",
+        "t-2:2:thinking",
+        "t-2:2:resting",
+        "t-1:1:hidden",
+        "t-2:2:hidden",
+      ]);
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          dispatcher: {
+            availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+            dispatch: (call) =>
+              Effect.succeed(
+                call.method === "select_tab"
+                  ? {
+                      value: {
+                        targetRef: {
+                          id: `t-${++nextId}`,
+                          kind: "tab" as const,
+                          environmentId: "env",
+                          runId: "run",
+                          turnId: "turn",
+                          generation: nextId,
+                        },
+                        tab: { tabId: "tab", title: "Page", url: page.pageUrl },
+                      },
+                      category: "confirmed" as const,
+                    }
+                  : { value: { indexedText: "Page" }, category: "confirmed" as const },
+              ),
+          },
+        }).pipe(
+          Layer.provide(NodeServices.layer),
+          Layer.provide(
+            Layer.succeed(
+              ScreenCursorPublisher,
+              ScreenCursorPublisher.of({
+                publish: (event) =>
+                  Effect.sync(() => {
+                    events.push(
+                      `${event.identity.targetId}:${event.identity.generation}:${event.phase}`,
+                    );
+                  }),
+              }),
+            ),
+          ),
+        ),
+      ),
+      Effect.provideService(ComputerUseCallApps, makeCallApps()),
+    );
+  },
+);
+
+it.live(
+  "wires ScreenCursorPhases into DesktopTargetHost so A -> B -> A desktop window switches advance call generations",
+  () => {
+    const { host, sent } = desktopFixture({
+      list_apps: {
+        apps: [{ pid: 42, name: "Editor", bundle_id: "org.example.Editor" }],
+      },
+      list_windows: {
+        windows: [
+          {
+            pid: 42,
+            window_id: 7,
+            title: "First",
+            bounds: { x: 0, y: 0, width: 400, height: 200 },
+          },
+          {
+            pid: 42,
+            window_id: 8,
+            title: "Second",
+            bounds: { x: 0, y: 0, width: 400, height: 200 },
+          },
+        ],
+      },
+    });
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+        ...request,
+        source: [
+          "const a = await screen.app({bundleId: 'org.example.Editor', windowId: 7});",
+          "const b = await screen.app({bundleId: 'org.example.Editor', windowId: 8});",
+          "await a.press('Escape');",
+          "await b.press('Escape');",
+          "await a.press('Escape');",
+          "return true;",
+        ].join(" "),
+      });
+      expect(result.status).toBe("completed");
+      const generations = sent
+        .filter((entry) => entry.tool === "press_key")
+        .map((entry) => (entry.cursor?.owner as { generation: number } | undefined)?.generation);
+      expect(generations).toEqual([1, 2, 3]);
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          desktopHost: host,
+          dispatcher: createScreenDispatchRouter({ app: host }),
+        }).pipe(
+          Layer.provide(NodeServices.layer),
+          Layer.provide(
+            Layer.succeed(
+              ScreenCursorPublisher,
+              ScreenCursorPublisher.of({ publish: () => Effect.void }),
+            ),
+          ),
+        ),
+      ),
+      Effect.provideService(ComputerUseCallApps, makeCallApps()),
+    );
+  },
 );

@@ -28,8 +28,6 @@ export interface SignInPage {
 
 /** What GOAT recorded on this tab. */
 export interface SignInRecord {
-  /** The identifier beside the field when GOAT filled the password. */
-  readonly identifierAtFill?: PreviewSignInField;
   /**
    * A form or same-site script request from the tab carried a password GOAT filled, while this
    * document was showing.
@@ -39,8 +37,10 @@ export interface SignInRecord {
     readonly at: number;
     /** The HTTP status the submission got back, once it did. */
     readonly status?: number;
-    /** The identifier beside the field when it was sent, read then or else kept from the fill. */
-    readonly identifier?: PreviewSignInField;
+    /** A form the page sent, or a script request, which GOAT cannot tell from other traffic. */
+    readonly kind?: "form" | "script";
+    /** The identifier as the form request carried it; unread when the request does not show it. */
+    readonly identifier?: PreviewSignInField | "unread";
   };
   /** When, in the same order as submitted.at, a person last handed the tab back after GOAT asked them to finish a step. */
   readonly handedBackAt?: number;
@@ -209,6 +209,19 @@ export const signInStage = (
     return {
       stage: "partial",
       evidence: [...evidence, "the identifier was empty when the password was sent"],
+    };
+  if (submitted?.identifier === "unread")
+    return {
+      stage: "unknown",
+      evidence: [...evidence, "GOAT could not read the identifier as the password was sent"],
+    };
+  if (submitted?.kind !== "form")
+    return {
+      stage: "unknown",
+      evidence: [
+        ...evidence,
+        "a script request carried it, which GOAT cannot tell from other traffic",
+      ],
     };
   // A later page alone is no answer: the site must have taken the submission itself.
   if (submitted?.status === undefined)

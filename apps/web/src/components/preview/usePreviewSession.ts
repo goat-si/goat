@@ -97,6 +97,20 @@ export function usePreviewSession(threadRef: ScopedThreadRef): void {
 
 const inactiveAtom = Atom.make(() => undefined);
 
+/**
+ * Syncs a browser card's thread preview list on the desktop app even when the thread was already
+ * running before startup and has emitted no new preview event yet.
+ */
+export function desktopCardPreviewSyncAtom(threadRef: ScopedThreadRef | null) {
+  return isElectron && threadRef !== null
+    ? previewSessionSyncAtom(scopedThreadKey(threadRef))
+    : inactiveAtom;
+}
+
+export function useDesktopCardPreviewSession(threadRef: ScopedThreadRef | null): void {
+  useAtomValue(desktopCardPreviewSyncAtom(threadRef));
+}
+
 // Discover background tabs without listing every thread at startup. Retain each
 // sync for the host's lifetime so later events still arrive while chat is absent.
 const desktopHostedPreviewSyncAtom = Atom.family((environmentId: EnvironmentId) => {

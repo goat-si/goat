@@ -231,7 +231,7 @@ import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { subscribeSidebarSearchFocus } from "./sidebar/sidebarSearchFocus";
-import { SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
+import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { TooltipProvider } from "./ui/tooltip";
 import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../composerDraftStore";
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
@@ -1093,7 +1093,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     threads,
   });
 
-  useEffect(() => subscribeSidebarSearchFocus(() => threadSearchInputRef.current?.focus()), []);
   const priorityRead = useSidebarPriorityRead({
     priorityThreads,
     wokeAtByThreadKey,
