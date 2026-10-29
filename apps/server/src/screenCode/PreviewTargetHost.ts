@@ -64,6 +64,11 @@ interface BoundTarget {
   readonly documentGeneration?: number;
   /** The latest observation, when its tree was incomplete: its refs are held to its document. */
   readonly incompleteObservationId?: string;
+  readonly screenshotBasis?: {
+    readonly documentGeneration?: number;
+    readonly viewport: { readonly width: number; readonly height: number };
+    readonly viewportReported: boolean;
+  };
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -504,13 +509,30 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           observations,
           arg: { ...arg, baseObservationId: arg.baseObservationId ?? bound.observationId },
         });
-        const { incompleteObservationId: _previous, ...kept } = reading;
+        const image = result.value.image;
+        const screenshotBasis =
+          image?.region.kind === "viewport"
+            ? {
+                ...(current.documentGeneration === undefined
+                  ? {}
+                  : { documentGeneration: current.documentGeneration }),
+                viewport: { width: image.region.width, height: image.region.height },
+                viewportReported: current.viewport !== undefined,
+              }
+            : undefined;
+        const {
+          incompleteObservationId: _previous,
+          documentGeneration: _previousDocument,
+          screenshotBasis: _previousBasis,
+          ...kept
+        } = reading;
         targets.set(bound.ref.id, {
           ...kept,
           observationId: result.value.observationId,
           ...(current.documentGeneration === undefined
             ? {}
             : { documentGeneration: current.documentGeneration }),
+          ...(screenshotBasis ? { screenshotBasis } : {}),
           ...(result.value.complete || result.value.elements.length === 0
             ? {}
             : { incompleteObservationId: result.value.observationId }),
@@ -600,6 +622,20 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that screenshot. Observe it again."),
         );
+      if (point && bound.screenshotBasis?.viewportReported) {
+        const viewport = bound.screenshotBasis.viewport;
+        if (
+          !current.viewport ||
+          current.viewport.width !== viewport.width ||
+          current.viewport.height !== viewport.height
+        )
+          return yield* Effect.fail(
+            fail(
+              "stale_reference",
+              "The viewport changed since that screenshot. Observe it again.",
+            ),
+          );
+      }
       // A ref from an incomplete tree is held to its document the same way: the browser's ref
       // table alone was never relied on for those.
       const documentBound =
@@ -792,11 +828,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         call.method === "close_tab" ? closingKey(bound.tab.threadId, bound.tab.tabId) : undefined;
       if (ownClose) closingTabs.set(ownClose, (closingTabs.get(ownClose) ?? 0) + 1);
       // Refs outlive completed in-page input, as computer use tokens do: the browser refuses a ref
-      // from a replaced document before any input. A failure or a new document retires them, and
-      // any input retires screenshot points, which name pixels.
+      // from a replaced document before any input. A failure or a new document retires them.
+      // Clicks keep their screenshot basis; inputs that can move the page retire it.
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
-      else observations.index.invalidatePoints(bound.ref.id);
+      else if (!["click", "right_click"].includes(call.method))
+        observations.index.invalidatePoints(bound.ref.id);
       // A point, or a ref from an incomplete tree, carries its document so the browser's input
       // gate can refuse it.
       const pointDocument = point || documentBound ? bound.documentGeneration : undefined;
