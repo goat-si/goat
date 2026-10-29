@@ -94,6 +94,7 @@ import {
   type DesktopPages,
   type DesktopRow,
 } from "./DesktopObserveRead.ts";
+import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
@@ -443,6 +444,8 @@ export const createDesktopTargetHost = (deps: {
     leases: deps.leases,
     bind: bindWindow,
   });
+  const selectText = makeSelectText({ send, tokenOf });
+  const menuBarExtras = makeMenuBarExtras({ send });
   /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
   const page = Effect.fn("DesktopTargetHost.page")(function* (
     bound: BoundWindow,
@@ -716,17 +719,12 @@ export const createDesktopTargetHost = (deps: {
     context: ScreenHostContext,
     inBatch = false,
   ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
-    if (call.method === "select_text")
-      return yield* Effect.fail(
-        fail(
-          "unsupported",
-          "Desktop select_text is unsupported by this runtime; nothing was sent. To replace an editable field's whole value, use setValue({ elementRef, value }).",
-        ),
-      );
     if (call.method === "launch_app" && !call.targetRef)
       return yield* launch(call, callArgs(call.args), context);
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(fail("stale_reference"));
+    if (call.method === "select_text")
+      return yield* selectText(bound, callArgs(call.args), call, context);
     const withInputEvidence = (
       tool: string,
       forwarded: Record<string, unknown>,
@@ -894,12 +892,7 @@ export const createDesktopTargetHost = (deps: {
     call.method === "tab_status" || call.method === "read_page"
       ? Effect.fail(fail("unsupported"))
       : call.method === "list_menu_bar_extras"
-        ? Effect.fail(
-            fail(
-              "unsupported",
-              "Menu bar extras are unavailable until the 030 §3.13 driver update is pinned; bind an app window with screen.app() or hand the status item to the person.",
-            ),
-          )
+        ? menuBarExtras(call, callArgs(call.args), context)
         : call.method === "bind_app"
           ? bindApp(call, context)
           : call.method === "list_apps" || call.method === "list_windows"
