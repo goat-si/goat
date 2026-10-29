@@ -522,16 +522,20 @@ export const make = Effect.gen(function* () {
       if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
       lastReads.delete(group.key);
       if (isRateLimited(read.cause)) return;
-      const counts = group.targets.map((target) => (readFailures.get(lifeKey(target)) ?? 0) + 1);
-      group.targets.forEach((target, index) => readFailures.set(lifeKey(target), counts[index]!));
+      const counts = group.targets.map((target) => {
+        const count = (readFailures.get(lifeKey(target)) ?? 0) + 1;
+        readFailures.set(lifeKey(target), count);
+        return { target, count };
+      });
       // The newest watch sets the pace, so it is not held back by older watches' failures.
+      const fewest = Math.min(...counts.map(({ count }) => count));
       readRetryAt.set(group.key, {
-        at:
-          now +
-          Math.min(SWEEP_MINUTES * 60_000 * 2 ** (Math.min(...counts) - 1), READ_RETRY_MAX_MS),
+        at: now + Math.min(SWEEP_MINUTES * 60_000 * 2 ** (fewest - 1), READ_RETRY_MAX_MS),
         watches: new Set(group.targets.map(watchKey)),
       });
-      const spent = group.targets.filter((_, index) => counts[index]! >= READ_FAILURE_LIMIT);
+      const spent = counts.flatMap(({ target, count }) =>
+        count >= READ_FAILURE_LIMIT ? [target] : [],
+      );
       if (spent.length > 0 && (yield* eachTarget({ ...group, targets: spent }, giveUp))) {
         for (const target of spent) readFailures.delete(lifeKey(target));
       }
