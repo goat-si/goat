@@ -207,5 +207,7 @@ export const fixture = (
       ...(labelTarget ? { labelTarget } : {}),
     }),
     sent,
+    channel,
+    leases,
   };
 };

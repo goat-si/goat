@@ -32,6 +32,7 @@ import { ScreenObservations } from "./ScreenObservations.ts";
 import {
   admitDesktopInput,
   BATCH_FAILED_CATEGORIES,
+  buildGuardInput,
   inspectTreeElements,
   preflightDesktopBatch,
   type GuardElement,
@@ -159,6 +160,7 @@ export const createDesktopTargetHost = (deps: {
   readonly primitiveChannel: ComputerUsePrimitiveChannel["Service"];
   readonly leases: ComputerUseLeases["Service"];
   readonly observations?: ScreenObservations;
+  readonly platform?: NodeJS.Platform;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
 }): DesktopTargetHost => {
@@ -270,6 +272,8 @@ export const createDesktopTargetHost = (deps: {
     delete bound.snapshotId;
     delete bound.pages;
     delete bound.elementsByToken;
+    bound.screenshots?.clear();
+    delete bound.latestScreenshot;
     bound.pointsStale = "restart";
     return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
   });
@@ -806,23 +810,11 @@ export const createDesktopTargetHost = (deps: {
       }
       const target = { kind: "window", pid: bound.pid, window_id: bound.windowId };
       const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
-      const guardElement =
-        elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
-      const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
-      const windowBounds = bound.framesBasis ?? bound.windowBounds;
-      const admission = admitDesktopInput({
-        method: call.method,
-        args,
-        appId: bound.appId,
-        ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
-        ...(elementToken === undefined ? {} : { elementToken }),
-        ...(guardElement === undefined ? {} : { element: guardElement }),
-        ...(placed === undefined ? {} : { placed }),
-        ...(windowBounds === undefined ? {} : { windowBounds }),
-        ...(bound.lastClickedTableCell === undefined
-          ? {}
-          : { lastClickedTableCell: bound.lastClickedTableCell }),
-      });
+      const guardInput = buildGuardInput(call.method, args, bound, elementToken, (el) =>
+        tokenOf(el, bound),
+      );
+      if (!guardInput.ok) return yield* Effect.fail(guardInput.error);
+      const admission = admitDesktopInput(guardInput.input);
       if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
       delete forwarded.elementRef;
       delete forwarded.send;
@@ -851,24 +843,24 @@ export const createDesktopTargetHost = (deps: {
         if (elementToken === undefined) forwarded.window_id = bound.windowId;
       }
       const tool = call.method === "right_click" ? "right_click" : call.method;
-      const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, {
+      const pointerState = {
+        ...(deps.platform === undefined ? {} : { platform: deps.platform }),
         ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
         ...(bound.frames === undefined ? {} : { frames: bound.frames }),
+        ...(bound.elementsByToken === undefined ? {} : { elementsByToken: bound.elementsByToken }),
         ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
         ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
         ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
         ...(bound.latestScreenshot === undefined
           ? {}
           : { latestScreenshot: bound.latestScreenshot }),
-        resolveToken: (el) => tokenOf(el, bound),
-      });
+        resolveToken: (el: Record<string, unknown>) => tokenOf(el, bound),
+      };
+      const pointerResolved = applyDesktopPointerArgs(call.method, args, forwarded, pointerState);
       if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
-      const aimed =
-        ["x", "y", "from_x", "from_y", "to_x", "to_y"].some((key) => key in forwarded) &&
-        forwarded.coordinate_space !== "window_points";
       if (admission.clickedTableCell !== undefined)
         bound.lastClickedTableCell = admission.clickedTableCell;
-      const needs = elementToken !== undefined ? "element" : aimed ? "points" : "nothing";
+      const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
       const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
         bound,
         point:
@@ -883,7 +875,11 @@ export const createDesktopTargetHost = (deps: {
           }),
         ),
       );
-      const result = annotatePointerResult(driverResult(tool, reply), pointerResolved.windowPoint);
+      const result = annotatePointerResult(
+        driverResult(tool, reply),
+        pointerResolved.windowPoint,
+        pointerState,
+      );
       const replyData = object(driverValue(reply));
       const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
       if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;
@@ -912,23 +908,10 @@ export const createDesktopTargetHost = (deps: {
       const element = object(args.elementRef);
       const elementToken = element ? tokenOf(element, bound) : undefined;
       if (element && !elementToken) return { ok: false, error: fail("stale_reference") };
-      const guardElement =
-        elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
-      const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
-      const windowBounds = bound.framesBasis ?? bound.windowBounds;
-      return {
-        ok: true,
-        args,
-        appId: bound.appId,
-        ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
-        ...(elementToken === undefined ? {} : { elementToken }),
-        ...(guardElement === undefined ? {} : { element: guardElement }),
-        ...(placed === undefined ? {} : { placed }),
-        ...(windowBounds === undefined ? {} : { windowBounds }),
-        ...(bound.lastClickedTableCell === undefined
-          ? {}
-          : { lastClickedTableCell: bound.lastClickedTableCell }),
-      };
+      const guardInput = buildGuardInput(call.method, args, bound, elementToken, (el) =>
+        tokenOf(el, bound),
+      );
+      return guardInput.ok ? { ok: true, ...guardInput.input } : guardInput;
     });
     if (refused !== undefined) return refused;
     return yield* dispatchInTurn(

@@ -5,6 +5,7 @@
  * element drag endpoints into window points with a validated window_basis.
  */
 import * as NodeCrypto from "node:crypto";
+import * as HostProcess from "@goat/shared/HostProcess";
 import type {
   ComputerUsePrimitiveReply,
   ScreenHostCall,
@@ -15,6 +16,7 @@ import type {
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 import { sameRect, type Placed, type Rect } from "./DesktopFrames.ts";
+import type { GuardElement } from "./DesktopInputGuards.ts";
 
 export interface ScreenshotBasis {
   readonly regionId: string;
@@ -24,6 +26,13 @@ export interface ScreenshotBasis {
   readonly scale: number;
 }
 
+const POINTER_METHODS: ReadonlySet<string> = new Set([
+  "click",
+  "right_click",
+  "drag",
+  "scroll",
+  "move_cursor",
+]);
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
 const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
@@ -39,8 +48,10 @@ const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
 export interface PointResolutionState {
+  readonly platform?: NodeJS.Platform;
   readonly pointsStale?: "input" | "restart";
   readonly frames?: ReadonlyMap<string, Placed>;
+  readonly elementsByToken?: ReadonlyMap<string, GuardElement>;
   readonly framesBasis?: Rect;
   readonly windowBounds?: Rect;
   readonly screenshots?: ReadonlyMap<string, ScreenshotBasis>;
@@ -52,7 +63,13 @@ const resolveEndpoint = (
   end: Record<string, unknown>,
   state: PointResolutionState,
 ):
-  | { readonly ok: true; readonly x: number; readonly y: number; readonly basis: Rect }
+  | {
+      readonly ok: true;
+      readonly x: number;
+      readonly y: number;
+      readonly basis: Rect;
+      readonly needs: "element" | "points" | "nothing";
+    }
   | { readonly ok: false; readonly error: ScreenRunError } => {
   const element = object(end.elementRef);
   if (element !== undefined) {
@@ -67,6 +84,7 @@ const resolveEndpoint = (
       x: placed.frame.x + placed.frame.w / 2 - basis.x,
       y: placed.frame.y + placed.frame.h / 2 - basis.y,
       basis,
+      needs: "element",
     };
   }
   const x = end.x;
@@ -76,12 +94,12 @@ const resolveEndpoint = (
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
-    return { ok: true, x, y, basis };
+    return { ok: true, x, y, basis, needs: "nothing" };
   }
   if (state.pointsStale === "restart")
     return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
   const regionId = string(end.regionId);
-  const shot = (regionId ? state.screenshots?.get(regionId) : undefined) ?? state.latestScreenshot;
+  const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
   if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
     return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
   return {
@@ -89,12 +107,23 @@ const resolveEndpoint = (
     x: (x * shot.basis.w) / shot.pixelWidth,
     y: (y * shot.basis.h) / shot.pixelHeight,
     basis: shot.basis,
+    needs: "points",
   };
 };
 
+const combineNeeds = (
+  a: "element" | "points" | "nothing",
+  b: "element" | "points" | "nothing",
+): "element" | "points" | "nothing" =>
+  a === "element" || b === "element"
+    ? "element"
+    : a === "points" || b === "points"
+      ? "points"
+      : "nothing";
+
 /**
  * Resolves pointer coordinates on forwarded desktop input arguments, returning the window point
- * used (when converted to window_points) or a pre-dispatch refusal error.
+ * used, its basis, and whether the call depends on an element or screenshot from the current driver.
  */
 export const applyDesktopPointerArgs = (
   method: ScreenHostCall["method"],
@@ -102,12 +131,27 @@ export const applyDesktopPointerArgs = (
   forwarded: Record<string, unknown>,
   state: PointResolutionState,
 ):
-  | { readonly ok: true; readonly windowPoint?: { readonly x: number; readonly y: number } }
+  | {
+      readonly ok: true;
+      readonly windowPoint?: { readonly x: number; readonly y: number; readonly basis?: Rect };
+      readonly needs: "element" | "points" | "nothing";
+    }
   | { readonly ok: false; readonly error: ScreenRunError } => {
   delete forwarded.regionId;
   delete forwarded.fromEnd;
   delete forwarded.toEnd;
   delete forwarded.scrollCenter;
+
+  const isMac = (state.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
+
+  if (!POINTER_METHODS.has(method)) {
+    delete forwarded.coordinate_space;
+    delete forwarded.window_basis;
+    const hasPoint = finite(args.x) && finite(args.y);
+    if (hasPoint && state.pointsStale === "restart")
+      return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
+    return { ok: true, needs: hasPoint ? "points" : "nothing" };
+  }
 
   if (method === "drag" && (args.fromEnd !== undefined || args.toEnd !== undefined)) {
     const fromObj = object(args.fromEnd);
@@ -123,9 +167,15 @@ export const applyDesktopPointerArgs = (
     forwarded.from_y = fromRes.y;
     forwarded.to_x = toRes.x;
     forwarded.to_y = toRes.y;
-    forwarded.coordinate_space = "window_points";
-    forwarded.window_basis = fromRes.basis;
-    return { ok: true, windowPoint: { x: toRes.x, y: toRes.y } };
+    if (isMac) {
+      forwarded.coordinate_space = "window_points";
+      forwarded.window_basis = fromRes.basis;
+    }
+    return {
+      ok: true,
+      windowPoint: { x: toRes.x, y: toRes.y, basis: fromRes.basis },
+      needs: combineNeeds(fromRes.needs, toRes.needs),
+    };
   }
 
   if (method === "scroll" && args.scrollCenter === true) {
@@ -136,17 +186,30 @@ export const applyDesktopPointerArgs = (
     const cy = Math.floor(basis.h / 2);
     forwarded.x = cx;
     forwarded.y = cy;
-    forwarded.coordinate_space = "window_points";
-    forwarded.window_basis = basis;
-    return { ok: true, windowPoint: { x: cx, y: cy } };
+    if (isMac) {
+      forwarded.coordinate_space = "window_points";
+      forwarded.window_basis = basis;
+    }
+    return { ok: true, windowPoint: { x: cx, y: cy, basis }, needs: "nothing" };
   }
 
   const hasXY = finite(args.x) && finite(args.y);
   const hasDragXY =
     finite(args.from_x) && finite(args.from_y) && finite(args.to_x) && finite(args.to_y);
-  if (!hasXY && !hasDragXY) return { ok: true };
+  if (!hasXY && !hasDragXY) return { ok: true, needs: "nothing" };
 
   if (args.coordinate_space === "window_points") {
+    if (!isMac) {
+      delete forwarded.coordinate_space;
+      delete forwarded.window_basis;
+      return {
+        ok: false,
+        error: fail(
+          "unsupported",
+          "Window points { window: [x, y] } are only supported on macOS in this driver version; use [x, y] screenshot pixels.",
+        ),
+      };
+    }
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
@@ -154,7 +217,8 @@ export const applyDesktopPointerArgs = (
     forwarded.window_basis = basis;
     return {
       ok: true,
-      ...(hasXY ? { windowPoint: { x: args.x as number, y: args.y as number } } : {}),
+      ...(hasXY ? { windowPoint: { x: args.x as number, y: args.y as number, basis } } : {}),
+      needs: "nothing",
     };
   }
 
@@ -163,9 +227,10 @@ export const applyDesktopPointerArgs = (
 
   const regionId = string(args.regionId);
   if (regionId !== undefined) {
-    const shot = state.screenshots?.get(regionId) ?? state.latestScreenshot;
+    const shot = state.screenshots?.get(regionId);
     if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+    if (!isMac) return { ok: true, needs: "points" };
     if (hasXY) {
       const wx = ((args.x as number) * shot.basis.w) / shot.pixelWidth;
       const wy = ((args.y as number) * shot.basis.h) / shot.pixelHeight;
@@ -173,7 +238,7 @@ export const applyDesktopPointerArgs = (
       forwarded.y = wy;
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = shot.basis;
-      return { ok: true, windowPoint: { x: wx, y: wy } };
+      return { ok: true, windowPoint: { x: wx, y: wy, basis: shot.basis }, needs: "points" };
     }
     if (hasDragXY) {
       const fx = ((args.from_x as number) * shot.basis.w) / shot.pixelWidth;
@@ -186,20 +251,67 @@ export const applyDesktopPointerArgs = (
       forwarded.to_y = ty;
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = shot.basis;
-      return { ok: true, windowPoint: { x: tx, y: ty } };
+      return { ok: true, windowPoint: { x: tx, y: ty, basis: shot.basis }, needs: "points" };
     }
   }
 
-  return { ok: true };
+  return { ok: true, needs: "points" };
+};
+
+const resolveObservationHit = (
+  windowPoint: { readonly x: number; readonly y: number; readonly basis?: Rect },
+  state: Pick<PointResolutionState, "frames" | "elementsByToken" | "framesBasis" | "windowBounds">,
+) => {
+  const basis = windowPoint.basis ?? state.framesBasis ?? state.windowBounds;
+  if (!basis || !state.frames) return null;
+  const screenX = basis.x + windowPoint.x;
+  const screenY = basis.y + windowPoint.y;
+  let bestToken: string | undefined;
+  let bestArea = Infinity;
+  for (const [token, placed] of state.frames) {
+    const el = state.elementsByToken?.get(token);
+    if (el?.role.toLowerCase().replace(/^ax/, "") === "window") continue;
+    const { frame } = placed;
+    if (
+      frame.w > 0 &&
+      frame.h > 0 &&
+      screenX >= frame.x &&
+      screenX <= frame.x + frame.w &&
+      screenY >= frame.y &&
+      screenY <= frame.y + frame.h
+    ) {
+      const area = frame.w * frame.h;
+      if (area <= bestArea) {
+        bestArea = area;
+        bestToken = token;
+      }
+    }
+  }
+  if (bestToken === undefined) return null;
+  const info = state.elementsByToken?.get(bestToken);
+  return {
+    ...(info?.index === undefined ? {} : { index: info.index }),
+    role: info?.role ?? "unknown",
+    name: info?.name ?? "",
+    element_token: bestToken,
+    source: "observation" as const,
+  };
 };
 
 /** Attaches window-point coordinates and hit metadata to a pointer action's result value. */
 export const annotatePointerResult = (
   result: ScreenHostDispatchResult,
-  windowPoint: { readonly x: number; readonly y: number } | undefined,
+  windowPoint: { readonly x: number; readonly y: number; readonly basis?: Rect } | undefined,
+  state?: Pick<PointResolutionState, "frames" | "elementsByToken" | "framesBasis" | "windowBounds">,
 ): ScreenHostDispatchResult => {
   if (windowPoint === undefined) return result;
   const current = object(result.value) ?? {};
+  const hit =
+    "hit" in current && current.hit !== undefined
+      ? current.hit
+      : state !== undefined
+        ? resolveObservationHit(windowPoint, state)
+        : null;
   return {
     ...result,
     value: {
@@ -209,7 +321,7 @@ export const annotatePointerResult = (
         y: windowPoint.y,
         unit: "window_points",
       },
-      hit: "hit" in current ? current.hit : null,
+      hit,
     },
   };
 };

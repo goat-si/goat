@@ -246,7 +246,7 @@ it.live(
       expect(result).toMatchObject({
         status: "completed",
         value: true,
-        contractVersion: "screen-target/2",
+        contractVersion: "screen-target/3",
       });
       expect(sent.map((entry) => entry.tool)).toEqual([
         "list_apps",
@@ -350,14 +350,19 @@ it.live(
           await app.scroll([20, 16], 'up', 2);
           await app.click({ window: [12, 14] });
           await app.drag(1, { window: [40, 30] });
-          await app.type('https://example.com', 3, { replace: true });
-          return { numberBeforeObserve, pixelBeforeScreenshot };`,
+          let replaceRefused;
+          try { await app.type('https://example.com', 3, { replace: true }); }
+          catch (e) { replaceRefused = e.nothingSent + ':' + e.message; }
+          await app.setValue(3, 'https://example.com');
+          return { numberBeforeObserve, pixelBeforeScreenshot, replaceRefused };`,
       });
       expect(result.status).toBe("completed");
       expect(result.value).toEqual({
         numberBeforeObserve: "Numbers come from observe(); call it first.",
         pixelBeforeScreenshot:
           "[x, y] are screenshot pixels and this cell has no screenshot; use { window: [x, y] } window points, or take a screenshot.",
+        replaceRefused:
+          "true:Use setValue(target, text) to replace a field's whole value; type() inserts at the cursor.",
       });
       const actions = sent.filter(
         (entry) => !["list_apps", "list_windows", "get_window_state"].includes(entry.tool),
@@ -369,7 +374,7 @@ it.live(
         "scroll",
         "click",
         "drag",
-        "type_text",
+        "set_value",
       ]);
       expect(actions[0]?.args).toMatchObject({ element_token: "s0000000a:1" });
       expect(actions[1]?.args).toMatchObject({
@@ -404,8 +409,7 @@ it.live(
       });
       expect(actions[6]?.args).toMatchObject({
         element_token: "s0000000a:3",
-        text: "https://example.com",
-        replace: true,
+        value: "https://example.com",
       });
     }).pipe(
       Effect.provide(
@@ -421,3 +425,82 @@ it.live(
     );
   },
 );
+
+it.live("tab.press with a point [x, y] clicks the point first and then presses the key", () => {
+  const tab = {
+    environmentId: "env",
+    browserInstanceId: "server-browser",
+    connectionId: "connection",
+    threadId: "thread",
+    tabId: PreviewTabId.make("page"),
+    title: "Page",
+    url: "https://example.test/",
+    owner: "unclaimed" as const,
+    ownedByCaller: true,
+    controlGeneration: 0,
+  };
+  const ops: Array<string> = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([tab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      ops.push(request.operation);
+      if (request.operation === "snapshot")
+        return Effect.succeed({
+          url: tab.url,
+          title: tab.title,
+          loading: false,
+          accessibilityTree: "- button Go [ref=e1]",
+          treeComplete: true,
+          refGeneration: "1",
+          screenshot: {
+            mimeType: "image/png",
+            data: "AQID",
+            width: 100,
+            height: 80,
+            region: { kind: "viewport", x: 0, y: 0, width: 100, height: 80 },
+            scale: 1,
+          },
+        } as A);
+      return Effect.succeed({
+        tabId: tab.tabId,
+        url: tab.url,
+        title: tab.title,
+        loading: false,
+        refGeneration: "1",
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation,
+        source: `const tab = await screen.tab({tabId: 'page'});
+          await tab.observe({ screenshot: true });
+          await tab.press('Enter', [20, 30]);
+          return true;`,
+      });
+      expect(result).toMatchObject({ status: "completed", value: true });
+      expect(ops).toContain("click");
+      expect(ops).toContain("press");
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+          tabHost,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  });
+});

@@ -116,6 +116,7 @@ const __legacy = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) && !__winPt(arg) &&
   ('ref' in arg || 'elementRef' in arg || 'point' in arg || 'x' in arg || 'selector' in arg || 'targetRef' in arg ||
     'sourceRef' in arg || 'deltaY' in arg || 'deltaX' in arg || 'mode' in arg || 'baseObservationId' in arg || 'urlIncludes' in arg || 'loadState' in arg);
+const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
 const __inputs = new Set(['click', 'right_click', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
 const __target = (binding, note, owner) => {
@@ -127,6 +128,7 @@ const __target = (binding, note, owner) => {
     if (tab && __inputs.has(method)) seen.image = undefined;
     const withRegion =
       !tab &&
+      __pointerMethods.has(method) &&
       seen.image &&
       arg &&
       typeof arg === 'object' &&
@@ -329,7 +331,7 @@ const __target = (binding, note, owner) => {
         'send' in target && !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
       const actualOpts = targetIsSendOpts ? target : (options ?? {});
-      if (Array.isArray(actualTarget) || __winPt(actualTarget))
+      if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
         throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
       if (needsImplicitObserve(actualTarget)) await ensureObserved();
       if (tab && actualTarget !== undefined) await common.click(actualTarget);
@@ -364,7 +366,7 @@ const __target = (binding, note, owner) => {
         act('setValue', 'set_value', tab ? { ...aim(target), text: value } : { ...aim(target), value });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
-    drag: (from, to) => {
+    drag: (from, to, options = {}) => {
       if (to === undefined) return call('drag', from ?? {});
       if (tab) {
         const source = aim(from);
@@ -378,7 +380,12 @@ const __target = (binding, note, owner) => {
           ...(target.ref ? { destinationRef: target.ref } : { destinationSelector: target.selector }),
         });
       }
-      const run = () => act('drag', 'drag', { fromEnd: aim(from), toEnd: aim(to) });
+      const run = () =>
+        act('drag', 'drag', {
+          fromEnd: aim(from),
+          toEnd: aim(to),
+          ...(options && options.send === true ? { send: true } : {}),
+        });
       return needsImplicitObserve(from) || needsImplicitObserve(to)
         ? ensureObserved().then(run)
         : run();

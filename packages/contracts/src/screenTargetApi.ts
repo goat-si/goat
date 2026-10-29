@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/2";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/3";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -35,11 +35,11 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
   click(t: Target, o?: { button?: "right"; count?: number; send?: boolean }): Promise<Done>;
-  type(text: string, t?: Target, o?: { replace?: boolean; send?: boolean }): Promise<Done>;
+  type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
-  drag(from: Target, to: Target): Promise<Done>;
+  drag(from: Target, to: Target, o?: { send?: boolean }): Promise<Done>;
   waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // default 15 s; answers before the cell ends
   verify(c: Condition): Promise<{ met: boolean }> }`;
 

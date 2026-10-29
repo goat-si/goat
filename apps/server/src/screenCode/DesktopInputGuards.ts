@@ -9,6 +9,13 @@ import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 import type { Placed, Rect } from "./DesktopFrames.ts";
 
+interface DragEndpointGuard {
+  readonly elementToken?: string;
+  readonly element?: GuardElement;
+  readonly placed?: Placed;
+  readonly aimed: boolean;
+}
+
 export interface GuardElement {
   readonly index?: number;
   readonly role: string;
@@ -452,11 +459,22 @@ const sendPolicy = (input: {
   readonly elementToken?: string;
   readonly element?: GuardElement;
   readonly aimed: boolean;
+  readonly dragEndpoints?: ReadonlyArray<DragEndpointGuard>;
 }): "allow" | "refuse_unaddressed" | "refuse_send" | "refuse_point" => {
-  const { method, args, elementToken, element, aimed } = input;
+  const { method, args, elementToken, element, aimed, dragEndpoints } = input;
   const send = args.send === true;
   if ((method === "click" || method === "right_click") && elementToken === undefined && aimed)
     return "refuse_point";
+  if (method === "drag") {
+    if (dragEndpoints && dragEndpoints.length > 0) {
+      if (dragEndpoints.some((end) => end.elementToken === undefined && end.aimed))
+        return "refuse_point";
+      if (dragEndpoints.some((end) => isSendButton(end.element)))
+        return send ? "allow" : "refuse_send";
+    } else if (elementToken === undefined && aimed) {
+      return "refuse_point";
+    }
+  }
   const resolvedKey =
     method === "press_key" || method === "hotkey" ? resolveKeyPress(args) : undefined;
   const isEnter = resolvedKey?.key === "enter";
@@ -514,13 +532,50 @@ export const admitDesktopInput = (input: {
   readonly placed?: Placed;
   readonly windowBounds?: Rect;
   readonly lastClickedTableCell?: number | string;
+  readonly dragEndpoints?: ReadonlyArray<DragEndpointGuard>;
 }): {
   readonly refused?: ScreenRunError;
   readonly clickedTableCell?: number | string;
   readonly clearClickedTableCell?: boolean;
 } => {
-  const { method, args, elementToken, element, placed, windowBounds, lastClickedTableCell } = input;
-  if (isPasteMenuItem(element)) return { refused: fail("permission_denied", PASTE_REFUSAL) };
+  const {
+    method,
+    args,
+    elementToken,
+    element,
+    placed,
+    windowBounds,
+    lastClickedTableCell,
+    dragEndpoints,
+  } = input;
+  if (method === "type_text" && args.replace === true)
+    return {
+      refused: fail(
+        "unsupported",
+        "Use setValue(target, text) to replace a field's whole value; type() inserts at the cursor.",
+      ),
+    };
+  if (
+    isPasteMenuItem(element) ||
+    dragEndpoints?.some((end) => isPasteMenuItem(end.element)) === true
+  )
+    return { refused: fail("permission_denied", PASTE_REFUSAL) };
+  if (dragEndpoints !== undefined) {
+    for (const end of dragEndpoints) {
+      if (
+        end.elementToken !== undefined &&
+        !hasVisibleClickBounds(end.placed, windowBounds, end.element)
+      ) {
+        const label = end.element?.index ?? end.elementToken;
+        return {
+          refused: fail(
+            "invalid_argument",
+            `Element ${label} has no visible click bounds; scroll it into view (scroll(${label})) or observe again.`,
+          ),
+        };
+      }
+    }
+  }
   if (method === "press_key" || method === "hotkey") {
     const resolved = resolveKeyPress(args);
     if (resolved.key === "v" && resolved.modifiers.has("cmd"))
@@ -569,6 +624,7 @@ export const admitDesktopInput = (input: {
       args,
       ...(elementToken === undefined ? {} : { elementToken }),
       ...(element === undefined ? {} : { element }),
+      ...(dragEndpoints === undefined ? {} : { dragEndpoints }),
       aimed,
     });
     if (decision === "refuse_point")
@@ -635,6 +691,7 @@ export const preflightDesktopBatch = (
         readonly placed?: Placed;
         readonly windowBounds?: Rect;
         readonly lastClickedTableCell?: number | string;
+        readonly dragEndpoints?: ReadonlyArray<DragEndpointGuard>;
       }
     | { readonly ok: false; readonly error: ScreenRunError },
 ): ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>> | undefined => {
@@ -663,6 +720,7 @@ export const preflightDesktopBatch = (
       ...(checked.placed === undefined ? {} : { placed: checked.placed }),
       ...(checked.windowBounds === undefined ? {} : { windowBounds: checked.windowBounds }),
       ...(simulatedTableCell === undefined ? {} : { lastClickedTableCell: simulatedTableCell }),
+      ...(checked.dragEndpoints === undefined ? {} : { dragEndpoints: checked.dragEndpoints }),
     });
     if (admission.refused !== undefined) return abortAt(index, admission.refused);
     // Preflight runs before the driver confirms any step's focus move, so a table-cell click in a
@@ -670,4 +728,83 @@ export const preflightDesktopBatch = (
     if (admission.clickedTableCell !== undefined) simulatedTableCell = admission.clickedTableCell;
   }
   return undefined;
+};
+
+/** Extracts drag endpoint guard metadata from a drag call's fromEnd and toEnd arguments. */
+const resolveDragEndpointGuards = (
+  args: Record<string, unknown>,
+  resolveToken: (el: Record<string, unknown>) => string | undefined,
+  elementsByToken: ReadonlyMap<string, GuardElement> | undefined,
+  frames: ReadonlyMap<string, Placed> | undefined,
+):
+  | { readonly ok: true; readonly endpoints?: ReadonlyArray<DragEndpointGuard> }
+  | { readonly ok: false; readonly error: ScreenRunError } => {
+  if (args.fromEnd === undefined && args.toEnd === undefined) return { ok: true };
+  const endpoints: DragEndpointGuard[] = [];
+  for (const raw of [args.fromEnd, args.toEnd]) {
+    const end = object(raw);
+    if (!end) return { ok: false, error: fail("invalid_argument") };
+    const elObj = object(end.elementRef);
+    if (elObj !== undefined) {
+      const token = resolveToken(elObj);
+      if (!token) return { ok: false, error: fail("stale_reference") };
+      const element = elementsByToken?.get(token);
+      const placed = frames?.get(token);
+      endpoints.push({
+        elementToken: token,
+        ...(element === undefined ? {} : { element }),
+        ...(placed === undefined ? {} : { placed }),
+        aimed: false,
+      });
+    } else {
+      endpoints.push({ aimed: "x" in end || "y" in end });
+    }
+  }
+  return { ok: true, endpoints };
+};
+
+/** Builds the admission input for a bound window's action call, including drag endpoints. */
+export const buildGuardInput = (
+  method: string,
+  args: Record<string, unknown>,
+  bound: {
+    readonly appId: string;
+    readonly bundleId?: string;
+    readonly elementsByToken?: ReadonlyMap<string, GuardElement>;
+    readonly frames?: ReadonlyMap<string, Placed>;
+    readonly framesBasis?: Rect;
+    readonly windowBounds?: Rect;
+    readonly lastClickedTableCell?: number | string;
+  },
+  elementToken: string | undefined,
+  resolveToken: (el: Record<string, unknown>) => string | undefined,
+):
+  | { readonly ok: true; readonly input: Parameters<typeof admitDesktopInput>[0] }
+  | { readonly ok: false; readonly error: ScreenRunError } => {
+  const dragRes =
+    method === "drag"
+      ? resolveDragEndpointGuards(args, resolveToken, bound.elementsByToken, bound.frames)
+      : { ok: true as const };
+  if (!dragRes.ok) return dragRes;
+  const guardElement =
+    elementToken === undefined ? undefined : bound.elementsByToken?.get(elementToken);
+  const placed = elementToken === undefined ? undefined : bound.frames?.get(elementToken);
+  const windowBounds = bound.framesBasis ?? bound.windowBounds;
+  return {
+    ok: true,
+    input: {
+      method,
+      args,
+      appId: bound.appId,
+      ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+      ...(elementToken === undefined ? {} : { elementToken }),
+      ...(guardElement === undefined ? {} : { element: guardElement }),
+      ...(placed === undefined ? {} : { placed }),
+      ...(windowBounds === undefined ? {} : { windowBounds }),
+      ...(bound.lastClickedTableCell === undefined
+        ? {}
+        : { lastClickedTableCell: bound.lastClickedTableCell }),
+      ...(dragRes.endpoints === undefined ? {} : { dragEndpoints: dragRes.endpoints }),
+    },
+  };
 };
