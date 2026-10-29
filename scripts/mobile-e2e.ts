@@ -9,7 +9,8 @@ import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 
-import { Device, type Pool, poolError, run } from "./mobile-e2e/device.ts";
+import { attemptPose } from "./mobile-e2e/attempts.ts";
+import { Device, type Pool, run } from "./mobile-e2e/device.ts";
 import { runJourney, type StepResult } from "./mobile-e2e/journey.ts";
 import { POSES, type Pose } from "./mobile-e2e/poses.ts";
 import {
@@ -260,19 +261,12 @@ async function main() {
       runPose(pose, pool, session, outputDirectory, `http://${host}:${metroPort}`, () =>
         issuePairUrl(environment, host),
       );
-    const runOne = async (pose: Pose) => {
-      let result = await attempt(pose, runId);
-      // A pose that failed before its first screen usually met the pool, not the app.
-      for (
-        let retry = 1;
-        retry <= 2 && result.error && (result.steps.length === 0 || poolError(result.error));
-        retry++
-      ) {
-        log(pose.id, `retrying after: ${result.error.split("\n")[0]}`);
-        result = await attempt(pose, `${runId}-retry${retry}`);
-      }
-      return result;
-    };
+    const runOne = (pose: Pose) =>
+      attemptPose(
+        (session) => attempt(pose, session),
+        runId,
+        (error) => log(pose.id, `retrying after: ${error.split("\n")[0]}`),
+      );
     // Each platform has its own workers, so each gets its own limit; one Mac runs every
     // iOS simulator, and recording several at once on a shared pool times it out.
     const byPlatform = await Promise.all(
