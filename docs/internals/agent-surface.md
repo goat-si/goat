@@ -162,7 +162,15 @@ between it and the recorded outcome is what `unknown` covers. A transient
 refusal that ran nothing frees the key, other failures replay, and a failure that
 may have left effects, an interrupt, or a row an earlier server process left
 running stays `unknown` and never runs again; its refusal names the read that settles
-it, on the same host for a routed write. Only completed keys expire, after
+it, on the same host for a routed write. Keyed writes that dispatch orchestration
+commands or remote thread launches derive their command or correlation id from the
+reservation's receipt id (`mcp:<receiptId>`, `mcp:lifecycle:<receiptId>`, `rr-<receiptId>`).
+When the caller runs the named reconcile read (or reads a lifecycle receipt),
+[ToolAdmissionSettlement.ts](../../apps/server/src/mcp/ToolAdmissionSettlement.ts)
+settles any `unknown` reservation whose domain outcome is provable—to `completed`
+with a refreshed 24-hour window when its command receipt committed, or to `released`
+when no command receipt was written or a remote launch was fenced—while leaving
+ambiguous or legacy uncorrelated rows `unknown`. Only completed keys expire, after
 24 hours.
 
 Every other write records an `idempotencyReason` in the registry instead, and
@@ -1037,7 +1045,7 @@ Each PR shipped on its own and left `tools/list` unchanged until the flip (row 1
 | 3   | Provider diagnose, setup, login, sync                                         | Shipped ([#210](https://github.com/goat-si/goat/pull/210), [#540](https://github.com/goat-si/goat/pull/540)); settings in [#774](https://github.com/goat-si/goat/pull/774)                                                |
 | 4   | Envelope schema; handlers keep domain reasons; exhaustive classification test | Started: envelope shipped in [#773](https://github.com/goat-si/goat/pull/773); classification remains partial                                                                                                             |
 | 5   | One invocation function, `goat_call`, `goat_describe`                         | Shipped ([#785](https://github.com/goat-si/goat/pull/785))                                                                                                                                                                |
-| 6   | Idempotency receipts with digest, unknown state, audit columns                | Started: eight high-risk writes keyed                                                                                                                                                                                     |
+| 6   | Idempotency receipts with digest, unknown state, audit columns                | Shipped ([#939](https://github.com/goat-si/goat/pull/939), [#1121](https://github.com/goat-si/goat/pull/1121), [#2071](https://github.com/goat-si/goat/pull/2071); per-domain settlement on reconcile reads)              |
 | 7   | Operations over existing stores; durable provider sync                        | Started: task and SSH operations shipped in [#920](https://github.com/goat-si/goat/pull/920), provider sync and approved provider changes in [#925](https://github.com/goat-si/goat/pull/925); other domains remain       |
 | 8   | Human steps return `needs_human`; cloud consent handoff; wake; one predicate  | Proposed                                                                                                                                                                                                                  |
 | 9   | Registry-generated CLI commands and credentials                               | Shipped: credentials ([#935](https://github.com/goat-si/goat/pull/935)); generated commands ([#938](https://github.com/goat-si/goat/pull/938))                                                                            |

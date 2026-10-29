@@ -543,6 +543,15 @@ it.effect(
           narrowed,
         )).isError,
       ).toBe(true);
+      yield* sql`DROP TRIGGER refuse_lifecycle_settlement`;
+      expect(
+        value(yield* call("goat_thread_lifecycle_receipt", { clientRequestId: "unknown-delete" })),
+      ).toMatchObject({
+        state: "completed",
+        commandStatus: "accepted",
+        result: { isError: false },
+      });
+      expect(value(yield* call("goat_thread_delete", args))).toMatchObject({ accepted: true });
     }).pipe(Effect.provide(served)),
 );
 
@@ -795,6 +804,11 @@ it.effect(
       yield* sql`UPDATE mcp_request_reservations SET boot_id = 'previous-process' WHERE client_request_id = 'failed-delete'`;
       expect(
         value(yield* call("goat_thread_lifecycle_receipt", { clientRequestId: "failed-delete" })),
-      ).toMatchObject({ state: "unknown", commandStatus: "rejected" });
+      ).toMatchObject({
+        state: "completed",
+        commandStatus: "rejected",
+        result: { isError: true },
+        failure: { code: "invalid_request" },
+      });
     }).pipe(Effect.provide(served)),
 );

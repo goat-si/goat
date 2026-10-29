@@ -33,6 +33,7 @@ import * as SshHostSetup from "../../../sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "../../../sshRemote/SshWorkspaceSync.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as LaunchWatchService from "../../LaunchWatchService.ts";
+import { LifecycleAdmissionReceipt } from "../../LifecycleAdmissionReceipt.ts";
 import * as RepositoryLaunchMcpService from "../../RepositoryLaunchMcpService.ts";
 import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -572,7 +573,14 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                         delivery: input.reportDelivery ?? "wake",
                         // A channel-owned launch carries its record's correlation id, so a retry's
                         // INSERT collides on the row instead of starting a second remote thread.
-                        correlationId: admissionCorrelationId(admission),
+                        correlationId:
+                          admissionCorrelationId(admission) ??
+                          (yield* Effect.serviceOption(LifecycleAdmissionReceipt).pipe(
+                            Effect.flatMap((receipt) =>
+                              receipt._tag === "Some" ? receipt.value.held : Effect.void,
+                            ),
+                            Effect.map((id) => (id === undefined ? undefined : `rr-${id}`)),
+                          )),
                         launch: guardedLaunch,
                       },
                       authorize.pipe(Effect.asVoid),

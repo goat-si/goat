@@ -27,11 +27,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { McpSchema } from "effect/ai";
 
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import { type CallerLimits, loadCaller } from "./threadAccess.ts";
+import { reconcilePathForReadTool, settleForReconcile } from "./ToolAdmissionSettlement.ts";
 import { KeyedClientRequestId } from "./toolkits/keyedParameters.ts";
 import { refusalResult } from "./toolRefusals.ts";
 
@@ -120,6 +122,8 @@ const Grant = Schema.Struct({
   role: Schema.NullOr(ProfileGrant),
   scopes: Schema.NullOr(Schema.Array(AuthEnvironmentScope)),
   readOnly: Schema.Boolean,
+  /** True when the reservation's receiptId is wired into newCommandId / SSH correlationId. */
+  correlated: Schema.optionalKey(Schema.Literal(true)),
 });
 type Grant = typeof Grant.Type;
 const GrantJson = Schema.fromJsonString(Grant);
@@ -406,6 +410,7 @@ const makeGrants = (
               },
         scopes,
         readOnly,
+        correlated: true,
       } satisfies Grant,
     };
   });
@@ -438,9 +443,50 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
   // goatclaw itself reads these settings; a role launch's profile cannot resolve without them.
   const settings = yield* Effect.serviceOption(ServerSettingsService);
   const database = yield* Effect.serviceOption(SqlClient.SqlClient);
+  const threads = yield* Effect.serviceOption(ThreadManagement.ThreadManagementService);
   const store = Option.map(database, (sql) => makeStore(sql, bootId));
 
   const { grantOf, stillGranted } = makeGrants(permissions, settings);
+
+  const settleReconcileRead = Effect.fnUntraced(
+    function* (reconcilePath: string) {
+      if (Option.isNone(database)) return;
+      const scope = Option.getOrUndefined(
+        yield* Effect.serviceOption(McpInvocationContext.McpInvocationContext),
+      );
+      const principal = scope === undefined ? undefined : principalOf(scope);
+      if (scope === undefined || principal === undefined) return;
+      const limits: CallerLimits =
+        scope.thread === undefined
+          ? {
+              runtimeMode: McpInvocationContext.clientRuntimeModeCeiling(scope.client),
+              interactionMode: "default",
+            }
+          : Option.isSome(threads)
+            ? ((yield* threads.value.getThreadShell(scope.thread.threadId).pipe(
+                Effect.map((shell) =>
+                  shell === null || shell.deletedAt !== null
+                    ? undefined
+                    : { runtimeMode: shell.runtimeMode, interactionMode: shell.interactionMode },
+                ),
+                Effect.orElseSucceed(() => undefined),
+              )) ?? { runtimeMode: "full-access", interactionMode: "default" })
+            : { runtimeMode: "full-access", interactionMode: "default" };
+      yield* settleForReconcile(database.value, bootId, ABANDONED_RECEIPTS, {
+        environmentId: scope.environmentId,
+        principal,
+        reconcilePath,
+        checkGrant: Effect.fnUntraced(
+          function* (grantJson: string) {
+            const { grant } = yield* grantOf(scope, {}, limits);
+            return yield* stillGranted(scope, grant, yield* decodeGrant(grantJson));
+          },
+          Effect.orElseSucceed(() => false),
+        ),
+      });
+    },
+    (effect) => Effect.ignoreCause(effect),
+  );
 
   const keyed =
     /* The request's span already covers each call. */
@@ -608,8 +654,19 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
     handle: (payload: unknown) => Effect.Effect<Outcome, E, R>,
   ) => {
     const entry = keyedEntries.get(tool);
-    if (entry === undefined || typeof payload !== "object" || payload === null)
-      return unkeyed(handle(payload));
+    if (entry === undefined || typeof payload !== "object" || payload === null) {
+      const reconcilePath = reconcilePathForReadTool(tool);
+      const ran = unkeyed(handle(payload));
+      return reconcilePath === undefined
+        ? ran
+        : ran.pipe(
+            Effect.tap((result) =>
+              isCallToolResult(result) && result.isError !== true
+                ? settleReconcileRead(reconcilePath)
+                : Effect.void,
+            ),
+          );
+    }
     // Handlers never see the key, so a routed call never forwards it to an older remote.
     const { clientRequestId, ...args } = payload as Readonly<Record<string, unknown>>;
     // The advertised JSON codec offers null for an omitted optional key.
@@ -737,11 +794,34 @@ export const makeEvalAdmission = Effect.fn("ToolAdmission.makeEvalAdmission")(fu
       !ABANDONED_RECEIPTS.has(row.receipt_id)
     )
       return { kind: "in_progress" } satisfies KeyedOutcome as KeyedOutcome;
-    if (row.state !== "completed" || row.result_json === null)
-      return { kind: "unknown" } satisfies KeyedOutcome as KeyedOutcome;
     const { grant } = yield* current(args);
     if (!(yield* stillGranted(scope, grant, yield* decodeGrant(row.grant_json))))
       return { kind: "grant_lost" } satisfies KeyedOutcome as KeyedOutcome;
+    if (row.state !== "completed" || row.result_json === null) {
+      yield* settleForReconcile(database.value, bootId, ABANDONED_RECEIPTS, {
+        environmentId: scope.environmentId,
+        principal,
+        path,
+        clientRequestId,
+        checkGrant: () => Effect.succeed(true),
+      }).pipe(Effect.ignoreCause);
+      const [settled] = yield* database.value<{
+        readonly state: "running" | "completed" | "unknown";
+        readonly result_json: string | null;
+        readonly failure_json: string | null;
+      }>`SELECT state, result_json, failure_json FROM mcp_request_reservations
+        WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
+          AND path = ${path} AND client_request_id = ${clientRequestId}`;
+      if (settled === undefined) return { kind: "absent" } satisfies KeyedOutcome as KeyedOutcome;
+      if (settled.state === "completed" && settled.result_json !== null)
+        return {
+          kind: "replay",
+          result: yield* decodeResult(settled.result_json),
+          failure:
+            settled.failure_json === null ? undefined : yield* decodeLiteral(settled.failure_json),
+        } satisfies KeyedOutcome as KeyedOutcome;
+      return { kind: "unknown" } satisfies KeyedOutcome as KeyedOutcome;
+    }
     return {
       kind: "replay",
       result: yield* decodeResult(row.result_json),
@@ -790,13 +870,39 @@ export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(fu
         result: yield* decodeResult(row.result_json),
         ...(row.failure_json === null ? {} : { failure: yield* decodeLiteral(row.failure_json) }),
       };
+    const isRunningHere =
+      row.state === "running" &&
+      row.boot_id === PROCESS_BOOT_ID &&
+      !ABANDONED_RECEIPTS.has(row.receipt_id);
+    if (!isRunningHere) {
+      yield* settleForReconcile(database.value, PROCESS_BOOT_ID, ABANDONED_RECEIPTS, {
+        environmentId: scope.environmentId,
+        principal,
+        path,
+        clientRequestId,
+        checkGrant: () => Effect.succeed(true),
+      }).pipe(Effect.ignoreCause);
+      const [settled] = yield* database.value<{
+        readonly state: "running" | "completed" | "unknown";
+        readonly receipt_id: string;
+        readonly result_json: string | null;
+        readonly failure_json: string | null;
+      }>`SELECT state, receipt_id, result_json, failure_json FROM mcp_request_reservations
+        WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
+          AND path = ${path} AND client_request_id = ${clientRequestId}`;
+      if (settled === undefined) return { state: "missing" as const };
+      if (settled.state === "completed" && settled.result_json !== null)
+        return {
+          state: "completed" as const,
+          receiptId: settled.receipt_id,
+          result: yield* decodeResult(settled.result_json),
+          ...(settled.failure_json === null
+            ? {}
+            : { failure: yield* decodeLiteral(settled.failure_json) }),
+        };
+    }
     return {
-      state:
-        row.state === "running" &&
-        row.boot_id === PROCESS_BOOT_ID &&
-        !ABANDONED_RECEIPTS.has(row.receipt_id)
-          ? ("in_progress" as const)
-          : ("unknown" as const),
+      state: isRunningHere ? ("in_progress" as const) : ("unknown" as const),
       receiptId: row.receipt_id,
     };
   });

@@ -12,9 +12,11 @@ import {
 } from "@goat/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import type { OrchestratorV2Error } from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import { LifecycleAdmissionReceipt } from "./LifecycleAdmissionReceipt.ts";
 import * as OrchestrationMcp from "./OrchestratorMcpService.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 
@@ -189,6 +191,9 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
 });
 
 export const newCommandId = Effect.fn("mcp.newCommandId")(function* () {
+  const held = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
+  const receiptId = Option.isNone(held) ? undefined : yield* held.value.held;
+  if (receiptId !== undefined) return CommandId.make(`mcp:${receiptId}`);
   const crypto = yield* Crypto.Crypto;
   return CommandId.make(`mcp:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`);
 });
