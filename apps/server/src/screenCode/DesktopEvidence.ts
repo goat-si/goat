@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import { driverError, driverValue } from "./DesktopDriverReplies.ts";
+import { windowClosure } from "./DesktopWindowClosure.ts";
 import type { ScreenHostContext, ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import {
   type CellWindowTracker,
@@ -288,12 +289,18 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       deps.onSettled?.();
     }
     const settledAt = yield* Clock.currentTimeMillis;
-    const postWins = parseWindowList(yield* read("list_windows", { pid }, 0), pid);
+    const postRaw = yield* read("list_windows", { pid }, 0);
+    const postWins = parseWindowList(postRaw, pid);
     tracker.recordAfter(pid, preWins, postWins);
     const postVerifyRaw =
       preVerifyRaw !== undefined ? yield* read("verify_state", verifyArgs, 0) : undefined;
     const endedAt = yield* Clock.currentTimeMillis;
-    const winDiff = diffInputWindows(preWins, postWins, windowId);
+    const winDiff = diffInputWindows(
+      preWins,
+      postWins,
+      windowId,
+      windowClosure(postRaw, pid, windowId),
+    );
     const elDiff =
       preVerifyRaw !== undefined && postVerifyRaw !== undefined
         ? diffWatchedEvidence(

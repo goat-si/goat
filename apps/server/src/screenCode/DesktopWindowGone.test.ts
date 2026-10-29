@@ -74,3 +74,34 @@ it.effect("an unsatisfied gone check, or one with no time left in the cell, list
     expect(late.listed).toBe(1);
   }),
 );
+
+it.effect(
+  "a key press after which complete ids omit the bound window reports it closed and keeps the driver's verdict",
+  () =>
+    Effect.gen(function* () {
+      let pressed = false;
+      const { host } = fixture({
+        list_windows: () =>
+          pressed
+            ? { windows: [other], enumeration_complete: true, authoritative_window_ids: [9] }
+            : { windows: [document, other] },
+        press_key: () => {
+          pressed = true;
+          return { effect: "unverifiable" };
+        },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      yield* host.observe(call("get_window_state", {}, ref), context);
+      const out = yield* host.invoke(
+        { ...call("press_key", { key: "w", modifiers: ["cmd"] }, ref), deadlineMillis: 10_000 },
+        context,
+      );
+      expect(out.category).toBe("unverifiable");
+      expect(out.evidence).toContain("observed:window_closed");
+      expect((out.value as { windows?: { bound?: string } }).windows?.bound).toBe("closed");
+    }),
+);

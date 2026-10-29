@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { waitForOutcome, windowClosure } from "./DesktopWindowClosure.ts";
+import { diffInputWindows, parseWindowList } from "./DesktopWindows.ts";
 
 const listing = (windows: unknown, extra: Record<string, unknown> = {}) => ({ windows, ...extra });
 const complete = (ids: unknown) => ({ enumeration_complete: true, authoritative_window_ids: ids });
@@ -75,3 +76,24 @@ it.effect(
       });
     }),
 );
+
+describe("diffInputWindows with closure ids", () => {
+  const before = parseWindowList(listing([{ pid: 42, window_id: 7, title: "Doc" }, other]), 42);
+  const diff = (after: Record<string, unknown>, from = before) =>
+    diffInputWindows(from, parseWindowList(after, 42), 7, windowClosure(after, 42, 7));
+
+  it("an input after which complete ids omit the bound window reports it closed", () => {
+    const { report, evidence } = diff(listing([other], complete([9])));
+    expect(report.bound).toBe("closed");
+    expect(evidence).toContain("observed:window_closed");
+    expect(evidence).not.toContain("observed:window_not_listed");
+  });
+
+  it("without proof, or without the window before the input, the old listing answer stands", () => {
+    expect(diff(listing([other])).report.bound).toBe("not_listed");
+    expect(diff(listing([other], complete([7, 9]))).report.bound).toBe("not_listed");
+    expect(diff(listing([], complete([]))).report.bound).toBe("closed");
+    const absentBefore = parseWindowList(listing([other]), 42);
+    expect(diff(listing([other], complete([9])), absentBefore).report.bound).toBe("not_listed");
+  });
+});

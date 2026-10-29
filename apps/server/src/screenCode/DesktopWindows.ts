@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import type { AppHolder } from "../cua/ComputerUseAppLeases.ts";
 import { CELL_RESERVE_MS, driverCallCapMs } from "../cua/ComputerUseCallCaps.ts";
 import { boundsOf, type Rect } from "./DesktopFrames.ts";
+import type { WindowClosure } from "./DesktopWindowClosure.ts";
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
 import type { ScreenHostContext } from "./ScreenHostBridge.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Window lists and return budgets are measured against driver JSON.
@@ -37,7 +38,7 @@ export interface WindowEntry {
 export interface InputWindowsReport {
   readonly opened: ReadonlyArray<ScreenWindowSummary>;
   readonly notListed: ReadonlyArray<ScreenWindowSummary>;
-  readonly bound: "present" | "offscreen" | "not_listed" | "unverified";
+  readonly bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified";
   readonly truncated?: boolean;
 }
 
@@ -109,6 +110,7 @@ export const diffInputWindows = (
   before: ReadonlyArray<WindowEntry> | undefined,
   after: ReadonlyArray<WindowEntry> | undefined,
   boundWindowId: number,
+  closure?: WindowClosure,
 ): { readonly report: InputWindowsReport; readonly evidence: ReadonlyArray<string> } => {
   if (!before || !after) {
     return {
@@ -125,7 +127,11 @@ export const diffInputWindows = (
   const boundAfter = afterById.get(boundWindowId);
   const evidence: string[] = [];
   let bound: InputWindowsReport["bound"] = "present";
-  if (!boundAfter) {
+  // Closure proves the window went away, not that this input closed it; the verdict stays the input's.
+  if (!boundAfter && boundBefore && closure === "closed") {
+    bound = "closed";
+    evidence.push("observed:window_closed");
+  } else if (!boundAfter) {
     if (witness) {
       bound = "not_listed";
       evidence.push("observed:window_not_listed");

@@ -247,7 +247,7 @@ it.live(
       expect(result).toMatchObject({
         status: "completed",
         value: true,
-        contractVersion: "screen-target/4",
+        contractVersion: "screen-target/5",
       });
       const presses = sent.filter((entry) => entry.tool === "press_key");
       expect(presses).toHaveLength(2);
