@@ -22,6 +22,13 @@ import {
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
 import { field, text } from "../unknownField.ts";
+import { mergeWorkflowAgentMetadata, withWorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
+import type { WorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
+import {
+  isClaudeConversationLine,
+  isClaudeTranscriptConversationLine,
+  isClaudeTranscriptTurnEnd,
+} from "./claudeTranscriptLines.ts";
 import {
   initialWorkflowAgentTranscriptCursor,
   readWorkflowAgentTranscript,
@@ -1910,16 +1917,6 @@ function makeProviderThread(input: {
     updatedAt: input.now,
   };
 }
-
-const decodeClaudeTranscriptLine = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ type: Schema.String })),
-);
-
-const isClaudeConversationLine = (line: string): boolean =>
-  Option.match(decodeClaudeTranscriptLine(line), {
-    onNone: () => false,
-    onSome: (entry) => entry.type === "user" || entry.type === "assistant",
-  });
 
 const getNativeThreadId = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
@@ -4012,26 +4009,6 @@ interface ClaudeSubagentProjectionTarget {
   readonly toolCalls: Map<string, ActiveClaudeToolCall>;
 }
 
-/** Claude writes blocks separately with stop_reason null until the last.
- * Missing stop_reason keeps the turn open; pre-tool text is not the reply. */
-function isClaudeTranscriptTurnEnd(entry: unknown): boolean {
-  if (field(entry, "type") !== "assistant") return false;
-  const stopReason = field(field(entry, "message"), "stop_reason");
-  return typeof stopReason === "string" && stopReason !== "tool_use";
-}
-
-function isClaudeTranscriptConversationLine(
-  entry: unknown,
-): entry is SDKAssistantMessage | SDKUserMessage {
-  const type = field(entry, "type");
-  const content = field(field(entry, "message"), "content");
-  return (
-    typeof field(entry, "uuid") === "string" &&
-    ((type === "assistant" && Array.isArray(content)) ||
-      (type === "user" && (Array.isArray(content) || typeof content === "string")))
-  );
-}
-
 interface PendingClaudeSubagentLaunch {
   readonly model?: string;
   readonly effort?: string;
@@ -4622,6 +4599,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly transcriptReadAttempts: number;
               readonly agentId: string | undefined;
               readonly transcriptCursor: WorkflowAgentTranscriptCursor;
+              readonly transcriptMetadata: WorkflowAgentMetadata;
               readonly nextItemOrdinal: number;
               readonly toolCalls: Map<string, ActiveClaudeToolCall>;
               readonly textShown: boolean;
@@ -5866,8 +5844,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const now = yield* DateTime.now;
           const seen = yield* Ref.get(workflowMemberStates);
           const transcriptDir = input.workflow.runHandles?.transcriptDir;
+          const reportedMembers = input.workflow.agents.slice();
 
-          for (const member of input.workflow.agents) {
+          for (const [memberIndex, member] of input.workflow.agents.entries()) {
             if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
               return;
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
@@ -6055,6 +6034,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               previous === undefined || restarted || previous.agentId !== agentId
                 ? initialWorkflowAgentTranscriptCursor
                 : previous.transcriptCursor;
+            let metadata =
+              previous === undefined || restarted || previous.agentId !== agentId
+                ? {}
+                : previous.transcriptMetadata;
             let textShown = !restarted && previous?.textShown === true;
             let resultShown = !restarted && previous?.resultShown === true;
             let turnEnded = !restarted && previous?.turnEnded === true;
@@ -6099,6 +6082,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   transcriptRead = true;
                   const advanced = read.value.cursor.offset !== transcriptCursor.offset;
                   transcriptCursor = read.value.cursor;
+                  metadata = mergeWorkflowAgentMetadata(read.value.lines, metadata);
                   for (const line of read.value.lines) {
                     if (yield* projectSubagentTranscriptLine(target, line)) textShown = true;
                     turnEnded = isClaudeTranscriptTurnEnd(line);
@@ -6121,6 +6105,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (!(yield* drain())) return;
               }
             }
+            if (transcriptRead)
+              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata);
             if (settled) {
               // Open calls receive no results after their member settles.
               yield* endOpenToolCalls();
@@ -6156,6 +6142,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
                   (readTranscript ? 1 : 0),
                 transcriptCursor,
+                transcriptMetadata: metadata,
                 nextItemOrdinal,
                 toolCalls,
                 textShown,
@@ -6166,6 +6153,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 completedAt,
               }),
             );
+          }
+          if (reportedMembers.some((member, index) => member !== input.workflow.agents[index])) {
+            if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
+              return;
+            input.coordinator.task = {
+              ...input.coordinator.task,
+              workflow: { ...input.workflow, agents: reportedMembers },
+            };
+            yield* emitProviderEvent({
+              type: "subagent.updated",
+              driver: CLAUDE_PROVIDER,
+              subagent: input.coordinator.task,
+            });
           }
         });
 
