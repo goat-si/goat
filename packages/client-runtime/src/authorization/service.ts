@@ -195,7 +195,8 @@ export const make = Effect.gen(function* () {
           return next;
         });
       }
-      return descriptor;
+      // Only a descriptor fetched now may stand in for the resolver's own fresh check.
+      return { descriptor, fresh: !canReuseDescriptor };
     },
   );
 
@@ -221,11 +222,13 @@ export const make = Effect.gen(function* () {
     }
     // The native manager can replace a forward while reusing its URL. Until it
     // provides an attachment lease, SSH must revalidate without the address cache.
-    const descriptor = yield* input.connectionMethod === "ssh"
+    const checked = yield* input.connectionMethod === "ssh"
       ? fetchDescriptor(input.httpBaseUrl, input.connectionMethod).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
+          Effect.map((descriptor) => ({ descriptor, fresh: true })),
         )
       : verifyDirectEndpoint(input);
+    const descriptor = checked.descriptor;
     if (descriptor.environmentId !== input.expectedEnvironmentId) {
       return yield* environmentMismatchError({
         expected: input.expectedEnvironmentId,
@@ -253,7 +256,7 @@ export const make = Effect.gen(function* () {
         _tag: "Bearer" as const,
         token: input.bearerToken,
       },
-      ...(input.connectionMethod === "ssh"
+      ...(checked.fresh
         ? { verifiedEndpoint: { httpBaseUrl: input.httpBaseUrl, descriptor } }
         : {}),
     };
@@ -541,16 +544,22 @@ export const make = Effect.gen(function* () {
   ) {
     if (!isGoatConnectEnabled()) return yield* connectDisabled();
     const endpoint = input.directEndpoint;
-    if (endpoint !== undefined) {
-      yield* verifyDirectEndpoint({
-        expectedEnvironmentId: input.expectedEnvironmentId,
-        httpBaseUrl: endpoint.httpBaseUrl,
-        connectionMethod: "direct",
-      });
-    }
+    const checked =
+      endpoint === undefined
+        ? undefined
+        : yield* verifyDirectEndpoint({
+            expectedEnvironmentId: input.expectedEnvironmentId,
+            httpBaseUrl: endpoint.httpBaseUrl,
+            connectionMethod: "direct",
+          });
     const authorized = (token: TokenStore.RemoteDpopAccessToken, socketUrl: string) => ({
       ...httpAuthorization(token, endpoint?.httpBaseUrl),
       socketUrl,
+      ...(endpoint !== undefined && checked?.fresh === true
+        ? {
+            verifiedEndpoint: { httpBaseUrl: endpoint.httpBaseUrl, descriptor: checked.descriptor },
+          }
+        : {}),
     });
     let selected = yield* getDpopToken(input);
     if (selected.fromCache) {

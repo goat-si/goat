@@ -302,6 +302,56 @@ it("ignores a result when a different dev pairing link replaces the route", asyn
   expect(harness.leave).not.toHaveBeenCalled();
 });
 
+it("keeps the old hub when a link replaces an open change-hub route", async () => {
+  using screen = setup({ intent: "change-hub" }, true);
+  const pairing = Promise.withResolvers<Result>();
+  harness.connect.mockReturnValueOnce(pairing.promise);
+  screen.rerender({ intent: "add-server", pairingUrl: "https://new.invalid", autoConnect: "1" });
+  expect(harness.connect).toHaveBeenCalledWith("https://new.invalid", undefined);
+  const newHub = EnvironmentId.make("new-hub");
+  await act(async () => {
+    pairing.resolve(AsyncResult.success(newHub));
+    await pairing.promise;
+  });
+  expect(harness.remember).toHaveBeenCalledWith({
+    intent: "add-server",
+    pairedEnvironmentId: newHub,
+  });
+  expect(harness.remove).not.toHaveBeenCalled();
+  expect(harness.leave).toHaveBeenCalledOnce();
+});
+
+it("starts the replacement auto-connect for the same URL and ignores the previous completion", async () => {
+  using screen = setup({ intent: "change-hub" }, true);
+  const oldPairing = Promise.withResolvers<Result>();
+  const newPairing = Promise.withResolvers<Result>();
+  harness.connect.mockReturnValueOnce(oldPairing.promise).mockReturnValueOnce(newPairing.promise);
+  const pairingUrl = "https://same.invalid";
+  screen.rerender({ intent: "change-hub", pairingUrl, autoConnect: "1" });
+  screen.rerender({ intent: "add-server", pairingUrl, autoConnect: "1" });
+  expect(harness.connect).toHaveBeenCalledTimes(2);
+  screen.rerender({ intent: "add-server", pairingUrl, autoConnect: "1" });
+  expect(harness.connect).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    oldPairing.resolve(AsyncResult.success(EnvironmentId.make("stale-hub")));
+    await oldPairing.promise;
+  });
+  expect(harness.remember).not.toHaveBeenCalled();
+  expect(harness.remove).not.toHaveBeenCalled();
+  expect(harness.leave).not.toHaveBeenCalled();
+  const newHub = EnvironmentId.make("new-hub");
+  await act(async () => {
+    newPairing.resolve(AsyncResult.success(newHub));
+    await newPairing.promise;
+  });
+  expect(harness.remember).toHaveBeenCalledWith({
+    intent: "add-server",
+    pairedEnvironmentId: newHub,
+  });
+  expect(harness.remove).not.toHaveBeenCalled();
+  expect(harness.leave).toHaveBeenCalledOnce();
+});
+
 it("ignores a result for a route whose expected environment has changed", async () => {
   using screen = setup({ routeFor: EnvironmentId.make("first-hub") });
   const pending = Promise.withResolvers<Result>();
