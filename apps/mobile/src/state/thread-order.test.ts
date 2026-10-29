@@ -90,7 +90,6 @@ function fixture() {
   return { rows, start, upsert };
 }
 
-/** The fixture's move, with a GOAT Bot session listed between its two rows. */
 function fixtureWithHiddenSession() {
   const moving = fixture();
   const [a, b] = moving.rows;

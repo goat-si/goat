@@ -10,7 +10,6 @@ import type { PendingThreadOrder } from "./threadOrder";
 
 const keyOf = (thread: EnvironmentThreadShell) => scopedThreadKey(thread.environmentId, thread.id);
 
-/** The arrangement sheet's sections. GOAT Bot's hidden observation threads are in none of them. */
 export function threadArrangementSections(input: {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly now: string;
