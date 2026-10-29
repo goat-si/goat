@@ -96,6 +96,34 @@ it("never matches conditions that only hold at different moments", () =>
     ).rejects.toThrow('enabled=true, value="b"');
   }));
 
+it("never matches visibility and an element condition that hold at different moments", () =>
+  fixture(async (page) => {
+    // Shown only while disabled, hidden once enabled: visible and enabled never hold together.
+    await page.setContent(
+      '<button id="b" disabled>Go</button><script>setInterval(() => { b.disabled = !b.disabled; b.hidden = !b.disabled; }, 5)</script>',
+    );
+    await expect(
+      ServerBrowserPage.waitFor(page, {
+        selector: "#b",
+        state: "visible",
+        enabled: true,
+        timeoutMs: 500,
+      }),
+    ).rejects.toThrow("enabled=true");
+  }));
+
+it("treats a mixed checkbox as neither checked nor unchecked", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      '<div id="m" role="checkbox" aria-checked="mixed">All</div><input id="i" type="checkbox"><script>i.indeterminate = true</script>',
+    );
+    for (const selector of ["#m", "#i"])
+      for (const checked of [true, false])
+        await expect(
+          ServerBrowserPage.waitFor(page, { selector, checked, timeoutMs: 200 }),
+        ).rejects.toThrow(`checked=${checked}`);
+  }));
+
 it("refuses an element condition on several matches instead of picking one", () =>
   fixture(async (page) => {
     await page.setContent('<button class="m">A</button><button class="m">B</button>');
