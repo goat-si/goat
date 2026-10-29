@@ -6,8 +6,8 @@ import { resolveDev } from "alchemy/Test/Core";
 import { AlchemyContext } from "alchemy/AlchemyContext";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as HttpClient from "effect/http/HttpClient";
 import * as Fixture from "../accounts/test/PolicyWorkerFixture.ts";
+import { policyWorkerHttpClient } from "../accounts/test/PolicyWorkerClient.testkit.ts";
 
 if (!resolveDev({ dev: true }))
   throw new Error("wp3 inbox tests require local provider mode; cloud fallback is forbidden");
@@ -36,7 +36,7 @@ test.provider(
             hostname.endsWith(".localhost") ||
             hostname === "[::1]",
         ).toBe(true);
-        const http = yield* HttpClient.HttpClient;
+        const http = yield* policyWorkerHttpClient;
         const get = (path: string) => http.get(new URL(path, url).href);
         yield* get("/hook-mode?mode=allowed");
         expect(yield* get("/hook-hold").pipe(Effect.flatMap((r) => r.json))).toBe(true);

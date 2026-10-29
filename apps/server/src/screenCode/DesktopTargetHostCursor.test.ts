@@ -164,3 +164,18 @@ it.effect(
       ).toEqual([undefined, { fx: 0.75, fy: 0.45 }]);
     }),
 );
+
+it.effect("uses the active cursor generation supplied for a switched desktop target", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      get_window_state: tree([
+        element(0, "Window", { frame: { x: 100, y: 50, w: 400, h: 200 } }),
+        element(1, "AXButton", { parent_index: 0, frame: { x: 280, y: 130, w: 40, h: 20 } }),
+      ]),
+    });
+    host.setCursorGeneration?.(() => 3);
+    const clicks = yield* clickEach(host, sent, [1]);
+    const owner = clicks[0]?.cursor?.owner as { generation: number } | undefined;
+    expect(owner?.generation).toBe(3);
+  }),
+);

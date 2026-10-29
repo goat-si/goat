@@ -52,7 +52,7 @@ export const call = (
   callId,
   method,
   args: [args],
-  deadlineMillis: 1000,
+  deadlineMillis: 10_000,
   ...(targetRef ? { targetRef } : {}),
 });
 
@@ -115,7 +115,11 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
           [undefined, "Cancel"].includes((request.input as { text?: string }).text)
           ? Effect.succeed({} as A)
           : Effect.fail(
-              new PreviewAutomationTimeoutError({ ...actionErrorContext, operation: "waitFor" }),
+              new PreviewAutomationTimeoutError({
+                ...actionErrorContext,
+                operation: "waitFor",
+                remoteTag: "PreviewAutomationTimeoutError",
+              }),
             );
       if (request.operation === "read")
         return Effect.succeed({ url: state.url, title: tab.title, text: "# Workspace" } as A);

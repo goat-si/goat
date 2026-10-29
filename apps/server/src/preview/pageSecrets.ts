@@ -96,14 +96,49 @@ const dottedSpans = (
 export const maskSecrets = (dotted: RegExp | undefined, cookies: Cookies) => (text: string) =>
   redactCookieValues(text, cookies, dotted ? dottedSpans(text, dotted) : []);
 
-/** Masks every string in an evaluation result, object keys included: all of it is the page's. */
-export const redactValue = (value: unknown, mask: (text: string) => string): unknown => {
-  if (typeof value === "string") return mask(value);
-  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask));
-  if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, each]) => [mask(key), redactValue(each, mask)]),
+/**
+ * The numbers a page script gets from masked fields that hold digits (a one-time code, a phone or
+ * card number): `Number()` of their digits, which drops separators and leading zeros and rounds
+ * past 2^53 exactly as the page's own conversion does.
+ */
+export const protectedNumbers = (values: ReadonlyArray<string>): ReadonlySet<number> =>
+  new Set(
+    values.flatMap((value) => {
+      const digits = value.replace(/\D/g, "");
+      return /^[\d\s+().-]+$/.test(value) && digits.length > 0 ? [Number(digits)] : [];
+    }),
   );
+
+/**
+ * Masks every string in an evaluation result, object keys included: all of it is the page's. A
+ * number, or a run of digits in a string, equal to a masked field's numeric form is masked too;
+ * this applies to evaluation results only, so short codes never mask ordinary page text.
+ */
+export const redactValue = (
+  value: unknown,
+  mask: (text: string) => string,
+  numbers: ReadonlySet<number> = new Set(),
+): unknown => {
+  const text = (each: string) =>
+    numbers.size === 0
+      ? mask(each)
+      : mask(each).replace(/\d+(?:\.\d+)?(?:e[+-]?\d+)?/gi, (token) =>
+          numbers.has(Number(token)) ? MASKED_VALUE : token,
+        );
+  if (typeof value === "string") return text(value);
+  if ((typeof value === "number" || typeof value === "bigint") && numbers.has(Number(value)))
+    return MASKED_VALUE;
+  if (Array.isArray(value)) return value.map((each) => redactValue(each, mask, numbers));
+  if (value === null || typeof value !== "object") return value;
+  // Two keys that mask alike both stay, the later one numbered.
+  const entries = new Map<string, unknown>();
+  for (const [key, each] of Object.entries(value)) {
+    const masked = text(key);
+    let name = masked;
+    for (let copy = 2; entries.has(name); copy++) name = `${masked} (${copy})`;
+    entries.set(name, redactValue(each, mask, numbers));
+  }
+  return Object.fromEntries(entries);
 };
 
 /**
@@ -178,16 +213,23 @@ export const maskSnapshotRecords = (
 
 const FRAME_ANSWER_MS = 1_000;
 
-// Include password and CSS-masked text in open shadow roots, normalized like accessible text.
+// Include password, phone, email and one-time-code fields and CSS-masked text in open shadow
+// roots, normalized like accessible text. A field counts by its type or an autocomplete token.
 const DOTTED_SCRIPT = `(() => {
   const values = [];
+  const sensitive = (element) =>
+    ["password", "tel", "email"].includes(element.type) ||
+    String(element.getAttribute("autocomplete") ?? "")
+      .toLowerCase()
+      .split(/\\s+/)
+      .some((token) => /^(?:tel(?:-.*)?|email|cc-.*|one-time-code|current-password|new-password)$/.test(token));
   const visit = (root) => {
     for (const element of root.querySelectorAll("*")) {
       if (element.shadowRoot) visit(element.shadowRoot);
       const field = element.localName === "input" || element.localName === "textarea";
       if (!field && !element.isContentEditable) continue;
       const dots = getComputedStyle(element).getPropertyValue("-webkit-text-security");
-      if (element.type !== "password" && (dots === "none" || dots === "")) continue;
+      if (!(field && sensitive(element)) && (dots === "none" || dots === "")) continue;
       // Raw as page text shows it, and normalized as the tree does.
       for (const value of field ? [element.value, element.defaultValue] : [element.textContent ?? ""])
         values.push(value, value.replace(/[\\u200b\\u00ad]/g, "").trim().replace(/\\s+/g, " "));
@@ -197,11 +239,10 @@ const DOTTED_SCRIPT = `(() => {
   return [...new Set(values.filter((value) => value.trim()))];
 })()`;
 
+/** A frame came or went while the secret readers ran; another try can get past it. */
+export const SECRETS_PAGE_CHANGED = "The page changed while reading its secrets.";
 const pageChanged = () =>
-  new ServerBrowserOperationError(
-    "PreviewAutomationExecutionError",
-    "The page changed while reading its secrets.",
-  );
+  new ServerBrowserOperationError("PreviewAutomationExecutionError", SECRETS_PAGE_CHANGED);
 const VALUE_TOO_LONG = "A private field holds a value too long to mask.";
 
 /** Reuse one CDP session per out-of-process frame across snapshots. */

@@ -6,6 +6,7 @@ import {
   type QuotaWindow,
   type ServerProviderUsageAvailability,
 } from "@goat/contracts";
+import { quotaPoolAccountName } from "@goat/shared/quotaAccountName";
 
 import { quotaRows, type FleetHostRow, type FleetQuotaRow } from "./fleetTelemetry";
 
@@ -210,7 +211,7 @@ export function fleetQuota(rows: ReadonlyArray<FleetHostRow>, maxWindows = 2) {
         accountCount += accounts.size;
         for (const account of accounts.values()) {
           detail.push(
-            `${account.label ?? account.accountRef} (${account.state}): ${windowDetail(account.windows) || "Quota unknown"}`,
+            `${quotaPoolAccountName(account)} (${account.state}): ${windowDetail(account.windows) || "Quota unknown"}`,
           );
         }
       }

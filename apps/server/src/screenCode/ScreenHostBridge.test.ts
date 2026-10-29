@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import type {
   EnvironmentId,
@@ -53,7 +54,7 @@ const call = (callId: number): ScreenHostCall => ({
   targetRef: tab,
   method: "click",
   args: {},
-  deadlineMillis: 1,
+  deadlineMillis: 60_000,
 });
 
 it.effect("a cut before the first host call refuses that call", () =>
@@ -209,6 +210,47 @@ it.effect("discard and finishTurn release cell and target state", () =>
     yield* bridge.finishTurn("r", "t");
     const after = yield* bridge.handle(call(1), context());
     expect(after && "error" in after ? after.error?.code : undefined).not.toBe("stale_reference");
+  }),
+);
+
+it.effect("a cell's targets and key labels outlive its taken state until its row takes them", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: (each) =>
+        Effect.succeed(
+          each.method === "select_tab"
+            ? { value: { targetRef: { ...tab, id: "opened" } }, category: "confirmed" as const }
+            : { category: "confirmed" as const, evidence: ["test"] },
+        ),
+    });
+    const live = context(() => Effect.void);
+    const press = (callId: number, args: unknown): ScreenHostCall => ({
+      ...call(callId),
+      method: "press_key",
+      args: [args] as ScreenHostCall["args"],
+    });
+    const { targetRef: _targetRef, ...untargeted } = call(1);
+    yield* bridge.handle(
+      { ...untargeted, method: "select_tab", args: [{ tabId: "x" }] },
+      context(),
+    );
+    yield* bridge.handle(press(2, { key: "Enter" }), live);
+    yield* bridge.handle(press(3, { key: "a" }), live);
+    yield* bridge.handle(press(4, { key: "a", modifiers: ["Meta"] }), live);
+    bridge.takeCellImagesNow("r", "t", "c");
+    bridge.discardCellNow("r", "t", "c");
+    const facts = bridge.takeCellFacts("r", "t", "c");
+    expect(facts.targets).toEqual(["opened", "target"]);
+    expect([...facts.keys]).toEqual([
+      [2, "Enter"],
+      [4, "cmd+a"],
+    ]);
+    expect(bridge.takeCellFacts("r", "t", "c").targets).toEqual([]);
+    yield* bridge.handle(press(5, { key: "Tab" }), { ...live, cellId: "d" });
+    yield* bridge.finishTurn("r", "t");
+    expect(bridge.takeCellFacts("r", "t", "d").targets).toEqual([]);
   }),
 );
 
@@ -584,4 +626,323 @@ it.effect("a batch group whose member is refused on admission sends none of the 
     ).toEqual(["not_run", "text_limit", "not_run"]);
     expect(sent).toBe(0);
   }),
+);
+
+it.effect(
+  "a tab wait stuck behind its tab's other call, its authorization or an unanswering browser still answers inside its cell",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const holding = yield* Deferred.make<void>();
+      const never = yield* Deferred.make<void>();
+      const interrupted: string[] = [];
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: (request) =>
+          request.method === "click"
+            ? Deferred.succeed(holding, undefined).pipe(
+                Effect.andThen(Deferred.await(never)),
+                Effect.as({ category: "confirmed" as const, evidence: ["clicked"] }),
+              )
+            : request.method === "observe"
+              ? Effect.succeed({ category: "confirmed" as const, evidence: ["seen"] })
+              : Effect.never.pipe(
+                  Effect.onInterrupt(() =>
+                    Effect.sync(() => interrupted.push(request.targetRef?.id ?? "")),
+                  ),
+                ),
+      });
+      const target = (id: string, kind: "tab" | "app" = "tab") => ({ ...tab, id, kind });
+      const inCell = (
+        cellId: string,
+        callId: number,
+        method: ScreenHostCall["method"],
+        id: string,
+        deadlineMillis: number,
+        reauthorize: () => Effect.Effect<void> = () => Effect.void,
+        kind: "tab" | "app" = "tab",
+      ) =>
+        bridge.handle(
+          { ...call(callId), cellId, method, targetRef: target(id, kind), deadlineMillis },
+          { ...context(reauthorize), cellId },
+        );
+      const receipt = (cellId: string) => bridge.takeCellImagesNow("r", "t", cellId);
+
+      // Gate: another call on the same tab holds it, so the wait never reaches the host.
+      const click = yield* inCell("gate", 1, "click", "a", 60_000).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(holding);
+      const gated = yield* inCell("gate", 2, "wait_for", "a", 1_000).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("899 millis");
+      expect(gated.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      // Answered at the boundary itself; a missing race fails here instead of hanging.
+      expect(gated.pollUnsafe()).toBeDefined();
+      expect((yield* Fiber.join(gated))?.error).toMatchObject({
+        code: "deadline",
+        effectStarted: false,
+      });
+      expect(click.pollUnsafe()).toBeUndefined();
+      const gateWait = receipt("gate").journal.find((entry) => entry.receipt.callId === 2);
+      expect(gateWait?.receipt).toMatchObject({ dispatched: false, evidence: [] });
+
+      // Authorization that never answers (the clock is at 900 ms now).
+      const authorizing = yield* inCell("auth", 1, "wait_for", "b", 2_900, () => Effect.never).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("1899 millis");
+      expect(authorizing.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      expect(authorizing.pollUnsafe()).toBeDefined();
+      expect((yield* Fiber.join(authorizing))?.error?.code).toBe("deadline");
+      expect(receipt("auth").journal[0]?.receipt.dispatched).toBe(false);
+
+      // A browser that never answers, when the broker's own timer has not fired (the clock is at 2,800 ms).
+      const unanswered = yield* inCell("browser", 1, "wait_for", "c", 5_800).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("2899 millis");
+      expect(unanswered.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("1 millis");
+      expect(unanswered.pollUnsafe()).toBeDefined();
+      expect((yield* Fiber.join(unanswered))?.error).toMatchObject({
+        code: "deadline",
+        effectStarted: false,
+      });
+      expect(interrupted).toEqual(["c"]);
+      // A read that failed does not stop the cell, and gives back its effect count.
+      expect((yield* inCell("browser", 2, "observe", "c", 60_000))?.outcome).toBe("ok");
+      const browser = receipt("browser");
+      expect(browser.journal[0]?.receipt).toMatchObject({
+        dispatched: false,
+        evidence: ["wait_deadline:after_dispatch"],
+      });
+      expect(browser.effectsStarted).toBe(1);
+
+      // An app wait keeps its own driver timing; the bridge does not race it.
+      const appWait = yield* inCell(
+        "app",
+        1,
+        "wait_for",
+        "d",
+        6_700,
+        () => Effect.void,
+        "app",
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* TestClock.adjust("2000 millis");
+      expect(appWait.pollUnsafe()).toBeUndefined();
+      yield* Fiber.interrupt(appWait);
+      yield* Fiber.interrupt(click);
+    }),
+);
+
+it.effect(
+  "a pause before dispatch says nothing was sent; a pause after dispatch says it may have taken effect",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const started = yield* Deferred.make<void>();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const first = yield* bridge
+        .handle({ ...call(1), targetRef: app }, context())
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      const second = yield* bridge
+        .handle({ ...call(2), targetRef: app }, context())
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      bridge.cutCellNow("r", "t", "c", "pause");
+      const dispatched = yield* Fiber.join(first);
+      const queued = yield* Fiber.join(second);
+      const third = yield* bridge.handle({ ...call(3), targetRef: app }, context());
+      expect(dispatched?.error?.effectStarted).toBe(true);
+      expect(dispatched?.error?.nextStep).toContain("may have taken effect");
+      expect(dispatched?.error?.nextStep).not.toContain("nothing was sent");
+      expect(queued?.error?.effectStarted).toBe(false);
+      expect(queued?.error?.nextStep).toContain("nothing was sent");
+      expect(third?.error?.effectStarted).toBe(false);
+      expect(third?.error?.nextStep).toContain("nothing was sent");
+    }),
+);
+
+it.effect(
+  "cutting or discarding a failed cell settles its cursor to resting and keeps the target for the next cell",
+  () =>
+    Effect.gen(function* () {
+      const events: Array<{ phase: string; generation: number }> = [];
+      const bridge = new ScreenHostBridge(
+        new ScreenCursorPhases((event) =>
+          events.push({ phase: event.phase, generation: event.identity.generation }),
+        ),
+      );
+      const started = yield* Deferred.make<void>();
+      const releaseOld = yield* Deferred.make<void>();
+      let calls = 0;
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          ++calls === 1
+            ? Deferred.succeed(started, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseOld)),
+                Effect.as({ value: true, category: "confirmed" as const, evidence: ["done"] }),
+              )
+            : Effect.succeed({ value: true, category: "confirmed" as const, evidence: ["done"] }),
+      });
+      const live = context(() => Effect.void);
+      const inFlight = yield* bridge
+        .handle(call(1), live)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      bridge.cutCellNow("r", "t", "c");
+      yield* Fiber.join(inFlight);
+      yield* Deferred.succeed(releaseOld, undefined);
+      expect(events.map((entry) => entry.phase)).toEqual(["thinking", "resting"]);
+
+      // Next cell in the same turn reuses the same target and callId 1.
+      const nextReply = yield* bridge.handle(
+        { ...call(1), cellId: "c2" },
+        { ...live, cellId: "c2" },
+      );
+      expect(nextReply?.outcome).toBe("ok");
+      expect(events.map((entry) => entry.phase)).toEqual([
+        "thinking",
+        "resting",
+        "thinking",
+        "resting",
+      ]);
+      yield* bridge.finishTurn("r", "t");
+      expect(events.at(-1)?.phase).toBe("hidden");
+    }),
+);
+
+it.effect(
+  "a missing preview capability hides only the tab while a failed session reauthorization hides all turn targets",
+  () =>
+    Effect.gen(function* () {
+      const appRef = { ...tab, id: "app-1", kind: "app" as const, generation: 1 };
+      const tabRef = { ...tab, id: "tab-1", kind: "tab" as const, generation: 1 };
+      const events: Array<{ targetId: string; phase: string }> = [];
+      const bridge = new ScreenHostBridge(
+        new ScreenCursorPhases((event) =>
+          events.push({ targetId: event.identity.targetId, phase: event.phase }),
+        ),
+      );
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.succeed({ value: true, category: "confirmed" as const, evidence: ["done"] }),
+      });
+      const noPreview = {
+        ...context(() => Effect.void),
+        invocation: {
+          ...context(() => Effect.void).invocation,
+          capabilities: new Set<never>(),
+        },
+      };
+      yield* bridge.handle({ ...call(1), targetRef: appRef }, noPreview);
+      const denied = yield* bridge.handle({ ...call(2), targetRef: tabRef }, noPreview);
+      expect(denied && "error" in denied ? denied.error?.code : undefined).toBe(
+        "permission_denied",
+      );
+      expect(events).toEqual([
+        { targetId: "app-1", phase: "thinking" },
+        { targetId: "app-1", phase: "resting" },
+        { targetId: "tab-1", phase: "thinking" },
+        { targetId: "tab-1", phase: "hidden" },
+      ]);
+      // In the next cell, the app remains usable while the denied tab is fenced as stale.
+      const appNext = yield* bridge.handle(
+        { ...call(1), cellId: "c2", targetRef: appRef },
+        { ...noPreview, cellId: "c2" },
+      );
+      const tabNext = yield* bridge.handle(
+        { ...call(2), cellId: "c2", targetRef: tabRef },
+        { ...noPreview, cellId: "c2" },
+      );
+      expect(appNext?.outcome).toBe("ok");
+      expect(tabNext && "error" in tabNext ? tabNext.error?.code : undefined).toBe(
+        "stale_reference",
+      );
+
+      // Session-wide reauthorize failure hides and fences all targets touched in the turn.
+      const revoked = context(() => Effect.fail("revoked" as never));
+      const tabRevoked = yield* bridge.handle(
+        { ...call(3), cellId: "c2", targetRef: { ...tabRef, id: "tab-2" } },
+        { ...revoked, cellId: "c2" },
+      );
+      expect(tabRevoked && "error" in tabRevoked ? tabRevoked.error?.code : undefined).toBe(
+        "permission_denied",
+      );
+      expect(events.filter((entry) => entry.targetId === "app-1").at(-1)?.phase).toBe("hidden");
+    }),
+);
+
+it.effect(
+  "holds a queued batch's phases behind the target gate and advances its generation after another window runs",
+  () =>
+    Effect.gen(function* () {
+      const events: Array<{ targetId: string; generation: number; phase: string }> = [];
+      const phases = new ScreenCursorPhases((event) =>
+        events.push({
+          targetId: event.identity.targetId,
+          generation: event.identity.generation,
+          phase: event.phase,
+        }),
+      );
+      const bridge = new ScreenHostBridge(phases);
+      const a1Started = yield* Deferred.make<void>();
+      const releaseA1 = yield* Deferred.make<void>();
+      const a1 = { ...tab, id: "win-a", kind: "app" as const, generation: 1 };
+      const b1 = { ...tab, id: "win-b", kind: "app" as const, generation: 2 };
+      const seenGenerations: number[] = [];
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: (each) =>
+          each.callId === 1
+            ? Deferred.succeed(a1Started, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseA1)),
+                Effect.as({ value: true, category: "confirmed" as const, evidence: ["ok"] }),
+              )
+            : Effect.sync(() => {
+                if (each.targetRef)
+                  seenGenerations.push(
+                    phases.generationOf(each.targetRef, `${each.cellId}\u0000${each.callId}`),
+                  );
+                return { value: true, category: "confirmed" as const, evidence: ["ok"] };
+              }),
+      });
+      const live = context(() => Effect.void);
+      const f1 = yield* bridge
+        .handle({ ...call(1), targetRef: a1 }, live)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(a1Started);
+      // Queue a 2-call batch [2, 3] on win-a while call 1 still holds win-a's gate.
+      const f2 = yield* bridge
+        .handle({ ...call(2), targetRef: a1, args: [{ batch: { index: 0, size: 2 } }] }, live)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      const f3 = yield* bridge
+        .handle({ ...call(3), targetRef: a1, args: [{ batch: { index: 1, size: 2 } }] }, live)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      // Neither batch member starts a phase while call 1 holds win-a's gate.
+      expect(events).toEqual([{ targetId: "win-a", generation: 1, phase: "thinking" }]);
+      // Window B runs meanwhile at generation 2.
+      yield* bridge.handle({ ...call(4), targetRef: b1 }, live);
+      // Release call 1: the queued batch [2, 3] enters win-a's gate and bumps win-a to generation 3.
+      yield* Deferred.succeed(releaseA1, undefined);
+      yield* Fiber.joinAll([f1, f2, f3]);
+      expect(seenGenerations).toEqual([2, 3, 3]);
+      expect(events).toEqual([
+        { targetId: "win-a", generation: 1, phase: "thinking" },
+        { targetId: "win-b", generation: 2, phase: "thinking" },
+        { targetId: "win-b", generation: 2, phase: "resting" },
+        { targetId: "win-a", generation: 1, phase: "resting" },
+        { targetId: "win-a", generation: 3, phase: "thinking" },
+        { targetId: "win-a", generation: 3, phase: "resting" },
+      ]);
+    }),
 );

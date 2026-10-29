@@ -25,6 +25,7 @@ import {
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
@@ -668,25 +669,34 @@ export const layer: Layer.Layer<
                   nodeId: input.event.message.nodeId,
                 }),
               ];
-            case "turn_item.updated":
+            case "turn_item.updated": {
+              // Every provider's computer use rows name their app; screen cells also their title.
+              const callApps = yield* ComputerUseCallApps;
+              const presented = callApps.present(
+                withCommandActions(input.event.turnItem),
+                yield* Clock.currentTimeMillis,
+              );
+              const turnItem = callApps.unresolvedScreenRow(presented)
+                ? callApps.keepStoredScreenRow(
+                    presented,
+                    yield* projections.getTurnItem({
+                      threadId: presented.threadId,
+                      itemId: presented.id,
+                    }),
+                  )
+                : presented;
               return [
                 yield* makeDomainEvent(input, {
                   type: "turn-item.updated",
                   threadId: input.event.turnItem.threadId,
                   payload: boundFileChangeForStorage(
-                    withFileChangeLineCounts(
-                      stripUnservedToolOutputImageBytes(
-                        // Every provider's cua-driver rows name the app their pid runs.
-                        (yield* ComputerUseCallApps).present(
-                          withCommandActions(input.event.turnItem),
-                        ),
-                      ),
-                    ),
+                    withFileChangeLineCounts(stripUnservedToolOutputImageBytes(turnItem)),
                   ),
                   runId: input.event.turnItem.runId,
                   nodeId: input.event.turnItem.nodeId,
                 }),
               ];
+            }
             case "runtime_request.updated":
               return [
                 yield* makeDomainEvent(input, {

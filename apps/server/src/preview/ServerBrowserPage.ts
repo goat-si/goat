@@ -36,6 +36,7 @@ import { codeLocator } from "./codeLocator.ts";
 import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
+import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
   narrowTree,
   resetSnapshotDiff,
@@ -48,6 +49,7 @@ import {
   maskSecrets,
   maskSnapshotRecords,
   maskTree,
+  protectedNumbers,
   redactValue,
   tabCookies,
   openReaders,
@@ -365,23 +367,9 @@ const withoutTreeDataPayloads = (tree: string) =>
       return url ? url[1] + withoutDataPayload(url[2]!) : line;
     })
     .join("\n");
-const pageChanged = () =>
-  new ServerBrowserOperationError(
-    "PreviewAutomationExecutionError",
-    "The page changed while capturing its snapshot. Take another snapshot.",
-  );
-
-const tooBusy = () =>
-  new ServerBrowserOperationError(
-    "PreviewAutomationTimeoutError",
-    "The page was too busy to capture a snapshot in time. Wait for it to settle and take another snapshot.",
-  );
-
-const VALUE_TOO_LONG = "A password field holds a value too long to hide, so no snapshot was taken.";
 const FULL_PAGE_TOO_LARGE =
   "The full-page screenshot exceeds the 3840 × 16384 pixel or 8 MiB limit, even at reduced scale. Use a viewport snapshot instead.";
 // A second capture would fail the same way; this one already tried every scale.
-const NOT_RETRIED = new Set([VALUE_TOO_LONG, FULL_PAGE_TOO_LARGE]);
 
 /** Chromium sizes the capture, so the reported size is read from the PNG header. */
 const pngSize = (base64: string) => {
@@ -688,37 +676,14 @@ const capture = async (
   );
 };
 
-/** Snapshots begun per page; observers' snapshots aren't queued, so two can overlap. */
-const snapshotTurns = new WeakMap<Page, number>();
-
-export const snapshot = async (input: SnapshotInput): Promise<PreviewAutomationSnapshot> => {
-  const deadline = Date.now() + input.timeoutMs;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(tooBusy()), input.timeoutMs);
+export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapshot> =>
+  runSnapshot({
+    page: input.page,
+    timeoutMs: input.timeoutMs,
+    capture: (deadline) => capture(input, deadline),
+    retryable: transientCapture,
+    tooBusy,
   });
-  const turn = (snapshotTurns.get(input.page) ?? 0) + 1;
-  snapshotTurns.set(input.page, turn);
-  // Retry only before the deadline and the next snapshot, whose refs a later retry would revoke.
-  const captured = capture(input, deadline).catch((cause: unknown) =>
-    Date.now() < deadline &&
-    snapshotTurns.get(input.page) === turn &&
-    !(cause instanceof Error && NOT_RETRIED.has(cause.message))
-      ? capture(input, deadline)
-      : Promise.reject(cause),
-  );
-  try {
-    return await Promise.race([captured, expired]);
-  } catch (cause) {
-    throw cause instanceof Error && cause.name === "TimeoutError" ? tooBusy() : cause;
-  } finally {
-    clearTimeout(timer);
-    // CDP cannot cancel a capture: the caller's capture lock and paused screencasts wait for the
-    // one Chromium still owes, so no second capture runs beside it. The caller's own deadline
-    // answers it meanwhile (CaptureLock).
-    await captured.then(constVoid, constVoid);
-  }
-};
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
 export const click = async (
@@ -1054,7 +1019,7 @@ const redactEvaluation = async (
     openReaders(page, cdp).then(({ read }) => read()),
   ]);
   const values = fields.flat().filter((each) => typeof each === "string");
-  return redactValue(value, maskSecrets(dottedPattern(values), cookies));
+  return redactValue(value, maskSecrets(dottedPattern(values), cookies), protectedNumbers(values));
 };
 
 /** Terminate expired page scripts so a hung expression cannot block the tab's control queue. */

@@ -1,0 +1,156 @@
+import { assert, describe, it } from "@effect/vitest";
+import { ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+
+import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+
+const threadId = ThreadId.make("thread:caps");
+const controlId = "control:caps";
+const authority = {
+  threadId,
+  attachmentGeneration: "attachment:one",
+  proxyChannelToken: "channel:secret",
+};
+
+/** A bound channel on the TestClock at 0, whose cell ends at cellDeadline. */
+const bound = Effect.fn("PrimitiveChannelCapsTest.bound")(function* (ready = true) {
+  const signals = yield* PubSub.unbounded<void>();
+  const leases = ComputerUseLeases.ComputerUseLeases.of({
+    currentControl: () => Effect.succeedSome({ controlId }),
+    controlState: () => Effect.succeed({ _tag: "active" }),
+    subscribe: PubSub.subscribe(signals),
+  } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
+  const channel = yield* PrimitiveChannel.make.pipe(
+    Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+  );
+  yield* channel.issue({ ...authority, expiresAt: 600_000 });
+  const registered = yield* channel.registerStream({
+    ...authority,
+    proxyInstanceId: "proxy:one",
+    kind: "thread",
+  });
+  if (registered.status !== "registered") throw new Error("expected registration");
+  if (ready)
+    assert.isTrue(
+      yield* channel.reportControlReady({
+        ...authority,
+        registrationId: registered.registrationId,
+        controlId,
+        connectionId: "driver:1",
+        driverGeneration: 1,
+      }),
+    );
+  const call = (tool: string, args: ComputerUsePrimitiveRequest["args"], cellDeadline = 30_000) =>
+    channel
+      .request({
+        threadId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 1,
+        deadlineMillis: cellDeadline,
+        tool,
+        args,
+      })
+      .pipe(Effect.result, Effect.forkChild);
+  /** The proxy takes the next request, which marks it sent. */
+  const delivered = Stream.runHead(
+    registered.requests.pipe(
+      Stream.filter(
+        (item): item is ComputerUsePrimitiveRequest => item.state === "primitive-request",
+      ),
+    ),
+  ).pipe(Effect.map(Option.getOrThrow));
+  return { call, delivered };
+});
+
+describe("ComputerUsePrimitiveChannel caps each driver call", () => {
+  it.effect(
+    "a list_apps the driver never answers fails at its own cap and leaves the cell its time",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* bound();
+        const waiter = yield* f.call("list_apps", {});
+        assert.equal((yield* f.delivered).deadlineMillis, 2_000);
+        yield* TestClock.adjust(2_000);
+        const result = yield* Fiber.join(waiter);
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        assert.equal(result.failure.code, "deadline");
+        assert.isTrue(result.failure.effectStarted);
+        assert.include(result.failure.nextStep, "GOAT is restarting it");
+        assert.include(result.failure.nextStep, "do not resend input");
+      }),
+  );
+
+  it.effect("a call the driver never took fails at its cap as nothing sent", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      const waiter = yield* f.call("click", { pid: 4, window_id: 9, x: 1, y: 1 });
+      yield* TestClock.adjust(3_000);
+      const result = yield* Fiber.join(waiter);
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") return;
+      assert.equal(result.failure.code, "deadline");
+      assert.isFalse(result.failure.effectStarted);
+      assert.include(result.failure.nextStep, "nothing was sent");
+    }),
+  );
+
+  it.effect("a wait's cap follows its own timeout and a long type's its length", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      yield* f.call("verify_state", { timeout_ms: 5_000 });
+      assert.equal((yield* f.delivered).deadlineMillis, 7_000);
+      yield* f.call("type_text", { text: "x".repeat(100) });
+      assert.equal((yield* f.delivered).deadlineMillis, 8_000);
+      yield* f.call("get_window_state", { include_screenshot: true });
+      assert.equal((yield* f.delivered).deadlineMillis, 7_000);
+    }),
+  );
+
+  it.effect("a cell with less time than the cap fails the call before the cell ends", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      yield* f.call("scroll", {}, 4_000);
+      assert.equal((yield* f.delivered).deadlineMillis, 2_500);
+    }),
+  );
+
+  it.effect("a call with under 250 ms to answer in is refused before it is queued", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      const result = yield* Fiber.join(yield* f.call("click", {}, 1_700));
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") return;
+      assert.equal(result.failure.code, "deadline");
+      assert.isFalse(result.failure.effectStarted);
+      assert.include(result.failure.nextStep, "new cell");
+    }),
+  );
+
+  it.effect(
+    "waiting for a driver to bind counts against the call's cap and the cell's reserve",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* bound(false);
+        const capped = yield* f.call("list_apps", {});
+        const short = yield* f.call("click", {}, 1_800);
+        // The short cell keeps its 1.5 s reserve: the call gives up waiting at 300 ms.
+        yield* TestClock.adjust(300);
+        const early = yield* Fiber.join(short);
+        assert.equal(early._tag, "Failure");
+        yield* TestClock.adjust(1_700);
+        const result = yield* Fiber.join(capped);
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        assert.equal(result.failure.reason, "desktop_not_ready");
+        assert.isFalse(result.failure.effectStarted);
+      }),
+  );
+});

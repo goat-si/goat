@@ -149,7 +149,7 @@ it("indexes only actionable refs in the current complete observation", () => {
   expect(observations.index.resolveElement(first.elements[0]!.ref)).toBeUndefined();
 });
 
-it("returns a diff only for consecutive complete same-lineage trees", () => {
+it("returns a diff only for consecutive complete same-lineage trees, carrying every current element", () => {
   const observations = new ScreenObservations();
   const base = observations.renderObservation({
     draft: tabDraft("heading\nbutton Save [ref=a]"),
@@ -163,7 +163,8 @@ it("returns a diff only for consecutive complete same-lineage trees", () => {
     limits: { treeBytes: 4096 },
   });
   expect(diff.mode).toBe("diff");
-  expect(diff.elements).toHaveLength(1);
+  expect(diff.indexedText).toBe("+ button Cancel [1]");
+  expect(diff.elements.map((element) => element.index)).toEqual([0, 1]);
   const reset = observations.renderObservation({
     draft: tabDraft("button [ref=c]", 3),
     mode: "diff",
@@ -300,7 +301,7 @@ it("a Playwright-quoted tree line keeps its role, so its textbox is editable and
   expect(query.elements.map((element) => element.role)).toEqual(["textbox"]);
 });
 
-it("a tab element keeps its role, name, text and selected state in a diff as in a full read", () => {
+it("a diff carries every current tab element with the role, name, text and state a full read gives", () => {
   const observations = new ScreenObservations();
   const form = (name: string, size: string, bacon: string) =>
     [
@@ -354,9 +355,11 @@ it("a tab element keeps its role, name, text and selected state in a diff as in 
   const diff = read(form(": 홍길동 Test", " [checked]", " [checked]"), full.observationId);
   expect(diff.mode).toBe("diff");
   expect(fields(diff)).toEqual([
+    { role: "generic", name: "", text: undefined, selected: undefined },
     { role: "textbox", name: "Customer name:", text: "홍길동 Test", selected: undefined },
     { role: "radio", name: "Small", text: undefined, selected: true },
     { role: "checkbox", name: "Bacon", text: undefined, selected: true },
     { role: "textbox", name: "Delivery time: HH:MM", text: "11:45", selected: undefined },
+    { role: "button", name: 'Submit "order"', text: undefined, selected: undefined },
   ]);
 });

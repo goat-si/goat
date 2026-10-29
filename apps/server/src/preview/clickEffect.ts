@@ -39,6 +39,9 @@ interface Watch {
  */
 const INSTALL = `(() => {
   const seen = new Set();
+  const STATE_ATTRIBUTES = new Set(["value", "checked", "selected", "open", "hidden", "disabled",
+    "aria-pressed", "aria-expanded", "aria-selected", "aria-checked", "aria-current",
+    "aria-valuenow", "aria-hidden", "href", "src"]);
   let armed = false;
   let target = null;
   let resolve = () => undefined;
@@ -108,6 +111,9 @@ const INSTALL = `(() => {
     const before = new Map();
     for (const record of records) {
       if (record.type === "childList" || !record.target.isConnected) continue;
+      // Styling a press sets (a class, a style, a data-* flag) is not the click's effect; only
+      // attributes that carry a control's state count.
+      if (record.type === "attributes" && !STATE_ATTRIBUTES.has(record.attributeName)) continue;
       const key = record.target;
       const name = record.type === "attributes" ? record.attributeName : "";
       const entries = before.get(key) ?? new Map();
@@ -194,7 +200,13 @@ const INSTALL = `(() => {
     const before = controlsAt.get(control);
     if (before && (before[0] !== control.value || before[1] !== control.checked)) note("input");
   };
-  const onFocus = (event) => related(event) && note("focus");
+  // The browser's own focus on the pressed control (or a control holding it) is not an effect;
+  // focus moving anywhere else is.
+  const onFocus = (event) => {
+    const at = event.composedPath()[0];
+    if (target !== null && within(target, at)) return;
+    if (related(event)) note("focus");
+  };
   // A link or form the click activated starts a user-initiated navigation; a handler's own
   // location change happens during dispatch. Navigations other work started are not the click's.
   // A link the click follows into a new window opens a popup unless a handler cancels the click,

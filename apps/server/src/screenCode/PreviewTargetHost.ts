@@ -51,9 +51,9 @@ const stringField = (record: Record<string, unknown>, key: string) =>
   typeof record[key] === "string" ? (record[key] as string) : undefined;
 /** A wait without its own timeout gets the browser's usual one. */
 const DEFAULT_WAIT_MS = 15_000;
-// A wait ends this long before its cell, so its answer arrives and it never holds the tab's queue
-// into the next cell.
-const WAIT_ANSWER_MARGIN_MS = 500;
+// What a wait leaves of its cell: the browser answers a wait that never started 500 ms after the
+// wait's own deadline (CaptureLock.answerCall), and that answer must still travel back.
+const WAIT_ANSWER_RESERVE_MS = 1_500;
 
 interface BoundTarget {
   readonly ref: ScreenTargetRef;
@@ -62,6 +62,8 @@ interface BoundTarget {
   readonly observationId?: string;
   /** The document the latest observation saw, when the host reports one; points belong to it. */
   readonly documentGeneration?: number;
+  /** The latest observation, when its tree was incomplete: its refs are held to its document. */
+  readonly incompleteObservationId?: string;
 }
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
@@ -72,6 +74,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const observations = new ScreenObservations();
   const callApps = yield* ComputerUseCallApps;
   const targets = new Map<string, BoundTarget>();
+  let epoch = 0;
   const bindingHints = new Map<string, ScreenBindingHints>();
   const turnKey = (identity: Pick<ScreenHostContext, "runId" | "turnId">) =>
     `${identity.runId}\u0000${identity.turnId}`;
@@ -181,10 +184,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       environmentId: context.environmentId,
       runId: context.runId,
       turnId: context.turnId,
-      generation: 0,
+      generation: ++epoch,
     };
     targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
-    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url });
+    callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url }, context);
     return ref;
   };
   const lookup = (call: ScreenHostCall, context: ScreenHostContext) => {
@@ -225,7 +228,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       current.control.generation !== bound.tab.controlGeneration
     )
       return yield* Effect.fail(fail("stale_reference", "Bind and observe the tab again."));
-    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url });
+    callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: current.url }, context);
     if (originOf(current.url) !== bound.origin) {
       observations.evictTarget(bound.ref.id);
       if (!readOnly)
@@ -287,7 +290,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       if (call.method === "select_tab") {
         const tabs = yield* list(context);
-        const tabId = stringField(arg, "tabId");
+        // A tab target's identity from an earlier cell of this turn names its tab again.
+        const identity = stringField(arg, "identity");
+        const tabId =
+          stringField(arg, "tabId") ?? (identity ? targets.get(identity)?.tab.tabId : undefined);
         const url = stringField(arg, "url");
         const mentionId = stringField(arg, "mentionId");
         const hints = bindingHints.get(turnKey(context));
@@ -312,7 +318,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           return yield* Effect.fail(
             fail(
               candidates.length ? "target_ambiguous" : "target_missing",
-              "Specify one live tab ID or URL.",
+              identity && !tabId
+                ? "That tab target is not bound in this turn; use its tabId or screen.listTabs()."
+                : "Specify one live tab ID or URL.",
             ),
           );
         const candidate = candidates[0];
@@ -496,12 +504,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           observations,
           arg: { ...arg, baseObservationId: arg.baseObservationId ?? bound.observationId },
         });
+        const { incompleteObservationId: _previous, ...kept } = reading;
         targets.set(bound.ref.id, {
-          ...reading,
+          ...kept,
           observationId: result.value.observationId,
           ...(current.documentGeneration === undefined
             ? {}
             : { documentGeneration: current.documentGeneration }),
+          ...(result.value.complete || result.value.elements.length === 0
+            ? {}
+            : { incompleteObservationId: result.value.observationId }),
         });
         return result;
       }
@@ -543,6 +555,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
       const selector = stringField(arg, "selector");
+      // A ref acts only through the binding that observed it, which holds its document and gate.
+      if (
+        [arg.ref, arg.sourceRef, arg.destinationRef].some(
+          (ref) =>
+            ref !== null &&
+            typeof ref === "object" &&
+            (ref as { readonly targetId?: unknown }).targetId !== bound.ref.id,
+        )
+      )
+        return yield* Effect.fail(
+          fail("stale_reference", "That element belongs to another tab target; observe this one."),
+        );
       const locator =
         arg.ref && typeof arg.ref === "object"
           ? observations.index.resolveElement(
@@ -575,6 +599,21 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       if (point && bound.documentGeneration !== current.documentGeneration)
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that screenshot. Observe it again."),
+        );
+      // A ref from an incomplete tree is held to its document the same way: the browser's ref
+      // table alone was never relied on for those.
+      const documentBound =
+        bound.incompleteObservationId !== undefined &&
+        [arg.ref, arg.sourceRef, arg.destinationRef].some(
+          (ref) =>
+            ref !== null &&
+            typeof ref === "object" &&
+            (ref as { readonly observationId?: unknown }).observationId ===
+              bound.incompleteObservationId,
+        );
+      if (documentBound && bound.documentGeneration !== current.documentGeneration)
+        return yield* Effect.fail(
+          fail("stale_reference", "The page changed since that observation. Observe it again."),
         );
       if (point?.kind === "document")
         return yield* Effect.fail(
@@ -711,6 +750,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const now = yield* Clock.currentTimeMillis;
         const requested =
           typeof arg.timeoutMs === "number" && arg.timeoutMs > 0 ? arg.timeoutMs : DEFAULT_WAIT_MS;
+        const budgetMs = Math.floor(call.deadlineMillis - now - WAIT_ANSWER_RESERVE_MS);
+        // Too little of the cell is left for any answer to arrive, so nothing is sent.
+        if (budgetMs < 1)
+          return yield* Effect.fail(
+            fail(
+              "deadline",
+              "Too little of this cell is left for a wait to answer; wait in a new cell.",
+            ),
+          );
+        const waitMs = Math.max(
+          1,
+          Math.floor(Math.min(requested, context.limits.cellWallMs, budgetMs)),
+        );
         const waited = yield* broker
           .invoke({
             scope: context.invocation,
@@ -718,19 +770,16 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             input,
             // A wait only reads, so it watches whatever document the tab holds, on any origin.
             exact: exact(bound.tab, false),
-            timeoutMs: Math.max(
-              1,
-              Math.min(
-                requested,
-                context.limits.cellWallMs,
-                call.deadlineMillis - now - WAIT_ANSWER_MARGIN_MS,
-              ),
-            ),
+            timeoutMs: waitMs,
           })
           .pipe(Effect.result);
-        // A condition that did not come true in time is an answer the cell can branch on; any
-        // other failure (a bad selector, a lost tab) fails the call like an action would.
-        if (waited._tag === "Failure" && waited.failure._tag !== "PreviewAutomationTimeoutError")
+        // Only the browser saying the condition did not hold in time is an answer to branch on; the
+        // broker's own timeout (the host never answered) fails the call like a lost tab.
+        const unmet =
+          waited._tag === "Failure" &&
+          waited.failure._tag === "PreviewAutomationTimeoutError" &&
+          waited.failure.remoteTag === "PreviewAutomationTimeoutError";
+        if (waited._tag === "Failure" && !unmet)
           return yield* Effect.fail(previewTargetFailure(waited.failure, "waitFor"));
         const waitStatus = waited._tag === "Success" ? "met" : "timeout";
         return {
@@ -748,8 +797,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const retire = Effect.sync(() => observations.index.invalidateTarget(bound.ref.id));
       if (["navigate", "reload", "back", "forward", "close"].includes(operation)) yield* retire;
       else observations.index.invalidatePoints(bound.ref.id);
-      // A point carries its screenshot's document so the browser's input gate can refuse it.
-      const pointDocument = point ? bound.documentGeneration : undefined;
+      // A point, or a ref from an incomplete tree, carries its document so the browser's input
+      // gate can refuse it.
+      const pointDocument = point || documentBound ? bound.documentGeneration : undefined;
       const result = yield* invoke(
         bound,
         context,
@@ -772,7 +822,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const reached =
         typeof result === "object" && result !== null ? Reflect.get(result, "url") : undefined;
       if (typeof reached === "string")
-        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached });
+        callApps.screenTarget(bound.ref.id, { kind: "tab", pageUrl: reached }, context);
       // The agent moved its own tab, so the handle follows to the page it reached; the old
       // document's refs and points were retired above.
       if (
@@ -789,19 +839,24 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         yield* claims.releaseClaim(claimIdentity).pipe(Effect.orElseSucceed(() => undefined));
         targets.delete(bound.ref.id);
       }
-      // A click the browser saw change something is confirmed; nothing seen stays unverifiable,
-      // since late effects can follow, so the cell goes on and one observation settles it.
+      // A click the browser saw change something is confirmed, and so is a navigation that
+      // reached its page; nothing seen stays unverifiable, since late effects can follow, so the
+      // cell goes on and one observation settles it. Typed text stays unverifiable: no read the
+      // page cannot also produce tells this input's insert from the page's own.
       const seen =
         operation === "click" && typeof result === "object" && result !== null
           ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
           : undefined;
-      const confirmed = seen?.effect === "confirmed" && Array.isArray(seen.evidence);
+      const navigated = operation === "navigate" && typeof reached === "string";
+      const confirmed = navigated || (seen?.effect === "confirmed" && Array.isArray(seen.evidence));
       return {
         value: result,
         category: confirmed ? "confirmed" : "unverifiable",
-        evidence: confirmed
-          ? (seen.evidence as ReadonlyArray<unknown>).map((kind) => `click:${String(kind)}`)
-          : ["dispatched; observe to confirm"],
+        evidence: navigated
+          ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
+          : confirmed && seen
+            ? (seen.evidence as ReadonlyArray<unknown>).map((each) => `click:${String(each)}`)
+            : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
         outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
       };

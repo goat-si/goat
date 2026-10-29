@@ -87,7 +87,7 @@ const client = McpSchema.McpServerClient.of({
 });
 
 it.effect(
-  "direct MCP and goat_call forward screen images while an outside read-only client is denied",
+  "direct MCP and goat_call forward screen images and refuse a bad title before the cell runs, while an outside read-only client is denied",
   () => {
     const calls: ScreenRunService.ScreenRunInput[] = [];
     const scope: McpInvocationContext.McpThreadInvocationScope = {
@@ -193,6 +193,30 @@ it.effect(
         );
       expect(denied.isError).toBe(true);
       expect(calls).toHaveLength(2);
+      const withTitle = (name: string, title: string) =>
+        server
+          .callTool(
+            name === "goat_call"
+              ? {
+                  name,
+                  arguments: { path: "surface.screen_run", args: { code: "return 1", title } },
+                }
+              : { name, arguments: { code: "return 1", title } },
+          )
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          );
+      expect((yield* withTitle("goat_screen_run", "Docs: read the page")).isError).toBe(false);
+      expect(calls).toHaveLength(3);
+      // goat_call reports a refusal in its own {status: "error"} envelope.
+      const refused = (response: McpSchema.CallToolResult) =>
+        response.isError === true ||
+        JSON.stringify(response.content).includes('\\"status\\":\\"error\\"');
+      for (const name of ["goat_screen_run", "goat_call"])
+        for (const title of ["   ", "two\u2028lines", "x".repeat(81)])
+          expect(refused(yield* withTitle(name, title))).toBe(true);
+      expect(calls).toHaveLength(3);
     }).pipe(Effect.provide(layer));
   },
 );

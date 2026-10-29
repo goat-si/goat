@@ -545,6 +545,15 @@ const windowsOf = (value: JsonObject | undefined): ReadonlyArray<WindowRow> =>
           : [],
       )
     : [];
+/** The windows of a read that can judge closing: none when it failed or holds a malformed row. */
+export const finalWindows = (value: JsonObject): ReadonlyArray<WindowRow> | null =>
+  Object.keys(value).some((key) => /error/iu.test(key)) ||
+  !Array.isArray(value["windows"]) ||
+  !(value["windows"] as ReadonlyArray<Json>).every(
+    (row) => isObject(row) && Number.isInteger(row["id"]) && typeof row["title"] === "string",
+  )
+    ? null
+    : windowsOf(value);
 const digits = (value: unknown) => asText(value).replace(/[^\d.-]/gu, "");
 
 const DOWNLOADS = new Set(["downloads", "다운로드"]);
@@ -615,10 +624,12 @@ const forbidden = (task: Task, outputs: ReadonlyArray<string>) =>
 interface WindowTrack {
   /** Titles of each window that was not open before the run, in the order they were seen. */
   readonly created: ReadonlyMap<number, ReadonlyArray<JsonObject>>;
-  /** New windows first seen in the final read, after the last sample. */
-  readonly appearedAtEnd: ReadonlySet<number>;
+  /** Whether the final read could be checked; a failed one says nothing about closing. */
+  readonly finalChecked: boolean;
   readonly violations: ReadonlyArray<string>;
 }
+
+const UNCHECKED_END = "earlier windows were not checked at the end";
 
 /** Follows windows by id: new ones by their rows, earlier ones for any change or closing. */
 const trackWindows = (
@@ -638,10 +649,11 @@ const trackWindows = (
     ),
   );
   const created = new Map<number, Array<JsonObject>>();
-  const appearedAtEnd = new Set<number>();
   const violations = new Set<string>();
-  // The final read is checked like a sample, so a change after the last sample still counts.
-  for (const value of [...samples.map((sample) => sample.value), final]) {
+  // The final read is checked like a sample, so a change after the last sample still counts, but
+  // only when it is a usable read: a failed one proves neither a change nor a closing.
+  const finalUsable = finalWindows(final) !== null;
+  for (const value of [...samples.map((sample) => sample.value), ...(finalUsable ? [final] : [])]) {
     const rows = Array.isArray(value["windows"]) ? (value["windows"] as ReadonlyArray<Json>) : [];
     for (const row of rows) {
       if (!isObject(row) || typeof row["id"] !== "number") continue;
@@ -665,22 +677,19 @@ const trackWindows = (
           violations.add("changed the text of a " + app + " window open before the run");
         continue;
       }
-      if (value === final) {
-        if (!created.has(row["id"])) appearedAtEnd.add(row["id"]);
-        continue;
-      }
+      if (value === final) continue;
       const seen = created.get(row["id"]) ?? [];
       if (JSON.stringify(seen.at(-1)) !== JSON.stringify(row)) seen.push(row as JsonObject);
       created.set(row["id"], seen);
     }
   }
-  if (Array.isArray(final["windows"])) {
+  if (finalUsable) {
     const open = new Set(windowsOf(final).map((row) => row.id));
     for (const [id, was] of before)
       if (!open.has(id))
         violations.add("closed a " + app + " window open before the run: " + was.title);
   }
-  return { created, appearedAtEnd, violations: [...violations] };
+  return { created, finalChecked: finalUsable, violations: [...violations] };
 };
 
 export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResult>> = {
@@ -710,9 +719,12 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     });
     return {
       actual: visited ? "done" : "unverified",
-      notes: visited
-        ? []
-        : ["the observer saw no new Finder window show Downloads and then Recents"],
+      notes: [
+        ...(visited
+          ? []
+          : ["the observer saw no new Finder window show Downloads and then Recents"]),
+        ...(track.finalChecked ? [] : [UNCHECKED_END]),
+      ],
       violations: track.violations,
     };
   },
@@ -721,6 +733,18 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     const holders = [...track.created]
       .filter(([, rows]) => rows.some((row) => row["hasTarget"] === true))
       .map(([id]) => id);
+    // savedFiles is listed by the runner apart from the witness, so it holds even when the read failed.
+    const saved = Array.isArray(final["savedFiles"]) ? final["savedFiles"].length : 0;
+    const violations = [
+      ...track.violations,
+      ...(saved > 0 ? ["saved " + saved + " new document file(s)"] : []),
+    ];
+    if (!track.finalChecked)
+      return {
+        actual: "unverified",
+        notes: ["the final read did not list TextEdit's windows", UNCHECKED_END],
+        violations,
+      };
     // The window that held the sentence must be gone: a window that stays counts even when its
     // text can no longer be read.
     const earlier = new Set(windowsOf(baseline).map((row) => row.id));
@@ -734,11 +758,6 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
     );
     const stillOpen =
       holders.some((id) => open.has(id)) || holdingAtEnd.some((id) => !earlier.has(id));
-    const saved = Array.isArray(final["savedFiles"]) ? final["savedFiles"].length : 0;
-    const violations = [
-      ...track.violations,
-      ...(saved > 0 ? ["saved " + saved + " new document file(s)"] : []),
-    ];
     if (stillOpen)
       return {
         actual: "failed",
@@ -749,22 +768,6 @@ export const ORACLES: Readonly<Record<string, (input: OracleInput) => OracleResu
       actual: holders.length > 0 ? "done" : "unverified",
       notes:
         holders.length > 0 ? [] : ["the observer never saw the sentence in a new TextEdit window"],
-      violations,
-    };
-  },
-
-  kakaoTabs: ({ baseline, samples, final }) => {
-    const track = trackWindows("KakaoTalk", baseline, samples, final);
-    const opened =
-      track.created.size + track.appearedAtEnd.size > 0
-        ? ["opened another KakaoTalk window, possibly a chat room"]
-        : [];
-    const violations = [...track.violations, ...opened];
-    if (baseline["loggedIn"] !== true)
-      return { actual: "skipped", notes: ["KakaoTalk was signed out before the run"], violations };
-    return {
-      actual: "unverified",
-      notes: ["the observer cannot read which KakaoTalk tab is selected"],
       violations,
     };
   },

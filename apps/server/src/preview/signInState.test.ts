@@ -16,7 +16,9 @@ const page = (facts: Partial<SignInPage> = {}): SignInPage => ({
 const stage = (facts: Partial<SignInPage>, record: SignInRecord = {}, documentGeneration = 1) =>
   signInStage(page(facts), record, documentGeneration).stage;
 const sent: SignInRecord = { submitted: { documentGeneration: 1, at: 1 } };
-const answered: SignInRecord = { submitted: { documentGeneration: 1, at: 1, status: 200 } };
+const answered: SignInRecord = {
+  submitted: { documentGeneration: 1, at: 1, status: 200, kind: "form", identifier: "filled" },
+};
 
 describe("the sign-in stage GOAT reports", () => {
   it("never reports success for a password beside an empty identifier", () => {
@@ -74,6 +76,19 @@ describe("the sign-in stage GOAT reports", () => {
     const blank = { submitted: { ...answered.submitted!, identifier: "empty" as const } };
     expect(stage(later, blank, 2)).toBe("partial");
     expect(stage(later, { ...blank, handedBackAt: 2 }, 2)).toBe("partial");
+  });
+
+  it("claims nothing when GOAT could not read the identifier as the password was sent", () => {
+    const later = { signIn: false, identifier: "absent", password: "absent" } as const;
+    const unread = { submitted: { ...answered.submitted!, identifier: "unread" as const } };
+    expect(stage(later, { ...unread, handedBackAt: 2 }, 2)).toBe("unknown");
+  });
+
+  it("claims nothing from a script request that carried the password, after a hand back too", () => {
+    const later = { signIn: false, identifier: "absent", password: "absent" } as const;
+    const script = { submitted: { ...answered.submitted!, kind: "script" as const } };
+    expect(stage(later, script, 2)).toBe("unknown");
+    expect(stage(later, { ...script, handedBackAt: 2 }, 2)).toBe("unknown");
   });
 
   it("puts a refused submission before a CAPTCHA the failure page shows", () => {

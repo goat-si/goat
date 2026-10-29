@@ -210,6 +210,9 @@ export const unsentCallRefusal = (
     id,
     method,
     interruptionDetail(lastInterruption),
-    interruptionRefusal(lastInterruption),
+    // The cause reads the same for a call the driver already had; this one never reached it.
+    lastInterruption._tag === "other"
+      ? `${interruptionRefusal(lastInterruption)} Nothing was sent.`
+      : interruptionRefusal(lastInterruption),
   );
 };

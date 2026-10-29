@@ -41,7 +41,7 @@ await tab.click("text=Save");
 return await tab.observe();
 \`\`\`
 
-Numbers and refs stay valid until the next observe; input alone does not retire them. \`observe()\` returns only what changed after the first one; pass \`{diff:false}\` for the whole tree. Actions return \`{verdict}\` once the input is delivered; waiting belongs to \`tab.waitFor({text})\`, \`{url}\`, \`{load}\` or \`{target}\`, and \`tab.verify(...)\` checks once. Stop where a result decides the next step. Do not put sends, purchases or deletes in an unchecked batch.
+Numbers and refs stay valid until the next observe; input alone does not retire them. After the first \`observe()\` text shows changes; \`elements\` stays complete; \`{diff:false}\` shows all. Actions return \`{verdict}\` once the input is delivered; waiting belongs to \`tab.waitFor({text})\`, \`{url}\`, \`{load}\`, \`{target}\` or \`{role,name}\`; \`tab.verify(...)\` checks once. Stop where a result decides the next step. Do not put sends, purchases or deletes in an unchecked batch.
 
 A refused or failed call throws \`ScreenError\` with \`code\`, \`message\` and \`nothingSent\`; the cell's later calls are then refused, so observe in a new cell. An uncaught host failure comes back as that call's receipt; a cell that fails in its own code also returns \`value.partial\`, what each call returned before the failure.
 
