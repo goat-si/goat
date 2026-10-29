@@ -130,10 +130,12 @@ const __target = (binding, note, owner, extraProps = {}) => {
   let currentWindowId = extraProps.windowId;
   let currentNote = note;
   const tab = ref.kind === 'tab';
-  const seen = { observation: undefined, image: undefined, replaced: false };
-  // Older call forms reach the host directly; tab clicks keep their screenshot, other tab inputs retire it.
+  const seen = { observation: undefined, image: undefined, replaced: false, retired: false };
+  // Tab clicks keep their screenshot; any other tab input may scroll or change the page, so it retires it.
+  const retire = () => { if (seen.image) seen.retired = true; seen.image = undefined; };
+  // Older call forms reach the host directly.
   const call = (method, arg = {}) => {
-    if (tab && __inputs.has(method) && method !== 'click' && method !== 'right_click') seen.image = undefined;
+    if (tab && __inputs.has(method) && method !== 'click' && method !== 'right_click') retire();
     const withRegion =
       !tab &&
       __pointerMethods.has(method) &&
@@ -148,7 +150,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return __call(method, { ...withRegion, targetRef: ref });
   };
   const act = async (name, method, arg) => {
-    if (tab && method !== 'click' && method !== 'right_click') seen.image = undefined;
+    if (tab && method !== 'click' && method !== 'right_click') retire();
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
@@ -211,6 +213,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
   const shot = () => {
     if (!seen.image && seen.replaced)
       throw new ScreenError('stale_reference', 'The window this screenshot showed was replaced; take a new screenshot.', true);
+    if (!seen.image && seen.retired)
+      throw new ScreenError('stale_reference', 'The page scrolled or changed since that screenshot. Observe({screenshot:true}) again.', true);
     if (!seen.image)
       throw new ScreenError(
         'invalid_argument',
@@ -263,7 +267,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       }
     }
     if (observation && Array.isArray(observation.elements)) seen.observation = observation;
-    if (observation && observation.image) { seen.image = observation.image; seen.replaced = false; }
+    if (observation && observation.image) { seen.image = observation.image; seen.replaced = false; seen.retired = false; }
     return observation;
   };
   const observe = async (arg = {}) => {
@@ -313,6 +317,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
       ...(wanted.text === undefined ? {} : { text: wanted.text }),
       ...(wanted.url === undefined ? {} : { urlIncludes: wanted.url }),
       ...(wanted.load === undefined ? {} : { loadState: wanted.load }),
+      ...(wanted.enabled === undefined ? {} : { enabled: wanted.enabled }),
+      ...(wanted.value === undefined ? {} : { value: wanted.value }),
+      ...(wanted.checked === undefined ? {} : { checked: wanted.checked }),
+      ...(wanted.selected === undefined ? {} : { selected: wanted.selected }),
+      ...(wanted.state === undefined ? {} : { state: wanted.state }),
       ...(wanted.target === undefined ? {} : aim(wanted.target)),
       // {role, name} waits for an element that may not exist yet, so it names it by role.
       ...(wanted.target !== undefined || wanted.role === undefined
@@ -347,6 +356,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         act('click', options.button === 'right' ? 'right_click' : 'click', {
           ...aim(target),
           ...(options.count !== undefined ? { count: options.count } : {}),
+          ...(tab && options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
         });

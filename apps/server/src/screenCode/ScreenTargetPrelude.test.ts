@@ -530,13 +530,13 @@ it.live(
         });
         expect(result).toMatchObject({
           status: "completed",
-          value: { afterPress: "invalid_argument", afterNavigate: "invalid_argument" },
+          value: { afterPress: "stale_reference", afterNavigate: "stale_reference" },
         });
         expect(snapshots).toBe(2);
         expect(clickInputs).toEqual([
-          { x: 20, y: 30 },
-          { x: 40, y: 50, button: "right" },
-          { x: 20, y: 30 },
+          { x: 20, y: 30, timeoutMs: 5_000 },
+          { x: 40, y: 50, button: "right", timeoutMs: 5_000 },
+          { x: 20, y: 30, timeoutMs: 5_000 },
         ]);
         expect(ops).toContain("press");
       }).pipe(

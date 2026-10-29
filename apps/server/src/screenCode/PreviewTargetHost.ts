@@ -25,6 +25,7 @@ import {
 } from "./ScreenHostBridge.ts";
 import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
 import { withInputTiming } from "./DesktopWindows.ts";
+import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
@@ -339,6 +340,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         };
       }
       if (call.method === "open_tab") {
+        if (nonWebUrl(arg.url)) return yield* Effect.fail(fail("unsupported", WEB_ONLY));
         // Once the browser may have opened the tab, a cutoff must not stop us claiming it, and a
         // tab that cannot be claimed is closed, so no agent tab escapes turn cleanup.
         return yield* Effect.uninterruptible(
@@ -686,16 +688,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             return yield* Effect.fail(
               fail("invalid_argument", "Use a current element or image point."),
             );
-          const count = arg.count;
-          if (
-            count !== undefined &&
-            !(Number.isInteger(count) && Number(count) >= 1 && Number(count) <= 3)
-          )
-            return yield* Effect.fail(fail("invalid_argument", "A tab click count is 1, 2 or 3."));
+          const pointer = pointerInput(arg, call.deadlineMillis, yield* Clock.currentTimeMillis);
+          if ("error" in pointer) return yield* Effect.fail(pointer.error);
           input = {
             ...(locator ? { locator } : { x: point?.x, y: point?.y }),
             ...(call.method === "right_click" ? { button: "right" } : {}),
-            ...(count === undefined ? {} : { clickCount: count }),
+            ...pointer.fields,
           };
           break;
         }
@@ -766,19 +764,24 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ...(Array.isArray(arg.modifiers) ? { modifiers: arg.modifiers } : {}),
           };
           break;
-        case "wait_for":
+        case "wait_for": {
+          const conditions = waitConditions(arg);
+          if ("error" in conditions) return yield* Effect.fail(conditions.error);
           input = {
             ...(locator ? { locator } : {}),
             ...(stringField(arg, "text") ? { text: arg.text } : {}),
             ...(stringField(arg, "urlIncludes") ? { urlIncludes: arg.urlIncludes } : {}),
             ...(stringField(arg, "loadState") ? { loadState: arg.loadState } : {}),
+            ...conditions.fields,
           };
           if (Object.keys(input).length === 0)
             return yield* Effect.fail(fail("invalid_argument", "Provide a wait condition."));
           break;
+        }
         case "navigate_tab":
           if (!stringField(arg, "url"))
             return yield* Effect.fail(fail("invalid_argument", "Provide a URL."));
+          if (nonWebUrl(arg.url)) return yield* Effect.fail(fail("unsupported", WEB_ONLY));
           input = { url: arg.url };
           break;
       }
@@ -892,11 +895,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       // cell goes on and one observation settles it. Typed text stays unverifiable: no read the
       // page cannot also produce tells this input's insert from the page's own.
       const seen =
-        operation === "click" && typeof result === "object" && result !== null
+        (operation === "click" || call.method === "set_value") &&
+        typeof result === "object" &&
+        result !== null
           ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
-      const confirmed = navigated || (seen?.effect === "confirmed" && Array.isArray(seen.evidence));
+      // A range the browser set and read back is confirmed; typed text never is.
+      const confirmed =
+        navigated ||
+        (seen?.effect === "confirmed" &&
+          Array.isArray(seen.evidence) &&
+          (operation === "click" || seen.evidence.includes("value")));
       return {
         value:
           call.method === "close_tab"
@@ -910,7 +920,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         evidence: navigated
           ? ["navigate:reached", `origin:${originOf(reached) ?? "unknown"}`]
           : confirmed && seen
-            ? (seen.evidence as ReadonlyArray<unknown>).map((each) => `click:${String(each)}`)
+            ? (seen.evidence as ReadonlyArray<unknown>).map(
+                (each) => `${operation === "click" ? "click" : "set_value"}:${String(each)}`,
+              )
             : ["dispatched; observe to confirm"],
         safety: classifyBrowserActionOutcome({ operation, status: "completed" }),
         outcome: { dispatch: "confirmed", effect: confirmed ? "confirmed" : "unknown" },
