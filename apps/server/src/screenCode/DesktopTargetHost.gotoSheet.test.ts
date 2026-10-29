@@ -202,6 +202,19 @@ it.live(
 );
 
 it.live(
+  "an observe with no Go to Folder input or followed sheet reads only the bound window, with no window list",
+  () => {
+    const { host, sent } = finder();
+    return Effect.gen(function* () {
+      yield* cell(BIND + "globalThis.saved = app; await app.press('cmd+a');");
+      const before = sent.length;
+      yield* cell("await saved.observe();");
+      expect(sent.slice(before).map((entry) => entry.tool)).toEqual(["get_window_state"]);
+    }).pipe(Effect.provide(service(host)));
+  },
+);
+
+it.live(
   "the Go to Folder input of one binding is followed only when no other binding of the app sent input in the cell before it returned, also from a later cell",
   () => {
     const { host } = finder();
