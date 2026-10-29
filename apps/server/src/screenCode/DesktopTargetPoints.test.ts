@@ -233,31 +233,61 @@ it.effect(
 );
 
 it.effect(
-  "driver window_geometry_changed surfaces as stale_reference with the window-points guidance",
+  "driver geometry and capture-registry refusal codes map to stale_reference or invalid_argument with appropriate guidance",
   () =>
     Effect.gen(function* () {
-      const { host } = fixture({
-        get_window_state: framedState,
-        click: new DriverError(
-          {
-            code: "window_geometry_changed",
-            effect: "refused",
-            nothing_sent: true,
-          },
-          "window 7 moved or resized",
-        ),
-      });
-      const bound = yield* host.bindApp(
-        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-        context,
-      );
-      const ref = bound.value as ScreenTargetRef;
-      yield* host.observe(call("get_window_state", {}, ref), context);
-      const refused = yield* host
-        .invoke(call("click", { x: 50, y: 50, coordinate_space: "window_points" }, ref), context)
-        .pipe(Effect.flip);
-      expect(refused).toMatchObject({ code: "stale_reference", effectStarted: false });
-      expect(refused.nextStep).toContain("{ window: [x, y] }");
+      for (const staleCode of [
+        "window_geometry_changed",
+        "capture_frame_mismatch",
+        "capture_not_found",
+        "capture_expired",
+        "capture_generation_mismatch",
+        "capture_target_mismatch",
+      ] as const) {
+        const { host } = fixture({
+          get_window_state: framedState,
+          click: new DriverError(
+            { code: staleCode, effect: "refused", nothing_sent: true },
+            `refused: ${staleCode}`,
+          ),
+        });
+        const bound = yield* host.bindApp(
+          call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+          context,
+        );
+        const ref = bound.value as ScreenTargetRef;
+        yield* host.observe(call("get_window_state", {}, ref), context);
+        const refused = yield* host
+          .invoke(call("click", { x: 50, y: 50, coordinate_space: "window_points" }, ref), context)
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "stale_reference", effectStarted: false });
+        expect(refused.nextStep).toContain("{ window: [x, y] }");
+      }
+
+      for (const invalidCode of [
+        "point_outside_window",
+        "capture_coordinate_invalid",
+        "capture_id_invalid",
+      ] as const) {
+        const { host } = fixture({
+          get_window_state: framedState,
+          click: new DriverError(
+            { code: invalidCode, effect: "refused", nothing_sent: true },
+            `invalid coordinate: ${invalidCode}`,
+          ),
+        });
+        const bound = yield* host.bindApp(
+          call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+          context,
+        );
+        const ref = bound.value as ScreenTargetRef;
+        yield* host.observe(call("get_window_state", {}, ref), context);
+        const refused = yield* host
+          .invoke(call("click", { x: 50, y: 50, coordinate_space: "window_points" }, ref), context)
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
+        expect(refused.nextStep).toContain(invalidCode);
+      }
     }),
 );
 
@@ -546,58 +576,13 @@ it.effect(
 );
 
 it.effect(
-  "Linux and Windows bind click to capture_id checked at driver dispatch (catching resize before the first click or between admission and delivery), retire prior capture regions on input so a later capture never reactivates an older regionId, and refuse point forms without capture_id dispatch validation",
+  "Linux and Windows refuse point-targeted actions until actuator-boundary window-basis validation exists on those platforms, while element-targeted actions work",
   () =>
     Effect.gen(function* () {
-      const LINUX_CLICK_KEYS = new Set([
-        "session",
-        "target",
-        "pid",
-        "window_id",
-        "element_token",
-        "capture_id",
-        "x",
-        "y",
-        "button",
-        "count",
-        "modifier",
-        "action",
-        "delivery_mode",
-      ]);
       for (const platform of ["linux", "win32"] as const) {
-        let captureCounter = 0;
-        let activeCaptureId = "";
-        let windowResizedBeforeDelivery = false;
         const platFix = fixture({
-          get_window_state: (args: Record<string, unknown>) => {
-            if (args.include_accessibility_tree === false) {
-              activeCaptureId = `cap-${++captureCounter}`;
-              return goat2WindowState(args, {
-                snapshot_id: "s0000000a",
-                capture_id: activeCaptureId,
-              });
-            }
-            return framedState;
-          },
-          click: (args: Record<string, unknown>) => {
-            const unknown = Object.keys(args).filter((k) => !LINUX_CLICK_KEYS.has(k));
-            if (unknown.length > 0)
-              return new DriverError(
-                { code: "invalid_arguments" },
-                `unknown: ${unknown.join(",")}`,
-              );
-            if ("x" in args && args.capture_id !== activeCaptureId)
-              return new DriverError(
-                { code: "window_geometry_changed", effect: "refused" },
-                "missing or stale capture_id",
-              );
-            if (windowResizedBeforeDelivery)
-              return new DriverError(
-                { code: "window_geometry_changed", effect: "refused" },
-                "window resized before delivery",
-              );
-            return { effect: "confirmed", evidence: ["driver:acted"] };
-          },
+          get_window_state: (args: Record<string, unknown>) =>
+            args.include_accessibility_tree === false ? goat2WindowState(args) : framedState,
         });
         const host = createDesktopTargetHost({
           primitiveChannel: platFix.channel as never,
@@ -613,71 +598,38 @@ it.effect(
         const applyRef = (
           obs.value as { elements: Array<{ index: number; ref: ScreenElementRef }> }
         ).elements.find((item) => item.index === 1)!.ref;
+        const shot = yield* host.observe(call("screenshot", {}, ref), context);
+        const regionId = shot.imageMetadata?.regionId!;
 
-        // 1. Resize before the FIRST action (or between admission and delivery) is caught by the
-        // driver's capture_id check at dispatch and surfaces as stale_reference.
-        const shotResize = yield* host.observe(call("screenshot", {}, ref), context);
-        const resizeRegionId = shotResize.imageMetadata?.regionId!;
-        windowResizedBeforeDelivery = true;
-        const refusedResizeFirst = yield* host
-          .invoke(call("click", { x: 20, y: 16, regionId: resizeRegionId }, ref), context)
-          .pipe(Effect.flip);
-        expect(refusedResizeFirst.code).toBe("stale_reference");
-        windowResizedBeforeDelivery = false;
+        // Element-targeted click works on Linux and Windows.
+        const elemClick = yield* host.invoke(call("click", { elementRef: applyRef }, ref), context);
+        expect(elemClick.category).toBe("confirmed");
 
-        // 2. Capture A -> input -> Capture B: A's regionId remains refused after B, while B works
-        // and sends capture_id without coordinate_space or window_basis.
-        const shotA = yield* host.observe(call("screenshot", {}, ref), context);
-        const regionA = shotA.imageMetadata?.regionId!;
-        yield* host.invoke(call("press_key", { key: "Escape" }, ref), context);
-        const shotB = yield* host.observe(call("screenshot", {}, ref), context);
-        const regionB = shotB.imageMetadata?.regionId!;
-
-        const retiredA = yield* host
-          .invoke(call("click", { x: 20, y: 16, regionId: regionA }, ref), context)
-          .pipe(Effect.flip);
-        expect(retiredA.code).toBe("stale_reference");
-
-        const clickedB = yield* host.invoke(
-          call("click", { x: 20, y: 16, regionId: regionB }, ref),
-          context,
-        );
-        expect(clickedB.category).toBe("confirmed");
-        expect(platFix.sent.at(-1)?.args).toMatchObject({
-          x: 20,
-          y: 16,
-          capture_id: activeCaptureId,
-        });
-        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
-        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("window_basis");
-
-        // 3. Point forms without capture_id dispatch validation (reused point after click,
-        // window_points, drag, scroll, right_click, point type_text/press_key) are refused on non-macOS.
-        const reusedB = yield* host
-          .invoke(call("click", { x: 20, y: 16, regionId: regionB }, ref), context)
-          .pipe(Effect.flip);
-        expect(reusedB.code).toBe("stale_reference");
-
-        const shotC = yield* host.observe(call("screenshot", {}, ref), context);
-        const regionC = shotC.imageMetadata?.regionId!;
+        // All point-targeted actions are refused before dispatch on Linux and Windows because
+        // goat.9 lacks actuator-boundary window-basis validation on those platforms.
+        const before = platFix.sent.length;
         for (const unsupportedCall of [
+          call("click", { x: 20, y: 16, regionId }, ref),
+          call("click", { x: 20, y: 16 }, ref),
           call("click", { x: 10, y: 10, coordinate_space: "window_points" }, ref),
-          call("right_click", { x: 10, y: 10, regionId: regionC }, ref),
-          call("scroll", { x: 10, y: 10, regionId: regionC, direction: "down", amount: 3 }, ref),
+          call("right_click", { x: 10, y: 10, regionId }, ref),
+          call("scroll", { x: 10, y: 10, regionId, direction: "down", amount: 3 }, ref),
+          call("scroll", { scrollCenter: true, direction: "down", amount: 3 }, ref),
           call(
             "drag",
             {
               fromEnd: { elementRef: applyRef },
-              toEnd: { x: 80, y: 60, regionId: regionC },
+              toEnd: { x: 80, y: 60, regionId },
             },
             ref,
           ),
-          call("type_text", { x: 10, y: 10, text: "hi", regionId: regionC }, ref),
-          call("press_key", { x: 10, y: 10, key: "Return", regionId: regionC }, ref),
+          call("type_text", { x: 10, y: 10, text: "hi", regionId }, ref),
+          call("press_key", { x: 10, y: 10, key: "Return", regionId }, ref),
         ]) {
           const refused = yield* host.invoke(unsupportedCall, context).pipe(Effect.flip);
-          expect(refused.code).toBe("unsupported");
+          expect(refused).toMatchObject({ code: "unsupported", effectStarted: false });
         }
+        expect(platFix.sent.slice(before)).toEqual([]);
       }
     }),
 );

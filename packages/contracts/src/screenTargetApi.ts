@@ -13,7 +13,7 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
-// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab and Linux/Windows [x, y] end on input or a new page.
+// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
 type Done = { verdict: "confirmed" | "unverifiable"; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: unknown };
 // confirmed: done. unverifiable: may have landed. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };

@@ -35,8 +35,6 @@ const POINTER_METHODS: ReadonlySet<string> = new Set([
   "move_cursor",
 ]);
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
-const STALE_INPUT_POINTS =
-  "Input reached this window after its latest screenshot; take a new screenshot before using points.";
 const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
@@ -198,12 +196,13 @@ export const applyDesktopPointerArgs = (
     finite(args.from_x) && finite(args.from_y) && finite(args.to_x) && finite(args.to_y);
   if (!hasXY && !hasDragXY) return { ok: true, needs: "nothing" };
 
+  if (!isMac) {
+    delete forwarded.coordinate_space;
+    delete forwarded.window_basis;
+    return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
+  }
+
   if (args.coordinate_space === "window_points") {
-    if (!isMac) {
-      delete forwarded.coordinate_space;
-      delete forwarded.window_basis;
-      return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
-    }
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
@@ -218,22 +217,8 @@ export const applyDesktopPointerArgs = (
 
   if (state.pointsStale === "restart")
     return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
-  if (!isMac && state.pointsStale === "input")
-    return { ok: false, error: fail("stale_reference", STALE_INPUT_POINTS) };
 
   const regionId = string(args.regionId);
-  if (!isMac) {
-    if (method !== "click" || !hasXY)
-      return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
-    const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
-    if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
-      return { ok: false, error: fail("stale_reference", STALE_INPUT_POINTS) };
-    if (!shot.captureId)
-      return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
-    forwarded.capture_id = shot.captureId;
-    return { ok: true, needs: "points" };
-  }
-
   if (regionId !== undefined) {
     const shot = state.screenshots?.get(regionId);
     if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
