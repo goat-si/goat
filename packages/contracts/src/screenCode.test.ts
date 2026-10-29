@@ -116,6 +116,17 @@ describe("screen code wire contracts", () => {
     };
     expect(encodeScreenHostReply(decodeReply(reply))).toEqual(reply);
     expect(() => decodeReply({ ...reply, bytes: "AAAA" })).toThrow();
+    // A driver's reply members are the value's own; only the envelope is closed.
+    const driverReply = {
+      ...reply,
+      value: {
+        point: { x: 80.5, y: 75, coordinate_space: "window_points" },
+        hit: { index: 3, role: "AXButton", label: "OK", identifier: "ok" },
+        enumeration_complete: true,
+        authoritative_window_ids: [7, 9],
+      },
+    };
+    expect(encodeScreenHostReply(decodeReply(driverReply))).toEqual(driverReply);
     const decodeCell = Schema.decodeUnknownSync(ScreenRunCell);
     expect(() =>
       decodeCell({
