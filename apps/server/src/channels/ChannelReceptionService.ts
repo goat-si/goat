@@ -67,7 +67,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
-import { lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
+import { isUnlinkedPrincipal, lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
@@ -1207,11 +1207,14 @@ const make = Effect.gen(function* () {
                   CHANNEL_RECEPTION_TAIL_LIMITS.messages,
                 );
                 const shells = yield* listThreads;
-                const recent = recentThreads(shells, targets, bot?.threadId);
                 const facts = yield* hostFacts(shells);
                 const notes = yield* readChannelBotNotes(fileSystem, botFiles);
                 // Everything this pass sees about other work is judged with the link as it is now.
                 const viewer = yield* viewerNow(requester, message.connectionId);
+                // Titles of the owner's threads are other work, so only someone who may read it sees them.
+                const recent = viewer.grantedScopes.includes("orchestration:read")
+                  ? recentThreads(shells, targets, bot?.threadId)
+                  : [];
                 const journal = journalFor(
                   yield* visibleTasks(viewer, conversationId).pipe(
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
@@ -1342,6 +1345,11 @@ const make = Effect.gen(function* () {
       }
       const decision = outcome.result;
 
+      // Notes are the owner's standing rules for every conversation, so only a person linked now
+      // may change them; someone let in without a link, or whose access ended, may not.
+      const noteWriter = requester.originKind === "mcp" ? undefined : yield* judgedNow;
+      const mayChangeNotes =
+        noteWriter !== undefined && !isUnlinkedPrincipal(noteWriter.principalId);
       // Notes shape every later reply, so a note is kept only when a person asked for it in this
       // input: the quote the model returns must occur in the message itself, never in the tail.
       // This records the request; it does not prove intent, and it fails closed.
@@ -1350,11 +1358,13 @@ const make = Effect.gen(function* () {
           ? undefined
           : requester.originKind === "mcp"
             ? "not_a_person"
-            : decision.rememberQuote === undefined
-              ? "missing_quote"
-              : !quotedFromInput(decision.rememberQuote, message.text)
-                ? "quote_not_in_input"
-                : undefined;
+            : !mayChangeNotes
+              ? "not_linked"
+              : decision.rememberQuote === undefined
+                ? "missing_quote"
+                : !quotedFromInput(decision.rememberQuote, message.text)
+                  ? "quote_not_in_input"
+                  : undefined;
       if (decision.remember !== undefined && rememberRefusal !== undefined) {
         yield* Effect.logInfo("GOAT Bot note dropped", { inputId, reason: rememberRefusal });
       }
@@ -1408,6 +1418,7 @@ const make = Effect.gen(function* () {
           // only a follow_up naming a task joins that task's run.
           // Only a task the person asked, in this input, to change or forget a note may edit them.
           const notesChangeRequested =
+            mayChangeNotes &&
             action.notesChangeRequested !== undefined &&
             quotedFromInput(action.notesChangeRequested, message.text)
               ? action.notesChangeRequested

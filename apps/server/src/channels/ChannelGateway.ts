@@ -151,6 +151,8 @@ export const unlinkedIdentity = (
   grantedScopes: owner.grantedScopes.filter((scope) => scope === "orchestration:operate"),
 });
 
+export const isUnlinkedPrincipal = (principalId: string) => principalId.startsWith("unlinked:");
+
 const replyAddressKey = (address: ChannelReplyAddress) => {
   switch (address.kind) {
     case "goat":

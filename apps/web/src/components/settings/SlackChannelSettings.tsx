@@ -38,6 +38,7 @@ import {
   slackSettingsAvailability,
   slackSettingsDraft,
   slackSettingsUnavailableMessage,
+  slackServerHasAccessChoices,
   slackStatusLabel,
   withLiveStatus,
 } from "./SlackChannelSettings.logic";
@@ -147,6 +148,7 @@ function SlackConnectionForm(props: {
   // Untouched fields follow the latest saved settings; only the user's edits are kept locally.
   const [edits, setEdits] = useState<Partial<SlackSettingsDraft>>({});
   const draft: SlackSettingsDraft = { ...slackSettingsDraft(connection), ...edits };
+  const accessChoices = slackServerHasAccessChoices(connection);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -278,10 +280,14 @@ function SlackConnectionForm(props: {
       />
       <SettingsRow
         title="Channels"
-        description="Invite the bot to a channel before mentioning it there; it can't hear channels it isn't in. DMs always work."
+        description={
+          accessChoices
+            ? "Invite the bot to a channel before mentioning it there; it can't hear channels it isn't in. DMs always work."
+            : "Update GOAT on this machine to answer in every channel or without a link."
+        }
         control={
           <Select
-            disabled={busy}
+            disabled={busy || !accessChoices}
             value={draft.channelScope}
             onValueChange={(value) => {
               if (value !== null) update({ channelScope: value as SlackChannelScope });
@@ -325,7 +331,7 @@ function SlackConnectionForm(props: {
         }
         control={
           <Select
-            disabled={busy}
+            disabled={busy || !accessChoices}
             value={draft.userAccess}
             onValueChange={(value) => {
               if (value !== null) update({ userAccess: value as SlackUserAccess });

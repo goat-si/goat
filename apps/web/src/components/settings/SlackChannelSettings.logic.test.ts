@@ -46,6 +46,9 @@ const saved = {
   hasBotToken: true,
   teamId: "T0TEAM",
   allowedChannelIds: ["C0AAAAAAAA"],
+  channelScope: "listed",
+  userAccess: "workspace",
+  unlinkedRuntimeModeCeiling: "approval-required",
   defaultTarget: {
     projectId: "project-1",
     modelSelection: { instanceId: "codex", model: "gpt-6.1-sol" },
@@ -144,18 +147,32 @@ describe("slackConfigureInput", () => {
 });
 
 describe("slackSettingsDraft", () => {
-  it("reads settings saved before access choices existed with the new defaults", () => {
+  it("starts a new connection open to every channel and the whole workspace", () => {
     expect(slackSettingsDraft(undefined)).toMatchObject({
       channelScope: "all",
       userAccess: "workspace",
       unlinkedRuntimeModeCeiling: "approval-required",
     });
-    // An older server with a saved list keeps restricting to it.
-    expect(slackSettingsDraft(saved).channelScope).toBe("listed");
-    expect(slackSettingsDraft({ ...saved, allowedChannelIds: [] }).channelScope).toBe("all");
     expect(
       slackSettingsDraft({ ...saved, userAccess: "linked", unlinkedRuntimeModeCeiling: "auto" }),
     ).toMatchObject({ userAccess: "linked", unlinkedRuntimeModeCeiling: "auto" });
+  });
+
+  it("shows an older server's actual behavior and sends it no access choices", () => {
+    // A server from before the access choices returns none of them.
+    const {
+      channelScope: _scope,
+      userAccess: _access,
+      unlinkedRuntimeModeCeiling: _ceiling,
+      ...older
+    } = saved;
+    const legacy = { ...older, allowedChannelIds: [] };
+    const draft = slackSettingsDraft(legacy);
+    expect(draft).toMatchObject({ channelScope: "listed", userAccess: "linked" });
+    const built = slackConfigureInput(draft, legacy);
+    expect(built._tag).toBe("ok");
+    expect(built._tag === "ok" && built.input).not.toHaveProperty("channelScope");
+    expect(built._tag === "ok" && built.input).not.toHaveProperty("userAccess");
   });
 });
 

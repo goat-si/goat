@@ -36,7 +36,7 @@ GOAT Bot screen shows only a chip for the work and its final report.
   another organization in a shared channel are ignored. **Linked accounts
   only** answers everyone else with how to link. Someone without a link sees
   only their own work and the conversation they write in, and cannot use GOAT
-  memory.
+  memory or change GOAT Bot's notes.
 - Replies, questions, and results go to the thread where you asked, and
   questions tag the person who asked.
 - **Default project** decides where work from Slack runs when your message
