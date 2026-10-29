@@ -31,6 +31,7 @@ export const createScreenDispatchRouter = (hosts: {
       call.targetRef?.kind ??
       (call.method === "list_apps" ||
       call.method === "list_windows" ||
+      call.method === "list_menu_bar_extras" ||
       call.method === "bind_app" ||
       call.method === "launch_app"
         ? "app"

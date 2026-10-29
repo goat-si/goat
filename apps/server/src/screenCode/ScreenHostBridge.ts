@@ -339,6 +339,7 @@ export class ScreenHostBridge {
       ![
         "list_apps",
         "list_windows",
+        "list_menu_bar_extras",
         "bind_app",
         "launch_app",
         "list_tabs",
