@@ -76,7 +76,10 @@ describe("slackConfigureInput", () => {
         connectionId: "slack-0123456789ab",
         enabled: true,
         botToken: "xoxb-new",
+        channelScope: "listed",
         allowedChannelIds: ["C0AAAAAAAA"],
+        userAccess: "workspace",
+        unlinkedRuntimeModeCeiling: "approval-required",
         defaultTarget: saved.defaultTarget,
       },
     });
@@ -96,7 +99,10 @@ describe("slackConfigureInput", () => {
         enabled: true,
         appToken: "xapp-1",
         botToken: "xoxb-2",
+        channelScope: "all",
         allowedChannelIds: [],
+        userAccess: "workspace",
+        unlinkedRuntimeModeCeiling: "approval-required",
         defaultTarget: {},
       },
     });
@@ -127,6 +133,29 @@ describe("slackConfigureInput", () => {
       saved,
     );
     expect(result._tag).toBe("invalid");
+  });
+
+  it("needs a channel ID when only listed channels are answered", () => {
+    const draft = { ...slackSettingsDraft(saved), channelScope: "listed" as const, channels: "" };
+    expect(slackConfigureInput(draft, saved)._tag).toBe("invalid");
+    const all = slackConfigureInput({ ...draft, channelScope: "all" }, saved);
+    expect(all._tag === "ok" && all.input.channelScope).toBe("all");
+  });
+});
+
+describe("slackSettingsDraft", () => {
+  it("reads settings saved before access choices existed with the new defaults", () => {
+    expect(slackSettingsDraft(undefined)).toMatchObject({
+      channelScope: "all",
+      userAccess: "workspace",
+      unlinkedRuntimeModeCeiling: "approval-required",
+    });
+    // An older server with a saved list keeps restricting to it.
+    expect(slackSettingsDraft(saved).channelScope).toBe("listed");
+    expect(slackSettingsDraft({ ...saved, allowedChannelIds: [] }).channelScope).toBe("all");
+    expect(
+      slackSettingsDraft({ ...saved, userAccess: "linked", unlinkedRuntimeModeCeiling: "auto" }),
+    ).toMatchObject({ userAccess: "linked", unlinkedRuntimeModeCeiling: "auto" });
   });
 });
 

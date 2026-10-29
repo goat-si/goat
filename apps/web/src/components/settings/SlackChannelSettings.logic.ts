@@ -1,11 +1,15 @@
 import type {
   ProjectId,
+  RuntimeMode,
   SlackChannelConfigureInput,
   SlackChannelConnectionStatus,
   SlackChannelDeliveryError,
+  SlackChannelScope,
   SlackChannelSettings,
   SlackChannelStatusEvent,
+  SlackUserAccess,
 } from "@goat/contracts";
+import { resolveSlackAccess } from "@goat/contracts";
 
 /**
  * When the Slack section can offer controls for the selected environment. The server
@@ -77,17 +81,25 @@ export interface SlackSettingsDraft {
   /** Write-only. Empty keeps the stored token. */
   readonly appToken: string;
   readonly botToken: string;
+  readonly channelScope: SlackChannelScope;
+  /** Kept while "every channel" is chosen, so switching back restores the list. */
   readonly channels: string;
+  readonly userAccess: SlackUserAccess;
+  readonly unlinkedRuntimeModeCeiling: RuntimeMode;
   /** Empty means no default project. */
   readonly projectId: string;
 }
 
 export function slackSettingsDraft(settings: SlackChannelSettings | undefined): SlackSettingsDraft {
+  const access = resolveSlackAccess(settings ?? { allowedChannelIds: [] });
   return {
     enabled: settings?.enabled ?? false,
     appToken: "",
     botToken: "",
+    channelScope: access.channelScope,
     channels: settings?.allowedChannelIds.join(", ") ?? "",
+    userAccess: access.userAccess,
+    unlinkedRuntimeModeCeiling: access.unlinkedRuntimeModeCeiling,
     projectId: settings?.defaultTarget?.projectId ?? "",
   };
 }
@@ -119,6 +131,9 @@ export function slackConfigureInput(
       message: `Use channel IDs such as C0123456789, not ${channels.invalid.join(", ")}.`,
     };
   }
+  if (draft.channelScope === "listed" && channels.ids.length === 0) {
+    return { _tag: "invalid", message: "Add a channel ID, or answer in every channel." };
+  }
   const hasAppToken = appToken.length > 0 || settings?.hasAppToken === true;
   const hasBotToken = botToken.length > 0 || settings?.hasBotToken === true;
   if (draft.enabled && !(hasAppToken && hasBotToken)) {
@@ -138,7 +153,10 @@ export function slackConfigureInput(
       enabled: draft.enabled,
       ...(appToken.length > 0 ? { appToken } : {}),
       ...(botToken.length > 0 ? { botToken } : {}),
+      channelScope: draft.channelScope,
       allowedChannelIds: channels.ids,
+      userAccess: draft.userAccess,
+      unlinkedRuntimeModeCeiling: draft.unlinkedRuntimeModeCeiling,
       defaultTarget,
     },
   };

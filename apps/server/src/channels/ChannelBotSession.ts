@@ -52,6 +52,7 @@ import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
 import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
 import {
@@ -137,6 +138,7 @@ export class ChannelBotSession extends Context.Service<
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const launches = yield* ThreadLaunch.ThreadLaunchService;
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
@@ -468,6 +470,7 @@ const make = Effect.gen(function* () {
     const requester =
       (yield* requesterForDispatch(initial.task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       )) ?? initial.task.requester;
     const key = bindingKeyFor(initial.task, target, sharing, requester);
     let row = yield* currentRow(key);

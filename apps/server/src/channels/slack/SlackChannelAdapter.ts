@@ -11,7 +11,11 @@
  *
  * @module SlackChannelAdapter
  */
-import { ChannelGatewayError, type ChannelDeliveryErrorCode } from "@goat/contracts";
+import {
+  ChannelGatewayError,
+  type ChannelDeliveryErrorCode,
+  type RuntimeMode,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -40,8 +44,13 @@ import {
 function slackIngressContext(
   owner: ChannelConnectionOwner,
   connectionId: string,
+  unlinkedRuntimeModeCeiling: RuntimeMode | undefined,
 ): ChannelIngressContext {
-  return { ...owner, caller: { type: "transport", kind: "slack", connectionId } };
+  return {
+    ...owner,
+    caller: { type: "transport", kind: "slack", connectionId },
+    ...(unlinkedRuntimeModeCeiling === undefined ? {} : { unlinkedRuntimeModeCeiling }),
+  };
 }
 
 export type SlackEnvelopeHandling =
@@ -75,13 +84,19 @@ export const handleSlackEnvelope = (
     readonly connectionId: string;
     readonly classifier: SlackClassifierConfig;
     readonly owner: ChannelConnectionOwner;
+    /** Set when people without a linked account may start work, at this ceiling. */
+    readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
     readonly receiveOnly?: Effect.Effect<boolean>;
     readonly onRevocation?: (event: SlackRevocationEvent) => Effect.Effect<boolean>;
   },
 ): Effect.Effect<SlackEnvelopeOutcome, never, ChannelGateway.ChannelGateway> =>
   Effect.gen(function* () {
     const gateway = yield* ChannelGateway.ChannelGateway;
-    const context = slackIngressContext(input.owner, input.connectionId);
+    const context = slackIngressContext(
+      input.owner,
+      input.connectionId,
+      input.unlinkedRuntimeModeCeiling,
+    );
     const classification =
       envelope.type === "events_api"
         ? classifySlackEvent(envelope.body, input.classifier)

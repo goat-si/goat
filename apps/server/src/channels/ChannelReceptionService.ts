@@ -71,6 +71,8 @@ import { lowerRuntimeMode, mayAnswerFor } from "./ChannelGateway.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
+import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import {
@@ -238,6 +240,15 @@ const boundTail = (
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
+  const identityNow = (input: {
+    readonly connectionId: string;
+    readonly externalActorId: string;
+  }) =>
+    currentChannelIdentity(input).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
   const home = yield* ChannelBotHome.ChannelBotHome;
   const textGeneration = yield* TextGeneration.TextGeneration;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -448,7 +459,7 @@ const make = Effect.gen(function* () {
         return viewer.grantedScopes;
       }
       if (viewer.externalActorId === undefined) return [];
-      const linked = yield* ledger.findIdentity({
+      const linked = yield* identityNow({
         connectionId,
         externalActorId: viewer.externalActorId,
       });
@@ -470,9 +481,9 @@ const make = Effect.gen(function* () {
       const linkedNow =
         !external ||
         (requester.externalActorId !== undefined &&
-          (yield* ledger
-            .findIdentity({ connectionId, externalActorId: requester.externalActorId })
-            .pipe(Effect.orElseSucceed(() => undefined)))?.principalId === requester.principalId);
+          (yield* identityNow({ connectionId, externalActorId: requester.externalActorId }).pipe(
+            Effect.orElseSucceed(() => undefined),
+          ))?.principalId === requester.principalId);
       return {
         ...requester,
         grantedScopes: requester.grantedScopes.filter((scope) => scopes.includes(scope)),
@@ -1090,7 +1101,7 @@ const make = Effect.gen(function* () {
         const linked =
           requester.externalActorId === undefined
             ? undefined
-            : yield* ledger.findIdentity({
+            : yield* identityNow({
                 connectionId: message.connectionId,
                 externalActorId: requester.externalActorId,
               });

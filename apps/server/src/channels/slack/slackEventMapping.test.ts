@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   classifySlackEvent,
+  classifySlackInteraction,
   toSlackInboundMessage,
   type SlackClassifierConfig,
 } from "./slackEventMapping.ts";
@@ -9,6 +10,7 @@ import {
 const config: SlackClassifierConfig = {
   teamId: "T0TEAM",
   botUserId: "U0BOT",
+  channelScope: "listed" as const,
   allowedChannelIds: new Set(["C0ALLOWED"]),
 };
 
@@ -177,10 +179,24 @@ describe("classifySlackEvent", () => {
     expect(classifySlackEvent(envelope(event), config)).toEqual({ _tag: "ignored", reason });
   });
 
-  it("rejects every channel mention when the allowlist is empty", () => {
-    expect(
-      classifySlackEvent(envelope(mention()), { ...config, allowedChannelIds: new Set() }),
-    ).toEqual({ _tag: "ignored", reason: "channel_not_allowed" });
+  it("accepts a mention in any channel the bot is in when the scope is all", () => {
+    // Slack only sends app_mention for channels the bot is a member of, so "all" means those.
+    const all = { ...config, channelScope: "all" as const, allowedChannelIds: new Set<string>() };
+    const result = classifySlackEvent(envelope(mention({ channel: "C0OTHER" })), all);
+    if (result._tag !== "message") throw new Error("expected a message");
+    expect(result.event.channelId).toBe("C0OTHER");
+    expect(classifySlackEvent(envelope(directMessage()), all)._tag).toBe("message");
+  });
+
+  it("ignores a mention from another organization in a Slack Connect channel", () => {
+    const all = { ...config, channelScope: "all" as const };
+    expect(classifySlackEvent(envelope(mention({ user_team: "T0OTHER" })), all)).toEqual({
+      _tag: "ignored",
+      reason: "external_user",
+    });
+    expect(classifySlackEvent(envelope(mention({ user_team: "T0TEAM" })), all)._tag).toBe(
+      "message",
+    );
   });
 
   it("ignores events from another workspace and malformed envelopes", () => {
@@ -272,7 +288,12 @@ describe("classifySlackEvent", () => {
 });
 
 describe("revocation classification", () => {
-  const config = { teamId: "T0TEAM", botUserId: "U0BOT", allowedChannelIds: new Set<string>() };
+  const config = {
+    teamId: "T0TEAM",
+    botUserId: "U0BOT",
+    channelScope: "listed" as const,
+    allowedChannelIds: new Set<string>(),
+  };
   it.each([
     [{ type: "tokens_revoked", tokens: { bot: ["U0BOT"] } }, "revocation"],
     [{ type: "tokens_revoked", tokens: { bot: ["U0OTHER"] } }, "ignored"],
@@ -285,5 +306,37 @@ describe("revocation classification", () => {
     expect(
       classifySlackEvent(envelope(event, { team_id: "T0OTHER", event_time: 1234 }), config),
     ).toEqual({ _tag: "ignored", reason: "team_mismatch" });
+  });
+});
+
+describe("classifySlackInteraction channel scope", () => {
+  const press = (channelId: string, userTeam?: string) => ({
+    type: "block_actions",
+    team: { id: "T0TEAM" },
+    user: { id: "U0ALICE", ...(userTeam === undefined ? {} : { team_id: userTeam }) },
+    channel: { id: channelId },
+    message: { ts: "1760000000.000200", thread_ts: "1760000000.000100" },
+    actions: [{ action_id: "goat_choice_1", value: "Approve A1", action_ts: "1760000001.000100" }],
+  });
+  const all = { ...config, channelScope: "all" as const, allowedChannelIds: new Set<string>() };
+
+  it("accepts a button press in any channel when the scope is all", () => {
+    expect(classifySlackInteraction(press("C0OTHER"), all)._tag).toBe("message");
+  });
+
+  it("ignores a button press outside the list when the scope is listed", () => {
+    expect(classifySlackInteraction(press("C0OTHER"), config)).toEqual({
+      _tag: "ignored",
+      reason: "channel_not_allowed",
+    });
+    expect(classifySlackInteraction(press("C0ALLOWED"), config)._tag).toBe("message");
+    expect(classifySlackInteraction(press("D0ALICE"), config)._tag).toBe("message");
+  });
+
+  it("ignores a button press from another organization", () => {
+    expect(classifySlackInteraction(press("C0OTHER", "T0OTHER"), all)).toEqual({
+      _tag: "ignored",
+      reason: "external_user",
+    });
   });
 });

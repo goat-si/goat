@@ -37,6 +37,7 @@ const connection = (
 ): SlackChannelRuntime.SlackRuntimeConnection => ({
   connectionId,
   enabled: true,
+  channelScope: "listed",
   allowedChannelIds: ["C0ALLOWED"],
   appToken: APP_TOKEN,
   botToken: BOT_TOKEN,

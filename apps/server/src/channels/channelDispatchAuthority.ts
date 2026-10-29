@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
-import * as ChannelLedger from "./ChannelLedger.ts";
+import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 
 /** Intake is a snapshot; a queued task cannot keep a revoked or reassigned external grant. */
 export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(function* (
@@ -13,8 +13,7 @@ export const requesterForDispatch = Effect.fn("channel.requesterForDispatch")(fu
   const address = task.originAddress;
   if (address.kind === "slack" || address.kind === "imessage") {
     if (requester.externalActorId === undefined) return undefined;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const current = yield* ledger.findIdentity({
+    const current = yield* currentChannelIdentity({
       connectionId: address.connectionId,
       externalActorId: requester.externalActorId,
     });
