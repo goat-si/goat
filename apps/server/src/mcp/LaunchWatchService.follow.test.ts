@@ -515,4 +515,38 @@ describe("LaunchWatchService runs the thread starts itself", () => {
       ]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+  it.effect.each(["local", "remote"] as const)(
+    "names the run that asks a question when the wait follows a continuation (%s)",
+    (mode) =>
+      Effect.gen(function* () {
+        const world = yield* makeWorld;
+        const baseDir = yield* tempDir;
+        // The wait for run-1 follows its restart continuation run-2, which asks.
+        world.requests = [{ id: "question-1", status: "pending", kind: "user_input" }];
+        world.waitHandler = () =>
+          Effect.succeed({
+            threadId: target,
+            run: { id: run2, status: "waiting" } as never,
+            timedOut: false,
+          });
+        world.hostCall = (call) =>
+          call.tool === "goat_thread_wait"
+            ? Effect.succeed({
+                threadId: target,
+                runId: run2,
+                status: "waiting",
+                timedOut: false,
+                pendingRequestIds: ["question-1"],
+              })
+            : Effect.never;
+        yield* withService(world, baseDir, (service) =>
+          Effect.gen(function* () {
+            yield* mode === "local" ? watchLocal(service, run1) : watchRemote(service, run1);
+            const wake = yield* Queue.take(world.delivered);
+            expect(wake.text).toContain("(question-1) in run run-2");
+          }),
+        );
+        expect(world.webhookReports.map(({ report }) => report.runId)).toEqual([run2]);
+      }),
+  );
 });
