@@ -191,8 +191,6 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
   };
   const element = (target) => {
-    // A misnamed key beside role and name (clickCount) would otherwise be dropped unseen.
-    if (typeof target === 'object' && target !== null) __only('A target', target, ['role', 'name', 'id']);
     const observation = seen.observation;
     if (!observation)
       throw new ScreenError(
@@ -251,13 +249,21 @@ const __target = (binding, note, owner, extraProps = {}) => {
     if (!tab) return { x: target[0], y: target[1], regionId: image.regionId };
     return { point: { observationId: image.observationId, regionId: image.regionId, x: target[0], y: target[1] } };
   };
+  // A misnamed key beside role and name or a window point (clickCount) would otherwise be dropped
+  // unseen, so it is refused before any read or input.
+  const checkTarget = (target) => {
+    if (target === null || typeof target !== 'object' || Array.isArray(target) || __legacy(target)) return;
+    __only('A target', target, __winPt(target) ? ['window'] : ['role', 'name', 'id']);
+  };
   const aim = (target) => {
+    checkTarget(target);
     if (Array.isArray(target) || __winPt(target)) return point(target);
     if (tab && typeof target === 'string') return { selector: target };
     const found = element(target);
     return tab ? { ref: found.ref } : { elementRef: found.ref };
   };
   const needsImplicitObserve = (target) =>
+    (checkTarget(target), true) &&
     !tab &&
     !seen.observation &&
     target !== null &&
@@ -369,7 +375,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     observe,
     click: (target = {}, options = {}) => {
       if (__legacy(target)) {
-        if (options !== null && typeof options === 'object' && Object.keys(options).length > 0)
+        if (options !== null && (typeof options !== 'object' || Object.keys(options).length > 0))
           throw new ScreenError('invalid_argument', 'click({selector, ...}) takes its options inside that object; nothing was sent.', true);
         return call('click', target);
       }

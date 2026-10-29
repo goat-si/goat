@@ -688,6 +688,7 @@ it.live(
           () => tab.click({ selector: '#cv', clicks: 2, button: 'right' }),
           () => tab.click('#cv', { action: 'show_menu' }),
           () => tab.click({ role: 'button', name: 'Go', clickCount: 2 }),
+          () => tab.click({ selector: '#cv' }, 2),
         ])
           try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent, error.message]); }
         screen.state.refused = refused;
@@ -704,7 +705,7 @@ it.live(
           ? (result.success.value as Array<[string, boolean, string]>)
           : [];
       expect(refused.map(([code, nothingSent]) => [code, nothingSent])).toEqual(
-        Array.from({ length: 13 }, () => ["invalid_argument", true]),
+        Array.from({ length: 14 }, () => ["invalid_argument", true]),
       );
       expect(refused[0]?.[2]).toContain("did you mean count?");
       expect(refused[2]?.[2]).toContain("did you mean timeoutMs?");
@@ -720,3 +721,52 @@ it.live(
     });
   },
 );
+
+it.live("an app target with a stray key is refused before any read or click", () => {
+  const { host, sent } = fixture({});
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: desktopContext.invocation,
+      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+      const refused = [];
+      for (const attempt of [
+        () => app.click({ role: 'AXButton', name: 'Apply', clickCount: 2 }),
+        () => app.click({ window: [12, 14], clickCount: 2 }),
+        () => app.click('Apply', { timeoutMs: 100 }),
+      ])
+        try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent]); }
+      return refused;`,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: [
+        ["invalid_argument", true],
+        ["invalid_argument", true],
+        ["invalid_argument", true],
+      ],
+    });
+    expect(
+      sent.filter(
+        (entry) =>
+          entry.tool !== "list_windows" && entry.tool !== "bind_app" && entry.tool !== "list_apps",
+      ),
+    ).toEqual([]);
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        desktopHost: host,
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
