@@ -92,7 +92,7 @@ const input = (
   host: Host,
   ref: ScreenTargetRef,
   method: "press_key" | "click",
-  args: Record<string, unknown>,
+  args: Parameters<typeof call>[1],
 ) =>
   Effect.gen(function* () {
     const fiber = yield* host
