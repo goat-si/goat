@@ -1,11 +1,15 @@
 import type {
   ProjectId,
+  RuntimeMode,
   SlackChannelConfigureInput,
   SlackChannelConnectionStatus,
   SlackChannelDeliveryError,
+  SlackChannelScope,
   SlackChannelSettings,
   SlackChannelStatusEvent,
+  SlackUserAccess,
 } from "@goat/contracts";
+import { resolveSlackAccess } from "@goat/contracts";
 
 /**
  * When the Slack section can offer controls for the selected environment. The server
@@ -77,17 +81,39 @@ export interface SlackSettingsDraft {
   /** Write-only. Empty keeps the stored token. */
   readonly appToken: string;
   readonly botToken: string;
+  readonly channelScope: SlackChannelScope;
+  /** Kept while "every channel" is chosen, so switching back restores the list. */
   readonly channels: string;
+  readonly userAccess: SlackUserAccess;
+  readonly unlinkedRuntimeModeCeiling: RuntimeMode;
   /** Empty means no default project. */
   readonly projectId: string;
 }
 
-export function slackSettingsDraft(settings: SlackChannelSettings | undefined): SlackSettingsDraft {
+/**
+ * `accessChoices` is the server's `slackChannelAccess` capability. Servers without it answer
+ * only listed channels and only linked accounts, and drop the choices on save.
+ */
+export function slackSettingsDraft(
+  settings: SlackChannelSettings | undefined,
+  accessChoices: boolean,
+): SlackSettingsDraft {
+  const access = accessChoices
+    ? resolveSlackAccess(settings ?? { allowedChannelIds: [] })
+    : {
+        channelScope: "listed" as const,
+        userAccess: "linked" as const,
+        unlinkedRuntimeModeCeiling: resolveSlackAccess({ allowedChannelIds: [] })
+          .unlinkedRuntimeModeCeiling,
+      };
   return {
     enabled: settings?.enabled ?? false,
     appToken: "",
     botToken: "",
+    channelScope: access.channelScope,
     channels: settings?.allowedChannelIds.join(", ") ?? "",
+    userAccess: access.userAccess,
+    unlinkedRuntimeModeCeiling: access.unlinkedRuntimeModeCeiling,
     projectId: settings?.defaultTarget?.projectId ?? "",
   };
 }
@@ -103,6 +129,7 @@ export type SlackConfigureDraftResult =
 export function slackConfigureInput(
   draft: SlackSettingsDraft,
   settings: SlackChannelSettings | undefined,
+  accessChoices: boolean,
 ): SlackConfigureDraftResult {
   const appToken = draft.appToken.trim();
   const botToken = draft.botToken.trim();
@@ -118,6 +145,9 @@ export function slackConfigureInput(
       _tag: "invalid",
       message: `Use channel IDs such as C0123456789, not ${channels.invalid.join(", ")}.`,
     };
+  }
+  if (accessChoices && draft.channelScope === "listed" && channels.ids.length === 0) {
+    return { _tag: "invalid", message: "Add a channel ID, or answer in every channel." };
   }
   const hasAppToken = appToken.length > 0 || settings?.hasAppToken === true;
   const hasBotToken = botToken.length > 0 || settings?.hasBotToken === true;
@@ -139,6 +169,13 @@ export function slackConfigureInput(
       ...(appToken.length > 0 ? { appToken } : {}),
       ...(botToken.length > 0 ? { botToken } : {}),
       allowedChannelIds: channels.ids,
+      ...(accessChoices
+        ? {
+            channelScope: draft.channelScope,
+            userAccess: draft.userAccess,
+            unlinkedRuntimeModeCeiling: draft.unlinkedRuntimeModeCeiling,
+          }
+        : {}),
       defaultTarget,
     },
   };

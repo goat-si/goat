@@ -11,6 +11,7 @@ import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.
 import * as ServerSettings from "../serverSettings.ts";
 import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { goatBotSessionSharingFor } from "./channelIds.ts";
 import { isTerminalRun, sessionStore } from "./channelBotSessionRuns.ts";
@@ -44,11 +45,13 @@ export const makeSessionEligibility = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const { currentRow } = sessionStore(sql);
   const eligible = Effect.fn("ChannelBotSession.eligible")(
     function* (task: ChannelTask) {
       const requester = yield* requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
       if (requester === undefined || requester.originKind === "mcp") return false;
       const settings = yield* serverSettings.getSettings;

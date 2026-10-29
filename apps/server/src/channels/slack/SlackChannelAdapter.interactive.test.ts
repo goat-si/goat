@@ -15,6 +15,7 @@ import type { SlackBotApi, SlackSocketEnvelope } from "./SlackSdk.ts";
 const classifier = {
   teamId: "T0TEAM",
   botUserId: "U0BOT",
+  channelScope: "listed" as const,
   allowedChannelIds: new Set(["C0ALLOWED"]),
 };
 const connectionId = "slack-0123456789ab";

@@ -223,6 +223,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
   /** Server runs a live Slack channel connection. False while only the settings contract exists. */
   slackChannel: Schema.optionalKey(Schema.Boolean),
+  /** Slack settings take channelScope, userAccess and unlinkedRuntimeModeCeiling. Older servers
+      answer listed channels and linked accounts only and drop those fields. */
+  slackChannelAccess: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
