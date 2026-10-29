@@ -242,7 +242,7 @@ it.live(
       expect(result).toMatchObject({
         status: "completed",
         value: true,
-        contractVersion: "screen-target/2",
+        contractVersion: "screen-target/3",
       });
       expect(sent.map((entry) => entry.tool)).toEqual([
         "list_apps",

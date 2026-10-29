@@ -31,6 +31,7 @@ import { dispatchInTurn } from "./ScreenBatchGroups.ts";
 import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
+import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
 import {
   admitDesktopInput,
   BATCH_FAILED_CATEGORIES,
@@ -92,7 +93,7 @@ const natural = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
 const RESTARTED_ELEMENTS = "The driver restarted; observe again to get current element numbers.";
-interface BoundWindow {
+export interface BoundWindow {
   readonly ref: ScreenTargetRef;
   readonly pid: number;
   readonly windowId: number;
@@ -154,6 +155,8 @@ export const createDesktopTargetHost = (deps: {
   readonly observations?: ScreenObservations;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
+  /** The platform the driver runs on, which picks launch_app's arguments; this host's by default. */
+  readonly platform?: NodeJS.Platform;
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
   const targets = new Map<string, BoundWindow>();
@@ -352,60 +355,39 @@ export const createDesktopTargetHost = (deps: {
         });
       if (named.length !== 1 || !pid) return yield* Effect.fail(fail("target_ambiguous"));
       const app = matches.find((candidate) => candidate.pid === pid);
-      const listedBundle = string(app?.bundle_id);
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
       if (!current) return yield* Effect.fail(fail("unavailable"));
-      let lastClickedTableCell: number | string | undefined;
-      for (const [id, previous] of targets)
-        if (
-          previous.pid === pid &&
-          previous.windowId === requestedWindow &&
-          previous.ref.runId === context.runId &&
-          previous.ref.turnId === context.turnId
-        ) {
-          lastClickedTableCell ??= previous.lastClickedTableCell;
-          observations.evictTarget(id);
-          targets.delete(id);
-        }
-      const ref: ScreenTargetRef = {
-        id: NodeCrypto.randomUUID(),
-        kind: "app",
-        environmentId: context.environmentId,
-        runId: context.runId,
-        turnId: context.turnId,
-        generation: ++epoch,
-      };
-      const listedBounds = boundsOf(named[0]?.bounds);
-      const bound: BoundWindow = {
-        ref,
-        pid,
-        windowId: requestedWindow,
-        appId: listedBundle ?? string(app?.name) ?? appId,
-        ...(listedBundle === undefined ? {} : { bundleId: listedBundle }),
-        epoch,
-        connectionGeneration: windowsReply.connectionGeneration,
-        controlId: current.controlId,
-        ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
-        ...(lastClickedTableCell === undefined ? {} : { lastClickedTableCell }),
-      };
-      targets.set(ref.id, bound);
-      // Only what the driver reported names the app on its row. The call's bundle id found the
-      // window, so it may pick the icon, but the driver's app filter also matches names, so never text.
-      deps.labelTarget?.(
-        ref.id,
+      const ref = bindWindow(
         {
-          kind: "app",
+          pid,
+          windowId: requestedWindow,
           bundleId: string(app?.bundle_id),
           name: string(app?.name) ?? string(named[0]?.app_name),
+          appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
           iconBundleId: bundleId,
+          bounds: named[0]?.bounds,
+          connectionGeneration: windowsReply.connectionGeneration,
+          controlId: current.controlId,
         },
         context,
       );
       return { value: ref, category: "unverifiable" };
     },
   );
+  const bindWindow = makeBindWindow({
+    targets,
+    evict: (id) => observations.evictTarget(id),
+    nextEpoch: () => ++epoch,
+    labelTarget: deps.labelTarget,
+  });
+  const launch = makeLaunch({
+    platform: deps.platform,
+    request,
+    leases: deps.leases,
+    bind: bindWindow,
+  });
   /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
   const page = Effect.fn("DesktopTargetHost.page")(function* (
     bound: BoundWindow,
@@ -680,17 +662,8 @@ export const createDesktopTargetHost = (deps: {
             "Desktop select_text is unsupported by this runtime; nothing was sent. To replace an editable field's whole value, use setValue({ elementRef, value }).",
           ),
         );
-      if (call.method === "launch_app" && !call.targetRef) {
-        const args = callArgs(call.args);
-        const bundleId = string(args.bundle_id) ?? string(args.bundleId);
-        if (!bundleId) return yield* Effect.fail(fail("invalid_argument"));
-        const current = Option.getOrUndefined(
-          yield* deps.leases.currentControl(context.invocation.thread.threadId),
-        );
-        if (!current) return yield* Effect.fail(fail("unavailable"));
-        const reply = yield* request("launch_app", { bundle_id: bundleId }, call, context);
-        return driverResult("launch_app", reply);
-      }
+      if (call.method === "launch_app" && !call.targetRef)
+        return yield* launch(call, callArgs(call.args), context);
       const bound = resolve(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference"));
       if (call.method === "invoke_menu") {
