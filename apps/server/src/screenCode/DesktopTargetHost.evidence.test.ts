@@ -706,10 +706,16 @@ it.live(
           "globalThis.calcApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await calcApp.observe(); return 1;",
         );
         return yield* runCell("return await calcApp.click({ window: [50, 50] });", {
-          returnBytes: 620,
+          returnBytes: 660,
         });
       }).pipe(Effect.provide(cellService(host)));
       expect(tightDone.status).toBe("completed");
+      expect(tightDone.truncated).toEqual([]);
+      expect(tightDone.value).toMatchObject({
+        verdict: "unverifiable",
+        point: { x: 50, y: 50, unit: "window_points" },
+        hit: bigHit,
+      });
     }),
 );
 
