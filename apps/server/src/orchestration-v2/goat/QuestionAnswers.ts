@@ -9,6 +9,24 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
+export function messageAnswerAttribution(
+  respondedBy: UserInputRespondedBy | undefined,
+  replies: string[],
+) {
+  const responder = respondedBy?.type === "user" ? undefined : respondedBy;
+  const localAgent =
+    responder?.type === "agent" && responder.environmentId === null ? responder : undefined;
+  const answerText = replies.join("\n\n");
+  return {
+    text:
+      responder === undefined
+        ? answerText
+        : `Answered by ${describeUserInputResponder({ respondedBy: responder })}${localAgent === undefined ? "" : ` (${localAgent.threadId})`}: ${responder.reason}\n\n${answerText}`,
+    createdBy: responder === undefined ? ("user" as const) : ("agent" as const),
+    ...(localAgent === undefined ? {} : { senderThreadId: localAgent.threadId }),
+  };
+}
+
 export class OrchestratorQuestionAlreadyAnsweredError extends Schema.TaggedError<OrchestratorQuestionAlreadyAnsweredError>()(
   "OrchestratorQuestionAlreadyAnsweredError",
   {
