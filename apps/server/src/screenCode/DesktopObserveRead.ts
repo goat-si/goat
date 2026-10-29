@@ -5,6 +5,8 @@
  */
 import type { ScreenObservation, ScreenTargetRef } from "@goat/contracts";
 import { fail } from "./DesktopDriverReplies.ts";
+import { type Placed, type Rect, sameRect } from "./DesktopFrames.ts";
+import type { Viewport } from "./DesktopObservationBudget.ts";
 import type { ScreenElementDetail, ScreenObservationDraft } from "./ScreenObservations.ts";
 import {
   actionName,
@@ -34,14 +36,78 @@ export interface DesktopQuery {
 export interface DesktopPages {
   /** The observation the pages continue; a newer read of the window ends them. */
   readonly base: string;
+  /** Rows with frames in window points from origin, as the read's observation gave them. */
   readonly rows: ReadonlyArray<DesktopRow>;
   readonly text: string;
   readonly given: Set<number>;
   readonly ids: Set<string>;
+  /** The window the frames were measured from; a page drops them once the window has moved. */
+  readonly origin?: Rect;
+  /** Frames the read could not place in its window. */
+  readonly dropped: number;
+  readonly viewport?: Viewport;
 }
 
 /** A full read too large to carry walks fewer elements, in this order, before it gives up. */
 export const READ_BOUNDS = [4096, 1024, 256] as const;
+
+const withoutFrame = ({ frame: _frame, ...row }: DesktopRow): DesktopRow => row;
+
+/**
+ * Rows as the agent sees them: frames in window points from origin. A row keeps its frame only
+ * when its own parents reach a window at origin. A read that repeats a token or an index cannot
+ * say whose parents are whose, so it places none.
+ */
+export const placeInWindow = (
+  rows: ReadonlyArray<DesktopRow>,
+  entries: ReadonlyArray<Record<string, unknown>>,
+  frames: ReadonlyMap<string, Placed>,
+  origin: Rect | undefined,
+): { readonly rows: DesktopRow[]; readonly dropped: number } => {
+  const tokens = new Set<string>();
+  const indexes = new Set<number>();
+  let repeated = false;
+  for (const entry of entries) {
+    const token = string(entry.element_token);
+    const index = natural(entry.element_index);
+    if ((token && tokens.has(token)) || (index !== undefined && indexes.has(index)))
+      repeated = true;
+    if (token) tokens.add(token);
+    if (index !== undefined) indexes.add(index);
+  }
+  const from = repeated ? undefined : origin;
+  let dropped = 0;
+  const placed = rows.map((row) => {
+    const frame = row.frame;
+    if (frame === undefined) return row;
+    const window = frames.get(row.driverToken)?.window;
+    if (from && window && sameRect(window, from))
+      return { ...row, frame: { ...frame, x: frame.x - from.x, y: frame.y - from.y } };
+    dropped++;
+    return withoutFrame(row);
+  });
+  return { rows: placed, dropped };
+};
+
+/** Why frames are missing from an observation, when some are. */
+export const framesOmission = (dropped: number): NonNullable<ScreenObservation["omitted"]> =>
+  dropped === 0
+    ? []
+    : [
+        {
+          kind: "frames",
+          detail: `Frames left out for ${dropped} elements this read could not place in its window, so their window points are unknown.`,
+        },
+      ];
+
+/** The window's bounds in the frames' window points, for the budget's visible-first cut. */
+export const windowViewport = (
+  bounds: Rect | undefined,
+  origin: Rect | undefined,
+): Viewport | undefined =>
+  bounds === undefined || origin === undefined
+    ? undefined
+    : { x: bounds.x - origin.x, y: bounds.y - origin.y, width: bounds.w, height: bounds.h };
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -54,7 +120,7 @@ const natural = (value: unknown): number | undefined =>
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 
-/** The driver's state and geometry for one element, in the observation's own names. */
+/** The driver's state and geometry for one element, in the observation's own names and screen points. */
 const elementDetail = (entry: Record<string, unknown>): ScreenElementDetail => {
   const frame = object(entry.frame);
   const actions = (Array.isArray(entry.actions) ? entry.actions : [])
@@ -206,14 +272,32 @@ const pageRows = (pages: DesktopPages, after: number) =>
     (row) => row.index !== undefined && row.index >= after && !pages.given.has(row.index),
   );
 
-/** A page's draft: those rows under the lines above them, which stay as context. */
+/**
+ * A page's draft: those rows under the lines above them, which stay as context. Frames stay
+ * only while the window is where the read measured it (basis is the host's current one).
+ */
 const pageDraft = (
   pages: DesktopPages,
   after: number,
   targetRef: ScreenTargetRef,
   generation: number,
+  basis: Rect | undefined,
 ): ScreenObservationDraft => {
   const rows = pageRows(pages, after);
+  const placed = pages.origin !== undefined && basis !== undefined && sameRect(pages.origin, basis);
+  const moved = placed ? 0 : rows.filter((row) => row.frame !== undefined).length;
+  const omitted = [
+    ...framesOmission(pages.dropped),
+    ...(moved === 0
+      ? []
+      : [
+          {
+            kind: "frames" as const,
+            detail:
+              "Frames left out: the window moved or was not measured since this read; observe again for window points.",
+          },
+        ]),
+  ];
   return {
     targetRef,
     targetGeneration: generation,
@@ -225,19 +309,11 @@ const pageDraft = (
     complete: false,
     truncated: false,
     loading: false,
-    elements: rows,
+    elements: placed ? rows : rows.map(withoutFrame),
+    ...(omitted.length === 0 ? {} : { omitted }),
+    ...(placed && pages.viewport !== undefined ? { viewport: pages.viewport } : {}),
   };
 };
-
-/** The window's bounds as a draft's viewport: elements outside them go first when over budget. */
-const viewportOf = (
-  bounds:
-    | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-    | undefined,
-) =>
-  bounds === undefined
-    ? {}
-    : { viewport: { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } };
 
 export const renderFailure = (cause: unknown) =>
   fail(
@@ -334,9 +410,8 @@ export const buildObservedDraft = (input: {
   readonly shown: ReadonlyArray<DesktopRow>;
   readonly shownText: string;
   readonly omitted: NonNullable<ScreenObservation["omitted"]>;
-  readonly nextBounds:
-    | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-    | undefined;
+  /** The window in the shown frames' window points; elements outside it go first when over budget. */
+  readonly viewport: Viewport | undefined;
   readonly fallbackTitle: string | undefined;
 }): ScreenObservationDraft => {
   const title = (
@@ -357,7 +432,7 @@ export const buildObservedDraft = (input: {
     loading: false,
     elements: input.shown,
     ...(input.omitted.length === 0 ? {} : { omitted: input.omitted }),
-    ...viewportOf(input.nextBounds),
+    ...(input.viewport === undefined ? {} : { viewport: input.viewport }),
   };
 };
 
@@ -367,9 +442,8 @@ export const renderPageObservation = (
   boundId: string | undefined,
   ref: ScreenTargetRef,
   epoch: number,
-  windowBounds:
-    | { readonly x: number; readonly y: number; readonly w: number; readonly h: number }
-    | undefined,
+  /** The window basis the host holds now; a screenshot that showed the window moved cleared it. */
+  basis: Rect | undefined,
   args: Record<string, unknown>,
   treeBytes: number,
 ): {
@@ -386,7 +460,7 @@ export const renderPageObservation = (
     };
   try {
     const observation = observations.renderObservation({
-      draft: { ...pageDraft(pages, from, ref, epoch), ...viewportOf(windowBounds) },
+      draft: pageDraft(pages, from, ref, epoch, basis),
       mode: "query",
       scope: `after [${from}]`,
       page: pages.base,

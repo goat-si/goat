@@ -647,7 +647,13 @@ it.live(
         tree_markdown:
           '- [0] AXWindow "Document"\n  - [1] AXButton "Apply" [actions=[press]]\n  - [2] AXSlider "Volume"',
         elements: [
-          { role: "AXWindow", label: "Document", element_index: 0, element_token: "s1:0" },
+          {
+            role: "AXWindow",
+            label: "Document",
+            element_index: 0,
+            element_token: "s1:0",
+            frame: { x: 300, y: 200, w: 600, h: 400 },
+          },
           {
             role: "AXButton",
             label: "Apply",
@@ -656,7 +662,7 @@ it.live(
             actions: ["press"],
             enabled: true,
             selected: false,
-            frame: { x: 10, y: 20, w: 80, h: 24 },
+            frame: { x: 310, y: 220, w: 80, h: 24 },
             parent_index: 0,
           },
           {
@@ -743,7 +749,7 @@ it.live(
         expect(drags).toEqual([
           expect.objectContaining({ source: "aria-ref=e1", target: "aria-ref=e2" }),
         ]);
-        // DSH-11: the driver's actions, state, geometry, range and parent reach the cell.
+        // DSH-11: the driver's actions, state, geometry (in window points), range and parent reach the cell.
         expect((result.value as { elements: unknown[] }).elements).toEqual([
           expect.objectContaining({ index: 0, role: "AXWindow", name: "Document" }),
           expect.objectContaining({

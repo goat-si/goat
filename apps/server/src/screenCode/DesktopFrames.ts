@@ -102,6 +102,23 @@ export const elementFrames = (entries: readonly Record<string, unknown>[]) => {
 export const sameRect = (a: Rect, b: Rect) =>
   a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 /**
+ * Where agent-facing frames are measured from: the read's top-level window, only when every
+ * top-level window it lists has that same positive frame. A frameless or second window cannot
+ * be told apart from the bound one, so then there is none.
+ */
+export const windowOrigin = (entries: readonly Record<string, unknown>[]): Rect | undefined => {
+  let origin: Rect | undefined;
+  for (const entry of entries) {
+    if (natural(entry.parent_index) !== undefined) continue;
+    if (!WINDOW_ROLES.has(string(entry.role)?.toLowerCase() ?? "")) continue;
+    const frame = frameOf(entry);
+    if (!frame || frame.w <= 0 || frame.h <= 0) return undefined;
+    if (origin && !sameRect(origin, frame)) return undefined;
+    origin = frame;
+  }
+  return origin;
+};
+/**
  * An element's center as a fraction of its window; a center outside the window gives none. A
  * tree that left its window out is measured against the bounds held when it was read, while no
  * screenshot has shown them wrong: the host cannot tell a move before the read from one after.

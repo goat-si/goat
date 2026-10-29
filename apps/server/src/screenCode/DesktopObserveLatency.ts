@@ -17,7 +17,7 @@ import type {
 import { COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE } from "@goat/contracts";
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
 import { settleCaptureIfNeeded } from "./DesktopEvidence.ts";
-import { boundsOf, elementFrames, sameRect } from "./DesktopFrames.ts";
+import { boundsOf, elementFrames, sameRect, windowOrigin } from "./DesktopFrames.ts";
 import { inspectTreeElements } from "./DesktopInputGuards.ts";
 import {
   beginObservedSheet,
@@ -30,8 +30,10 @@ import {
   desktopQuery,
   desktopRows,
   driverQuery,
+  framesOmission,
   matchesQuery,
   observeScope,
+  placeInWindow,
   queryOmission,
   READ_BOUNDS,
   renderFailure,
@@ -39,6 +41,7 @@ import {
   shownTree,
   treeOf,
   type DesktopQuery,
+  windowViewport,
 } from "./DesktopObserveRead.ts";
 import { buildScreenshotCapture, treeWindowBasis } from "./DesktopTargetPoints.ts";
 import { cleanActionText, isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
@@ -274,7 +277,7 @@ const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
     bound.observationId,
     bound.ref,
     bound.epoch,
-    bound.windowBounds,
+    bound.framesBasis,
     args,
     rawBudget,
   );
@@ -408,6 +411,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   if (kept === undefined) {
     const parseAt = yield* Clock.currentTimeMillis;
     const tree = parseDesktopTreeState({ state, filtered, query, interactive });
+    bound.frames = elementFrames(tree.elements);
+    // The agent reads frames in window points; internal geometry stays in the driver's screen points.
+    const origin = windowOrigin(tree.elements);
+    const placed = placeInWindow(tree.shown, tree.elements, bound.frames, origin);
     const omitted = [
       ...(query
         ? queryOmission(state, tree.shown.length, filtered)
@@ -415,12 +422,13 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
           ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
           : []),
       ...sheet.extraOmitted,
+      ...framesOmission(placed.dropped),
     ];
+    const viewport = windowViewport(nextBounds, origin);
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
     bound.rows = tree.shown;
-    bound.frames = elementFrames(tree.elements);
     bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows, tree.markdown);
     const basis = treeWindowBasis(bound.frames, nextBounds);
     if (basis === undefined) delete bound.framesBasis;
@@ -446,10 +454,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               state,
               filtered,
               limit,
-              shown: tree.shown,
+              shown: placed.rows,
               shownText: tree.shownText,
               omitted,
-              nextBounds,
+              viewport,
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
                 ?.title,
             }),
@@ -474,10 +482,13 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       if (observation.elements.length < tree.shown.length)
         bound.pages = {
           base: observation.observationId,
-          rows: tree.shown,
+          rows: placed.rows,
           text: tree.shownText,
           given: new Set(observation.elements.map((element) => element.index)),
           ids: new Set(),
+          ...(origin === undefined ? {} : { origin }),
+          dropped: placed.dropped,
+          ...(viewport === undefined ? {} : { viewport }),
         };
       else delete bound.pages;
       const timing = buildObserveTiming({
