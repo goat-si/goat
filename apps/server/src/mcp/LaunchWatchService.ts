@@ -55,7 +55,7 @@ import * as CompletionWebhook from "./completionWebhook.ts";
 import {
   addPendingRun,
   clearAttempts,
-  discoverRun,
+  discoverRuns,
   dormantExpired,
   endReported,
   finishedWake,
@@ -75,7 +75,6 @@ import {
   outageWake,
   questionKey,
   questionWake,
-  quietEnd,
   recordContact,
   recordFailure,
   recordQuestion,
@@ -83,7 +82,9 @@ import {
   rearmRetriedRun,
   settleEnd,
   settleRun,
+  skipRun,
   wakeAttempt,
+  wentOnFrom,
   watchExpired as expired,
 } from "./launchWatch.ts";
 import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
@@ -106,10 +107,10 @@ import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
  * launcher's watch, so a later goat_thread_send from the same caller re-arms
  * it and that run reaches the webhook too.
  *
- * While nothing is owed, a kept watch looks at its thread every tick, and a
- * run the thread started on its own (a wake from a child, a review or a pull
- * request watch) is followed like an armed one. Its end is reported when the
- * thread goes idle with it; see quietEnd for the ends that settle silently.
+ * While nothing is owed, a kept watch looks at its thread's runs since its
+ * last look, and follows each the thread started on its own (a wake from a
+ * child, a review or a pull request watch) like an armed one, so each time the
+ * thread goes idle is reported; discoverRuns says which runs it leaves out.
  *
  * Idle watches expire: a launcher's after a week without changes, a
  * launcherless one a week after it was last armed. An expired watch is treated
@@ -126,6 +127,11 @@ const REMOTE_ANSWER_MARGIN_MS = 60_000;
 const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
 /** How often dormant watches past their retention are dropped while the server runs. */
 const SWEEP_MS = 60 * 60_000;
+/** How an idle follower waits before its next look; tests step looks with it instead of a clock. */
+export const IdleLookWait = Context.Reference<(ms: number) => Effect.Effect<void>>(
+  "goat/mcp/LaunchWatchService/IdleLookWait",
+  { defaultValue: () => (ms) => Effect.sleep(ms) },
+);
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
 const RETRY_MS = 30_000;
 
@@ -282,6 +288,7 @@ const decodeRequestIds = Schema.decodeUnknownEffect(
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const hold = yield* AutomationHold.AutomationHold;
+  const idleWait = yield* IdleLookWait;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const config = yield* ServerConfig.ServerConfig;
@@ -836,14 +843,9 @@ export const make = Effect.gen(function* () {
                 return 0;
               }
               const title = details.title ?? watch.title;
-              const quiet = endedRunId === runId ? quietEnd(watch, runId, details) : null;
-              if (quiet !== null) {
-                const settled = settleEnd(recordContact(watch, now), runId, end, now);
-                yield* keep(
-                  details.continuedIn === null
-                    ? settled
-                    : discoverRun(settled, details.continuedIn, now),
-                );
+              // The thread went straight on to its own next run; that run's end reports it.
+              if (endedRunId === runId && wentOnFrom(watch, runId, details.runs)) {
+                yield* keep(skipRun(recordContact(watch, now), runId, now));
                 return 0;
               }
               const wake = { watch, runId: endedRunId, status: result.status, ...details, end };
@@ -1061,14 +1063,16 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const watch = current(watchId, incarnation);
         if (watch === undefined || watch.recovery !== undefined || watch.detached) return;
-        if (watch.pendingRuns.length > 0) return;
+        const now = yield* Clock.currentTimeMillis;
+        // A look that outlived the watch's retention must not re-arm it; plan drops it.
+        if (watch.pendingRuns.length > 0 || expired(watch, now)) return;
         if (look._tag === "Gone" || look._tag === "LauncherGone") {
           // Nothing is owed, so the watch ends without a report.
           yield* save((map) => map.delete(watchId));
           return;
         }
-        if (look._tag === "Run" && look.runId !== null) {
-          const next = discoverRun(watch, look.runId, yield* Clock.currentTimeMillis);
+        if (look._tag === "Runs") {
+          const next = discoverRuns(watch, look.runs, now);
           if (next !== watch) {
             yield* save((map) => map.set(watchId, next));
             return;
@@ -1642,7 +1646,7 @@ export const make = Effect.gen(function* () {
             ),
           );
           if (wait !== undefined)
-            yield* Deferred.await(wait.idle).pipe(Effect.timeoutOption(wait.ms));
+            yield* Effect.raceFirst(idleWait(wait.ms), Deferred.await(wait.idle));
           continue;
         }
         const { watch, runId } = next;

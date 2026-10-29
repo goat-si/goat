@@ -1,5 +1,11 @@
-import { OrchestratorMcpThreadReadResult, RunId, type RuntimeMode } from "@goat/contracts";
+import {
+  type OrchestrationV2Run,
+  OrchestratorMcpThreadReadResult,
+  type RunId,
+  type RuntimeMode,
+} from "@goat/contracts";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -9,44 +15,70 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import {
   EXCERPT_MAX_CHARS,
   failureFromRemoteStatus,
+  isTerminalStatus,
   type LaunchWatch,
   type LaunchWatchRunDetails,
   type LaunchWatchTerminalStatus,
   noRunDetails,
   RemoteRunFailureStatus,
+  type WatchedRun,
 } from "./launchWatch.ts";
 import { lastText } from "./launchWatchText.ts";
 import { runFailure } from "./threadStatus.ts";
 
 /**
  * What a launch watch's follower reads about its thread: the details a report quotes, and, while
- * nothing is owed, a look for a run the thread started on its own.
+ * nothing is owed, a look for runs the thread started since the last one.
  */
 
 export const REMOTE_READ_TIMEOUT_MS = 60_000;
 const TAIL_WINDOW = 40;
 const TAIL_PAGE = 20;
 const TAIL_PAGES = 3;
+/** Runs a remote read lists; more than this between two looks are not each reported. */
+const RUN_WINDOW = 20;
+/** Messages a remote look reads to tell who started its new runs. */
+const LOOK_MESSAGES = 50;
 
 /** The watch's launcher thread was deleted or archived, so the watch ends. */
 export class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
 
-/** What a look at an idle watch's thread found. */
+/** What a look at an idle watch's thread found: its runs when there are new ones, else none. */
 export type Look =
-  | { readonly _tag: "Run"; readonly runId: RunId | null }
+  | { readonly _tag: "Runs"; readonly runs: ReadonlyArray<WatchedRun> }
   | { readonly _tag: "Gone" }
   | { readonly _tag: "LauncherGone" }
   | { readonly _tag: "Unreachable"; readonly error: string };
 
 const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
 const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
-const decodeLatestRun = Schema.decodeUnknownEffect(
-  Schema.Struct({ run: Schema.NullOr(Schema.Struct({ runId: RunId })) }),
-);
+type RemoteRead = OrchestratorMcpThreadReadResult;
 
-/** The thread's active run when it is another than the one that ended. */
-const laterRun = (active: RunId | null | undefined, ended: RunId) =>
-  active == null || active === ended ? null : active;
+const localRun = (run: OrchestrationV2Run): WatchedRun => ({
+  runId: run.id,
+  ordinal: run.ordinal,
+  terminal: isTerminalStatus(run.status),
+  requestedAt: DateTime.toEpochMillis(run.requestedAt),
+  completedAt: run.completedAt === null ? null : DateTime.toEpochMillis(run.completedAt),
+  trigger: run.userMessageId,
+});
+
+const remoteRuns = (read: RemoteRead, triggers: ReadonlyMap<string, string>): Array<WatchedRun> =>
+  read.recentRuns.map((run) => ({
+    runId: run.runId,
+    ordinal: run.ordinal,
+    terminal: isTerminalStatus(run.status),
+    requestedAt: Date.parse(run.requestedAt),
+    completedAt: run.completedAt === null ? null : Date.parse(run.completedAt),
+    trigger: triggers.get(run.runId),
+  }));
+
+/** The message that started each run, from timeline items. */
+const recordTriggers = (items: RemoteRead["items"], into: Map<string, string>) => {
+  for (const item of items)
+    if (item.type === "user_message" && item.runId !== null && item.messageId !== null)
+      if (!into.has(item.runId)) into.set(item.runId, item.messageId);
+};
 
 export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
   readonly threads: ThreadManagementService.ThreadManagementServiceShape;
@@ -61,6 +93,15 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
 }) => {
   const { threads, callHost } = deps;
 
+  const remoteRead = (watch: LaunchWatch, host: string, args: Record<string, unknown>) =>
+    callHost(
+      watch,
+      host,
+      "goat_thread_read",
+      { threadId: watch.threadId, view: "messages", ...args },
+      REMOTE_READ_TIMEOUT_MS,
+    ).pipe(Effect.flatMap(decodeRead));
+
   const localDetails = Effect.fn("LaunchWatchReads.localDetails")(function* (
     watch: LaunchWatch,
     runId: RunId,
@@ -72,12 +113,10 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
       {
         messageRoles: ["assistant"],
         messageRunIds: [runId],
-        runIds: [runId],
         turnItemRunIds: [runId],
         turnItemTypes: ["assistant_message", "error"],
       },
     );
-    const run = records.runs.find((candidate) => candidate.id === runId) ?? null;
     return {
       title: shell?.title ?? null,
       branch: shell?.branch ?? null,
@@ -88,9 +127,8 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
         (thread) =>
           thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
       ),
-      failure: runFailure(run, records.turnItems),
-      continuedIn: laterRun(shell?.activeRunId, runId),
-      trigger: run?.userMessageId ?? null,
+      failure: runFailure(records.runs.find((run) => run.id === runId) ?? null, records.turnItems),
+      runs: records.runs.map(localRun),
     } satisfies LaunchWatchRunDetails;
   });
 
@@ -105,30 +143,20 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
     runId: RunId,
     status: LaunchWatchTerminalStatus,
   ) {
-    const read = (args: Record<string, unknown>) =>
-      callHost(
-        watch,
-        host,
-        "goat_thread_read",
-        { threadId: watch.threadId, ...args },
-        REMOTE_READ_TIMEOUT_MS,
-      ).pipe(Effect.flatMap(decodeRead));
-    const head = yield* read({ view: "messages", limit: 1, runLimit: 1 });
+    const head = yield* remoteRead(watch, host, { limit: 1, runLimit: RUN_WINDOW });
     const start = head.thread.itemCount - TAIL_WINDOW - 1;
     let afterPosition: number | undefined = start < 0 ? undefined : start;
     const texts: Array<string | null> = [];
-    let trigger: string | null = null;
+    const triggers = new Map<string, string>();
     for (let page = 0; page < TAIL_PAGES; page++) {
-      const result = yield* read({
-        view: "messages",
+      const result = yield* remoteRead(watch, host, {
         limit: TAIL_PAGE,
         maxCharsPerItem: EXCERPT_MAX_CHARS,
         ...(afterPosition === undefined ? {} : { afterPosition }),
       });
-      for (const item of result.items) {
+      for (const item of result.items)
         if (item.type === "assistant_message" && item.runId === runId) texts.push(item.text);
-        if (item.type === "user_message" && item.runId === runId) trigger ??= item.messageId;
-      }
+      recordTriggers(result.items, triggers);
       if (!result.hasMore || result.nextPosition === null) break;
       afterPosition = result.nextPosition;
     }
@@ -164,8 +192,7 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
       // Registered runs live on their holder, whose own watch reads them locally.
       linkOnlyRegistration: false,
       failure,
-      continuedIn: laterRun(head.thread.activeRunId, runId),
-      trigger,
+      runs: remoteRuns(head, triggers),
     } satisfies LaunchWatchRunDetails;
   });
 
@@ -200,38 +227,56 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
     return { _tag: "Unreachable", error: String(error) };
   };
 
+  /** A local look reads the runs only when the thread's latest run is not the one last seen. */
   const localLook = Effect.fn("LaunchWatchReads.localLook")(function* (watch: LaunchWatch) {
     yield* deps.launcherCeiling(watch);
     const shell = yield* threads.getThreadShell(watch.threadId);
     if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null)
       return { _tag: "Gone" } satisfies Look;
-    return { _tag: "Run", runId: shell.activeRunId ?? shell.latestRunId ?? null } satisfies Look;
+    if (shell.latestRunId == null || shell.latestRunId === watch.seen?.runId)
+      return { _tag: "Runs", runs: [] } satisfies Look;
+    const records = yield* threads.getThreadRecords(watch.threadId, ["runs"]);
+    return { _tag: "Runs", runs: records.runs.map(localRun) } satisfies Look;
   });
 
-  const remoteLook = (watch: LaunchWatch, host: string) =>
-    callHost(
-      watch,
-      host,
-      "goat_thread_status",
-      { threadId: watch.threadId },
-      REMOTE_READ_TIMEOUT_MS,
-    ).pipe(
-      Effect.flatMap(decodeLatestRun),
-      Effect.map((status): Look => ({ _tag: "Run", runId: status.run?.runId ?? null })),
-      Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
-      Effect.map(
-        Option.getOrElse((): Look => ({
-          _tag: "Unreachable",
-          error: `${host} did not answer in time.`,
-        })),
-      ),
-    );
+  /**
+   * One goat_thread_read lists the remote thread's recent runs, which hosts of every version
+   * answer. Only when a run is new does a second read find the messages that started them.
+   */
+  const remoteLook = Effect.fn("LaunchWatchReads.remoteLook")(function* (
+    watch: LaunchWatch,
+    host: string,
+  ) {
+    const head = yield* remoteRead(watch, host, { limit: 1, runLimit: RUN_WINDOW });
+    const newest = head.recentRuns[0];
+    if (newest === undefined || newest.ordinal <= (watch.seen?.ordinal ?? 0))
+      return { _tag: "Runs", runs: [] } satisfies Look;
+    const start = head.thread.itemCount - LOOK_MESSAGES - 1;
+    const tail = yield* remoteRead(watch, host, {
+      limit: LOOK_MESSAGES,
+      maxCharsPerItem: 1,
+      ...(start < 0 ? {} : { afterPosition: start }),
+    });
+    const triggers = new Map<string, string>();
+    recordTriggers(tail.items, triggers);
+    return { _tag: "Runs", runs: remoteRuns(head, triggers) } satisfies Look;
+  });
 
-  /** The thread's active run, else its latest; a remote thread is asked with goat_thread_status. */
+  /** The thread's runs since the last look; an unanswered remote look counts as unreachable. */
   const look = Effect.fn("LaunchWatchReads.look")(
     function* (watch: LaunchWatch) {
       const found: Look =
-        watch.host === null ? yield* localLook(watch) : yield* remoteLook(watch, watch.host);
+        watch.host === null
+          ? yield* localLook(watch)
+          : yield* remoteLook(watch, watch.host).pipe(
+              Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
+              Effect.map(
+                Option.getOrElse((): Look => ({
+                  _tag: "Unreachable",
+                  error: "The host did not answer in time.",
+                })),
+              ),
+            );
       return found;
     },
     Effect.catch((error) => Effect.succeed(lookFailure(error))),
