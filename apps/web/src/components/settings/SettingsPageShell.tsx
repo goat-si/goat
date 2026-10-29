@@ -3,6 +3,7 @@ import { useState, type ReactNode } from "react";
 import { XIcon } from "~/components/solar";
 
 import { isElectron } from "../../env";
+import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { registerCommands } from "../../shortcuts/dispatcher";
 import { closeAppPage, useCloseAppModal } from "../sidebar/mainAppLocation";
 import { Button } from "../ui/button";
@@ -53,7 +54,10 @@ export function SettingsPageShell({
   );
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate">
+    <SidebarInset
+      {...workspaceAreaProps("settings", 1, "Settings")}
+      className="h-dvh min-h-0 overflow-hidden overscroll-y-none isolate"
+    >
       <div
         ref={escapeCommandRef}
         className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground"

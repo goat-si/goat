@@ -393,7 +393,7 @@ function RightPanelEmptyState(props: {
 
   return (
     <div
-      ref={focusOnMount}
+      data-workspace-focus-default
       tabIndex={0}
       onKeyDown={handleKeyDown}
       aria-label="Open a surface"
@@ -530,10 +530,6 @@ function surfaceTitle(
 
 // Module-level so React only runs this callback ref on mount and unmount;
 // a fresh function would re-attach and re-focus on every render.
-function focusOnMount(node: HTMLDivElement | null) {
-  node?.focus();
-}
-
 export function RightPanelTabs(props: RightPanelTabsProps) {
   const ownsDesktopTitleBar = isElectron && props.mode === "inline";
   const browserProfiles = useBrowserDefaults().profiles;
@@ -802,6 +798,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
   return (
     <PreviewPanelShell
+      workspaceArea
+      workspaceFocusKey={`panel:${props.environmentId}:${props.activeSurfaceId ?? "empty"}`}
       mode={props.mode}
       {...(props.maximized !== undefined ? { maximized: props.maximized } : {})}
       {...(props.open !== undefined ? { open: props.open } : {})}

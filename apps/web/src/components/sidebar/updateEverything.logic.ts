@@ -177,6 +177,10 @@ function serverDetail(server: ServerUpdateTarget): string {
  */
 export function buildAppTab(input: {
   readonly local: LocalAppUpdate | null;
+  readonly localMachines?: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly label: string;
+  }>;
   readonly servers: ReadonlyArray<ServerUpdateTarget & { readonly fromVersion: string }>;
   readonly sshRuntimes: ReadonlyArray<SshRuntimeUpdateTarget>;
   readonly skipped: ReadonlyArray<SkippedMachine>;
@@ -212,20 +216,24 @@ export function buildAppTab(input: {
       ...remote,
       ...(local === null
         ? []
-        : [
-            {
-              id: "local",
-              kind: "local" as const,
-              environmentId: local.environmentId,
-              label: `GOAT on this Mac`,
-              detail: `${desktopChannelLabel(local.channel)} channel · restarts last`,
-              fromVersion: local.currentVersion,
-              toVersion: local.version,
-              runningThreads:
-                local.environmentId === null ? 0 : input.runningThreads(local.environmentId),
-              selectable: true,
-            },
-          ]),
+        : (input.localMachines?.length
+            ? input.localMachines
+            : [{ environmentId: local.environmentId, label: "GOAT on this Mac" }]
+          ).map((machine, index) => ({
+            id: index === 0 ? "local" : `local-host:${machine.environmentId}`,
+            kind: "local" as const,
+            environmentId: machine.environmentId,
+            label: machine.label,
+            detail:
+              index === 0
+                ? `${desktopChannelLabel(local.channel)} channel · restarts last`
+                : "Updates with this app",
+            fromVersion: local.currentVersion,
+            toVersion: local.version,
+            runningThreads:
+              machine.environmentId === null ? 0 : input.runningThreads(machine.environmentId),
+            selectable: index === 0,
+          }))),
     ],
     skipped: input.skipped,
   };

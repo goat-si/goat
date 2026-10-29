@@ -120,6 +120,26 @@ describe("collectServerUpdateTargets", () => {
 const id = (value: string) => EnvironmentId.make(value);
 
 describe("buildAppTab", () => {
+  it("names every app-hosted environment while selecting the local update only once", () => {
+    const tab = buildAppTab({
+      local: {
+        environmentId: id("local"),
+        currentVersion: "1.0.0",
+        version: "1.1.0",
+        channel: "latest",
+      },
+      localMachines: [
+        { environmentId: id("local"), label: "Laptop" },
+        { environmentId: id("wsl"), label: "Laptop WSL" },
+      ],
+      servers: [],
+      sshRuntimes: [],
+      skipped: [],
+      runningThreads: () => 0,
+    });
+    expect(tab.rows.map((row) => row.label)).toEqual(["Laptop", "Laptop WSL"]);
+    expect(selectedRows(tab, new Set()).map((row) => row.kind)).toEqual(["local"]);
+  });
   const server = (name: string) => ({
     environmentId: id(name),
     serverLabel: name,

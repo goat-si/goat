@@ -1,3 +1,4 @@
+import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import {
   isAtomCommandInterrupted,
@@ -69,11 +70,7 @@ import {
   terminalDeleteShortcutData,
   terminalNavigationShortcutData,
 } from "../keybindings";
-import {
-  DEFAULT_THREAD_TERMINAL_HEIGHT,
-  MAX_TERMINALS_PER_GROUP,
-  type ThreadTerminalGroup,
-} from "../types";
+import { MAX_TERMINALS_PER_GROUP, type ThreadTerminalGroup } from "../types";
 import { readLocalApi } from "~/localApi";
 import { confirmTerminalClose } from "~/lib/terminalCloseConfirm";
 import { useClientSettings } from "../hooks/useSettings";
@@ -101,36 +98,13 @@ import {
   TYPOGRAPHY_ADVANCED_STORAGE_KEY,
 } from "../appearanceFonts";
 
-const MIN_DRAWER_HEIGHT = 180;
-const MAX_DRAWER_HEIGHT_RATIO = 0.75;
-
-interface DrawerLayout {
-  viewportHeight: number;
-  chatColumnHeight?: number;
-  headerHeight?: number;
-  composerHeight?: number;
-}
-
-function resolveTerminalDrawerMaxHeight(input: DrawerLayout): number {
-  const windowCap = Math.max(
-    MIN_DRAWER_HEIGHT,
-    Math.floor(input.viewportHeight * MAX_DRAWER_HEIGHT_RATIO),
-  );
-  if (input.chatColumnHeight === undefined) return windowCap;
-  // The composer overlays the timeline, so flex layout cannot reserve its
-  // height; without this cap a tall drawer pushes it into the header.
-  return Math.min(
-    windowCap,
-    Math.max(0, input.chatColumnHeight - (input.headerHeight ?? 0) - (input.composerHeight ?? 0)),
-  );
-}
+import {
+  clampDrawerHeight,
+  resolveTerminalDrawerMaxHeight,
+  type DrawerLayout,
+} from "./terminalDrawerLayout";
 
 const DRAG_HEIGHT_PROPERTY = "--terminal-drawer-drag-height";
-
-function clampDrawerHeight(height: number, maxHeight: number): number {
-  const safeHeight = Number.isFinite(height) ? height : DEFAULT_THREAD_TERMINAL_HEIGHT;
-  return Math.min(Math.max(Math.round(safeHeight), MIN_DRAWER_HEIGHT), maxHeight);
-}
 
 function chatColumnOf(drawer: HTMLElement | null): HTMLElement | null {
   return drawer?.closest<HTMLElement>("[data-chat-column]") ?? null;
@@ -678,6 +652,7 @@ function TerminalSessionViewport({
       terminal.setTheme(terminalThemeFromApp(mount));
       setupTerminal = terminal;
       terminalRef.current = terminal;
+      terminal.input.setAttribute("data-workspace-focus-default", "");
       terminal.input.readOnly = !hasTerminalWriteAccess();
       // Reapply font settings hydrated during loading, when terminalRef was null.
       const currentFont = terminalFontRef.current;
@@ -1431,6 +1406,7 @@ export default function ThreadTerminalDrawer({
   terminalLaunchLocationsById,
 }: ThreadTerminalDrawerProps) {
   const canOperateTerminal = useEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope);
+  const terminalArea = workspaceAreaProps("terminal", 5, "Terminal");
   const isPanel = mode === "panel";
   const [advancedTypography] = useLocalStorage(
     TYPOGRAPHY_ADVANCED_STORAGE_KEY,
@@ -1714,6 +1690,7 @@ export default function ThreadTerminalDrawer({
     return (
       <aside
         ref={drawerRef}
+        {...(!isPanel && visible ? terminalArea : {})}
         data-thread-terminal-drawer
         data-glass-pane="terminal"
         data-terminal-owner={isPanel ? "right-panel" : "drawer"}
@@ -1751,6 +1728,7 @@ export default function ThreadTerminalDrawer({
   return (
     <aside
       ref={drawerRef}
+      {...(!isPanel && visible ? terminalArea : {})}
       data-thread-terminal-drawer
       data-glass-pane="terminal"
       data-terminal-owner={isPanel ? "right-panel" : "drawer"}
