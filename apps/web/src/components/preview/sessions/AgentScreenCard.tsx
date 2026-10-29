@@ -42,13 +42,14 @@ import { cn } from "~/lib/utils";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
+import { useThreadPreviewState } from "~/previewStateStore";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useEnvironmentScope } from "~/state/session";
 
 import { NativeAppIcon } from "../../chat/TimelineToolActivityIcon";
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { BrowserCardActions } from "./BrowserCardActions";
-import { NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
+import { cardServerTabSnapshot, NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
@@ -568,9 +569,12 @@ export function AgentScreenCard(
     previewSessionsEnvironment.control.permissionAtom(session.environmentId),
   );
   const canOperateBrowser = useEnvironmentScope(session.environmentId, AuthPreviewOperateScope);
+  const previewState = useThreadPreviewState(threadRef);
+  const drawnHere = useRendersServerTabNatively(
+    session.environmentId,
+    cardServerTabSnapshot(session, previewState.sessions),
+  );
   const hosted = useHostedTab(session);
-  // The thread's own snapshot, which ElectronBrowserHost hosts from, decides where the tab draws.
-  const drawnHere = useRendersServerTabNatively(session.environmentId, hosted?.snapshot);
   return (
     <AgentScreenCardView
       session={session}

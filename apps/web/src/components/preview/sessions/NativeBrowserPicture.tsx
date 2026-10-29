@@ -49,7 +49,6 @@ export function cardServerTabSnapshot(
 export function useHostedTab(session: PreviewSession): {
   readonly runtimeTabId: string;
   readonly overlay: DesktopPreviewOverlay | null;
-  readonly snapshot: PreviewSessionSnapshot;
 } | null {
   const threadId = session.threadId;
   const tabId = session.target.kind === "browser" ? session.target.tabId : null;
@@ -70,7 +69,6 @@ export function useHostedTab(session: PreviewSession): {
   return {
     runtimeTabId: previewRuntimeTabId(threadRef, state.serverEpoch, tabId),
     overlay: state.desktopByTabId[tabId] ?? null,
-    snapshot,
   };
 }
 
