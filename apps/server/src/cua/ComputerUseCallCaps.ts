@@ -16,6 +16,8 @@ const CAP_MS: Readonly<Record<string, number>> = {
   invoke_menu: 5_000,
   scroll: 10_000,
   launch_app: 15_000,
+  run_steps: 60_000,
+  run_script: 60_000,
 };
 const DEFAULT_CAP_MS = 4_000;
 

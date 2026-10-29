@@ -771,7 +771,7 @@ it.effect(
 );
 
 import { assert } from "@effect/vitest";
-import { active, CONTROL, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
+import { CONTROL, foregroundActive, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 
 it.effect(
   "audit r3 & r4: queued auxiliary read waits for an earlier provider call before counting its 1.5 s watchdog budget, then recovers in 2.5 s when stuck so a subsequent provider call does not wait for the cell deadline; short hidden wait returns met:false; and oversized titles drop before elements",
@@ -781,20 +781,28 @@ it.effect(
       // Once prov:1 answers at 5 s, aux is at the head of the pipe; when aux itself wedges the child and prov:2 arrives behind it,
       // the watchdog fires 2.5 s later (1.5 s budget + 1 s grace), not after a 28.5 s cell deadline.
       const h = yield* harness();
-      yield* h.push(active());
+      yield* h.push(foregroundActive());
       const current = yield* h.driverStarted;
+      // (a) A 10 s provider run_steps batch (cap 60 s) followed by a 1.5 s auxiliary read is not cut off at 6.5 s.
       yield* h.send(
         JSON.stringify({
           jsonrpc: "2.0",
-          id: "prov:1",
+          id: "prov:batch",
           method: "tools/call",
-          params: { name: "scroll", arguments: {} },
+          params: {
+            name: "run_steps",
+            arguments: {
+              pid: 42,
+              window_id: 1,
+              steps: [{ tool: "click", args: { pid: 42, window_id: 1, element_token: "s1:3" } }],
+            },
+          },
         }),
       );
-      const prov1 = yield* h.nextToDriver;
+      const provBatch = yield* h.nextToDriver;
       yield* h.sendPrimitive({
         state: "primitive-request",
-        requestId: "req:optional",
+        requestId: "req:aux1",
         registrationId: "registration:one",
         controlId: CONTROL,
         connectionGeneration: current.connectionId,
@@ -805,17 +813,48 @@ it.effect(
         tool: "list_windows",
         args: { pid: 42 },
       });
-      const aux = yield* h.nextToDriver;
-      // A driver-origin request (carrying method) with prov1's id must not be mistaken for prov1's reply.
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: prov1.id, method: "ping" }));
-      yield* TestClock.adjust("5 seconds");
+      const aux1 = yield* h.nextToDriver;
+      // A driver-origin request (carrying method) with provBatch's id must not be mistaken for provBatch's reply.
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: provBatch.id, method: "ping" }));
+      yield* TestClock.adjust("10 seconds");
       assert.isFalse(yield* h.isKilled);
       assert.equal(h.drivers.length, 1);
-      // If prov:1 is also stuck (never replies past its 10 s scroll cap), aux's watchdog still starts after the 10 s cap and replaces the stuck child.
-      yield* TestClock.adjust("8 seconds");
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: provBatch.id, result: { content: [] } }));
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: aux1.id, result: { content: [] } }));
+      assert.equal((yield* h.primitiveReply).status, "settled");
+
+      // (b) Three provider scroll calls (each 10 s cap) are queued and the first is wedged, followed by a 1.5 s auxiliary read.
+      // The watchdog replaces the child after the first wedged scroll's 10 s cap + 1 s grace (11 s), not after 30 s of combined caps.
+      for (const id of ["prov:s1", "prov:s2", "prov:s3"]) {
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id,
+            method: "tools/call",
+            params: { name: "scroll", arguments: {} },
+          }),
+        );
+        yield* h.nextToDriver;
+      }
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "req:aux2",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 1,
+        deadlineMillis: 11_500,
+        tool: "list_windows",
+        args: { pid: 42 },
+      });
+      yield* h.nextToDriver;
+      yield* TestClock.adjust("5 seconds");
+      assert.isFalse(yield* h.isKilled);
+      yield* TestClock.adjust("6100 millis");
       assert.isTrue(yield* h.isKilled);
       assert.equal(h.drivers.length, 2);
-      void aux;
 
       // 2. Short hidden wait (50 ms) after driver replacement with 5 ms admission delay returns met:false without failing deadline.
       const conn = { id: "driver:1" };

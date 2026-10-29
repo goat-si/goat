@@ -55,6 +55,8 @@ export const makeUnansweredWatch = <E>(
 ) => {
   // Marked as each line leaves the driver, ahead of the replies GOAT is still checking in order.
   const replied = new Set<string>();
+  // When the current head call of each connection reached the front of the pipe.
+  const headByConn = new Map<string, { readonly key: string; readonly since: number }>();
   // The chain a private or taken-over target closed; no call reaches it until it is replaced.
   let fenced: string | undefined;
   // Calls past their deadline, by key, until a reply lands or their grace ends. A new call to the
@@ -68,6 +70,17 @@ export const makeUnansweredWatch = <E>(
   const settle = (key: string) => {
     if (overdue.delete(key)) wake();
   };
+  const currentHead = (connectionId: string, now: number) => {
+    for (const [k, each] of proxy.outstanding) {
+      if (each.connectionId !== connectionId || replied.has(k)) continue;
+      const prev = headByConn.get(connectionId);
+      const since = prev?.key === k ? prev.since : now;
+      if (prev?.key !== k) headByConn.set(connectionId, { key: k, since });
+      return { key: k, call: each, since };
+    }
+    headByConn.delete(connectionId);
+    return undefined;
+  };
   /**
    * The chain is gone or closing: calls held for it wake now, before its cleanup and before a new
    * driver is acquired. Only the current chain takes the fence, so a stale cleanup never lifts a
@@ -75,6 +88,7 @@ export const makeUnansweredWatch = <E>(
    */
   const close = (connectionId: string, current: boolean) => {
     if (current) fenced = connectionId;
+    headByConn.delete(connectionId);
     for (const [key, chain] of overdue) if (chain === connectionId) overdue.delete(key);
     wake();
   };
@@ -150,51 +164,58 @@ export const makeUnansweredWatch = <E>(
     }),
     /** Every line the driver writes, as it arrives. */
     received: (line: string) =>
-      Effect.sync(() => {
-        const key = replyKey(line);
-        if (key === undefined) return;
-        for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
-        if (proxy.outstanding.has(key)) replied.add(key);
-        overdue.delete(key);
-        wake();
-      }),
+      Clock.currentTimeMillis.pipe(
+        Effect.tap((now) =>
+          Effect.sync(() => {
+            const key = replyKey(line);
+            if (key === undefined) return;
+            for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
+            const answered = proxy.outstanding.get(key);
+            if (answered !== undefined) {
+              replied.add(key);
+              currentHead(answered.connectionId, now);
+            }
+            overdue.delete(key);
+            wake();
+          }),
+        ),
+        Effect.asVoid,
+      ),
     // Every primitive call forks one watch; untraced to avoid a span per background timer.
     watch: Effect.fnUntraced(
       function* (key: string, deadlineMillis: number) {
         const started = yield* Clock.currentTimeMillis;
         const budgetMs = Math.max(0, deadlineMillis - started);
-        const initial = proxy.outstanding.get(key);
-        if (!initial) return;
-        let aheadCapMs = 0;
-        for (const [k, each] of proxy.outstanding) {
-          if (k === key) break;
-          if (each.connectionId === initial.connectionId && !replied.has(k))
-            aheadCapMs += driverCallCapMs(each.tool ?? "", each.args);
-        }
-        // Wait for earlier calls on the same child up to their combined tool caps.
-        if (aheadCapMs > 0) {
-          yield* Effect.gen(function* () {
-            for (;;) {
-              const woken = Deferred.await(settled);
-              const call = proxy.outstanding.get(key);
-              if (
-                !call ||
-                replied.has(key) ||
-                proxy.lifecycle.current?.connectionId !== call.connectionId
-              )
-                return;
-              let head = false;
-              for (const [k, each] of proxy.outstanding) {
-                if (each.connectionId !== call.connectionId || replied.has(k)) continue;
-                head = k === key;
-                break;
-              }
-              if (head) return;
-              yield* woken;
+        let headOverdue = false;
+        // Wait only while the currently blocking call at the head of the pipe is within its own
+        // cap; if that head call wedges, stop immediately without spending later queued calls' caps.
+        for (;;) {
+          const woken = Deferred.await(settled);
+          const now = yield* Clock.currentTimeMillis;
+          const call = proxy.outstanding.get(key);
+          if (
+            !call ||
+            replied.has(key) ||
+            proxy.lifecycle.current?.connectionId !== call.connectionId
+          )
+            return;
+          const head = currentHead(call.connectionId, now);
+          if (!head || head.key === key) break;
+          const headDeadline = head.since + driverCallCapMs(head.call.tool ?? "", head.call.args);
+          if (now >= headDeadline) {
+            headOverdue = true;
+            break;
+          }
+          const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
+          if (Option.isNone(step)) {
+            const after = yield* Clock.currentTimeMillis;
+            if (currentHead(call.connectionId, after)?.key === head.key) {
+              headOverdue = true;
+              break;
             }
-          }).pipe(Effect.timeoutOption(aheadCapMs));
+          }
         }
-        yield* Effect.sleep(budgetMs);
+        if (!headOverdue) yield* Effect.sleep(budgetMs);
         const call = proxy.outstanding.get(key);
         if (call !== undefined && !replied.has(key)) overdue.set(key, call.connectionId);
         yield* Effect.sleep(UNANSWERED_GRACE_MS);
