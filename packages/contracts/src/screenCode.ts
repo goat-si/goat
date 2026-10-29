@@ -436,6 +436,12 @@ export const ScreenSurfaceAvailability = Schema.Struct({
 });
 export type ScreenSurfaceAvailability = typeof ScreenSurfaceAvailability.Type;
 
+/**
+ * Longest cell API bundle a result carries. It is sent once per thread and is about 8 KiB with
+ * both surfaces; twice that leaves room to grow, and result.test.ts fails once a bundle outgrows it.
+ */
+const SCREEN_TARGET_API_MAX_CHARS = 16 * 1024;
+
 export const ScreenRunResult = Schema.Struct({
   runId: id,
   turnId: id,
@@ -450,7 +456,7 @@ export const ScreenRunResult = Schema.Struct({
   imageMetadata: Schema.Array(ScreenImageMetadata).check(Schema.isMaxLength(64)),
   images: Schema.Array(ScreenImage).check(Schema.isMaxLength(64)),
   /** The cell API bundle (screenTargetApi), when this thread needs it again. */
-  api: Schema.optionalKey(text(8192)),
+  api: Schema.optionalKey(text(SCREEN_TARGET_API_MAX_CHARS)),
   /** SCREEN_TARGET_CONTRACT_VERSION, on every result, so a stale copy of the API is noticed. */
   contractVersion: Schema.optionalKey(text(40)),
   ...cellWindowFields,
