@@ -745,11 +745,13 @@ export const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (watch.recovery !== undefined || watch.detached) return;
       const running = followers.get(watch.id);
-      if (running !== undefined) {
+      if (running?.incarnation === watch.incarnation) {
         if (running.idle !== undefined && watch.pendingRuns.length > 0)
           yield* Deferred.succeed(running.idle, undefined);
         return;
       }
+      // A follower of a pruned earlier incarnation exits at its next step; wake it so it does.
+      if (running?.idle !== undefined) yield* Deferred.succeed(running.idle, undefined);
       const slot: { readonly incarnation: string; fiber: Fiber.Fiber<void> | undefined } = {
         incarnation: watch.incarnation,
         fiber: undefined,
