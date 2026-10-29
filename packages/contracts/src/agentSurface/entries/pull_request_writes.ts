@@ -124,20 +124,27 @@ export const pullRequestWriteEntries = {
     "Mark ready or draft, reopen, update the branch, or disable auto-merge. Reconcile with pull_request.read. Merge and close have separate tools requiring pr.merge.",
     "pull_request.read",
     {
-      guide: "delete-branch, revert and approve-workflows are not exposed here.",
-    },
-  ),
-  "pull_request.merge": write(
-    "merge",
-    "Request a pull request merge",
-    "Request merge or enable auto-merge with auto:true. Requires pr.merge. The receipt says accepted; it does not prove merged. Read pull_request.read for state and autoMerge.",
-    "pull_request.read",
-    {
-      capability: "pr.merge",
       guide:
-        "Merge acts on the host's current head. For exact-head merges, use branch protection. The host may queue the merge; accepted never means merged.",
+        "Branch deletion has a separate tool; revert and approve-workflows are not exposed here.",
     },
   ),
+  "pull_request.merge": {
+    ...write(
+      "merge",
+      "Request a pull request merge",
+      "Request merge or enable auto-merge with auto:true. Requires pr.merge. The receipt says accepted; it does not prove merged. Read pull_request.read for state and autoMerge.",
+      "pull_request.read",
+      {
+        capability: "pr.merge",
+        guide:
+          "Pass headSha from the pull_request.read result you reviewed. The host refuses the request if the head has moved; unsupported hosts and methods refuse the pin. Auto-merge may happen later under the host's queue rules. Accepted never means merged.",
+      },
+    ),
+    parameters: {
+      headSha:
+        "Reviewed head SHA from pull_request.read; the host refuses the request if it has moved.",
+    },
+  },
   "pull_request.close": write(
     "close",
     "Close a pull request",
@@ -145,4 +152,25 @@ export const pullRequestWriteEntries = {
     "pull_request.read",
     { capability: "pr.merge" },
   ),
+  "pull_request.branch_delete": entry({
+    resource: "pull_request",
+    verb: "branch_delete",
+    name: "goat_pull_request_branch_delete",
+    toolkit: "pullRequests",
+    summary: "Delete a pull request source branch",
+    description:
+      "Delete the source branch of a closed or merged pull request. Requires pr.merge; unsupported hosts refuse.",
+    guide:
+      access +
+      "Repeating is safe: an absent branch succeeds, and a moved or unsafe branch is refused. pull_request.read does not show whether the branch exists.",
+    effect: "write",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    capability: "pr.merge",
+    idempotencyReason:
+      "The supported host accepts an absent branch and atomically deletes only the unchanged PR head; a repeat refuses a moved branch.",
+    annotations: { idempotentHint: true, openWorldHint: true },
+  }),
 } as const;

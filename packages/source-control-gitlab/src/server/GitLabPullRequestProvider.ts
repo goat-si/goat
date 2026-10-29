@@ -21,6 +21,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: [...definition.changeRequestActions],
   mergeMethods: ["merge", "squash", "rebase"],
+  expectedHeadMergeMethods: ["merge", "squash"],
   // GitLab has no merge-target-into-source operation.
   updateMethods: ["rebase"],
   search: true,
@@ -263,6 +264,7 @@ export const make = Effect.gen(function* () {
           repository: input.repository,
           number: input.number,
           action: input.action,
+          ...(input.headSha === undefined ? {} : { headSha: input.headSha }),
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),

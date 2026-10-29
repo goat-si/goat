@@ -261,6 +261,8 @@ export const PullRequestCapabilities = Schema.Struct({
   comment: Schema.Boolean,
   actions: ForwardCompatibleArray(PullRequestAction),
   mergeMethods: ForwardCompatibleArray(PullRequestMergeMethod),
+  expectedHeadMergeMethods: Schema.optional(ForwardCompatibleArray(PullRequestMergeMethod)),
+  /** Deletion must accept an absent branch and atomically refuse a moved head. */
   deleteBranch: Schema.optional(Schema.Boolean),
   /**
    * Absent where it cannot at all, which is every host that has not said otherwise — so a
@@ -728,6 +730,7 @@ export const PullRequestActionInput = Schema.Struct({
   expectedStackHeads: Schema.optional(Schema.Array(PullRequestStackHead)),
   ...PullRequestRef.fields,
   action: PullRequestAction,
+  headSha: Schema.optional(TrimmedNonEmptyString),
   mergeMethod: Schema.optional(PullRequestMergeMethod),
   updateMethod: Schema.optional(PullRequestUpdateMethod),
 });

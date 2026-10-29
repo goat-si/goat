@@ -24,9 +24,11 @@ import type { PullRequestTargetInput, PullRequestToolError } from "./tools.ts";
 
 export class PullRequestWriteFailedError extends Schema.TaggedError<PullRequestWriteFailedError>()(
   "PullRequestWriteFailedError",
-  { cause: Schema.Defect() },
+  { cause: Schema.Defect(), natural: Schema.optional(Schema.Boolean) },
 ) {
   override get message(): string {
+    if (this.natural)
+      return "Branch deletion failed or its outcome is unknown. A repeat safely checks the branch again; pull_request.read does not show whether it exists.";
     return "The pull request write failed and may have been partly posted. Read pull_request.activity or pull_request.read to reconcile. Never resend with a new key. Tell the user if the outcome cannot be confirmed.";
   }
 }
@@ -60,7 +62,8 @@ type WriteVerb =
   | "reviewers"
   | "action"
   | "merge"
-  | "close";
+  | "close"
+  | "branch_delete";
 
 export const makeWriteTools = (
   target: Pick<typeof PullRequestTargetInput.fields, "url" | "repository" | "number" | "host">,
@@ -73,7 +76,10 @@ export const makeWriteTools = (
     const entry = agentSurfaceRegistry[`pull_request.${verb}`];
     return Tool.make(`goat_pull_request_${verb}` as const, {
       description: entry.description,
-      parameters: withClientRequestId(Schema.Struct({ ...target, ...fields })),
+      parameters:
+        verb === "branch_delete"
+          ? Schema.Struct({ ...target, ...fields })
+          : withClientRequestId(Schema.Struct({ ...target, ...fields })),
       success: Receipt,
       failure,
       dependencies: [
@@ -127,7 +133,11 @@ export const makeWriteTools = (
     make("merge", {
       method: Schema.optional(PullRequestMergeMethod),
       auto: Schema.optional(Schema.Boolean),
+      headSha: PullRequestActionInput.fields.headSha.annotate({
+        description: "Head SHA reviewed from pull_request.read; the host refuses if it has moved.",
+      }),
     }),
     make("close", {}),
+    make("branch_delete", {}),
   ] as const;
 };

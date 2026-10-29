@@ -1,3 +1,7 @@
+import {
+  GitLabDiffRefsUnavailableError,
+  GitLabPinnedRebaseError,
+} from "./gitLabPullRequestActionErrors.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -86,23 +90,6 @@ export class GitLabViewerUnavailableError extends Schema.TaggedError<GitLabViewe
   }
 }
 
-export class GitLabDiffRefsUnavailableError extends Schema.TaggedError<GitLabDiffRefsUnavailableError>()(
-  "GitLabDiffRefsUnavailableError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-    number: Schema.Int,
-  },
-) {
-  get detail(): string {
-    return "The merge request reported no diff revisions.";
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in getDiffRefs: ${this.detail}`;
-  }
-}
-
 export class GitLabDiffCursorError extends Schema.TaggedError<GitLabDiffCursorError>()(
   "GitLabDiffCursorError",
   {
@@ -174,6 +161,7 @@ export class GitLabDiffFileContentsUnavailableError extends Schema.TaggedError<G
 
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
+  | GitLabPinnedRebaseError
   | GitLabMergeRequestReadError
   | GitLabDiffCursorError
   | GitLabDiffCommitError
@@ -321,6 +309,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
       readonly action: PullRequestAction;
+      readonly headSha?: string;
       readonly mergeMethod?: PullRequestMergeMethod;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
@@ -1374,6 +1363,12 @@ export const make = Effect.gen(function* () {
 
     runMergeRequestAction: Effect.fn("GitLabPullRequestCli.runMergeRequestAction")(
       function* (input) {
+        if (
+          input.headSha !== undefined &&
+          (input.mergeMethod === "rebase" || !["merge", "enable-auto-merge"].includes(input.action))
+        ) {
+          return yield* new GitLabPinnedRebaseError({ number: input.number });
+        }
         // `glab mr merge` arms auto-merge and never disarms it, so the one direction the CLI has
         // no flag for is asked of GitLab directly through the same `api` passthrough the rest of
         // this module writes with.
@@ -1395,8 +1390,8 @@ export const make = Effect.gen(function* () {
             // A rebase changes the source SHA, so wait for it before reading the merge guard.
             yield* executeMr("rebase");
           }
-          const refs = yield* getDiffRefs(input);
-          flags.push("--sha", refs.headSha);
+          const headSha = input.headSha ?? (yield* getDiffRefs(input)).headSha;
+          flags.push("--sha", headSha);
         }
         yield* executeMr(subcommand!, ...flags);
       },
