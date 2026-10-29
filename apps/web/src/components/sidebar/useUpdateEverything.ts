@@ -209,6 +209,9 @@ export function useUpdateEverything(
             version: localUpdateVersion,
             channel: localChannel,
           },
+    localMachines: machines
+      .filter((machine) => machine.hostedByThisApp)
+      .map(({ environmentId, label }) => ({ environmentId, label })),
     servers: servers.map((server) => ({ ...server, fromVersion: versionOf(server.environmentId) })),
     sshRuntimes,
     skipped,
