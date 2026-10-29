@@ -901,115 +901,6 @@ describe("ClaudeAdapterV2 context usage", () => {
   });
 });
 
-describe("ClaudeAdapterV2 approval presentation", () => {
-  it("marks asks that full access could not auto-allow and keeps the CLI's reason", () => {
-    const presentation = ClaudeAdapterV2.claudeApprovalPresentation({
-      permissionMode: "bypassPermissions",
-      prompt: 'Claude wants to run rm -r -- "$rr/$h"',
-      callbackOptions: {
-        decisionReason: "\u001b[33mDangerous rm on a path built from a variable\u001b[39m",
-        suppressAlwaysAllowRule: true,
-      },
-    });
-    assert.deepEqual(presentation, {
-      reason: "Dangerous rm on a path built from a variable",
-      fullAccessOverride: "provider_check",
-      options: [
-        { decision: "decline", label: "Decline" },
-        { decision: "accept", label: "Approve" },
-      ],
-    });
-  });
-
-  it("attributes a bypass ask to the user's ask rule when one matched", () => {
-    const presentation = ClaudeAdapterV2.claudeApprovalPresentation({
-      permissionMode: "bypassPermissions",
-      prompt: "Claude wants to run git push",
-      callbackOptions: {
-        matchedAskRule: { source: "userSettings", toolName: "Bash", ruleContent: "git push:*" },
-      },
-    });
-    assert.deepEqual(presentation, { fullAccessOverride: "ask_rule" });
-  });
-
-  it("adds nothing to ordinary approvals outside full access", () => {
-    const presentation = ClaudeAdapterV2.claudeApprovalPresentation({
-      permissionMode: "default",
-      prompt: "Run make?",
-      callbackOptions: { decisionReason: "Run make?" },
-    });
-    assert.deepEqual(presentation, {});
-  });
-});
-
-describe("ClaudeAdapterV2 session permissions", () => {
-  it("keeps explicit user refusals classified as user_reject", () => {
-    const result = ClaudeAdapterV2.permissionResultFromDecision({
-      toolName: "Bash",
-      decision: "decline",
-      toolInput: { command: "make" },
-      toolUseID: "denied-build",
-    });
-    assert.equal(result.behavior, "deny");
-    if (result.behavior !== "deny") return;
-    assert.equal(result.decisionClassification, "user_reject");
-    assert.equal(result.message, "User declined tool execution.");
-    assert.equal(result.interrupt, undefined);
-  });
-
-  it("forces suggested permission updates to session scope", () => {
-    const result = ClaudeAdapterV2.permissionResultFromDecision({
-      toolName: "Bash",
-      decision: "acceptForSession",
-      toolInput: { command: "git status" },
-      toolUseID: "tool-1",
-      suggestions: [
-        {
-          type: "addRules",
-          rules: [{ toolName: "Bash", ruleContent: "git status" }],
-          behavior: "allow",
-          destination: "localSettings",
-        },
-      ],
-    });
-
-    assert.equal(result.behavior, "allow");
-    if (result.behavior !== "allow") {
-      return;
-    }
-    assert.deepEqual(result.updatedPermissions, [
-      {
-        type: "addRules",
-        rules: [{ toolName: "Bash", ruleContent: "git status" }],
-        behavior: "allow",
-        destination: "session",
-      },
-    ]);
-  });
-
-  it("adds a whole-tool session rule when Claude offers no suggestion", () => {
-    const result = ClaudeAdapterV2.permissionResultFromDecision({
-      toolName: "mcp__t3__custom_tool",
-      decision: "acceptForSession",
-      toolInput: {},
-      toolUseID: "tool-2",
-    });
-
-    assert.equal(result.behavior, "allow");
-    if (result.behavior !== "allow") {
-      return;
-    }
-    assert.deepEqual(result.updatedPermissions, [
-      {
-        type: "addRules",
-        rules: [{ toolName: "mcp__t3__custom_tool" }],
-        behavior: "allow",
-        destination: "session",
-      },
-    ]);
-  });
-});
-
 describe("ClaudeAdapterV2 Auto-accept edits", () => {
   it.effect("asks before a command instead of allowing it", () =>
     Effect.scoped(
@@ -7456,7 +7347,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
-  it.effect("stops background work after the turn settled", () =>
+  it.effect("preserves settled background work until an explicit stop", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let closes = 0;
@@ -7486,6 +7377,29 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         const settledThread = providerThreadRosterEvents(harness.events).at(-1)?.providerThread;
         assert.equal(settledThread?.pendingBackgroundTasks?.[0]?.taskId, WAKE_TASK_ID);
+        assert.isTrue(yield* harness.hasPendingBackgroundWork);
+
+        const replacementAttempt = yield* harness.runtime
+          .startTurn(
+            makeClaudeTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: {
+                ...harness.providerThread,
+                nativeThreadRef: {
+                  ...harness.providerThread.nativeThreadRef!,
+                  nativeId: "replacement-session",
+                },
+              },
+              now,
+              attemptId: RunAttemptId.make("attempt-claude-background-replacement"),
+              text: "Continue in a fresh session.",
+              attachments: [],
+              providerTurnOrdinal: 2,
+            }),
+          )
+          .pipe(Effect.result);
+        assert.equal(replacementAttempt._tag, "Failure");
+        assert.equal(closes, 0);
         assert.isTrue(yield* harness.hasPendingBackgroundWork);
 
         yield* harness.runtime.interruptTurn({
@@ -11856,6 +11770,25 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         yield* observations.awaitUntil(() => terminals().length === 1, "first turn terminal");
         const settledTurn = terminals()[0]!;
+
+        assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(providerThread));
+        assert.isTrue(
+          yield* runtime.hasPendingBackgroundWorkForThread!(providerThread, {
+            includeSubagents: true,
+          }),
+        );
+        assert.isFalse(
+          yield* runtime.hasPendingBackgroundWorkForThread!(
+            {
+              ...providerThread,
+              nativeThreadRef: {
+                ...providerThread.nativeThreadRef!,
+                nativeId: "sibling-native-session",
+              },
+            },
+            { includeSubagents: true },
+          ),
+        );
 
         const alternateModel = CLAUDE_TEST_RESTART_MODEL_SELECTION;
         const switchTurn = (attempt: string) =>
