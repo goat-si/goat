@@ -2,6 +2,7 @@ import type { Root, RootContent } from "mdast";
 import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
+import { markdownWithCommonMarkCjkEmphasis } from "@goat/shared/markdownCjkEmphasis";
 import { remarkKeepWindowsProsePaths } from "@goat/shared/markdownWindowsPaths";
 import { isWindowsAbsolutePath } from "@goat/shared/path";
 
@@ -430,7 +431,9 @@ function markdownWithWindowsPathDestinations(markdown: string): string {
 
 // HTML wrappers can expose Markdown that wasn't in the first AST, so normalize them first.
 export function markdownForNativeParsing(markdown: string): string {
-  return markdownWithWindowsPathDestinations(markdownWithHtml(markdown));
+  return markdownWithCommonMarkCjkEmphasis(
+    markdownWithWindowsPathDestinations(markdownWithHtml(markdown)),
+  );
 }
 
 export function parseMarkdownDocument(markdown: string): Root {

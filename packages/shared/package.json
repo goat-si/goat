@@ -651,6 +651,10 @@
       "types": "./src/markdownMath.ts",
       "import": "./src/markdownMath.ts"
     },
+    "./markdownCjkEmphasis": {
+      "types": "./src/markdownCjkEmphasis.ts",
+      "import": "./src/markdownCjkEmphasis.ts"
+    },
     "./cloneUrl": {
       "types": "./src/cloneUrl.ts",
       "import": "./src/cloneUrl.ts"
