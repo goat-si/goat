@@ -51,6 +51,13 @@ export interface AppBusy {
   readonly app: string;
 }
 
+/** A thread other than the asker that uses an app now, by the processes it acted on. */
+export interface AppHolder {
+  readonly holderThreadId: ThreadId;
+  readonly pids: ReadonlyArray<number>;
+  readonly app?: string;
+}
+
 /** One admitted call's use of the app: its process, its app id when known, and when. */
 interface Use {
   readonly pid: number;
@@ -210,5 +217,27 @@ export const makeAppLeases = <E>(options: {
   const release = (threadId: ThreadId, controlId: string) => {
     leases = leases.filter((other) => other.threadId !== threadId || other.controlId !== controlId);
   };
-  return { busy, hold, settle, release, held: () => leases.length };
+  /**
+   * Other threads' leases for discover, read without a yield or a write. It asks only whether the
+   * holder's control still lives, never holds(), whose control read can revoke and publish, so a
+   * lease whose grant lapsed but was not yet revoked is still listed: the safe side.
+   */
+  const holders = (
+    threadId: ThreadId,
+    now: number,
+    live: (holder: ThreadId, controlId: string) => boolean,
+  ): ReadonlyArray<AppHolder> =>
+    leases
+      .filter(
+        (lease) =>
+          lease.threadId !== threadId &&
+          lease.usedAt + APP_LEASE_IDLE_MS > now &&
+          live(lease.threadId, lease.controlId),
+      )
+      .map((lease) => ({
+        holderThreadId: lease.threadId,
+        pids: lease.pids,
+        ...(lease.app === undefined ? {} : { app: lease.app }),
+      }));
+  return { busy, hold, settle, release, holders, held: () => leases.length };
 };

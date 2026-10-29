@@ -97,7 +97,7 @@ export const screenTargetApi = (surfaces: {
     "declare const screen: {",
     ...(app ? [SCREEN_APP] : []),
     ...(tab ? [SCREEN_TAB] : []),
-    "  discover(): Promise<{ apps: unknown; windows: unknown; tabs: unknown; unavailable: object }>;",
+    "  discover(): Promise<{ apps: unknown; windows: unknown; tabs: unknown; unavailable: object }>; // app and window rows another thread uses now carry inUse: true and holderThreadId (it may have just finished); holdersUnknown: true means some rows could not be checked",
     "  state: object; // survives cells of this turn",
     "};",
     ...(app
