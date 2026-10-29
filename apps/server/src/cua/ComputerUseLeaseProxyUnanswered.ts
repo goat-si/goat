@@ -11,7 +11,6 @@ import type * as Scope from "effect/Scope";
 import type * as Semaphore from "effect/Semaphore";
 
 import { type Interruption, targetClosedInterruption } from "./ComputerUseLeaseMessages.ts";
-import { PRIMITIVE_ID } from "./ComputerUseLeaseProxyOptions.ts";
 
 /** Lets a reply already on its way land before the child is judged stuck. */
 const UNANSWERED_GRACE_MS = 1_000;
@@ -24,10 +23,9 @@ const DRIVER_UNANSWERED: Interruption = {
 };
 
 const replyKey = (line: string): string | undefined => {
-  if (!line.includes(PRIMITIVE_ID)) return undefined;
   try {
     const id: unknown = (JSON.parse(line) as { id?: unknown }).id;
-    return typeof id === "string" && id.startsWith(PRIMITIVE_ID) ? JSON.stringify(id) : undefined;
+    return id === undefined || id === null ? undefined : JSON.stringify(id);
   } catch {
     return undefined;
   }
@@ -149,28 +147,53 @@ export const makeUnansweredWatch = <E>(
       Effect.sync(() => {
         const key = replyKey(line);
         if (key === undefined) return;
+        for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
         if (proxy.outstanding.has(key)) replied.add(key);
-        settle(key);
+        overdue.delete(key);
+        wake();
       }),
-    watch: (key: string, deadlineMillis: number) =>
-      Clock.currentTimeMillis.pipe(
-        Effect.flatMap((now) => Effect.sleep(Math.max(0, deadlineMillis - now))),
-        Effect.andThen(
-          Effect.sync(() => {
-            const call = proxy.outstanding.get(key);
-            if (call !== undefined && !replied.has(key)) overdue.set(key, call.connectionId);
-          }),
+    // Every primitive call forks one watch; untraced to avoid a span per background timer.
+    watch: Effect.fnUntraced(
+      function* (key: string, deadlineMillis: number) {
+        const started = yield* Clock.currentTimeMillis;
+        const budgetMs = Math.max(0, deadlineMillis - started);
+        // A call queued behind an earlier unanswered call on the same child waits for its turn
+        // at the head of the pipe before its own response budget counts down.
+        for (;;) {
+          const woken = Deferred.await(settled);
+          const call = proxy.outstanding.get(key);
+          if (
+            !call ||
+            replied.has(key) ||
+            proxy.lifecycle.current?.connectionId !== call.connectionId
+          )
+            return;
+          let head = false;
+          for (const [k, each] of proxy.outstanding) {
+            if (each.connectionId !== call.connectionId || replied.has(k)) continue;
+            head = k === key;
+            break;
+          }
+          if (head) break;
+          yield* woken;
+        }
+        yield* Effect.sleep(budgetMs);
+        const call = proxy.outstanding.get(key);
+        if (call !== undefined && !replied.has(key)) overdue.set(key, call.connectionId);
+        yield* Effect.sleep(UNANSWERED_GRACE_MS);
+        yield* replace(key);
+      },
+      (effect, key) =>
+        effect.pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              replied.delete(key);
+              settle(key);
+            }),
+          ),
+          Effect.forkIn(proxy.scope),
+          Effect.asVoid,
         ),
-        Effect.andThen(Effect.sleep(UNANSWERED_GRACE_MS)),
-        Effect.andThen(replace(key)),
-        Effect.ensuring(
-          Effect.sync(() => {
-            replied.delete(key);
-            settle(key);
-          }),
-        ),
-        Effect.forkIn(proxy.scope),
-        Effect.asVoid,
-      ),
+    ),
   };
 };

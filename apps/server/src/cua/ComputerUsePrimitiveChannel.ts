@@ -23,12 +23,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import {
-  CELL_RESERVE_MS,
-  driverCallDeadline,
-  MIN_CALL_MS,
-  seconds,
-} from "./ComputerUseCallCaps.ts";
+import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
 
 /**
  * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
@@ -102,7 +97,6 @@ export interface PrimitiveChannelRequest {
   readonly tool: string;
   readonly args: ComputerUsePrimitiveRequest["args"];
   readonly cursor?: ComputerUsePrimitiveRequest["cursor"];
-  readonly optional?: boolean;
 }
 
 export class ComputerUsePrimitiveChannel extends Context.Service<
@@ -332,10 +326,7 @@ export const make = Effect.gen(function* () {
       runId: input.runId,
       turnId: input.turnId,
       callId: input.callId,
-      deadlineMillis:
-        input.optional === true
-          ? Math.max(deadlineMillis, input.deadlineMillis - CELL_RESERVE_MS)
-          : deadlineMillis,
+      deadlineMillis,
       tool: input.tool,
       args: input.args,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),

@@ -220,7 +220,7 @@ export const createDesktopTargetHost = (deps: {
     expectedConnectionGeneration?: string,
     /** The input's cursor: the bound target that owns it and, for an element, its center. */
     cursor?: {
-      readonly bound?: BoundWindow;
+      readonly bound: BoundWindow;
       readonly point?: ComputerUseOverlayPoint | undefined;
       readonly optional?: boolean;
     },
@@ -236,8 +236,7 @@ export const createDesktopTargetHost = (deps: {
       tool,
       args,
       ...(expectedConnectionGeneration === undefined ? {} : { expectedConnectionGeneration }),
-      ...(cursor?.optional === true ? { optional: true } : {}),
-      ...(cursor?.bound === undefined
+      ...(cursor === undefined
         ? {}
         : {
             cursor: {
@@ -310,14 +309,7 @@ export const createDesktopTargetHost = (deps: {
       return yield* Effect.fail(
         fail("stale_reference", needs === "points" ? RESTARTED_POINTS : RESTARTED_ELEMENTS),
       );
-    const listed = yield* request(
-      "list_windows",
-      { pid: bound.pid },
-      call,
-      context,
-      undefined,
-      cursor?.optional === true ? { optional: true } : undefined,
-    );
+    const listed = yield* request("list_windows", { pid: bound.pid }, call, context);
     const still = array(object(driverValue(listed))?.windows)
       .map(object)
       .some((window) => window?.window_id === bound.windowId && window.pid === bound.pid);
@@ -784,9 +776,7 @@ export const createDesktopTargetHost = (deps: {
       if (args.window === "hidden")
         return yield* pollHiddenWindow({
           list: () =>
-            boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context, {
-              optional: true,
-            }),
+            boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context),
           pid: bound.pid,
           windowId: bound.windowId,
           timeoutMs: args.timeoutMs,

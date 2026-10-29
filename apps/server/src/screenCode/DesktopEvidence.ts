@@ -161,7 +161,6 @@ type SendFn = (
   call: ScreenHostCall,
   context: ScreenHostContext,
   expectedConnectionGeneration?: string,
-  cursor?: { readonly optional?: boolean },
 ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
 
 const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
@@ -178,9 +177,14 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
   const latestEnd = call.deadlineMillis - reserveAfterMs - CELL_RESERVE_MS;
   if (latestEnd - now < MIN_CALL_MS) return undefined;
   const effective = Math.min(budgetMs, latestEnd - now);
-  const sent = yield* send(tool, args, call, context, connectionGeneration, {
-    optional: true,
-  }).pipe(Effect.timeoutOption(effective), Effect.option);
+  const deadlineMillis = now + CELL_RESERVE_MS + effective;
+  const sent = yield* send(
+    tool,
+    args,
+    { ...call, deadlineMillis },
+    context,
+    connectionGeneration,
+  ).pipe(Effect.timeoutOption(effective), Effect.option);
   const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
   if (!reply || driverError(reply) !== undefined) return undefined;
   return driverValue(reply);
@@ -310,11 +314,10 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
         callId: 0,
         method: "list_windows",
         args: { pid },
-        deadlineMillis: cap,
+        deadlineMillis: now + CELL_RESERVE_MS + remain,
       },
       context,
       entry.connectionGeneration,
-      { optional: true },
     ).pipe(Effect.timeoutOption(remain), Effect.option);
     const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
     endByPid.set(

@@ -61,8 +61,6 @@ export const ComputerUsePrimitiveRequest = Schema.Struct({
   ),
   tool: primitiveId,
   args: primitiveJson,
-  /** Best-effort host read: a timeout cancels the wait without restarting a busy driver. */
-  optional: Schema.optionalKey(Schema.Boolean),
   /**
    * The agent cursor this call draws, never sent to the driver: the host-owned owner (sequence 0,
    * before any of its phases) and where in the window the call acts, when the host knows.

@@ -774,11 +774,12 @@ import { assert } from "@effect/vitest";
 import { active, CONTROL, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 
 it.effect(
-  "audit r3: optional read keeps the cell watch deadline on a base proxy (no early restart at 5s, recovery watchdog fires at 30s when stuck), hidden-wait rebind forwards optional, short hidden wait returns met:false, and oversized titles are bounded",
+  "audit r3 & r4: queued auxiliary read waits for an earlier provider call before counting its 1.5 s watchdog budget, then recovers in 2.5 s when stuck so a subsequent provider call does not wait for the cell deadline; short hidden wait returns met:false; and oversized titles drop before elements",
   () =>
     Effect.gen(function* () {
-      // 1. Base-version proxy (no wire optional field): auxiliary read carries cell watch deadline (28,500 ms),
-      // so at 5 s behind a slow provider call the child is NOT killed; if an unanswered read stays stuck past 30 s, the watchdog DOES replace the child.
+      // 1. Auxiliary read (1,500 ms deadline) queued behind prov:1 (5 s scroll) does not kill the driver at 5 s.
+      // Once prov:1 answers at 5 s, aux is at the head of the pipe; when aux itself wedges the child and prov:2 arrives behind it,
+      // the watchdog fires 2.5 s later (1.5 s budget + 1 s grace), not after a 28.5 s cell deadline.
       const h = yield* harness();
       yield* h.push(active());
       const current = yield* h.driverStarted;
@@ -790,7 +791,7 @@ it.effect(
           params: { name: "scroll", arguments: {} },
         }),
       );
-      const prov = yield* h.nextToDriver;
+      const prov1 = yield* h.nextToDriver;
       yield* h.sendPrimitive({
         state: "primitive-request",
         requestId: "req:optional",
@@ -800,7 +801,7 @@ it.effect(
         runId: "run:one",
         turnId: "cell:one",
         callId: 0,
-        deadlineMillis: 28_500,
+        deadlineMillis: 1_500,
         tool: "list_windows",
         args: { pid: 42 },
       });
@@ -808,15 +809,23 @@ it.effect(
       yield* TestClock.adjust("5 seconds");
       assert.isFalse(yield* h.isKilled);
       assert.equal(h.drivers.length, 1);
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: prov.id, result: { content: [] } }));
-      // Now leave aux unanswered past its 28.5 s watch deadline + 1 s grace: the watchdog replaces the stuck child.
-      yield* TestClock.adjust("25 seconds");
+      // prov:1 finishes at t = 5 s; aux is now at the head of the pipe and wedges the child, while prov:2 queues behind it.
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: prov1.id, result: { content: [] } }));
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "prov:2",
+          method: "tools/call",
+          params: { name: "list_apps", arguments: {} },
+        }),
+      );
+      yield* TestClock.adjust("2600 millis");
       assert.isTrue(yield* h.isKilled);
+      assert.equal(h.drivers.length, 2);
       void aux;
 
-      // 2. Hidden-wait recovery after driver replacement forwards optional: true on the rebind list_windows, and short hidden wait (50 ms) with 10 ms admission delay returns met:false.
+      // 2. Short hidden wait (50 ms) after driver replacement with 5 ms admission delay returns met:false without failing deadline.
       const conn = { id: "driver:1" };
-      const optionalFlags: Array<boolean | undefined> = [];
       const rebindBase = fixture(
         {
           list_windows: { windows: [win(7, { is_on_screen: true })] },
@@ -829,7 +838,6 @@ it.effect(
           args: unknown;
           deadlineMillis: number;
           expectedConnectionGeneration?: string;
-          optional?: boolean;
         }) =>
           Effect.gen(function* () {
             yield* TestClock.adjust("5 millis");
@@ -841,7 +849,6 @@ it.effect(
                 effectStarted: false,
                 nextStep: "Too short.",
               });
-            optionalFlags.push(req.optional);
             return yield* rebindBase.channel.request(req as never);
           }),
       };
@@ -857,7 +864,6 @@ it.effect(
         context,
       )).value as ScreenTargetRef;
       conn.id = "driver:2";
-      optionalFlags.length = 0;
       const shortWaitFiber = yield* rebindHost
         .invoke(
           {
@@ -871,10 +877,8 @@ it.effect(
       yield* TestClock.adjust("100 millis");
       const shortWaitOut = yield* Fiber.join(shortWaitFiber);
       expect(shortWaitOut.value).toMatchObject({ met: false, status: "unsatisfied" });
-      expect(optionalFlags.length).toBeGreaterThanOrEqual(2);
-      expect(optionalFlags.every((f) => f === true)).toBe(true);
 
-      // 3. Desktop title > 1,024 chars is clipped to 1,024, and under a tight treeBytes budget the title is dropped rather than failing tree_limit.
+      // 3. Desktop title > 1,024 chars is clipped to 1,024, and under a tight treeBytes budget the title is dropped first so usable elements survive.
       const longTitle = "T".repeat(1500);
       const titleFix = fixture({
         get_window_state: {
@@ -889,7 +893,7 @@ it.effect(
       const tBound = (yield* titleFix.host.bindApp(
         evCall("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
-      )).value as ScreenTargetRef;
+      )).value as ScreenObservation["targetRef"];
       const normalObs = (yield* titleFix.host.observe(
         evCall("get_window_state", {}, tBound),
         context,
@@ -900,6 +904,7 @@ it.effect(
         limits: { ...context.limits, returnBytes: 1200 },
       })).value as ScreenObservation;
       expect(tightObs.title).toBeUndefined();
+      expect(tightObs.elements).toHaveLength(1);
       expect(tightObs.truncated).toBe(true);
     }),
 );

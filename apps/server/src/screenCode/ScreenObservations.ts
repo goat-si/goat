@@ -584,6 +584,14 @@ export class ScreenObservations {
     const budget = Math.min(input.limits.treeBytes, 128 * 1024);
     // An app read over budget gives up redundant annotations, then elements in the order
     // desktopCutOrder plans (chrome outlasts table body, visible outlasts off-window).
+    if (
+      draft.targetRef.kind === "app" &&
+      Buffer.byteLength(JSON.stringify(build())) > budget &&
+      title !== undefined
+    ) {
+      title = undefined;
+      truncated = true;
+    }
     if (draft.targetRef.kind === "app" && Buffer.byteLength(JSON.stringify(build())) > budget) {
       const plain = renderedText.replace(/ actions=\[[^\]]*\]/g, "").replace(/ \[\]/g, "");
       text = cut(plain);
