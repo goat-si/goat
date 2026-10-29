@@ -69,6 +69,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { REPORTING_NOTE } from "../remoteReports/reportFrame.ts";
 import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
 import {
@@ -541,6 +542,7 @@ export class ChannelTaskMoveError extends Data.TaggedError("ChannelTaskMoveError
 
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
+  const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const settings = yield* ServerSettings.ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -800,6 +802,7 @@ const make = Effect.gen(function* () {
       return yield* new Superseded();
     const requester = yield* requesterForDispatch(stored.task).pipe(
       Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       Effect.orElseSucceed(() => undefined),
     );
     if (requester === undefined) return yield* new Superseded();
@@ -1489,6 +1492,7 @@ const make = Effect.gen(function* () {
       if (remote === undefined) return;
       const requester = yield* requesterForDispatch(task).pipe(
         Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
       );
       const now = yield* nowIso;
       let state = yield* readState(taskId);

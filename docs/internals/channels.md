@@ -49,7 +49,12 @@ two generations. Reads change nothing, so a reception retried after a crash read
   Agents over MCP see only their own conversation. A Slack or iMessage link acts as the GOAT
   principal who made the link code, so it sees what that principal sees, judged with the link as
   it stands when reception reads: a link removed or narrowed after the message arrived leaves
-  only that conversation's work. Read results and journal
+  only that conversation's work. A Slack connection open to its whole workspace admits people
+  without a link as their own `unlinked:<connection>:<user>` principal with only
+  `orchestration:operate` and the connection's unlinked ceiling; every later check rebuilds that
+  identity from the connection's current settings
+  ([`channelCurrentIdentity.ts`](../../apps/server/src/channels/channelCurrentIdentity.ts)), so
+  switching to linked accounts only stops work that has not started. Read results and journal
   lines are labelled as records for the model, but the filtering above is what keeps them private.
 
 ## The bot's own turns

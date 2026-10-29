@@ -629,7 +629,6 @@ describe("disconnect", () => {
               owner,
             );
             yield* awaitConnectedId(second.connectionId);
-
             // Keep the runtime busy stopping the first connection, so disabling the second
             // has already saved its file and is waiting to stop it.
             const releaseDisconnect = sdk.holdDisconnects();
@@ -637,6 +636,7 @@ describe("disconnect", () => {
               runtime.apply({
                 connectionId: first.connectionId,
                 enabled: false,
+                channelScope: "all",
                 allowedChannelIds: [],
                 appToken: undefined,
                 botToken: undefined,

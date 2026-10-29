@@ -41,6 +41,7 @@ const connect = (_sdk: FakeSlackSdk) =>
     yield* runtime.apply({
       connectionId,
       enabled: true,
+      channelScope: "listed",
       allowedChannelIds: ["C0ALLOWED"],
       appToken: "xapp-1-test",
       botToken: "xoxb-test",

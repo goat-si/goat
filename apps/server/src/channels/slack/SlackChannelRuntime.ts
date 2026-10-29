@@ -10,6 +10,7 @@
  * @module SlackChannelRuntime
  */
 import type {
+  RuntimeMode,
   SlackChannelConnectionStatus,
   SlackChannelDeliveryError,
   SlackChannelStatusEvent,
@@ -46,7 +47,10 @@ import * as SlackSdk from "./SlackSdk.ts";
 export interface SlackRuntimeConnection {
   readonly connectionId: string;
   readonly enabled: boolean;
+  readonly channelScope: "all" | "listed";
   readonly allowedChannelIds: ReadonlyArray<string>;
+  /** Set when people without a linked account may start work, at this ceiling. */
+  readonly unlinkedRuntimeModeCeiling?: RuntimeMode;
   readonly appToken: string | undefined;
   readonly botToken: string | undefined;
   /** The workspace saved when the tokens were validated. */
@@ -333,6 +337,7 @@ const make = Effect.gen(function* () {
       const classifier = {
         teamId: identity.teamId,
         botUserId: identity.botUserId,
+        channelScope: connection.channelScope,
         allowedChannelIds: new Set(connection.allowedChannelIds),
       };
       const handleEnvelope = (envelope: SlackSdk.SlackSocketEnvelope) =>
@@ -341,6 +346,9 @@ const make = Effect.gen(function* () {
             connectionId: connection.connectionId,
             classifier,
             owner,
+            ...(connection.unlinkedRuntimeModeCeiling === undefined
+              ? {}
+              : { unlinkedRuntimeModeCeiling: connection.unlinkedRuntimeModeCeiling }),
             onRevocation,
             receiveOnly: Effect.map(Ref.get(blocked), (reason) => reason !== undefined),
           }).pipe(

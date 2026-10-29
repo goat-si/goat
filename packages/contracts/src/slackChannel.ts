@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ChannelDeliveryErrorCode } from "./channelCommon.ts";
 import { ModelSelection } from "./modelSelection.ts";
+import { RuntimeMode } from "./providerPolicy.ts";
 
 /**
  * Settings and status for the Slack channel connection. Tokens are write-only: they go in
@@ -42,6 +43,35 @@ export const SlackChannelDeliveryError = Schema.Struct({
 });
 export type SlackChannelDeliveryError = typeof SlackChannelDeliveryError.Type;
 
+/** "all": every channel the bot is a member of. "listed": only `allowedChannelIds`. */
+export const SlackChannelScope = Schema.Literals(["all", "listed"]);
+export type SlackChannelScope = typeof SlackChannelScope.Type;
+
+/** "workspace": anyone in the connected workspace. "linked": only accounts linked with a code. */
+export const SlackUserAccess = Schema.Literals(["workspace", "linked"]);
+export type SlackUserAccess = typeof SlackUserAccess.Type;
+
+export const SLACK_DEFAULT_UNLINKED_RUNTIME_MODE: RuntimeMode = "approval-required";
+
+interface SlackAccessFields {
+  readonly channelScope?: SlackChannelScope | undefined;
+  readonly allowedChannelIds: ReadonlyArray<string>;
+  readonly userAccess?: SlackUserAccess | undefined;
+  readonly unlinkedRuntimeModeCeiling?: RuntimeMode | undefined;
+}
+
+/**
+ * The access a connection grants, with defaults for fields saved before they existed: a saved
+ * channel list keeps restricting, an empty one means every channel the bot is in.
+ */
+export const resolveSlackAccess = (fields: SlackAccessFields) => ({
+  channelScope:
+    fields.channelScope ?? (fields.allowedChannelIds.length > 0 ? "listed" : ("all" as const)),
+  userAccess: fields.userAccess ?? ("workspace" as const),
+  unlinkedRuntimeModeCeiling:
+    fields.unlinkedRuntimeModeCeiling ?? SLACK_DEFAULT_UNLINKED_RUNTIME_MODE,
+});
+
 export const SlackChannelSettings = Schema.Struct({
   connectionId: SlackChannelConnectionId,
   enabled: Schema.Boolean,
@@ -50,6 +80,11 @@ export const SlackChannelSettings = Schema.Struct({
   teamId: Schema.optional(TrimmedNonEmptyString),
   botUserId: Schema.optional(TrimmedNonEmptyString),
   allowedChannelIds: Schema.Array(TrimmedNonEmptyString),
+  /** Optional on the wire for older servers; read it through `resolveSlackAccess`. */
+  channelScope: Schema.optional(SlackChannelScope),
+  userAccess: Schema.optional(SlackUserAccess),
+  /** The highest access level for work from people who have not linked their account. */
+  unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
   status: SlackChannelConnectionStatus,
   /** Redacted; never contains a token. */
@@ -59,9 +94,9 @@ export const SlackChannelSettings = Schema.Struct({
 export type SlackChannelSettings = typeof SlackChannelSettings.Type;
 
 /**
- * Omitted tokens keep the stored ones. `clearCredentials: true` disconnects and deletes both
- * tokens; `disconnect` keeps them. Without `connectionId` the server creates a connection
- * with an id it generates.
+ * Omitted tokens and access fields keep the stored ones; `clearCredentials: true` deletes both
+ * tokens. Without `connectionId` the server creates a connection. A channel list sent without
+ * `channelScope` (an older client) sets the scope from whether it is empty.
  */
 export const SlackChannelConfigureInput = Schema.Struct({
   connectionId: Schema.optional(SlackChannelConnectionId),
@@ -70,6 +105,9 @@ export const SlackChannelConfigureInput = Schema.Struct({
   botToken: Schema.optional(TrimmedNonEmptyString),
   clearCredentials: Schema.optional(Schema.Boolean),
   allowedChannelIds: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
+  channelScope: Schema.optional(SlackChannelScope),
+  userAccess: Schema.optional(SlackUserAccess),
+  unlinkedRuntimeModeCeiling: Schema.optional(RuntimeMode),
   defaultTarget: Schema.optional(SlackChannelDefaultTarget),
 });
 export type SlackChannelConfigureInput = typeof SlackChannelConfigureInput.Type;
