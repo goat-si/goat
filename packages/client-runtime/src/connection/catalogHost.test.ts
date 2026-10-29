@@ -123,6 +123,7 @@ function run(
       networkStatus,
       start: Effect.void,
       register: unused,
+      assertKnownAddress: unused,
       registerPlatform: unused,
       reconcilePlatform: unused,
       remove: (environmentId) =>

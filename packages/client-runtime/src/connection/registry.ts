@@ -39,6 +39,7 @@ import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionDriver from "./driver.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
+import { makeKnownAddressCheck, unsupportedState } from "./registryPairing.ts";
 import {
   PullRequestRoutingPermissions,
   pullRequestRoutingConnectionKey,
@@ -58,17 +59,6 @@ import {
 } from "./routes.ts";
 
 const isSshConnectionProfile = Schema.is(SshConnectionProfile);
-
-function unsupportedState(
-  entry: ConnectionCatalogEntry,
-): Pick<ConnectionCatalogEntry, "unsupportedReason" | "serverUpdateRequired"> {
-  return {
-    ...(entry.unsupportedReason === undefined
-      ? {}
-      : { unsupportedReason: entry.unsupportedReason }),
-    ...(entry.serverUpdateRequired === true ? { serverUpdateRequired: true } : {}),
-  };
-}
 
 export class EnvironmentNotRegisteredError extends Schema.TaggedError<EnvironmentNotRegisteredError>()(
   "EnvironmentNotRegisteredError",
@@ -100,14 +90,15 @@ export class EnvironmentRegistry extends Context.Service<
     >;
     readonly networkStatus: SubscriptionRef.SubscriptionRef<NetworkStatus>;
     readonly start: Effect.Effect<void>;
-    /**
-     * Succeeds with `false` and changes nothing when the environment is
-     * platform-managed, since the host owns that entry.
-     */
+    /** Platform-managed entries are unchanged; known addresses are checked under the lease. */
     readonly register: (
       registration: ConnectionRegistration,
-    ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError>;
+      options?: { readonly knownAddressOnly?: boolean },
+    ) => Effect.Effect<boolean, Persistence.ConnectionPersistenceError | ConnectionBlockedError>;
     readonly registerPlatform: (registration: PrimaryConnectionRegistration) => Effect.Effect<void>;
+    readonly assertKnownAddress: (
+      route: ConnectionRoute,
+    ) => Effect.Effect<void, ConnectionBlockedError>;
     readonly reconcilePlatform: (
       registrations: ReadonlyArray<PlatformConnectionRegistration>,
     ) => Effect.Effect<void>;
@@ -536,21 +527,27 @@ export const make = Effect.gen(function* () {
     return { entry: rest, addressesChanged: true };
   };
 
+  const assertKnownAddress = makeKnownAddressCheck(platformEnvironmentIds, entries);
+
   const register = Effect.fn("EnvironmentRegistry.register")(function* (
     registration: ConnectionRegistration,
+    options?: { readonly knownAddressOnly?: boolean },
   ) {
     const registered = connectionRegistrationCatalogEntry(registration);
     const environmentId = registered.target.environmentId;
+    const route: ConnectionRoute = { target: registered.target, profile: registered.profile };
     return yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
         if ((yield* Ref.get(platformEnvironmentIds)).has(environmentId)) {
           return false;
         }
+        if (options?.knownAddressOnly === true) {
+          yield* assertKnownAddress(route);
+        }
         const previous = (yield* SubscriptionRef.get(entries)).get(environmentId);
         let entry = registered;
         if (previous !== undefined) {
-          const route: ConnectionRoute = { target: registered.target, profile: registered.profile };
           const existing = connectionRoutes(previous);
           const sameAddress = findRouteToSameAddress(existing, route);
           const routes = existing.filter(
@@ -1195,6 +1192,7 @@ export const make = Effect.gen(function* () {
     start,
     register,
     registerPlatform,
+    assertKnownAddress,
     reconcilePlatform,
     remove,
     removeRoute,

@@ -136,6 +136,7 @@ vi.mock("../../state/threads", async () => {
             networkStatus: yield* SubscriptionRef.make<NetworkStatus>("online"),
             start: Effect.void,
             register: unexpected,
+            assertKnownAddress: unexpected,
             registerPlatform: unexpected,
             reconcilePlatform: unexpected,
             remove: unexpected,
