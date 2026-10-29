@@ -124,6 +124,8 @@ const Grant = Schema.Struct({
   readOnly: Schema.Boolean,
   /** True when the reservation's receiptId is wired into newCommandId / SSH correlationId. */
   correlated: Schema.optionalKey(Schema.Literal(true)),
+  roleName: Schema.optionalKey(GoatclawRole),
+  forwardedCeiling: Schema.optionalKey(PermissionProfile),
 });
 type Grant = typeof Grant.Type;
 const GrantJson = Schema.fromJsonString(Grant);
@@ -411,6 +413,8 @@ const makeGrants = (
         scopes,
         readOnly,
         correlated: true,
+        ...(role === undefined ? {} : { roleName: role }),
+        ...(forwarded === undefined ? {} : { forwardedCeiling: forwarded }),
       } satisfies Grant,
     };
   });
@@ -478,8 +482,18 @@ export const make = Effect.fn("ToolAdmission.make")(function* (bootId: string = 
         reconcilePath,
         checkGrant: Effect.fnUntraced(
           function* (grantJson: string) {
-            const { grant } = yield* grantOf(scope, {}, limits);
-            return yield* stillGranted(scope, grant, yield* decodeGrant(grantJson));
+            const recorded = yield* decodeGrant(grantJson);
+            const { grant } = yield* grantOf(
+              scope,
+              {
+                ...(recorded.roleName === undefined ? {} : { goatclawRole: recorded.roleName }),
+                ...(recorded.forwardedCeiling === undefined
+                  ? {}
+                  : { permissionProfileCeiling: recorded.forwardedCeiling }),
+              },
+              limits,
+            );
+            return yield* stillGranted(scope, grant, recorded);
           },
           Effect.orElseSucceed(() => false),
         ),
@@ -794,34 +808,11 @@ export const makeEvalAdmission = Effect.fn("ToolAdmission.makeEvalAdmission")(fu
       !ABANDONED_RECEIPTS.has(row.receipt_id)
     )
       return { kind: "in_progress" } satisfies KeyedOutcome as KeyedOutcome;
+    if (row.state !== "completed" || row.result_json === null)
+      return { kind: "unknown" } satisfies KeyedOutcome as KeyedOutcome;
     const { grant } = yield* current(args);
     if (!(yield* stillGranted(scope, grant, yield* decodeGrant(row.grant_json))))
       return { kind: "grant_lost" } satisfies KeyedOutcome as KeyedOutcome;
-    if (row.state !== "completed" || row.result_json === null) {
-      yield* settleForReconcile(database.value, bootId, ABANDONED_RECEIPTS, {
-        environmentId: scope.environmentId,
-        principal,
-        path,
-        clientRequestId,
-        checkGrant: () => Effect.succeed(true),
-      }).pipe(Effect.ignoreCause);
-      const [settled] = yield* database.value<{
-        readonly state: "running" | "completed" | "unknown";
-        readonly result_json: string | null;
-        readonly failure_json: string | null;
-      }>`SELECT state, result_json, failure_json FROM mcp_request_reservations
-        WHERE environment_id = ${scope.environmentId} AND principal = ${principal}
-          AND path = ${path} AND client_request_id = ${clientRequestId}`;
-      if (settled === undefined) return { kind: "absent" } satisfies KeyedOutcome as KeyedOutcome;
-      if (settled.state === "completed" && settled.result_json !== null)
-        return {
-          kind: "replay",
-          result: yield* decodeResult(settled.result_json),
-          failure:
-            settled.failure_json === null ? undefined : yield* decodeLiteral(settled.failure_json),
-        } satisfies KeyedOutcome as KeyedOutcome;
-      return { kind: "unknown" } satisfies KeyedOutcome as KeyedOutcome;
-    }
     return {
       kind: "replay",
       result: yield* decodeResult(row.result_json),
@@ -857,8 +848,18 @@ export const makeReceiptReader = Effect.fn("ToolAdmission.makeReceiptReader")(fu
         AND (state != 'completed' OR expires_at > ${DateTime.formatIso(yield* DateTime.now)})`;
     if (row === undefined) return { state: "missing" as const };
     const { limits } = yield* loadCaller();
-    const { grant } = yield* grantOf(scope, {}, limits);
-    if (!(yield* stillGranted(scope, grant, yield* decodeGrant(row.grant_json))))
+    const recorded = yield* decodeGrant(row.grant_json);
+    const { grant } = yield* grantOf(
+      scope,
+      {
+        ...(recorded.roleName === undefined ? {} : { goatclawRole: recorded.roleName }),
+        ...(recorded.forwardedCeiling === undefined
+          ? {}
+          : { permissionProfileCeiling: recorded.forwardedCeiling }),
+      },
+      limits,
+    );
+    if (!(yield* stillGranted(scope, grant, recorded)))
       return yield* new OrchestratorMcpFailure({
         code: "capability_denied",
         message: "This caller no longer holds the recorded request grant.",

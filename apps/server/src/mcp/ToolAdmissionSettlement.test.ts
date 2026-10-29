@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  GoatclawRole,
   OrchestratorMcpFailure,
   ProviderInstanceId,
   ThreadId,
@@ -20,6 +21,7 @@ import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as HostThreadsMcpService from "./HostThreadsMcpService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -49,6 +51,7 @@ const writeSchema = {
     threadId: Schema.optional(Schema.String),
     host: Schema.optional(Schema.String),
     action: Schema.optional(Schema.String),
+    goatclawRole: Schema.optional(GoatclawRole),
     clientRequestId: Schema.optional(Schema.String),
   }),
   success: Schema.Struct({
@@ -148,6 +151,7 @@ const served = Layer.mergeAll(
         ),
     }),
   ),
+  Layer.provideMerge(Layer.mock(HostThreadsMcpService.HostThreadsMcpService)({})),
   Layer.provideMerge(Sqlite.layerMemory),
   Layer.provideMerge(
     ServerSettings.layerTest({ goatclaw: { enabled: true, defaultProfile: "owner" } }),
@@ -349,15 +353,50 @@ it.effect(
       ).toMatchObject({ reason: "outcome_unknown" });
 
       const correlationId = `rr-${row!.receipt_id}`;
+      // A non-fence cancellation whose host name happens to contain "fenced" must not release the key.
       yield* sql`INSERT INTO remote_dispatches
         (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, last_error, created_at, updated_at, memory_grant_ceiling)
-        VALUES (${correlationId}, 'thread', ${caller}, 'box', 'key', 'wake', 'cancelled',
-          'The launch never reached box; it is fenced there, so it cannot start late.',
+        VALUES (${correlationId}, 'thread', ${caller}, 'unfenced-buildbox', 'key', 'wake', 'cancelled',
+          'The launched thread was deleted on unfenced-buildbox.',
           '2026-10-23T00:00:00.000Z', '2026-10-23T00:00:00.000Z', 'none')`;
+      expect(yield* callTool(threadList.name, { host: "box" })).toEqual({ ok: true });
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-1" }),
+      ).toMatchObject({ reason: "outcome_unknown" });
+
+      // Once the row carries the exact pre-launch fence message, thread.list releases the reservation.
+      yield* sql`UPDATE remote_dispatches
+        SET last_error = 'The launch never reached box; it is fenced there, so it cannot start late.'
+        WHERE correlation_id = ${correlationId}`;
 
       expect(yield* callTool(threadList.name, { host: "box" })).toEqual({ ok: true });
       expect(
         yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-1" }),
       ).toMatchObject({ run: 2 });
+
+      // A role-scoped SSH launch also releases on reconcile when fenced and the caller still holds the role.
+      yield* sql`CREATE TRIGGER block_role_ssh_settle BEFORE UPDATE ON mcp_request_reservations
+        BEGIN SELECT RAISE(ABORT, 'refused'); END`;
+      yield* callTool(sshLaunch.name, {
+        host: "box",
+        goatclawRole: "merge-manager",
+        clientRequestId: "ssh-role-1",
+      });
+      const [roleRow] = yield* sql<{ readonly receipt_id: string }>`
+        SELECT receipt_id FROM mcp_request_reservations WHERE client_request_id = 'ssh-role-1'`;
+      yield* sql`DROP TRIGGER block_role_ssh_settle`;
+      yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, last_error, created_at, updated_at, memory_grant_ceiling)
+        VALUES (${`rr-${roleRow!.receipt_id}`}, 'thread', ${caller}, 'box', 'key', 'wake', 'cancelled',
+          'The launch never reached box; it is fenced there, so it cannot start late.',
+          '2026-10-23T00:00:00.000Z', '2026-10-23T00:00:00.000Z', 'none')`;
+      expect(yield* callTool(threadList.name, { host: "box" })).toEqual({ ok: true });
+      expect(
+        yield* callTool(sshLaunch.name, {
+          host: "box",
+          goatclawRole: "merge-manager",
+          clientRequestId: "ssh-role-1",
+        }),
+      ).toMatchObject({ run: 4 });
     }).pipe(Effect.provide(served)),
 );

@@ -92,7 +92,7 @@ const LIFECYCLE_PATHS: ReadonlySet<string> = new Set([
  * tables, and updates or deletes the reservation accordingly. Best-effort: database failures
  * during settlement are ignored so the read tool itself still succeeds.
  */
-export const settleUnsettledRow = Effect.fn("ToolAdmissionSettlement.settleRow")(function* (
+const settleUnsettledRow = Effect.fn("ToolAdmissionSettlement.settleRow")(function* (
   sql: SqlClient.SqlClient,
   row: UnsettledRow,
 ) {
@@ -194,13 +194,16 @@ export const settleUnsettledRow = Effect.fn("ToolAdmissionSettlement.settleRow")
     const correlationId = `rr-${row.receipt_id}`;
     const [dispatch] = yield* sql<{
       readonly state: string;
+      readonly remote_thread_id: string | null;
       readonly last_error: string | null;
-    }>`SELECT state, last_error FROM remote_dispatches WHERE correlation_id = ${correlationId}`;
+    }>`SELECT state, remote_thread_id, last_error FROM remote_dispatches WHERE correlation_id = ${correlationId}`;
     if (
       dispatch !== undefined &&
       dispatch.state === "cancelled" &&
+      dispatch.remote_thread_id === null &&
       dispatch.last_error !== null &&
-      dispatch.last_error.includes("fenced")
+      dispatch.last_error.startsWith("The launch never reached ") &&
+      dispatch.last_error.endsWith("; it is fenced there, so it cannot start late.")
     ) {
       yield* release;
     }
