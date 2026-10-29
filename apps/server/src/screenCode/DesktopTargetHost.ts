@@ -709,7 +709,6 @@ export const createDesktopTargetHost = (deps: {
           ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
         });
         if (menuAdmission.refused !== undefined) return yield* Effect.fail(menuAdmission.refused);
-        delete bound.lastClickedTableCell;
         bound.pointsStale = "input";
         const reply = yield* boundRequest(
           bound,
@@ -833,9 +832,6 @@ export const createDesktopTargetHost = (deps: {
           : { lastClickedTableCell: bound.lastClickedTableCell }),
       });
       if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
-      if (admission.clickedTableCell !== undefined)
-        bound.lastClickedTableCell = admission.clickedTableCell;
-      else if (admission.clearClickedTableCell) delete bound.lastClickedTableCell;
       delete forwarded.elementRef;
       delete forwarded.send;
       // The guest names its target in the call; the driver gets the window below instead.
@@ -875,6 +871,8 @@ export const createDesktopTargetHost = (deps: {
         );
       // Any input, even one that fails, may change what is under a pixel.
       bound.pointsStale = "input";
+      if (admission.clickedTableCell !== undefined)
+        bound.lastClickedTableCell = admission.clickedTableCell;
       const needs = elementToken !== undefined ? "element" : aimed ? "points" : "nothing";
       const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
         bound,
@@ -890,7 +888,10 @@ export const createDesktopTargetHost = (deps: {
           }),
         ),
       );
-      return driverResult(tool, reply);
+      const result = driverResult(tool, reply);
+      if (admission.clearClickedTableCell && result.category === "confirmed")
+        delete bound.lastClickedTableCell;
+      return result;
     },
   );
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>

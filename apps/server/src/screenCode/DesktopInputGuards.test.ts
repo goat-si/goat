@@ -601,6 +601,14 @@ it.effect(
             frame: { x: 10, y: 540, w: 400, h: 30 },
           },
           {
+            element_index: 5,
+            element_token: "s0000000v:5",
+            role: "AXTextArea",
+            value_description: "search in conversation",
+            parent_index: 0,
+            frame: { x: 10, y: 500, w: 400, h: 30 },
+          },
+          {
             element_index: 4,
             element_token: "s0000000v:4",
             role: "AXTextField",
@@ -623,7 +631,7 @@ it.effect(
       const ref = bound.value as ScreenTargetRef;
       const observed = yield* host.observe(call("get_window_state", {}, ref), context);
       const before = sent.length;
-      for (const idx of [1, 2, 3] as const) {
+      for (const idx of [1, 2, 3, 5] as const) {
         const targetRef = byIndex(observed.value, idx);
         const refused = yield* host
           .invoke(call("press_key", { key: "Enter", elementRef: targetRef }, ref), context)
@@ -752,6 +760,14 @@ it.effect(
             parent_index: 0,
             frame: { x: 520, y: 420, w: 0, h: 22 },
           },
+          {
+            element_index: 3,
+            element_token: "s0000000m:3",
+            role: "AXStatusItem",
+            label: "Wi-Fi",
+            parent_index: 0,
+            frame: { x: 900, y: 0, w: 28, h: 22 },
+          },
         ],
       };
       const { host } = fixture({ get_window_state: menuState });
@@ -763,6 +779,12 @@ it.effect(
       const observed = yield* host.observe(call("get_window_state", {}, ref), context);
       const outOfWindowMenu = byIndex(observed.value, 1);
       const zeroMenu = byIndex(observed.value, 2);
+      const statusItem = byIndex(observed.value, 3);
+      const statusClicked = yield* host.invoke(
+        call("click", { elementRef: statusItem }, ref),
+        context,
+      );
+      expect(statusClicked.category).toBe("confirmed");
       // Even when a context menu sits completely outside the window (x: 520, y: 420), positive size is allowed.
       const menuState2 = {
         ...menuState,
@@ -770,6 +792,7 @@ it.effect(
           menuState.elements[0],
           { ...menuState.elements[1], frame: { x: 550, y: 450, w: 160, h: 22 } },
           menuState.elements[2],
+          menuState.elements[3],
         ],
       };
       const f2 = fixture({ get_window_state: menuState2 });
@@ -791,5 +814,44 @@ it.effect(
         .invoke(call("click", { elementRef: zeroMenu }, ref), context)
         .pipe(Effect.flip);
       expect(refused.code).toBe("invalid_argument");
+    }),
+);
+
+it.effect(
+  "a refused stale-point click or an unverifiable click does not clear the table-cell typing guard; only a confirmed focus move to a safe element does",
+  () =>
+    Effect.gen(function* () {
+      let clickOutcome: "unverifiable" | "confirmed" = "unverifiable";
+      const { host } = fixture({
+        get_window_state: finderState,
+        click: () =>
+          clickOutcome === "confirmed"
+            ? { effect: "confirmed", evidence: ["driver:acted"] }
+            : { effect: "unverifiable" },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
+      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 41) }, ref), context);
+      // Stale point click (no screenshot after click): refused before dispatch, risk stays.
+      yield* host.invoke(call("click", { x: 10, y: 10 }, ref), context).pipe(Effect.flip);
+      const afterStalePoint = yield* host
+        .invoke(call("type_text", { text: "still blocked" }, ref), context)
+        .pipe(Effect.flip);
+      expect(afterStalePoint.code).toBe("invalid_argument");
+      // Unverifiable click on search field: focus move is not confirmed, so risk stays.
+      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 50) }, ref), context);
+      const afterUnverifiable = yield* host
+        .invoke(call("type_text", { text: "still blocked" }, ref), context)
+        .pipe(Effect.flip);
+      expect(afterUnverifiable.code).toBe("invalid_argument");
+      // Confirmed click on search field moves focus away from the table cell, so unaddressed typing is allowed.
+      clickOutcome = "confirmed";
+      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 50) }, ref), context);
+      const typed = yield* host.invoke(call("type_text", { text: "ok" }, ref), context);
+      expect(typed.category).toBe("confirmed");
     }),
 );

@@ -52,7 +52,7 @@ const MENU_ROLES: ReadonlySet<string> = new Set([
   "menubar",
   "menubarextra",
   "menubaritem",
-  " statusitem",
+  "statusitem",
 ]);
 const SEARCH_HINTS = ["search", "검색", "찾기"];
 const SEND_HINTS = ["send", "보내기", "전송", "submit"];
@@ -363,18 +363,24 @@ export const inspectTreeElements = (
     const index = row?.index ?? natural(entry.element_index);
     const rawLabel = string(entry.label) ?? "";
     const rawValue = typeof entry.value === "string" ? entry.value : undefined;
+    const rawValueDesc = string(entry.value_description);
     // cua-driver's element_entry falls back label = title ?? description ?? value ?? identifier;
-    // when label equals value and no separate title is given, rawLabel may be the field's value.
+    // when label equals value or value_description and no separate title is given, rawLabel may
+    // come from the field's value, so exclude it from search-field identity.
     const explicitTitle = string(entry.title);
     const nonValueLabel =
-      explicitTitle ?? (rawValue !== undefined && rawLabel === rawValue ? "" : rawLabel);
+      explicitTitle ??
+      ((rawValue !== undefined && rawLabel === rawValue) ||
+      (rawValueDesc !== undefined && rawLabel === rawValueDesc)
+        ? ""
+        : rawLabel);
     map.set(token, {
       ...(index === undefined ? {} : { index }),
       role,
       name: row?.name ?? rawLabel,
       rawLabel,
       nonValueLabel,
-      description: string(entry.description) ?? string(entry.value_description) ?? "",
+      description: string(entry.description) ?? "",
       placeholder: string(entry.placeholder) ?? "",
       identifier: string(entry.identifier) ?? "",
       editable,
@@ -589,7 +595,13 @@ export const admitDesktopInput = (input: {
   }
   if ((method === "click" || method === "right_click") && element?.tableCell === true)
     return { clickedTableCell: element.index ?? elementToken ?? 0 };
-  return { clearClickedTableCell: true };
+  if (
+    elementToken !== undefined &&
+    element?.tableCell !== true &&
+    ["click", "right_click", "press_key", "type_text", "set_value"].includes(method)
+  )
+    return { clearClickedTableCell: true };
+  return {};
 };
 
 export const BATCH_FAILED_CATEGORIES: ReadonlySet<ScreenHostDispatchResult["category"]> = new Set([
@@ -653,8 +665,9 @@ export const preflightDesktopBatch = (
       ...(simulatedTableCell === undefined ? {} : { lastClickedTableCell: simulatedTableCell }),
     });
     if (admission.refused !== undefined) return abortAt(index, admission.refused);
+    // Preflight runs before the driver confirms any step's focus move, so a table-cell click in a
+    // batch keeps its risk for later unaddressed typing in the same batch.
     if (admission.clickedTableCell !== undefined) simulatedTableCell = admission.clickedTableCell;
-    else if (admission.clearClickedTableCell) simulatedTableCell = undefined;
   }
   return undefined;
 };
