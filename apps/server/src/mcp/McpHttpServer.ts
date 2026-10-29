@@ -121,6 +121,7 @@ import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as ToolAdmission from "./ToolAdmission.ts";
+import * as ChannelSessionReceiptGate from "./ChannelSessionReceiptGate.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PendingQuestionsMcpService from "./PendingQuestionsMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -1037,6 +1038,10 @@ export const catalogRegistrations = {
   ),
 };
 
+/** What every registration's admission reads when a tool is called, including session receipts. */
+export const provideAdmission = <A, E, R>(registrations: Layer.Layer<A, E, R>) =>
+  registrations.pipe(Layer.provide(ChannelSessionReceiptGate.layer), Layer.provide(Profiles.layer));
+
 export const layerHtmlToolkit = Layer.mergeAll(
   catalogRegistrations.htmlRender,
   catalogRegistrations.htmlPreview,
@@ -1120,6 +1125,7 @@ export const layerHostStatusService = HostStatusMcpService.layer.pipe(
   Layer.provide(HostThreadsMcpService.layer),
   Layer.provide(OrchestratorMcpService.layer),
   Layer.provide(RemoteReportService.layer),
+  Layer.provide(ChannelSessionReceiptGate.layer),
   Layer.provide(ThreadResultService.layer),
   // Its own pressure rides on this machine's entry; the nudger reads the same monitor.
   Layer.provideMerge(HostPressureMonitor.layer),
@@ -1135,7 +1141,7 @@ const layerThreadDiffToolkit = catalogRegistrations.threadDiff.pipe(
 );
 
 /** goat_goal_*. The server provides GoalService with the controller (fleet/goals/GoalLayers). */
-export const layerFleetToolkit = catalogRegistrations.fleet.pipe(Layer.provide(Profiles.layer));
+export const layerFleetToolkit = provideAdmission(catalogRegistrations.fleet);
 /** Reads Placement and FallbackChains from the server's context, like host status. */
 const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
 
@@ -1144,7 +1150,9 @@ const layerFleetResourcesToolkit = catalogRegistrations.fleetResources;
  * ProviderDiagnosisService and CodexHomeRequests are shared application services.
  * The approval tool uses the same mutation singleton as authenticated Settings.
  */
-export const layerProviderToolkit = catalogRegistrations.provider;
+export const layerProviderToolkit = catalogRegistrations.provider.pipe(
+  Layer.provide(ChannelSessionReceiptGate.layer),
+);
 
 const layerRepositoryReferences = RepositoryReferenceMcpService.layer.pipe(
   Layer.provide(RepositoryReferences.layer),
@@ -1248,8 +1256,8 @@ export const layer = Layer.mergeAll(
   Layer.provide(RemoteReportService.layer),
   // Run results for the report tool and the thread read and wait tools.
   Layer.provide(ThreadResultService.layer),
-  // Every registration's goatclaw capability gate, and the handlers that check profiles.
-  Layer.provide(Profiles.layer),
+  // Every registration's goatclaw and session receipt gates, and the handlers that check profiles.
+  provideAdmission,
   // tools/list leaves out what a thread's profile refuses, so the transport reads profiles too.
   Layer.provideMerge(layerMcpTransport.pipe(Layer.provide(Profiles.layer))),
 );

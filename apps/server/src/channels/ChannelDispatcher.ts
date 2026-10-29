@@ -845,6 +845,9 @@ const make = Effect.gen(function* () {
       }
       // A generation that may already run on another machine never starts anywhere else.
       if (stored.task.status === "received" || stored.task.status === "dispatching") {
+        // An automatic placement in flight owns the task until it claims or gives up; its own
+        // remote attempt must not read as an attempt elsewhere.
+        if (yield* FiberMap.has(placements, taskId)) return;
         const elsewhere = yield* remoteWorkers.attemptedElsewhere(stored);
         if (elsewhere !== undefined) {
           yield* commitTransition(

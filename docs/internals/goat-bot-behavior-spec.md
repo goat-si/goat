@@ -25,14 +25,14 @@ the bot MUST keep them as separate records, never as one status field doing doub
 
 **Work item** (what was asked):
 
-| State          | Meaning                                                                                                                                                                                                  |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| queued         | Created, together with the first reply, when the bot decides the message asks for work; before any dispatch. No worker yet: dispatch is pending, or the requester is at the concurrency cap (section 5). |
-| in progress    | A worker is attached and a run is working on it, or its outcome is waiting to be delivered.                                                                                                              |
-| waiting on you | The work needs the requester: a question, an approval, a sign-in.                                                                                                                                        |
-| completed      | Its result was **delivered** to the requester.                                                                                                                                                           |
-| failed         | Its failure, with the reason, was **delivered** to the requester.                                                                                                                                        |
-| cancelled      | The requester stopped it and the confirmation was **delivered**.                                                                                                                                         |
+| State          | Meaning                                                                                                                                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| queued         | Created when an eligible session-first input is claimed, before its first reply; other new work is created with reception's reply. Dispatch is pending, or capacity is full (section 5). |
+| in progress    | A worker is attached and a run is working on it, or its outcome is waiting to be delivered.                                                                                              |
+| waiting on you | The work needs the requester: a question, an approval, a sign-in.                                                                                                                        |
+| completed      | Its result was **delivered** to the requester.                                                                                                                                           |
+| failed         | Its failure, with the reason, was **delivered** to the requester.                                                                                                                        |
+| cancelled      | The requester stopped it and the confirmation was **delivered**.                                                                                                                         |
 
 Completed, failed and cancelled are the only terminal states, and each is reached only by a
 delivery. An outcome that could not be delivered keeps the item open as "not delivered".
@@ -67,11 +67,13 @@ Acceptance:
 
 - The message itself is stored durably the moment it is accepted, so it survives a restart before
   the bot has read it.
-- A message that asks for new work creates its work item, in state queued, in the same commit as
-  its first reply, and before any worker launch is attempted.
+- An eligible session-first message creates a queued turn item atomically with its claim. Its
+  session receives the message and writes the receipt afterwards. Other new work is created in
+  the same commit as reception's first reply, before dispatch.
 - A follow-up to an open item extends that item: no new item, and the item stays in progress until
-  the reply covering the follow-up is delivered. A follow-up to an item that is already completed,
-  failed or cancelled starts a new item that links to the earlier one and reuses its worker.
+  the reply covering the follow-up is delivered. Linking a new item to finished work and reusing
+  its worker remains a gap: reception currently refuses follow-ups naming finished work and asks
+  the person to state a new request.
 - A follow-up while the workstream's run is running joins that run; no new worker and no new run.
 - A follow-up after the workstream's run finished starts the next run on the same worker, even
   when another item's run has started there since.
@@ -88,40 +90,48 @@ Acceptance:
   delivered; then it is completed.
 - A delivery that fails permanently leaves the item open and visible as "not delivered".
 
-## 2. First reply before any work
+## 2. First reply before acting
 
-- The bot MUST reply to every message before it starts any worker, subagent or tool that acts.
-  The only lookups allowed before the first reply are the bounded, permission-checked reads of
-  section 9 (memory, work history, status), which change nothing and exist to make that reply the
-  answer.
-- The first reply MUST be committed within 60 seconds of the message being accepted, counting any
-  time spent waiting for a free slot, and SHOULD be within 10 seconds. When the deadline arrives
-  without a reply, even if no slot ever freed up and even if the bot's other work is stuck, the bot
-  commits a fixed message saying it could not read the message, so the person is never left
-  without one, and a late reply never arrives as a second one. Running workers never delay it.
-  The 60 seconds bound the commit and its hand-off to a healthy transport; a transport that hangs
-  on a send is outside it.
-- Work a message starts MUST NOT begin until that message's first reply has been delivered, or
-  has failed to deliver, so the person hears what is happening before anything happens.
-- The first reply comes from the bot's reception for every provider today. A session could answer
-  first itself only if its provider held native tools until that reply is delivered; no provider
-  can yet, so the request reaches the session only after the reply has settled.
-- When work starts, the first reply MUST name the concrete first step ("Checking the disk usage on
-  this Mac now", not "On it").
-- When the answer needs no work, the first reply is the answer.
-- The first reply MUST NOT promise a result it has not got.
+- An ordinary message MUST go directly to the requester's idle Codex or Claude session when its
+  conversation has no open work: nothing queued, running, waiting on the person, or awaiting
+  result or failure delivery. The requester must have current permission and capacity to start
+  work. A busy session, a provider without per-run identity, or existing open work MUST keep
+  reception routing. Explicit answers and reports MUST keep their existing checked paths.
+- The same read-only session that receives an eligible request MUST begin with one line naming
+  its concrete first step, before any tool call, or with the answer itself when no work is needed.
+  Its first sealed assistant line is the receipt. Read-only lookups may proceed while it reaches
+  the person; launches, writes, questions and approvals MUST wait until its delivery settles.
+- If the session has not supplied its line after 20 seconds from acceptance, acknowledgment-only
+  reception takes over. It describes work already begun and MUST NOT choose or discard actions.
+  If that acknowledgment fails or hangs, at 55 seconds the bot commits “Working on it — I'll
+  reply here.” The task continues. A late session line MUST NOT become a second receipt.
+- Every input MUST have at most one receipt. Its commit and transport hand-off MUST be independent
+  of other model calls, ordinary passes and other receipt sends. The bot SHOULD normally reply
+  within 10 seconds. Inputs on reception retain its fixed failure reply at 55 seconds.
+- Receipt delivery MUST settle by 60 seconds from acceptance. Each attempt gets at most four
+  seconds and never extends past that absolute deadline. No attempt may start at or after it.
+  A definitely-unsent receipt expires permanently failed; an in-flight or unknown-outcome send
+  is ambiguous and MUST NOT retry. Late results MUST NOT reopen a settled row.
+- Settled means delivered, permanently failed, or terminal ambiguous. Ambiguous releases held
+  work without claiming the person received it. A missing receipt, a pending or delivering one,
+  or an unreadable delivery state MUST keep acting and person-reaching actions held.
+- The receipt MUST precede every other outbox row for its work, including task-only cards. A final
+  answer may lose the receipt prefix only when the session supplied that receipt and both came
+  from the same assistant item. A fallback receipt or a separate final item preserves the answer.
+  An answer consisting only of its receipt MUST produce one message, with no synthetic “Done.”
 
 Acceptance:
 
-- With a turn already running in the same conversation, a new message still gets its reply
-  without waiting for that turn.
-- With four replies already being written and hung, a fifth message still gets a reply (the
-  fixed one if need be) within 60 seconds of its own acceptance, exactly once.
-- A model that never answers produces the fixed failure reply at the deadline.
-- No worker launch, and no message into a session, happens for a message before that message's
-  reply delivery is settled.
-- The reply to a message that starts work is committed in the same transaction as the work item.
-- A reply to a work request names what is being done first.
+- An eligible request calls no reception model; its delivered receipt is the session's first line.
+- Open work, a busy session, unsupported providers and requester admission failures keep reception.
+- A silent session gets acknowledgment-only reception at 20 seconds, or the session fixed line at
+  55 seconds if that call hangs. It gets exactly one receipt and its task remains running.
+- Any number of hung receipt transports leave another input's receipt able to start and settle
+  within its own deadline. Retry-After cannot extend that deadline.
+- Claims, acknowledgment takeover and committed receipt source survive restart. A stopped owner
+  and a late attempt cannot overwrite a newer claim or a terminal delivery.
+- Read-only tools progress during the hold. Writes and native questions reach no person until
+  settlement; a one-line direct answer is sent once.
 
 ## 3. Answer first, natural length, warm
 
@@ -355,37 +365,36 @@ Acceptance:
 
 ## 15. Tool use: direct reads vs workers
 
-- Direct (in the bot's reply, no worker): memory, work history, task and thread status, host
-  facts, earlier messages. These MUST be answered within the reply budget.
-- Bot turn (a run in the conversation's GOAT Bot session, with tools, never changing a
-  repository): looking into files or logs on the machine, comparing threads, web research. A turn
-  keeps itself short; research and anything longer than about a minute fans out to subagents,
-  which stay under the session in the sidebar lineage.
-- Coding worker (a coding thread in a project): anything that changes a repository or runs in one.
-  It is always its own visible thread, never a run in the session.
-- The bot MUST pick the cheapest of these that can answer correctly.
-- With more than one machine connected, the bot SHOULD place each lane on a machine that has
-  what it needs and room to spare, by launch or delegation, instead of doing it all on its own
-  machine. Lanes it starts keep its read-only rule; it never starts a paid cloud machine unless
-  asked. `GOAT_BOT_DISPATCH_RULE` in `channelWorkerBrief.ts` states this.
-- With goatclaw on, the bot fronts the goatclaw supervisor: it plans, launches managers with a
-  `goatclawRole`, and asks through the decision inbox, and it stays read-only by the same rule. The
-  managers' profiles carry the authority. A session for a person at full access runs under the
-  supervisor's profile; anyone linked lower keeps the default one. `GOAT_BOT_SUPERVISOR_RULE`
-  states this. Turning goatclaw off returns the bot to this front-desk behavior.
-- Child work a session starts is tied to the run that asked for it. On providers that cannot tie
-  each tool call to its run (anything but Codex and Claude today), requests do not share a
-  session: each gets its own, reused only by its follow-ups.
+- An eligible input is received first by the same read-only GOAT Bot session that will answer
+  and work on it. It names its first step before calling tools. Bounded reads of memory, work
+  history, status, files, logs and the web may proceed before receipt settlement; actions that
+  change anything or reach a person wait for it (section 2).
+- Inputs that are not eligible keep reception's bounded, permission-checked reads and routing.
+  The bot MUST choose the cheapest path that can answer correctly.
+- Bot turns MUST remain read-only and short. Research and anything longer than about a minute
+  goes to children under the session's lineage. Work that changes or runs in a repository belongs
+  to a coding worker in its own visible project thread.
+- With more than one machine connected, the bot SHOULD place work where its prerequisites and
+  spare capacity are available. Children retain the read-only rule, and paid cloud machines
+  start only when asked.
+- With goatclaw on, a full-access requester's session fronts the supervisor and launches managers
+  with their role profiles. A lower requester ceiling keeps the default profile. Turning
+  goatclaw off returns to the same read-only front desk.
+- Child work belongs to the exact run that requested it. Providers without per-run tool identity
+  retain a separate session per task; only that task's follow-ups reuse it.
 
 Acceptance:
 
-- A history question launches nothing before its first answer. A "why is the disk full" question
-  runs one bot turn in the conversation's session. A "fix the bug" request launches one coding
-  worker.
-- With an idle SSH host connected, a bot turn that fans research out starts a lane there and its
-  answer says which machine ran what.
-- A child a turn started that reports after the next request's run began settles the turn that
-  started it, never the next one.
+- An eligible history question may start the read-only session before its receipt, but launches
+  no acting worker before settlement. A disk investigation stays a short bot turn; a code change
+  starts a coding worker after its receipt settles.
+- A child reporting after another request began settles its own parent task, never the later one.
+- With a suitable idle SSH host connected, a research turn may delegate there after settlement,
+  and its answer identifies which machine did the work.
+
+**Next: the session classifies every input (model B).** Extending session-first routing to
+conversations with open work, busy sessions and explicit routing intents is the next step;
+reception and the existing answer/report paths remain in this model.
 
 ## Comparison with other bots
 
@@ -398,25 +407,25 @@ Sources, as of 2026-10-20: [OpenMausBot docs](https://docs.openmausbot.com),
 did not show it, not that it is absent. "GOAT now" is dev at
 `7c90cdf7f`. Target says whether GOAT must **match** the best of the others or **exceed** them.
 
-| Behavior                             | GOAT now                                                                                           | OpenMausBot                     | Hermes Agent                     | OpenBot (CopilotKit)          | OpenClaw                                       | GOAT target                                                                                         |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------- | ----------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Reply before work                    | Partly: the reply is committed with the work item, but dispatch does not wait for its delivery     | Streams the agent's own turn    | Quick ack symbols, then the turn | Streams the turn              | Typing indicator, then the turn                | **Exceed**: a reply that names the first step, settled (delivered or failed) before any work starts |
-| Answer from history without a worker | Yes: reads of memory, tasks, threads, PRs, conversation (#459)                                     | Per-thread transcript only      | Session history only             | Thread history and memory     | `goat_memory_search`, session history          | **Exceed**: cross-workstream history with PR state, visibility-checked                              |
-| Memory                               | Notes, ledger journal, GOAT memory search                                                          | Plain-text memory per bot       | MEMORY.md, USER.md, memory tool  | Personal memory               | USER.md, MEMORY.md, daily notes, consolidation | **Match** plus newest-wins and per-requester visibility                                             |
-| Bot uses tools itself                | No: reads only, work goes to coding threads                                                        | Yes (agent CLI)                 | Yes                              | Yes, through a policy gateway | Yes                                            | **Match**: bot turns with tools on the bot's model                                                  |
-| Parallel workers                     | Yes: one coding thread per task, no cap                                                            | Up to 3 threads per bot         | Up to 10 children                | Job queue                     | Up to 8 subagents                              | **Match**: per-requester soft cap of 4 with a visible queue                                         |
-| Follow-up reuses the worker          | No: each message is judged alone                                                                   | Queued per thread, steerable    | Interrupt by default             | Queued                        | Steer by default                               | **Exceed**: durable steer to the workstream's worker, delivered even if the run just ended          |
-| Interrupt policy                     | Answers to open questions reach the worker; no general steer or interrupt for a workstream         | Queue / steer                   | Interrupt / queue / steer        | Queue                         | Steer / followup / collect / interrupt         | **Match**: steer, interrupt on correction, new item on new topic                                    |
-| Work queue and "what's pending"      | Tasks and chips; no pending view                                                                   | Tasks per thread                | `/sessions`                      | Work queue (internal)         | `/subagents list`                              | **Exceed**: separate work items and worker runs, reconciled, askable in chat                        |
-| Stop all                             | Per thread in GOAT only                                                                            | Cancel turn                     | `/stop`                          | Not in notes                  | Interrupt mode; stop-all not in notes          | **Match**: "stop all" in any channel stops every run and subagent                                   |
-| Durable delivery                     | Outbox and idempotent ids; Slack/iMessage sends cut by a crash become ambiguous and are not resent | Queued work survives restart    | Delivery ledger, at-least-once   | Outbox and work queue         | Durable input                                  | **Exceed**: every result arrives; item completes only on delivery                                   |
-| Approvals                            | Requester ceiling; approvals inside the worker thread                                              | Allow/Deny cards                | Smart, manual, off; buttons      | Policy gateway, cards         | Exec approvals, forwarded                      | **Match**: cards in every channel, including subagents' approvals                                   |
-| Unattended deny                      | Not distinguished                                                                                  | Interval routines skip overlaps | Deny by default                  | Routines as creator           | Never routes to chat                           | **Match**: deny by default, reported                                                                |
-| Routines / tell-me-when              | Through a worker calling `goat_schedule_create`                                                    | Routines and triggers           | Cron                             | Routines with floors and caps | Cron sessions                                  | **Match**: create, list, cancel from chat; watches stop after firing                                |
-| Decision cards                       | Buttons in GOAT, list in Slack/iMessage                                                            | Cards                           | Buttons on some platforms        | Cards via OpenTag             | Native approval clients                        | **Match**: Slack buttons, numbered replies in iMessage                                              |
-| Attachments                          | Refused on GOAT bot input                                                                          | Not in notes                    | Platform media                   | Not in notes                  | Platform media                                 | **Match**                                                                                           |
-| Model per bot                        | Text generation model only                                                                         | Per bot engine                  | `/model` per channel             | Per bot                       | Per agent                                      | **Match**: picker like a main thread                                                                |
-| Audit of trigger                     | Requester recorded per task                                                                        | Inspector                       | Logs                             | Audit row with trigger        | Logs                                           | **Match**: person / routine / delegation on every action                                            |
+| Behavior                             | GOAT now                                                                                           | OpenMausBot                     | Hermes Agent                     | OpenBot (CopilotKit)          | OpenClaw                                       | GOAT target                                                                                                                                   |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------- | ----------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reply before work                    | Partly: the reply is committed with the work item, but dispatch does not wait for its delivery     | Streams the agent's own turn    | Quick ack symbols, then the turn | Streams the turn              | Typing indicator, then the turn                | **Exceed**: a reply that names the first step, settled (delivered or failed) before work that acts or reaches a person; a session reads first |
+| Answer from history without a worker | Yes: reads of memory, tasks, threads, PRs, conversation (#459)                                     | Per-thread transcript only      | Session history only             | Thread history and memory     | `goat_memory_search`, session history          | **Exceed**: cross-workstream history with PR state, visibility-checked                                                                        |
+| Memory                               | Notes, ledger journal, GOAT memory search                                                          | Plain-text memory per bot       | MEMORY.md, USER.md, memory tool  | Personal memory               | USER.md, MEMORY.md, daily notes, consolidation | **Match** plus newest-wins and per-requester visibility                                                                                       |
+| Bot uses tools itself                | No: reads only, work goes to coding threads                                                        | Yes (agent CLI)                 | Yes                              | Yes, through a policy gateway | Yes                                            | **Match**: bot turns with tools on the bot's model                                                                                            |
+| Parallel workers                     | Yes: one coding thread per task, no cap                                                            | Up to 3 threads per bot         | Up to 10 children                | Job queue                     | Up to 8 subagents                              | **Match**: per-requester soft cap of 4 with a visible queue                                                                                   |
+| Follow-up reuses the worker          | No: each message is judged alone                                                                   | Queued per thread, steerable    | Interrupt by default             | Queued                        | Steer by default                               | **Exceed**: durable steer to the workstream's worker, delivered even if the run just ended                                                    |
+| Interrupt policy                     | Answers to open questions reach the worker; no general steer or interrupt for a workstream         | Queue / steer                   | Interrupt / queue / steer        | Queue                         | Steer / followup / collect / interrupt         | **Match**: steer, interrupt on correction, new item on new topic                                                                              |
+| Work queue and "what's pending"      | Tasks and chips; no pending view                                                                   | Tasks per thread                | `/sessions`                      | Work queue (internal)         | `/subagents list`                              | **Exceed**: separate work items and worker runs, reconciled, askable in chat                                                                  |
+| Stop all                             | Per thread in GOAT only                                                                            | Cancel turn                     | `/stop`                          | Not in notes                  | Interrupt mode; stop-all not in notes          | **Match**: "stop all" in any channel stops every run and subagent                                                                             |
+| Durable delivery                     | Outbox and idempotent ids; Slack/iMessage sends cut by a crash become ambiguous and are not resent | Queued work survives restart    | Delivery ledger, at-least-once   | Outbox and work queue         | Durable input                                  | **Exceed**: every result arrives; item completes only on delivery                                                                             |
+| Approvals                            | Requester ceiling; approvals inside the worker thread                                              | Allow/Deny cards                | Smart, manual, off; buttons      | Policy gateway, cards         | Exec approvals, forwarded                      | **Match**: cards in every channel, including subagents' approvals                                                                             |
+| Unattended deny                      | Not distinguished                                                                                  | Interval routines skip overlaps | Deny by default                  | Routines as creator           | Never routes to chat                           | **Match**: deny by default, reported                                                                                                          |
+| Routines / tell-me-when              | Through a worker calling `goat_schedule_create`                                                    | Routines and triggers           | Cron                             | Routines with floors and caps | Cron sessions                                  | **Match**: create, list, cancel from chat; watches stop after firing                                                                          |
+| Decision cards                       | Buttons in GOAT, list in Slack/iMessage                                                            | Cards                           | Buttons on some platforms        | Cards via OpenTag             | Native approval clients                        | **Match**: Slack buttons, numbered replies in iMessage                                                                                        |
+| Attachments                          | Refused on GOAT bot input                                                                          | Not in notes                    | Platform media                   | Not in notes                  | Platform media                                 | **Match**                                                                                                                                     |
+| Model per bot                        | Text generation model only                                                                         | Per bot engine                  | `/model` per channel             | Per bot                       | Per agent                                      | **Match**: picker like a main thread                                                                                                          |
+| Audit of trigger                     | Requester recorded per task                                                                        | Inspector                       | Logs                             | Audit row with trigger        | Logs                                           | **Match**: person / routine / delegation on every action                                                                                      |
 
 ## Gaps, in priority order
 
@@ -425,6 +434,7 @@ did not show it, not that it is absent. "GOAT now" is dev at
    reports).
 2. **Bot turns after the ack** (P2): the bot works with tools on its own model, one worker per
    workstream, results summarized by the bot; dispatch waits until the first reply's delivery is settled, delivered or failed.
+   A session turn's read-only tools may run before then; its launches, cards and channel sends wait (section 2).
 3. **Durable interrupts** (P3): follow-ups steer the workstream's worker through the ledger, sent
    once across restarts, and answered even if the run just ended.
 4. **Work items vs worker runs, and "what's pending"** (P4): separate records, item completion on

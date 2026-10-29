@@ -320,9 +320,10 @@ export const narrationFor = (
           };
     case "task.completed":
       if (task.kind === "turn") {
+        if (event.payload.summary.trim() === "") return undefined;
         return {
           kind: "result" as const,
-          text: event.payload.summary.trim() === "" ? "Done." : event.payload.summary,
+          text: event.payload.summary,
         };
       }
       return {

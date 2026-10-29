@@ -1,3 +1,7 @@
+import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
+import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
+import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
+import { isGoatBotSessionThreadId } from "@goat/contracts";
 import {
   readClaudeAppendSystemPromptFile,
   readClaudeLaunchArgSettings,
@@ -103,7 +107,6 @@ import {
   defaultInstanceIdForDriver,
   isCompactionCommandMessage,
   type ModelSelection,
-  type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderFailure,
@@ -3590,93 +3593,6 @@ function providerFailureFromApiRetry(message: SDKAPIRetryMessage): Orchestration
   });
 }
 
-function buildAssistantArtifacts(input: {
-  readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
-  readonly turnInput: ProviderAdapter.ProviderAdapterV2TurnInput;
-  readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
-  readonly nativeItemId: string;
-  readonly text: string;
-  readonly ordinal: number;
-  readonly startedAt: DateTime.Utc;
-  readonly completedAt: DateTime.Utc;
-}): {
-  readonly node: OrchestrationV2ExecutionNode;
-  readonly message: OrchestrationV2ConversationMessage;
-  readonly turnItem: OrchestrationV2TurnItem;
-} {
-  const nodeId = input.idAllocator.derive.nodeFromProviderItem({
-    driver: CLAUDE_PROVIDER,
-    nativeItemId: input.nativeItemId,
-  });
-  const messageId = input.idAllocator.derive.messageFromProviderItem({
-    driver: CLAUDE_PROVIDER,
-    nativeItemId: input.nativeItemId,
-  });
-  const turnItemId = input.idAllocator.derive.turnItemFromProviderItem({
-    driver: CLAUDE_PROVIDER,
-    nativeItemId: input.nativeItemId,
-  });
-  const nativeItemRef = {
-    driver: CLAUDE_PROVIDER,
-    nativeId: input.nativeItemId,
-    strength: "strong" as const,
-  };
-
-  return {
-    node: {
-      id: nodeId,
-      threadId: input.turnInput.threadId,
-      runId: input.turnInput.runId,
-      parentNodeId: input.turnInput.rootNodeId,
-      rootNodeId: input.turnInput.rootNodeId,
-      kind: "assistant_message",
-      status: "completed",
-      countsForRun: false,
-      providerThreadId: input.turnInput.providerThread.id,
-      providerTurnId: input.providerTurnId,
-      nativeItemRef,
-      runtimeRequestId: null,
-      checkpointScopeId: null,
-      startedAt: input.startedAt,
-      completedAt: input.completedAt,
-    },
-    message: {
-      createdBy: "agent",
-      creationSource: "provider",
-      id: messageId,
-      threadId: input.turnInput.threadId,
-      runId: input.turnInput.runId,
-      nodeId,
-      role: "assistant",
-      text: input.text,
-      attachments: [],
-      streaming: false,
-      createdAt: input.completedAt,
-      updatedAt: input.completedAt,
-    },
-    turnItem: {
-      id: turnItemId,
-      threadId: input.turnInput.threadId,
-      runId: input.turnInput.runId,
-      nodeId,
-      providerThreadId: input.turnInput.providerThread.id,
-      providerTurnId: input.providerTurnId,
-      nativeItemRef,
-      parentItemId: null,
-      ordinal: input.ordinal,
-      status: "completed",
-      title: null,
-      startedAt: input.startedAt,
-      completedAt: input.completedAt,
-      updatedAt: input.completedAt,
-      type: "assistant_message",
-      messageId,
-      text: input.text,
-      streaming: false,
-    },
-  };
-}
-
 const CLAUDE_USAGE_LIMIT_WINDOWS = {
   five_hour: "5-hour",
   seven_day: "7-day",
@@ -3737,6 +3653,7 @@ interface ActiveClaudeTurnContext {
   readonly providerTurnOrdinal: number;
   readonly startedAt: DateTime.Utc;
   readonly itemOrdinals: Map<string, number>;
+  readonly textProjector: ReturnType<typeof makeClaudeAssistantTextProjector>;
   readonly assistant: {
     fallbackText: string;
     fallbackNativeItemId: string;
@@ -7426,11 +7343,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly context: ActiveClaudeTurnContext;
           readonly nativeItemId: string;
           readonly text: string;
+          readonly streaming?: boolean;
+          readonly sealed?: boolean;
         }) {
           if (input.context.assistant.emittedNativeItemIds.has(input.nativeItemId)) {
             return;
           }
-          input.context.assistant.emittedNativeItemIds.add(input.nativeItemId);
+          if (!input.streaming)
+            input.context.assistant.emittedNativeItemIds.add(input.nativeItemId);
           const now = yield* DateTime.now;
           const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
           const artifacts = buildAssistantArtifacts({
@@ -7440,8 +7360,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             nativeItemId: input.nativeItemId,
             text: input.text,
             ordinal,
-            startedAt: now,
+            startedAt: input.context.textProjector.startedAt(input.nativeItemId, now),
             completedAt: now,
+            streaming: input.streaming,
           });
           yield* Effect.all(
             [
@@ -7450,16 +7371,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 driver: CLAUDE_PROVIDER,
                 node: artifacts.node,
               }),
-              emitProviderEvent({
-                type: "message.updated",
-                driver: CLAUDE_PROVIDER,
-                message: artifacts.message,
-              }),
-              emitProviderEvent({
-                type: "turn_item.updated",
-                driver: CLAUDE_PROVIDER,
-                turnItem: artifacts.turnItem,
-              }),
+              input.streaming
+                ? Effect.void
+                : emitProviderEvent({
+                    type: "message.updated",
+                    driver: CLAUDE_PROVIDER,
+                    message: artifacts.message,
+                  }),
+              emitProviderEvent(
+                input.sealed
+                  ? sealAssistantTextEvent({
+                      type: "turn_item.updated",
+                      driver: CLAUDE_PROVIDER,
+                      turnItem: artifacts.turnItem,
+                    })
+                  : {
+                      type: "turn_item.updated",
+                      driver: CLAUDE_PROVIDER,
+                      turnItem: artifacts.turnItem,
+                    },
+              ),
             ],
             { concurrency: 1 },
           );
@@ -8103,6 +8034,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           yield* trackClaudeGoal({ nativeThreadId: liveQuery.nativeThreadId, context, message });
 
           if (message.type === "stream_event" && !message.parent_tool_use_id) {
+            for (const update of context.textProjector.stream(message.event))
+              yield* emitAssistantTextArtifacts({ context, ...update });
             const event = message.event;
             const reasoning = context.reasoning;
             if (event.type === "message_start") {
@@ -8799,7 +8732,23 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }
 
           const toolPresentations = claudeToolPresentationsFromAssistantMessage(message);
-          for (const toolUse of claudeToolUseBlocksFromAssistantMessage(message)) {
+          const rootBlocks =
+            message.type === "assistant" &&
+            !message.parent_tool_use_id &&
+            !isClaudeGoalAcknowledgement(message) &&
+            !(
+              "local_command_source" in message &&
+              isCompactionCommandMessage({ role: "user", ...context.input.message })
+            )
+              ? context.textProjector.snapshot(message)
+              : null;
+          for (const block of rootBlocks ??
+            claudeToolUseBlocksFromAssistantMessage(message).map((toolUse) => ({ toolUse }))) {
+            if ("text" in block) {
+              yield* emitAssistantTextArtifacts({ context, ...block });
+              continue;
+            }
+            const toolUse = block.toolUse;
             const nativeToolInput = claudeNativeToolInputFromUnknown(toolUse.input);
             if (toolUse.name === "Agent") {
               rememberClaudeSubagentLaunch(
@@ -9014,6 +8963,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ) {
             return;
           }
+          if (rootBlocks !== null) return;
           if (assistantText !== null && assistantText.text.length > 0) {
             yield* emitAssistantTextArtifacts({
               context,
@@ -9764,12 +9714,14 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
-          const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, {
-            ...mcpOverrides,
-            allowedTools: mcpOverrides.allowedTools?.filter(
-              (tool) => claudeGoatMemoryTool(tool) === undefined,
-            ),
-          });
+          const queryPolicyKey =
+            String(isGoatBotSessionThreadId(turnInput.threadId)) +
+            claudeEffectiveQueryPolicyKey(queryPolicy, {
+              ...mcpOverrides,
+              allowedTools: mcpOverrides.allowedTools?.filter(
+                (tool) => claudeGoatMemoryTool(tool) === undefined,
+              ),
+            });
           const cuaServer = mcpOverrides.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME];
           const cuaKey = McpProviderSession.isBlockedCuaServer(cuaServer)
             ? "blocked"
@@ -9917,6 +9869,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : undefined,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
+            ...(isGoatBotSessionThreadId(turnInput.threadId)
+              ? { disallowedTools: ["Agent", "Task"] }
+              : {}),
             ...(mcpOverrides.allowedTools === undefined
               ? {}
               : { allowedTools: mcpOverrides.allowedTools }),
@@ -10155,6 +10110,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               providerTurnOrdinal,
               startedAt,
               itemOrdinals: new Map(),
+              textProjector: makeClaudeAssistantTextProjector(),
               assistant: {
                 fallbackText: "",
                 fallbackNativeItemId: `assistant:${turnInput.runId}`,

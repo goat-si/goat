@@ -6,6 +6,8 @@
 import type { TextGenerationFailureKind } from "@goat/provider-core/server/textGenerationUtils";
 
 export const CHANNEL_COPY = {
+  // oxlint-disable-next-line goat/no-em-dash-copy -- The approved receipt protocol fixes this exact text.
+  sessionWorking: "Working on it — I'll reply here.",
   linkHelp:
     'I don\'t know who you are yet. Open GOAT, go to Settings → GOAT Bot → Slack, create a link code, and send it to me as "link <code>".',
   linkInvalid: "That link code is wrong or expired. Create a new one in GOAT and try again.",

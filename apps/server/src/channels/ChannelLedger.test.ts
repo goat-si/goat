@@ -39,6 +39,10 @@ import {
   commitTransition,
 } from "./channelTaskWrites.ts";
 import { applyChannelTaskEvent } from "./channelTaskTransitions.ts";
+import {
+  prepareDeliveryTask,
+  ledgerOutboxDelivery as delivery,
+} from "./testkit/channelLedgerFixtures.ts";
 
 const decodeMessage = Schema.decodeUnknownSync(ChannelInboundMessage);
 const decodeRequester = Schema.decodeUnknownSync(ChannelRequester);
@@ -415,17 +419,6 @@ describe("ChannelLedger tasks", () => {
 });
 
 describe("ChannelLedger outbox", () => {
-  const delivery = (causeKey: string, destination: unknown, taskId?: string) => ({
-    deliveryId: deliveryIdFor(causeKey),
-    causeKey,
-    ...(taskId === undefined ? {} : { taskId: taskId as never }),
-    message: decodeOutbound({
-      deliveryId: deliveryIdFor(causeKey),
-      destination,
-      kind: "receipt",
-      text: "On it.",
-    }),
-  });
   const slackDestination = slackMessage().replyAddress;
   const goatDestination = { kind: "goat", environmentId: "env-1", threadId: "bot" };
 
@@ -480,6 +473,9 @@ describe("ChannelLedger outbox", () => {
       Effect.gen(function* () {
         const ledger = yield* ChannelLedger.ChannelLedger;
         yield* claimOwner("a", NOW, "2026-10-11T23:59:30.000Z");
+        const accepted = yield* accept();
+        const created = newTask(accepted.inputId, accepted.conversationId, accepted.bindingId);
+        yield* prepareDeliveryTask(accepted, created, "a", NOW);
         const claim = (now = NOW) =>
           ledger
             .claimDueDeliveries({ owner: "a", now, limit: 10 })
@@ -487,34 +483,37 @@ describe("ChannelLedger outbox", () => {
         // Same timestamp: insertion order decides, not the hashed delivery id.
         yield* ledger.enqueueDeliveries(
           [
-            delivery("receipt", slackDestination, "task-1"),
-            delivery("result", slackDestination, "task-1"),
-            delivery("bot-copy", goatDestination, "task-1"),
+            {
+              ...delivery("reply:" + accepted.inputId, slackDestination, created.task.taskId),
+              inputId: accepted.inputId,
+            },
+            delivery("result", slackDestination, created.task.taskId),
+            delivery("bot-copy", goatDestination, created.task.taskId),
           ],
           NOW,
         );
-        assert.deepStrictEqual(yield* claim(), [
-          deliveryIdFor("receipt"),
-          deliveryIdFor("bot-copy"),
-        ]);
+        assert.deepStrictEqual(yield* claim(), [deliveryIdFor("reply:" + accepted.inputId)]);
         // A receipt waiting out a rate limit keeps the result behind it.
         yield* ledger.recordDelivery({
           owner: "a",
-          deliveryId: deliveryIdFor("receipt"),
+          deliveryId: deliveryIdFor("reply:" + accepted.inputId),
           outcome: { type: "retry", at: "2026-10-12T00:00:30.000Z", errorCode: "rate_limited" },
           now: NOW,
         });
         assert.deepStrictEqual(yield* claim("2026-10-12T00:00:10.000Z"), []);
         assert.deepStrictEqual(yield* claim("2026-10-12T00:00:30.000Z"), [
-          deliveryIdFor("receipt"),
+          deliveryIdFor("reply:" + accepted.inputId),
         ]);
         yield* ledger.recordDelivery({
           owner: "a",
-          deliveryId: deliveryIdFor("receipt"),
+          deliveryId: deliveryIdFor("reply:" + accepted.inputId),
           outcome: { type: "delivered" },
           now: "2026-10-12T00:00:30.000Z",
         });
-        assert.deepStrictEqual(yield* claim("2026-10-12T00:00:30.000Z"), [deliveryIdFor("result")]);
+        assert.deepStrictEqual(yield* claim("2026-10-12T00:00:30.000Z"), [
+          deliveryIdFor("result"),
+          deliveryIdFor("bot-copy"),
+        ]);
       }).pipe(Effect.provide(TestLayer)),
   );
 });

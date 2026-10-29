@@ -42,6 +42,9 @@ import { hasUnsettledChannelDelivery } from "./channelDeliveryGate.ts";
 import { deliveryIdFor } from "./channelIds.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
+import { isSessionClaim } from "./channelSessionReceipt.ts";
+import { readReceiptSettlement } from "./channelReceiptSettlement.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -78,6 +81,7 @@ const make = Effect.gen(function* () {
   const hold = yield* AutomationHold.AutomationHold;
   const ledger = yield* ChannelLedger.ChannelLedger;
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
+  const sessionFirst = yield* ChannelSessionFirst.ChannelSessionFirst;
   const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
   const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
@@ -133,6 +137,7 @@ const make = Effect.gen(function* () {
     const overdue = yield* sql<{ readonly input_id: ChannelInputId }>`
       SELECT input_id FROM channel_inbox
       WHERE state IN ('accepted', 'processing') AND accepted_at <= ${cutoff}
+        AND (reception_id IS NULL OR (reception_id NOT LIKE 'channel-session:%' AND reception_id NOT LIKE 'channel-session-ack:%'))
       ORDER BY accepted_at, rowid
     `.pipe(
       Effect.mapError(
@@ -144,7 +149,8 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    let expired = 0;
+    let expired = yield* sessionFirst.deadlines(owner);
+    yield* ledger.expireReceipts({ owner, now });
     for (const { input_id: inputId } of overdue) {
       const receptionId = ChannelReceptionId.make("channel-reception:" + NodeCrypto.randomUUID());
       const taken = yield* sql
@@ -210,7 +216,7 @@ const make = Effect.gen(function* () {
   });
 
   const deliverReceipts = Effect.fn("ChannelRuntime.deliverReceipts")(function* () {
-    const delivered = yield* delivery.deliverDue(owner);
+    const delivered = yield* delivery.deliverReceipts(owner);
     if (delivered > 0) yield* wake.wake;
     return delivered;
   });
@@ -234,30 +240,26 @@ const make = Effect.gen(function* () {
     // Only each conversation's oldest input is offered, so a conversation is read in order while
     // others proceed; at most one fiber per conversation waits for a reception slot.
     for (const inputId of yield* ledger.listReceivableInputs(100)) {
-      if (yield* startReception(inputId)) started += 1;
+      if ((yield* sessionFirst.offer(inputId, owner)) || (yield* startReception(inputId)))
+        started += 1;
     }
     // Oldest request first, so work held back by the per-person cap starts in arrival order.
     const waiting = (yield* ledger.listTasksByStatus(["received", "dispatching"])).toSorted(
       (left, right) => left.task.createdAt.localeCompare(right.task.createdAt),
     );
-    let receiptReadFailed = false;
     for (const stored of waiting) {
       // The acknowledgement goes out before the work starts: while its delivery could still
       // reach the person, the task waits at received until that delivery settles.
       if (stored.task.status === "received") {
-        const unsettled =
+        const input =
           stored.task.kind === "turn"
-            ? sql`SELECT 1 AS unsettled FROM channel_outbox
-              WHERE input_id = ${stored.task.originInputId} AND state IN ('pending', 'delivering') LIMIT 1`.pipe(
-                Effect.map((rows) => rows.length > 0),
-                Effect.catchCause((cause) => {
-                  if (receiptReadFailed) return Effect.succeed(true);
-                  receiptReadFailed = true;
-                  return Effect.logWarning(
-                    "channel turn receipt read failed; keeping turns waiting",
-                    { cause },
-                  ).pipe(Effect.as(true));
-                }),
+            ? yield* ledger.getInput(stored.task.originInputId)
+            : undefined;
+        const unsettled = isSessionClaim(input?.snapshot.receptionId)
+          ? Effect.succeed(false)
+          : stored.task.kind === "turn"
+            ? readReceiptSettlement(sql, stored.task.originInputId).pipe(
+                Effect.map((settled) => !settled),
               )
             : hasUnsettledChannelDelivery(sql, stored.task.originInputId);
         if (yield* unsettled) continue;
@@ -265,6 +267,7 @@ const make = Effect.gen(function* () {
       yield* dispatcher.dispatch(stored.task.taskId, owner);
       started += 1;
     }
+    yield* sessionFirst.observe(owner);
     for (const pending of yield* ledger.listPendingForwards(50)) {
       yield* dispatcher.forward(pending, owner);
       started += 1;
@@ -305,11 +308,15 @@ const make = Effect.gen(function* () {
         (fiber) => Fiber.await(fiber),
         { discard: true },
       );
+      yield* sessionFirst.settle(inputIds);
+      yield* delivery.settleReceipts;
     });
 
   const recover = Effect.gen(function* () {
     const now = DateTime.formatIso(yield* DateTime.now);
     yield* ledger.settleInterruptedDeliveries({ owner, now });
+    yield* sessionFirst.observe(owner);
+    yield* sessionFirst.deadlines(owner);
   });
 
   const drain = Effect.gen(function* () {
@@ -318,6 +325,7 @@ const make = Effect.gen(function* () {
     for (let pass = 0; pass < 50; pass += 1) {
       const started = yield* runPass;
       const awaited = yield* awaitReceptions;
+      yield* delivery.settleReceipts;
       if (started === 0 && awaited === 0) return;
     }
   });
@@ -347,7 +355,9 @@ export const layerBackground = Layer.effectDiscard(
     const wake = yield* ChannelWake.ChannelWake;
     const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
     const eventSink = yield* EventSink.EventSinkV2;
+    const sessionEventStart = yield* eventSink.latestSequence();
     const hold = yield* AutomationHold.AutomationHold;
+    const sessionFirst = yield* ChannelSessionFirst.ChannelSessionFirst;
     const owning = yield* Ref.make(false);
 
     const heartbeat = Effect.gen(function* () {
@@ -385,19 +395,16 @@ export const layerBackground = Layer.effectDiscard(
       ),
     );
 
-    const runEvents = Stream.unwrap(
-      eventSink
-        .latestSequence()
-        .pipe(
-          Effect.map((latest) =>
-            eventSink.stream({ afterSequence: latest, eventType: "run.updated" }),
-          ),
-        ),
-    ).pipe(
+    const runEvents = eventSink.stream({ afterSequence: sessionEventStart }).pipe(
       Stream.runForEach((stored) =>
-        reports.isWorkerThread(stored.event.threadId).pipe(
-          Effect.flatMap((isWorker) => (isWorker ? wake.wake : Effect.void)),
-          Effect.ignore,
+        Effect.gen(function* () {
+          if (!(yield* Ref.get(owning)) || (yield* hold.current) !== null) return;
+          yield* sessionFirst.observe(runtime.ownerToken, stored.event);
+          if (yield* reports.isWorkerThread(stored.event.threadId)) yield* wake.wake;
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("channel session event observation failed", { cause }),
+          ),
         ),
       ),
       Effect.catchCause((cause) =>

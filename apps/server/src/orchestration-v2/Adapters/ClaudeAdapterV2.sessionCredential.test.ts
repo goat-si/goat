@@ -78,8 +78,9 @@ it.effect(
           idAllocator: yield* IdAllocator.IdAllocatorV2,
           queryRunner: {
             allocateSessionId: Effect.succeed(nativeSessionId),
-            open: () =>
+            open: (input) =>
               Effect.sync(() => {
+                expect(input.options.disallowedTools).toEqual(["Agent", "Task"]);
                 opens++;
                 return {
                   messages: Stream.fromQueue(sdkMessages),

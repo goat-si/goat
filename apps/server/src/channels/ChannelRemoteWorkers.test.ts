@@ -36,7 +36,7 @@ import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
-import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
+import { deliverAllDue } from "./testkit/channelLedgerFixtures.ts";
 import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import {
@@ -3285,8 +3285,7 @@ describe("automatic same-repository placement through the dispatcher", () => {
         const reception = yield* ChannelReceptionService.ChannelReceptionService;
         for (const pending of yield* ledger.listPendingNarrations(50))
           yield* reception.narrate(pending, "placement-owner");
-        const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
-        yield* delivery.deliverDue("placement-owner");
+        yield* deliverAllDue("placement-owner");
         const chips = (yield* botMessages).turnItems.flatMap((item) =>
           item.type === "notification" && item.ledgerTask !== undefined ? [item.ledgerTask] : [],
         );

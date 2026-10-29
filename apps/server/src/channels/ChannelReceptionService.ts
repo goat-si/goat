@@ -178,6 +178,7 @@ export class ChannelReceptionService extends Context.Service<
       pending: ChannelLedger.ChannelPendingEvent,
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
+    readonly acknowledgeSession: (i: ChannelReceptionInput) => Effect.Effect<string | undefined>;
   }
 >()("goat/channels/ChannelReceptionService") {}
 
@@ -1840,7 +1841,11 @@ const make = Effect.gen(function* () {
       yield* wake.wake;
     });
 
-  return ChannelReceptionService.of({ receive, narrate });
+  const acknowledgeSession = Effect.fn("ChannelReceptionService.acknowledgeSession")(
+    (input: ChannelReceptionInput) =>
+      Effect.map(generate(input), (r) => Option.getOrUndefined(r)?.replyText.trim() || undefined),
+  );
+  return ChannelReceptionService.of({ receive, narrate, acknowledgeSession });
 });
 
 export const layer = Layer.effect(ChannelReceptionService, make);

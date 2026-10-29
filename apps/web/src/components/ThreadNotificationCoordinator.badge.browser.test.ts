@@ -229,6 +229,38 @@ it.each(["hasPendingApprovals", "hasPendingUserInput"] as const)(
   },
 );
 
+it("never notifies for a GOAT Bot session thread, whose replies reach the person in the bot", async () => {
+  await using app = setup();
+  app.start();
+  using _timers = fakeTimers();
+  const session = { id: "goat-bot-session:abc", title: "GOAT Bot" };
+  const ordinary = {};
+  state.shells.set("one", shell(session, ordinary));
+  state.shells.set("one", shell({ ...session, hasPendingApprovals: true }, ordinary));
+  state.shells.set(
+    "one",
+    shell(
+      { ...session, latestTurn: { turnId: "failed", state: "error", completedAt: null } },
+      ordinary,
+    ),
+  );
+  state.shells.set(
+    "one",
+    shell(
+      {
+        ...session,
+        latestTurn: { turnId: "done", state: "completed", completedAt: "2026-09-13T07:01:00.000Z" },
+      },
+      ordinary,
+    ),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent).toEqual([]);
+  expect(state.badge).not.toHaveBeenCalledWith(1);
+  state.shells.set("one", shell(session, { hasPendingApprovals: true }));
+  expect(TestNotification.sent.map((sent) => sent.title)).toHaveLength(1);
+});
+
 it("holds a completion through a continuation gap and notifies once it settles", async () => {
   await using app = setup();
   app.start();
