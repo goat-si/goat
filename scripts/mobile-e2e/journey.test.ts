@@ -161,3 +161,42 @@ it("pairing that never shows the threads is an app failure", async () => {
 
   expect(error).toEqual(new Error("the app did not show the fixture threads after pairing"));
 });
+
+it("an error dialog seen before the pool fails its screenshot stays recorded", async () => {
+  const dialog: Snapshot = {
+    viewport: { width: 400, height: 800 },
+    nodes: [
+      {
+        index: 0,
+        label: "Could not connect",
+        kind: "text",
+        rect: { x: 60, y: 300, width: 300, height: 30 },
+      },
+      {
+        index: 1,
+        label: "Dismiss",
+        kind: "button",
+        rect: { x: 60, y: 340, width: 100, height: 40 },
+      },
+    ],
+  };
+  const device = {
+    pose: { form: "phone", platform: "ios" },
+    agent: async () => {},
+    screenshot: async () => {
+      throw new AgentDeviceError("agent-device screenshot: Daemon connection closed");
+    },
+    waitFor: async () => dialog,
+  } as unknown as Device;
+  const steps: StepResult[] = [];
+
+  const error = await runJourney(device, "/tmp/journey-fixture", async () => "", steps)
+    .then(() => undefined)
+    .catch((failure: unknown) => failure);
+
+  expect(error instanceof Error && poolError(error.message)).toBe(true);
+  expect(steps.flatMap((step) => step.checks).filter((item) => !item.pass)).toEqual([
+    { name: "no error dialog on launch", pass: false, detail: "Could not connect" },
+  ]);
+  expect(steps[0]?.screenshot).toBeUndefined();
+});

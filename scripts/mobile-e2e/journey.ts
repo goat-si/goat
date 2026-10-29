@@ -93,16 +93,19 @@ export async function runJourney(
     expectations: ReadonlyArray<Check> = [],
     extra: Partial<StepResult> = {},
   ) => {
-    const screenshot = NodePath.join(directory, `${steps.length + 1}-${name}.png`);
-    await device.screenshot(screenshot);
+    // Record what was seen before any device I/O: a pool failure in the screenshot must not
+    // erase it, or the attempt reads as clean and its retry replaces the evidence.
+    const index = steps.length;
     const step = {
       name,
       checks: [...layoutChecks(snapshot, BUNDLE_ID), ...expectations],
-      screenshot,
       ...extra,
     };
     steps.push(step);
-    return step;
+    const screenshot = NodePath.join(directory, `${index + 1}-${name}.png`);
+    await device.screenshot(screenshot);
+    steps[index] = { ...step, screenshot };
+    return steps[index];
   };
 
   // The app ignores the pairing link until its JS has loaded and shown the workspace. An
