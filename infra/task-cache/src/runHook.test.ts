@@ -102,6 +102,7 @@ it("uses one machine hook across fresh worktrees without modifying Vite+", async
             env: {
               ...process.env,
               HOME: root,
+              USERPROFILE: root,
               // Flush inline so no detached flusher can write under root while it is removed.
               GITHUB_ACTIONS: "true",
               T3_TASK_CACHE_TELEMETRY: undefined,
@@ -202,10 +203,22 @@ it("sends telemetry from a detached flusher that the task runner does not wait f
       NodePath.join(root, ".config/t3-task-cache/credentials.json"),
       JSON.stringify({ [endpoint]: { name: "maria", token: "secret" } }),
     );
+    // os.homedir() reads USERPROFILE on Windows; both keep the hook away from the real profile.
     vi.stubEnv("HOME", root);
-    vi.stubEnv("GITHUB_ACTIONS", undefined);
-    vi.stubEnv("T3_TASK_CACHE_TELEMETRY", undefined);
-    vi.stubEnv("VITE_CACHE_PATH", undefined);
+    vi.stubEnv("USERPROFILE", root);
+    for (const name of [
+      "GITHUB_ACTIONS",
+      "GITHUB_RUN_ID",
+      "ACTIONS_ID_TOKEN_REQUEST_URL",
+      "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+      "T3_TASK_CACHE_TELEMETRY",
+      "T3_TASK_CACHE_HOST",
+      "VITE_CACHE_PATH",
+      "VP_REMOTE_CACHE",
+      "VP_REMOTE_CACHE_URL",
+      "VP_T3_TASK_CACHE_MODE",
+    ])
+      vi.stubEnv(name, undefined);
     const finish = startRunHook({ root });
     const summary = NodePath.join(root, "node_modules/.vite/task-cache/run/last-summary.json");
     await NodeFSP.mkdir(NodePath.dirname(summary), { recursive: true });
@@ -251,6 +264,7 @@ it("rejects invalid setup credentials before installing anything and never print
           env: {
             ...process.env,
             HOME: home,
+            USERPROFILE: home,
             T3_CACHE_SETUP_URL: `http://127.0.0.1:${address.port}/projects/test`,
             T3_CACHE_SETUP_NAME: "maria",
             T3_CACHE_SETUP_TOKEN: token,
@@ -298,7 +312,7 @@ it("does not start telemetry or create local state without cache credentials", a
         ],
         {
           cwd: root,
-          env: { ...process.env, HOME: root, VP_REMOTE_CACHE_URL: "" },
+          env: { ...process.env, HOME: root, USERPROFILE: root, VP_REMOTE_CACHE_URL: "" },
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
@@ -327,7 +341,7 @@ it("installs without masking .profile and configures CI through bash", async () 
   const run = (args: string[], env: NodeJS.ProcessEnv) =>
     new Promise<string>((resolve, reject) => {
       const child = NodeChildProcess.spawn(args[0]!, args.slice(1), {
-        env: { ...process.env, ...env, HOME: home, NODE_OPTIONS: "" },
+        env: { ...process.env, ...env, HOME: home, USERPROFILE: home, NODE_OPTIONS: "" },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let output = "";
@@ -477,6 +491,7 @@ it("does not send an old endpoint's token after changing the URL interactively",
           env: {
             ...process.env,
             HOME: root,
+            USERPROFILE: root,
             NODE_OPTIONS: "",
             T3_CACHE_SETUP_URL: "https://old.example",
             T3_CACHE_SETUP_NAME: "maria",
@@ -527,6 +542,7 @@ it("rejects non-loopback HTTP before transmitting a setup credential", async () 
           env: {
             ...process.env,
             HOME: home,
+            USERPROFILE: home,
             NODE_OPTIONS: "",
             T3_CACHE_SETUP_URL: "http://cache.invalid/projects/test",
             T3_CACHE_SETUP_NAME: "maria",
