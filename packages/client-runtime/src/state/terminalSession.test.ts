@@ -34,6 +34,31 @@ const BASE_SNAPSHOT: TerminalSessionSnapshot = {
 };
 
 describe("terminal session reducers", () => {
+  it("follows the shared grid while accepting geometry-free legacy events", () => {
+    const attached = applyTerminalAttachStreamEvent(nextTerminalAttachSeedState(), {
+      type: "snapshot",
+      snapshot: { ...BASE_SNAPSHOT, cols: 130, rows: 15 },
+    });
+    const activity = {
+      type: "activity",
+      threadId: TARGET.threadId,
+      terminalId: TARGET.terminalId,
+      hasRunningSubprocess: false,
+      label: "Terminal 1",
+    } as const;
+    const narrowed = applyTerminalAttachStreamEvent(attached, { ...activity, cols: 54, rows: 15 });
+    const legacy = applyTerminalAttachStreamEvent(narrowed, activity);
+    expect(attached.grid).toEqual({ cols: 130, rows: 15 });
+    expect(narrowed.grid).toEqual({ cols: 54, rows: 15 });
+    expect(legacy).toBe(narrowed);
+    expect(
+      applyTerminalAttachStreamEvent(nextTerminalAttachSeedState(), {
+        type: "snapshot",
+        snapshot: BASE_SNAPSHOT,
+      }).grid,
+    ).toBeNull();
+  });
+
   it("prefers live attach status over stale metadata after the attach stream starts", () => {
     const summary = applyTerminalMetadataStreamEvent([], {
       type: "snapshot",

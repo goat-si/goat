@@ -5,6 +5,8 @@ import {
   DEFAULT_TERMINAL_ID,
   TerminalError,
   TerminalOpenInput,
+  TerminalSessionSnapshot,
+  TerminalAttachStreamEvent,
   TerminalProviderEnvironmentError,
 } from "./terminal.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
@@ -48,4 +50,29 @@ describe("TerminalOpenInput", () => {
     });
     expect(parsed.env).toEqual({ GOOD_KEY: "2" });
   });
+});
+
+it("decodes legacy terminal snapshots and activity without geometry", () => {
+  const snapshot = {
+    threadId: "thread-1",
+    terminalId: "term-1",
+    cwd: "/repo",
+    worktreePath: null,
+    status: "running",
+    pid: 123,
+    history: "",
+    exitCode: null,
+    exitSignal: null,
+    label: "Terminal",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const activity = {
+    type: "activity",
+    threadId: "thread-1",
+    terminalId: "term-1",
+    hasRunningSubprocess: false,
+    label: "Terminal",
+  };
+  expect(decodeSync(TerminalSessionSnapshot, snapshot)).toEqual(snapshot);
+  expect(decodeSync(TerminalAttachStreamEvent, activity)).toEqual(activity);
 });
