@@ -120,7 +120,8 @@ jobs:
     strategy:
       fail-fast: false
       # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
-      # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows, build, and test-server in
+      # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows,
+      # smoke-linux-computer-use, build, and test-server in
       # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
       # one to four for the related files goat-scope picked. A quick run has check, typecheck,
       # test-changed, and related server shards when its server tests outgrow one job. Each entry
@@ -362,6 +363,16 @@ jobs:
       - name: Test mobile
         if: matrix.task == 'test-mobile'
         run: vp test run --root apps/mobile --config vite.config.ts
+
+      - name: Linux computer use smoke
+        # The helper built from this commit against a GTK fixture on its own Xvfb display, bus and
+        # AT-SPI bus, all stopped by pid. It installs packages, so goat-scope keeps it hosted.
+        if: matrix.task == 'smoke-linux-computer-use'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xcompmgr xdotool at-spi2-core dbus gir1.2-gtk-3.0 python3-gi
+          node scripts/build-computer-use-helper-linux.ts --out "$RUNNER_TEMP/goat-computer-use"
+          node scripts/computer-use-linux-smoke.ts --helper "$RUNNER_TEMP/goat-computer-use/goat-computer-use" --evidence "$RUNNER_TEMP/goat-computer-use-evidence"
 
       - name: Test server
         if: matrix.task == 'test-server' && !matrix.related

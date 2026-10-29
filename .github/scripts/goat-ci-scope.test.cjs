@@ -127,7 +127,10 @@ describe("selectTasks", () => {
       tasksFor("packages/contracts/src/orchestrationV2.ts"),
       TASKS.filter(
         (task) =>
-          task !== "test-memory-growth" && task !== "test-ingest" && task !== "test-windows",
+          task !== "test-memory-growth" &&
+          task !== "test-ingest" &&
+          task !== "test-windows" &&
+          task !== "smoke-linux-computer-use",
       ),
     );
   });
@@ -380,8 +383,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists eighteen jobs for a full run including relay, Windows and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 18);
+  it("lists nineteen jobs for a full run including relay, Windows, the Linux smoke and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 19);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -592,6 +595,35 @@ describe("planRun", () => {
       matrixFor(labelled.tasks, labelled.server).include.find((e) => e.task === "test-windows"),
       { task: "test-windows", title: "test-windows", runner: "windows" },
     );
+  });
+
+  it("adds the Linux computer use smoke for a change to the Linux helper or its scripts, on a hosted runner", async () => {
+    const helper = await plan(pr(), labels([]), [
+      "apps/server/src/cua/linuxHelper/LinuxComputerUseHelper.ts",
+    ]);
+    assert.equal(
+      helper.reasons.get("smoke-linux-computer-use"),
+      "apps/server/src/cua/linuxHelper/LinuxComputerUseHelper.ts",
+    );
+    assert.deepEqual(
+      matrixFor(helper.tasks, helper.server).include.find(
+        (e) => e.task === "smoke-linux-computer-use",
+      ),
+      { task: "smoke-linux-computer-use", title: "smoke-linux-computer-use", runner: "hosted" },
+    );
+    assert.ok(
+      (await plan(pr(), labels([]), ["scripts/computer-use-linux-smoke.ts"])).tasks.includes(
+        "smoke-linux-computer-use",
+      ),
+    );
+    assert.ok(!(await plan(pr(), labels([]))).tasks.includes("smoke-linux-computer-use"));
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    const step = workflow.match(
+      /- name: Linux computer use smoke\n([\s\S]*?)(?=\n\s*- name:)/,
+    )?.[1];
+    assert.ok(step);
+    assert.match(step, /if: matrix\.task == 'smoke-linux-computer-use'/);
+    assert.match(step, /computer-use-linux-smoke\.ts/);
   });
 
   it("filters the Windows job by suites that each still select a test file", () => {

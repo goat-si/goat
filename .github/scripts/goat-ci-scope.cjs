@@ -22,6 +22,10 @@
 // test-windows runs WINDOWS_SUITES on hosted Windows: in lane=all, in the windows lane, with the
 // ci:windows label, and on a pull request that changes one of those paths. Its job has a 30-minute
 // timeout and never runs on EPYC.
+//
+// smoke-linux-computer-use builds the Linux computer use helper and runs its live smoke on a
+// private Xvfb display, hosted only since it installs packages: in lane=all, and on a pull request
+// that changes one of LINUX_COMPUTER_USE_PATHS.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -61,6 +65,16 @@ const WINDOWS_SUITES = [
   "scripts/build-computer-use-helper",
 ];
 const WINDOWS_TASK = "test-windows";
+/** Paths whose change selects the Linux computer use smoke. */
+const LINUX_COMPUTER_USE_PATHS = [
+  "apps/server/src/cua/linuxHelper/",
+  "packages/shared/src/cuaDriverRelease.ts",
+  "packages/shared/src/computerUseObservation.ts",
+  "scripts/build-computer-use-helper-linux.ts",
+  "scripts/computer-use-linux-smoke.ts",
+  "scripts/lib/computer-use-helper-linux-manifest.ts",
+];
+const LINUX_COMPUTER_USE_TASK = "smoke-linux-computer-use";
 /** The quick run's selected tests. */
 const CHANGED_TESTS_TASK = "test-changed";
 /** CI script tests use node:test, not Vitest. */
@@ -120,6 +134,7 @@ const TASKS = [
   "test-ingest",
   "test-memory-growth",
   WINDOWS_TASK,
+  LINUX_COMPUTER_USE_TASK,
   "build",
   "test-server",
 ];
@@ -137,6 +152,7 @@ const HOSTED_TASKS = new Set([
   "test-mobile",
   "test-shared",
   "test-ingest",
+  LINUX_COMPUTER_USE_TASK,
 ]);
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
@@ -170,6 +186,8 @@ const BUILD_ONLY_EDGES = [["apps/server", "apps/web"]];
 const TYPECHECK_ONLY_RE = /^(?:infra\/(?!relay\/)[^/]+|oxlint-plugin-goat)\//;
 
 const isWindowsSensitive = (file) => WINDOWS_SUITES.some((suite) => file.startsWith(suite));
+const isLinuxComputerUse = (file) =>
+  LINUX_COMPUTER_USE_PATHS.some((prefix) => file.startsWith(prefix));
 
 /** Prose that only the check task (formatting) reads. */
 function isDocument(file) {
@@ -669,6 +687,11 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
   if (!tasks.has(WINDOWS_TASK) && (labels.has(WINDOWS_LABEL) || windowsChange !== undefined)) {
     tasks.add(WINDOWS_TASK);
     reasons.set(WINDOWS_TASK, windowsChange ?? WINDOWS_LABEL + " label");
+  }
+  const linuxChange = changed.find(isLinuxComputerUse);
+  if (!tasks.has(LINUX_COMPUTER_USE_TASK) && linuxChange !== undefined) {
+    tasks.add(LINUX_COMPUTER_USE_TASK);
+    reasons.set(LINUX_COMPUTER_USE_TASK, linuxChange);
   }
   return {
     ...result,

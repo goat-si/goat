@@ -58,5 +58,6 @@ def focus_password():
 
 GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGUSR1, focus_password)
 
+window.connect("map-event", lambda *_: print("ready", flush=True) and False)
 window.show_all()
 Gtk.main()
