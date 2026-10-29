@@ -97,6 +97,7 @@ export interface PrimitiveChannelRequest {
   readonly tool: string;
   readonly args: ComputerUsePrimitiveRequest["args"];
   readonly cursor?: ComputerUsePrimitiveRequest["cursor"];
+  readonly optional?: boolean;
 }
 
 export class ComputerUsePrimitiveChannel extends Context.Service<
@@ -330,6 +331,7 @@ export const make = Effect.gen(function* () {
       tool: input.tool,
       args: input.args,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      ...(input.optional === true ? { optional: true } : {}),
     };
     const pending: Pending = { request, answer, sent: false };
     record.pending.set(request.requestId, pending);

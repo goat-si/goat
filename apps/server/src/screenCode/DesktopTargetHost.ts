@@ -67,6 +67,7 @@ import {
 } from "./DesktopInputPlan.ts";
 import {
   CellWindowTracker,
+  checkWindowReplyState,
   type CellWindowsOutcome,
   matchBindWindow,
   parseWindowList,
@@ -76,19 +77,18 @@ import {
 import { isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
 import {
   boundedReadDetail,
+  buildObservedDraft,
   desktopQuery,
   desktopRows,
   driverQuery,
   matchesQuery,
   observeScope,
-  pageDraft,
+  renderPageObservation,
   queryOmission,
   renderFailure,
   shownTree,
-  tooLargeStep,
   treeOf,
   READ_BOUNDS,
-  viewportOf,
   type DesktopPages,
   type DesktopRow,
 } from "./DesktopObserveRead.ts";
@@ -112,8 +112,6 @@ const integer = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
-const natural = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
 const RESTARTED_ELEMENTS = "The driver restarted; observe again to get current element numbers.";
 export interface BoundWindow {
@@ -177,7 +175,7 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly finishTurn: (runId: string, turnId: string) => void;
   readonly finishCell?: (
     context: ScreenHostContext,
-    options?: { readonly skipEndRead?: boolean },
+    options?: { readonly skipEndRead?: boolean; readonly cellDeadlineMillis?: number },
   ) => Effect.Effect<CellWindowsOutcome>;
 }
 
@@ -221,7 +219,11 @@ export const createDesktopTargetHost = (deps: {
     context: ScreenHostContext,
     expectedConnectionGeneration?: string,
     /** The input's cursor: the bound target that owns it and, for an element, its center. */
-    cursor?: { readonly bound: BoundWindow; readonly point?: ComputerUseOverlayPoint | undefined },
+    cursor?: {
+      readonly bound?: BoundWindow;
+      readonly point?: ComputerUseOverlayPoint | undefined;
+      readonly optional?: boolean;
+    },
   ) {
     if (!isJson(args) || !withinPrimitiveCap(args))
       return yield* Effect.fail(fail("invalid_argument"));
@@ -234,11 +236,11 @@ export const createDesktopTargetHost = (deps: {
       tool,
       args,
       ...(expectedConnectionGeneration === undefined ? {} : { expectedConnectionGeneration }),
-      ...(cursor === undefined
+      ...(cursor?.optional === true ? { optional: true } : {}),
+      ...(cursor?.bound === undefined
         ? {}
         : {
             cursor: {
-              // The owner ScreenCursorPhases names for this target, before its first phase.
               owner: {
                 environmentId: EnvironmentId.make(cursor.bound.ref.environmentId),
                 runId: cursor.bound.ref.runId,
@@ -444,35 +446,19 @@ export const createDesktopTargetHost = (deps: {
     call: ScreenHostCall,
     context: ScreenHostContext,
   ) {
-    const args = callArgs(call.args);
-    const from = natural(args.after);
-    if (from === undefined)
-      return yield* Effect.fail(
-        fail("invalid_argument", "Pass after the number the omission names."),
-      );
-    const pages = bound.pages;
-    const base = string(args.baseObservationId);
-    if (!pages || pages.base !== bound.observationId || (base !== undefined && base !== pages.base))
-      return yield* Effect.fail(
-        fail("stale_reference", "A newer read ended that read's pages; observe again."),
-      );
-    const observation = yield* Effect.try({
-      try: () =>
-        observations.renderObservation({
-          draft: {
-            ...pageDraft(pages, from, bound.ref, bound.epoch),
-            ...viewportOf(bound.windowBounds),
-          },
-          mode: "query",
-          scope: `after [${from}]`,
-          page: pages.base,
-          limits: { treeBytes: observationReplyBudget(call, context.limits) },
-        }),
-      catch: renderFailure,
-    });
-    for (const element of observation.elements) pages.given.add(element.index);
-    pages.ids.add(observation.observationId);
-    return { value: observation, category: "unverifiable" as const };
+    const res = renderPageObservation(
+      observations,
+      bound.pages,
+      bound.observationId,
+      bound.ref,
+      bound.epoch,
+      bound.windowBounds,
+      callArgs(call.args),
+      observationReplyBudget(call, context.limits),
+    );
+    if (res.error || !res.observation)
+      return yield* Effect.fail(res.error ?? fail("downstream_failure"));
+    return { value: res.observation, category: "unverifiable" as const };
   });
   const observe: DesktopTargetHost["observe"] = Effect.fn("DesktopTargetHost.observe")(
     function* (call, context) {
@@ -539,9 +525,22 @@ export const createDesktopTargetHost = (deps: {
         limit = smaller;
         reply = yield* read(limit);
       }
-      let state = object(driverValue(reply));
+      const verifyReply = (raw: Record<string, unknown> | undefined, expectedWid: number) => {
+        const checked = checkWindowReplyState(
+          raw,
+          bound.pid,
+          expectedWid,
+          capture,
+          query !== undefined,
+        );
+        if (checked.ok) return Effect.succeed(checked.state);
+        retire();
+        if (checked.evictTarget) targets.delete(bound.ref.id);
+        return Effect.fail(checked.error);
+      };
+      let state = yield* verifyReply(object(driverValue(reply)), bound.windowId);
       const fromSheetId = bound.windowId;
-      const parentId = !capture && state ? sheetParentId(state) : undefined;
+      const parentId = !capture ? sheetParentId(state) : undefined;
       const followedSheet =
         parentId !== undefined &&
         parentId !== fromSheetId &&
@@ -549,27 +548,9 @@ export const createDesktopTargetHost = (deps: {
       if (followedSheet && parentId !== undefined) {
         retire();
         reply = yield* read(limit, filtered ? search : undefined, parentId);
-        state = object(driverValue(reply));
+        state = yield* verifyReply(object(driverValue(reply)), parentId);
       }
       const expectedWindowId = followedSheet && parentId !== undefined ? parentId : bound.windowId;
-      if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE) {
-        retire();
-        return yield* Effect.fail(fail("tree_limit", tooLargeStep(capture, query !== undefined)));
-      }
-      if (!state || integer(state.pid) === undefined || integer(state.window_id) === undefined) {
-        retire();
-        return yield* Effect.fail(
-          fail(
-            "downstream_failure",
-            "The driver's answer did not describe the window. Observe again.",
-          ),
-        );
-      }
-      if (state.pid !== bound.pid || state.window_id !== expectedWindowId) {
-        observations.evictTarget(bound.ref.id);
-        targets.delete(bound.ref.id);
-        return yield* Effect.fail(fail("stale_reference"));
-      }
       const elements = array(state.elements)
         .map(object)
         .filter((entry) => entry !== undefined);
@@ -607,15 +588,21 @@ export const createDesktopTargetHost = (deps: {
         !invalidated.includes(bound.snapshotId)
           ? bound.observationId
           : undefined;
+      const nextBounds = followedSheet
+        ? (boundsOf(state.window_bounds) ??
+          bound.boundWindows?.find((w) => w.window_id === expectedWindowId)?.bounds)
+        : bound.windowBounds;
+      const fallbackTitle = bound.boundWindows?.find(
+        (w) => w.window_id === expectedWindowId,
+      )?.title;
       if (kept === undefined) {
         observations.evictTarget(bound.ref.id);
         delete bound.observationId;
         delete bound.snapshotId;
         bound.rows = shown;
-        // No driver call for the cursor: a window the tree left out uses its known bounds.
         bound.frames = elementFrames(elements);
         bound.elementsByToken = inspectTreeElements(elements, rows);
-        const basis = treeWindowBasis(bound.frames, bound.windowBounds);
+        const basis = treeWindowBasis(bound.frames, nextBounds);
         if (basis === undefined) delete bound.framesBasis;
         else bound.framesBasis = basis;
       }
@@ -631,18 +618,20 @@ export const createDesktopTargetHost = (deps: {
       const render = Effect.try({
         try: () =>
           observations.renderObservation({
-            draft: observations.normalizeAppTree({
-              targetRef: nextRef,
-              targetGeneration: nextEpoch,
-              surfaceGeneration: nextEpoch,
-              indexedText: shownText,
-              complete: state.elements_complete === true && !filtered,
-              truncated: state.truncated === true || limit < READ_BOUNDS[0],
-              loading: false,
-              elements: shown,
-              ...(omitted.length === 0 ? {} : { omitted }),
-              ...viewportOf(bound.windowBounds),
-            }),
+            draft: observations.normalizeAppTree(
+              buildObservedDraft({
+                targetRef: nextRef,
+                generation: nextEpoch,
+                state,
+                filtered,
+                limit,
+                shown,
+                shownText,
+                omitted,
+                nextBounds,
+                fallbackTitle,
+              }),
+            ),
             mode: query ? "query" : "full",
             ...(scope === undefined ? {} : { scope }),
             ...(!capture && args.mode === "diff" ? { resetReason: "desktop_reads_full" } : {}),
@@ -659,6 +648,8 @@ export const createDesktopTargetHost = (deps: {
             ref: nextRef,
             pointsStale: "restart" as const,
           });
+          if (nextBounds === undefined) delete bound.windowBounds;
+          else bound.windowBounds = nextBounds;
           bound.screenshots?.clear();
           delete bound.latestScreenshot;
         }
@@ -732,6 +723,8 @@ export const createDesktopTargetHost = (deps: {
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(fail("stale_reference"));
     const withInputEvidence = (
+      tool: string,
+      forwarded: Record<string, unknown>,
       acted: DesktopRow | undefined,
       runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
     ) =>
@@ -745,6 +738,8 @@ export const createDesktopTargetHost = (deps: {
             windowId: bound.windowId,
             connectionGeneration: bound.connectionGeneration,
             tracker: trackerFor(context, bound.connectionGeneration),
+            tool,
+            forwarded,
             acted,
             rows: bound.rows ?? [],
             runInput,
@@ -760,6 +755,8 @@ export const createDesktopTargetHost = (deps: {
         delete bound.latestScreenshot;
       }
       return yield* withInputEvidence(
+        "invoke_menu",
+        { pid: bound.pid, window_id: bound.windowId, path },
         undefined,
         Effect.map(
           boundRequest(
@@ -779,8 +776,16 @@ export const createDesktopTargetHost = (deps: {
       const args = callArgs(call.args);
       if (args.window === "hidden")
         return yield* pollHiddenWindow({
-          list: () =>
-            boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context),
+          list: (deadlineMillis) =>
+            boundRequest(
+              bound,
+              "nothing",
+              "list_windows",
+              { pid: bound.pid },
+              { ...call, deadlineMillis },
+              context,
+              { optional: true },
+            ),
           pid: bound.pid,
           windowId: bound.windowId,
           timeoutMs: args.timeoutMs,
@@ -820,17 +825,16 @@ export const createDesktopTargetHost = (deps: {
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
-      if (
-        !current ||
-        current.controlId !== bound.controlId ||
-        !deps.leases.releaseForeground ||
-        !(yield* deps.leases.releaseForeground({
+      const ok =
+        current?.controlId === bound.controlId &&
+        deps.leases.releaseForeground &&
+        (yield* deps.leases.releaseForeground({
           threadId: context.invocation.thread.threadId,
           controlId: current.controlId,
-        }))
-      )
-        return yield* Effect.fail(fail("unavailable"));
-      return { value: { released: true }, category: "confirmed" as const };
+        }));
+      return ok
+        ? { value: { released: true }, category: "confirmed" as const }
+        : yield* Effect.fail(fail("unavailable"));
     }
     const args = callArgs(call.args);
     const prepared = prepareDesktopInput(call.method, args, bound, (el) => tokenOf(el, bound));
@@ -859,6 +863,8 @@ export const createDesktopTargetHost = (deps: {
       bound.lastClickedTableCell = admission.clickedTableCell;
     const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
     return yield* withInputEvidence(
+      tool,
+      forwarded,
       actedRow,
       Effect.map(
         boundRequest(bound, needs, tool, forwarded, call, context, {
@@ -920,7 +926,7 @@ export const createDesktopTargetHost = (deps: {
     if (first && firstBound)
       yield* seedBatchBaseline({
         send,
-        call: first,
+        calls,
         context,
         pid: firstBound.pid,
         connectionGeneration: firstBound.connectionGeneration,
@@ -966,7 +972,7 @@ export const createDesktopTargetHost = (deps: {
       const key = cellKey(context);
       const entry = cellTrackers.get(key);
       cellTrackers.delete(key);
-      return finishCellTracker(entry, context, options?.skipEndRead === true, send);
+      return finishCellTracker(entry, context, options, send);
     },
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)

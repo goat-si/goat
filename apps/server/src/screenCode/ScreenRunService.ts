@@ -560,7 +560,12 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       };
       const collectCellWindows = (skipEndRead: boolean) => {
         const finish = options.desktopHost?.finishCell;
-        return finish ? finish(cellContext, { skipEndRead }) : Effect.succeed({});
+        return finish
+          ? finish(cellContext, {
+              skipEndRead,
+              cellDeadlineMillis: startedAt + cellLimits.cellWallMs,
+            })
+          : Effect.succeed({});
       };
       return yield* running
         .runCell(

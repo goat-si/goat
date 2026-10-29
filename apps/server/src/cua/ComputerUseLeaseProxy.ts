@@ -983,7 +983,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             : notSent(id),
       );
     }
-    if (primitive !== undefined && isRequest)
+    if (primitive !== undefined && !primitive.optional && isRequest)
       yield* unanswered.watch(JSON.stringify(id), primitiveDeadline);
   });
   yield* forwardPrimitiveRequests(

@@ -1,4 +1,10 @@
-import type { ScreenRunError, ScreenWindowSummary } from "@goat/contracts";
+import { tooLargeStep } from "./DesktopObserveRead.ts";
+import {
+  COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+  type ScreenRunError,
+  type ScreenWindowSummary,
+} from "@goat/contracts";
+import { boundsOf, type Rect } from "./DesktopFrames.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Window lists and return budgets are measured against driver JSON.
 /**
@@ -12,6 +18,7 @@ export interface WindowEntry {
   readonly title: string;
   readonly width?: number;
   readonly height?: number;
+  readonly bounds?: Rect;
   readonly sheetOf?: number;
   readonly is_on_screen: boolean;
   readonly on_current_space?: boolean | null;
@@ -56,6 +63,7 @@ export const parseWindowList = (
     const wpid = natural(rec?.pid) ?? pid;
     if (!rec || wid === undefined || wid <= 0 || wpid !== pid) continue;
     const bounds = object(rec.bounds);
+    const rect = boundsOf(bounds);
     const width = finite(bounds?.width) ?? finite(rec.width);
     const height = finite(bounds?.height) ?? finite(rec.height);
     const sheetOf = natural(rec.sheet_of_window_id) ?? natural(rec.sheetOf);
@@ -65,6 +73,7 @@ export const parseWindowList = (
       title: clipTitle(rec.title),
       ...(width === undefined ? {} : { width }),
       ...(height === undefined ? {} : { height }),
+      ...(rect === undefined ? {} : { bounds: rect }),
       ...(sheetOf === undefined || sheetOf <= 0 ? {} : { sheetOf }),
       is_on_screen: rec.is_on_screen !== false,
       ...(typeof rec.on_current_space === "boolean" || rec.on_current_space === null
@@ -291,4 +300,30 @@ export const matchBindWindow = (
     };
   if (named.length !== 1 || !pid || pid <= 0 || !first) return { error: fail("target_ambiguous") };
   return { pid, app: matches.find((candidate) => candidate.pid === pid), window: first };
+};
+
+export const checkWindowReplyState = (
+  state: Record<string, unknown> | undefined,
+  expectedPid: number,
+  expectedWindowId: number,
+  capture: boolean,
+  query: boolean,
+):
+  | { readonly ok: true; readonly state: Record<string, unknown> }
+  | { readonly ok: false; readonly evictTarget?: boolean; readonly error: ScreenRunError } => {
+  if (state?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE)
+    return { ok: false, error: fail("tree_limit", tooLargeStep(capture, query)) };
+  const pid = natural(state?.pid);
+  const wid = natural(state?.window_id);
+  if (!state || pid === undefined || pid <= 0 || wid === undefined || wid <= 0)
+    return {
+      ok: false,
+      error: fail(
+        "downstream_failure",
+        "The driver's answer did not describe the window. Observe again.",
+      ),
+    };
+  if (pid !== expectedPid || wid !== expectedWindowId)
+    return { ok: false, evictTarget: true, error: fail("stale_reference") };
+  return { ok: true, state };
 };

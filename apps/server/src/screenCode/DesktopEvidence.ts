@@ -1,4 +1,4 @@
-import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
+import { CELL_RESERVE_MS, driverCallCapMs, MIN_CALL_MS } from "../cua/ComputerUseCallCaps.ts";
 // @effect-diagnostics preferSchemaOverJson:off - verify_state observed_json payloads are bounded by the driver.
 /**
  * Observation-only evidence around a non-batch desktop input: watched element state before and
@@ -155,50 +155,49 @@ const diffWatchedEvidence = (
   return out;
 };
 
+type SendFn = (
+  tool: string,
+  args: Record<string, unknown>,
+  call: ScreenHostCall,
+  context: ScreenHostContext,
+  expectedConnectionGeneration?: string,
+  cursor?: { readonly optional?: boolean },
+) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+
 const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
-  send: (
-    tool: string,
-    args: Record<string, unknown>,
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-    expectedConnectionGeneration?: string,
-  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>,
+  send: SendFn,
   call: ScreenHostCall,
   context: ScreenHostContext,
   connectionGeneration: string,
   tool: string,
   args: Record<string, unknown>,
+  reserveAfterMs = 0,
   budgetMs = 1500,
 ) {
   const now = yield* Clock.currentTimeMillis;
-  if (call.deadlineMillis - now <= CELL_RESERVE_MS + 1000) return undefined;
-  const deadlineMillis = Math.min(call.deadlineMillis, now + CELL_RESERVE_MS + budgetMs);
-  const sent = yield* send(
-    tool,
-    args,
-    { ...call, deadlineMillis },
-    context,
-    connectionGeneration,
-  ).pipe(Effect.option);
-  if (Option.isNone(sent) || driverError(sent.value) !== undefined) return undefined;
-  return driverValue(sent.value);
+  const latestEnd = call.deadlineMillis - reserveAfterMs - CELL_RESERVE_MS;
+  if (latestEnd - now < MIN_CALL_MS) return undefined;
+  const effective = Math.min(budgetMs, latestEnd - now);
+  const deadlineMillis = now + CELL_RESERVE_MS + effective;
+  const sent = yield* send(tool, args, { ...call, deadlineMillis }, context, connectionGeneration, {
+    optional: true,
+  }).pipe(Effect.timeoutOption(effective), Effect.option);
+  const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
+  if (!reply || driverError(reply) !== undefined) return undefined;
+  return driverValue(reply);
 });
 
 export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvidence")(
   function* (deps: {
-    readonly send: (
-      tool: string,
-      args: Record<string, unknown>,
-      call: ScreenHostCall,
-      context: ScreenHostContext,
-      expectedConnectionGeneration?: string,
-    ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+    readonly send: SendFn;
     readonly call: ScreenHostCall;
     readonly context: ScreenHostContext;
     readonly pid: number;
     readonly windowId: number;
     readonly connectionGeneration: string;
     readonly tracker: CellWindowTracker;
+    readonly tool: string;
+    readonly forwarded: Record<string, unknown>;
     readonly acted: DesktopRow | undefined;
     readonly rows: ReadonlyArray<DesktopRow>;
     readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
@@ -211,37 +210,61 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       windowId,
       connectionGeneration,
       tracker,
+      tool,
+      forwarded,
       acted,
       rows,
       runInput,
     } = deps;
-    const read = (tool: string, args: Record<string, unknown>) =>
-      quietRead(send, call, context, connectionGeneration, tool, args);
-    const preWinRaw = yield* read("list_windows", { pid });
+    const inputCapMs = driverCallCapMs(tool, forwarded);
+    const watched = buildWatchedElements(acted, rows);
+    const preReserve = inputCapMs + (watched.length > 0 ? 1500 : 0);
+    const preWinRaw = yield* quietRead(
+      send,
+      call,
+      context,
+      connectionGeneration,
+      "list_windows",
+      { pid },
+      preReserve,
+    );
     const preWins = parseWindowList(preWinRaw, pid);
     tracker.recordBefore(pid, preWins);
-    const watched = buildWatchedElements(acted, rows);
     const preVerifyRaw =
       watched.length > 0
-        ? yield* read("verify_state", {
-            pid,
-            window_id: windowId,
-            expect: toVerifyExpectations(watched),
-            timeout_ms: 0,
-          })
+        ? yield* quietRead(
+            send,
+            call,
+            context,
+            connectionGeneration,
+            "verify_state",
+            { pid, window_id: windowId, expect: toVerifyExpectations(watched), timeout_ms: 0 },
+            inputCapMs,
+          )
         : undefined;
     const base = yield* runInput;
-    const postWinRaw = yield* read("list_windows", { pid });
+    const postWinRaw = yield* quietRead(
+      send,
+      call,
+      context,
+      connectionGeneration,
+      "list_windows",
+      { pid },
+      0,
+    );
     const postWins = parseWindowList(postWinRaw, pid);
     tracker.recordAfter(pid, preWins, postWins);
     const postVerifyRaw =
       watched.length > 0 && preVerifyRaw !== undefined
-        ? yield* read("verify_state", {
-            pid,
-            window_id: windowId,
-            expect: toVerifyExpectations(watched),
-            timeout_ms: 0,
-          })
+        ? yield* quietRead(
+            send,
+            call,
+            context,
+            connectionGeneration,
+            "verify_state",
+            { pid, window_id: windowId, expect: toVerifyExpectations(watched), timeout_ms: 0 },
+            0,
+          )
         : undefined;
     const winDiff = diffInputWindows(preWins, postWins, windowId);
     const elDiff =
@@ -263,20 +286,20 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
 export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(function* (
   entry: { readonly tracker: CellWindowTracker; readonly connectionGeneration: string } | undefined,
   context: ScreenHostContext,
-  skipEndRead: boolean,
-  send: (
-    tool: string,
-    args: Record<string, unknown>,
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-    expectedConnectionGeneration?: string,
-  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>,
+  options: { readonly skipEndRead?: boolean; readonly cellDeadlineMillis?: number } | undefined,
+  send: SendFn,
 ): Effect.fn.Return<CellWindowsOutcome> {
   if (!entry) return {};
-  if (skipEndRead) return entry.tracker.finish();
+  if (options?.skipEndRead === true) return entry.tracker.finish();
   const endByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
-  const now = yield* Clock.currentTimeMillis;
   for (const pid of entry.tracker.pids()) {
+    const now = yield* Clock.currentTimeMillis;
+    const cap = options?.cellDeadlineMillis ?? now + CELL_RESERVE_MS + 1500;
+    const remain = Math.min(1500, cap - now - CELL_RESERVE_MS);
+    if (remain < MIN_CALL_MS) {
+      endByPid.set(pid, undefined);
+      continue;
+    }
     const sent = yield* send(
       "list_windows",
       { pid },
@@ -288,30 +311,24 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
         callId: 0,
         method: "list_windows",
         args: { pid },
-        deadlineMillis: now + CELL_RESERVE_MS + 1500,
+        deadlineMillis: now + CELL_RESERVE_MS + remain,
       },
       context,
       entry.connectionGeneration,
-    ).pipe(Effect.option);
+      { optional: true },
+    ).pipe(Effect.timeoutOption(remain), Effect.option);
+    const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
     endByPid.set(
       pid,
-      Option.isSome(sent) && !driverError(sent.value)
-        ? parseWindowList(driverValue(sent.value), pid)
-        : undefined,
+      reply && !driverError(reply) ? parseWindowList(driverValue(reply), pid) : undefined,
     );
   }
   return entry.tracker.finish(endByPid);
 });
 
 export const seedBatchBaseline = Effect.fn("DesktopEvidence.seedBatchBaseline")(function* (deps: {
-  readonly send: (
-    tool: string,
-    args: Record<string, unknown>,
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-    expectedConnectionGeneration?: string,
-  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
-  readonly call: ScreenHostCall;
+  readonly send: SendFn;
+  readonly calls: ReadonlyArray<ScreenHostCall>;
   readonly context: ScreenHostContext;
   readonly pid: number;
   readonly connectionGeneration: string;
@@ -319,19 +336,31 @@ export const seedBatchBaseline = Effect.fn("DesktopEvidence.seedBatchBaseline")(
   readonly boundWindows?: ReadonlyArray<WindowEntry> | undefined;
   readonly tracker: CellWindowTracker;
 }) {
-  const { send, call, context, pid, connectionGeneration, boundInCellId, boundWindows, tracker } =
+  const { send, calls, context, pid, connectionGeneration, boundInCellId, boundWindows, tracker } =
     deps;
-  if (tracker.hasPid(pid)) return;
+  const first = calls[0];
+  if (!first || tracker.hasPid(pid)) return;
   if (boundInCellId === context.cellId && boundWindows !== undefined) {
     tracker.recordBefore(pid, boundWindows);
     return;
   }
-  const raw = yield* quietRead(send, call, context, connectionGeneration, "list_windows", { pid });
+  const batchCapMs = calls.reduce((sum, c) => sum + driverCallCapMs(c.method, c.args), 0);
+  const raw = yield* quietRead(
+    send,
+    first,
+    context,
+    connectionGeneration,
+    "list_windows",
+    { pid },
+    batchCapMs,
+  );
   tracker.recordBefore(pid, parseWindowList(raw, pid));
 });
 
 export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(function* (deps: {
-  readonly list: () => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly list: (
+    deadlineMillis: number,
+  ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
   readonly pid: number;
   readonly windowId: number;
   readonly timeoutMs: unknown;
@@ -339,19 +368,29 @@ export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(fu
 }) {
   const { list, pid, windowId, timeoutMs, cellDeadlineMillis } = deps;
   const started = yield* Clock.currentTimeMillis;
-  const requested = typeof timeoutMs === "number" ? timeoutMs : 10_000;
+  const requested = typeof timeoutMs === "number" ? Math.max(0, timeoutMs) : 10_000;
   const waitCap = Math.max(
     0,
-    Math.min(requested, 10_000, cellDeadlineMillis - started - CELL_RESERVE_MS - 250),
+    Math.min(requested, 10_000, cellDeadlineMillis - started - CELL_RESERVE_MS - MIN_CALL_MS),
   );
   const deadline = started + waitCap;
-  let hidden = hiddenWindowStatus(driverValue(yield* list()), pid, windowId);
-  while (!hidden.met) {
+  let hidden = hiddenWindowStatus({}, pid, windowId);
+  for (let sample = 0; ; sample++) {
     const now = yield* Clock.currentTimeMillis;
-    if (now >= deadline) break;
-    yield* Effect.sleep(Math.min(100, deadline - now));
-    if ((yield* Clock.currentTimeMillis) > deadline) break;
-    hidden = hiddenWindowStatus(driverValue(yield* list()), pid, windowId);
+    if (sample > 0 && now >= deadline) break;
+    const remain = waitCap === 0 ? MIN_CALL_MS : Math.max(1, deadline - now);
+    const callDeadline = Math.min(
+      cellDeadlineMillis,
+      now + CELL_RESERVE_MS + Math.max(MIN_CALL_MS, remain),
+    );
+    const polled = yield* list(callDeadline).pipe(Effect.timeoutOption(remain));
+    if (Option.isNone(polled)) break;
+    if (waitCap > 0 && (yield* Clock.currentTimeMillis) > deadline) break;
+    hidden = hiddenWindowStatus(driverValue(polled.value), pid, windowId);
+    if (hidden.met || waitCap === 0) break;
+    const after = yield* Clock.currentTimeMillis;
+    if (after >= deadline) break;
+    yield* Effect.sleep(Math.min(100, deadline - after));
   }
   return {
     value: hidden,
