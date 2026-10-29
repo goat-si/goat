@@ -117,12 +117,19 @@ it("judges a display: contents target visible through its children, and reads pa
     await page.route("https://lab.test/", (route) =>
       route.fulfill({
         contentType: "text/html",
-        body: '<p>Main ready</p><div id="c" style="display:contents"><button>Inner</button></div><iframe srcdoc="<button>Frame</button>"></iframe>',
+        body: '<p>Main ready</p><div id="c" style="display:contents"><button>Inner</button></div><div id="t" style="display:contents">Ready</div><iframe srcdoc="<button>Frame</button>"></iframe>',
       }),
     );
     await page.goto("https://lab.test/");
     await ServerBrowserPage.waitFor(page, {
       selector: "#c",
+      state: "visible",
+      enabled: true,
+      timeoutMs: 2_000,
+    });
+    // Its own text alone shows it too.
+    await ServerBrowserPage.waitFor(page, {
+      selector: "#t",
       state: "visible",
       enabled: true,
       timeoutMs: 2_000,

@@ -45,7 +45,13 @@ export const matchesState = async (locator: Locator, input: StateInput, budgetMs
             readonly display: string;
           };
           readonly location: { readonly href: string };
-          readonly document: { readonly body: { readonly innerText: string } | null };
+          readonly document: {
+            readonly body: { readonly innerText: string } | null;
+            createRange(): {
+              selectNodeContents(node: unknown): void;
+              getBoundingClientRect(): Rect;
+            };
+          };
           readonly top: unknown;
         };
         const node = element as unknown as Node;
@@ -62,16 +68,29 @@ export const matchesState = async (locator: Locator, input: StateInput, budgetMs
           : aria("aria-checked");
         const selected = node.tagName === "OPTION" ? node.selected === true : aria("aria-selected");
         const form = ["INPUT", "TEXTAREA", "SELECT"].includes(node.tagName);
-        // As Playwright judges it: a display: contents element shows through its children.
+        type Rect = { readonly width: number; readonly height: number };
+        const rendered = (box: Rect) => box.width > 0 && box.height > 0;
+        // As Playwright judges it: a display: contents element shows through its child elements
+        // and its own non-empty text.
         const visible = (each: Node): boolean => {
-          if (view.getComputedStyle(each).display === "contents")
-            return Array.from(
-              (each as unknown as { readonly children: ArrayLike<Node> }).children,
-            ).some(visible);
-          const box = each.getBoundingClientRect();
-          return (
-            box.width > 0 && box.height > 0 && view.getComputedStyle(each).visibility !== "hidden"
-          );
+          const style = view.getComputedStyle(each);
+          if (style.display !== "contents")
+            return rendered(each.getBoundingClientRect()) && style.visibility !== "hidden";
+          const kids = (
+            each as unknown as {
+              readonly childNodes: ArrayLike<{
+                readonly nodeType: number;
+                readonly textContent: string | null;
+              }>;
+            }
+          ).childNodes;
+          return Array.from(kids).some((kid) => {
+            if (kid.nodeType === 1) return visible(kid as unknown as Node);
+            if (kid.nodeType !== 3 || (kid.textContent ?? "").trim() === "") return false;
+            const range = view.document.createRange();
+            range.selectNodeContents(kid);
+            return rendered(range.getBoundingClientRect()) && style.visibility !== "hidden";
+          });
         };
         // Page text and URL belong to the main page; a target in a frame leaves them to that check.
         const top = view.top === globalThis;
