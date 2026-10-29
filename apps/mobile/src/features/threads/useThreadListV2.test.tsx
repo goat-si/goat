@@ -14,7 +14,7 @@ vi.mock("../../state/threads", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
     environmentThreadShells: {
-      goatBotObservationThreadKeysAtom: Atom.make<ReadonlySet<string>>(new Set()).pipe(
+      goatBotObservationThreadKeysAtom: Atom.make(new Set<string>() as ReadonlySet<string>).pipe(
         Atom.keepAlive,
       ),
     },

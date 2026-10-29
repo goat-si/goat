@@ -986,6 +986,10 @@ vi.mock("../../state/queries", () => ({
   useThreadSearch: (_ids: unknown, query: string) => ({ matches: [], query, isPending: false }),
 }));
 vi.mock("../../state/thread-order", () => ({ usePendingThreadOrder: () => null }));
+vi.mock("../threads/goatBotThreadVisibility", async () => {
+  const { Atom } = await import("effect/reactivity");
+  return { hiddenGoatBotThreadKeysAtom: Atom.make(new Set<string>() as ReadonlySet<string>) };
+});
 vi.mock("../../state/use-thread-outbox", () => ({ useQueuedThreadKeys: () => new Set() }));
 vi.mock("../../state/use-pending-new-tasks", () => ({ usePendingNewTasks: () => [] }));
 vi.mock("../../state/server", async () => {

@@ -34,9 +34,13 @@ function sections(hiddenBotThreadKeys: ReadonlySet<string>) {
     hiddenBotThreadKeys,
     workingShelfEnabled: false,
   });
-  return Object.fromEntries(
-    Object.entries(result).map(([section, rows]) => [section, rows.map((row) => String(row.id))]),
-  );
+  const ids = (rows: readonly EnvironmentThreadShell[]) => rows.map((row) => String(row.id));
+  return {
+    pinned: ids(result.pinned),
+    active: ids(result.active),
+    snoozed: ids(result.snoozed),
+    settled: ids(result.settled),
+  };
 }
 
 describe("thread arrangement sections with GOAT Bot threads", () => {
