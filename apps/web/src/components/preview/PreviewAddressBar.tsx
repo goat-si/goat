@@ -115,6 +115,7 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
             ref={inputRef}
             render={<InputGroupInput size="sm" nativeInput />}
             aria-label="Search or enter URL"
+            data-workspace-focus-default
             onFocus={() => {
               setFocused(true);
               setOpen(true);

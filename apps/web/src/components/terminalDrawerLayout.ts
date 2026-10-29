@@ -3,7 +3,7 @@ import { DEFAULT_THREAD_TERMINAL_HEIGHT } from "../types";
 const MIN_DRAWER_HEIGHT = 180;
 const MAX_DRAWER_HEIGHT_RATIO = 0.75;
 
-interface DrawerLayout {
+export interface DrawerLayout {
   viewportHeight: number;
   chatColumnHeight?: number;
   headerHeight?: number;
@@ -25,12 +25,10 @@ export function resolveTerminalDrawerMaxHeight(input: DrawerLayout): number {
 }
 
 export const DRAG_HEIGHT_PROPERTY = "--terminal-drawer-drag-height";
-
 export function clampDrawerHeight(height: number, maxHeight: number): number {
   const safeHeight = Number.isFinite(height) ? height : DEFAULT_THREAD_TERMINAL_HEIGHT;
   return Math.min(Math.max(Math.round(safeHeight), MIN_DRAWER_HEIGHT), maxHeight);
 }
-
 export function chatColumnOf(drawer: HTMLElement | null): HTMLElement | null {
   return drawer?.closest<HTMLElement>("[data-chat-column]") ?? null;
 }

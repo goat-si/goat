@@ -5,6 +5,7 @@ import type { DraftId } from "./composerDraftStore";
 import {
   confirmPromotedGlobalAgent,
   resolveGlobalAgent,
+  selectGlobalAgentScratchEnvironment,
   type GlobalAgentResolverInput,
 } from "./globalAgentResolver";
 
@@ -30,6 +31,30 @@ function input(overrides: Partial<GlobalAgentResolverInput>): GlobalAgentResolve
 const CREATE = { kind: "create", environmentId: SCRATCH_ENV };
 
 describe("resolveGlobalAgent", () => {
+  it("recreates a saved remote global agent on its own machine even when primary offers scratch", () => {
+    const rootFor = (id: EnvironmentId | null) =>
+      id === ENV || id === SCRATCH_ENV ? "/scratch" : null;
+    const selected = selectGlobalAgentScratchEnvironment(
+      REF,
+      SCRATCH_ENV,
+      rootFor,
+      () => SCRATCH_ENV,
+    );
+    expect(
+      resolveGlobalAgent(input({ threadShell: ARCHIVED, scratchEnvironmentId: selected })),
+    ).toEqual({
+      kind: "create",
+      environmentId: ENV,
+    });
+    expect(
+      selectGlobalAgentScratchEnvironment(
+        REF,
+        SCRATCH_ENV,
+        () => null,
+        () => SCRATCH_ENV,
+      ),
+    ).toBeNull();
+  });
   it("waits until shells bootstrap", () => {
     expect(resolveGlobalAgent(input({ bootstrapped: false }))).toEqual({ kind: "wait" });
   });

@@ -15,6 +15,7 @@ import { startLegacyThreadMigrationToast } from "./components/LegacyThreadMigrat
 import { startPermissionUpdateNotices } from "./components/PermissionUpdateNotice";
 import { startAgentOpenedPreviews } from "./components/preview/agentOpenedPreviews";
 import { startMainAppLocationTracking } from "./components/sidebar/mainAppLocation";
+import { startWorkspaceFocus } from "./lib/workspaceFocus";
 import { startDesktopUpdateLaunchNotice } from "./components/sidebar/updateEverythingRun";
 import { startThreadNotifications } from "./components/ThreadNotificationCoordinator";
 import { startGuideRunNotifications } from "./components/pullRequest/guide/PullRequestGuideRunCoordinator";
@@ -163,6 +164,7 @@ export function startAppServices(): AppRouter {
   startBrowserProfileReporting();
   startThreadOverlayRetention(router);
   startMainAppLocationTracking(router);
+  startWorkspaceFocus(router);
   installChatRouteCommands(router);
   startBackgroundThreadAnnouncements(appAtomRegistry, router);
   startThreadVisitedMigration(appAtomRegistry);

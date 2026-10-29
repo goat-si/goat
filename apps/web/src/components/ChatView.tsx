@@ -1,4 +1,5 @@
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
 import { announcedRun, isDetailBehindShell } from "./chat/threadActivityAnnouncement";
@@ -766,6 +767,8 @@ export default function ChatView(props: ChatViewProps) {
   const [timelineScrollNode, setTimelineScrollNode] = useState<HTMLElement | null>(null);
   const getTimelineScrollableNode = () => legendListRef.current?.getScrollableNode() ?? null;
   const getTimelineScrollableNodeStable = useStableCallback(getTimelineScrollableNode);
+  const conversationArea = workspaceAreaProps("conversation", 1, "Conversation");
+  const composerArea = workspaceAreaProps("composer", 2, "Message input");
   const [composerOverlayElement, setComposerOverlayElement] = useState<HTMLDivElement | null>(null);
   const [composerTimelineInset, setComposerTimelineInset] = useState(0);
   const composerTimelineInsetRef = useRef(0);
@@ -3445,6 +3448,7 @@ export default function ChatView(props: ChatViewProps) {
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
         data-chat-column
+        inert={rightPanelMaximized}
       >
         {embedded ? null : (
           <header
@@ -3534,7 +3538,11 @@ export default function ChatView(props: ChatViewProps) {
               setThreadError={setThreadError}
               setThreadErrorBannerDismissTick={setThreadErrorBannerDismissTick}
             />
-            <div data-glass-layer className="relative flex min-h-0 flex-1 flex-col bg-background">
+            <div
+              {...conversationArea}
+              data-glass-layer
+              className="relative flex min-h-0 flex-1 flex-col bg-background"
+            >
               <ThreadTimeline
                 readyActivity={timelineActivity}
                 onScrollableNodeChange={setTimelineScrollNode}
@@ -3695,6 +3703,7 @@ export default function ChatView(props: ChatViewProps) {
             </div>
 
             <div
+              {...composerArea}
               ref={(overlay: HTMLDivElement | null) => {
                 setComposerOverlayElement(overlay);
                 attachFollowComposerOverlay(overlay);
