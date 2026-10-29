@@ -738,6 +738,7 @@ it.live("an app target with a stray key is refused before any read or click", ()
         () => app.click({ role: 'AXButton', name: 'Apply', clickCount: 2 }),
         () => app.click({ window: [12, 14], clickCount: 2 }),
         () => app.click('Apply', { timeoutMs: 100 }),
+        () => app.observe({ query: { role: 'AXButton', nam: 'Save' } }),
       ])
         try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent]); }
       return refused;`,
@@ -745,6 +746,7 @@ it.live("an app target with a stray key is refused before any read or click", ()
     expect(result).toMatchObject({
       status: "completed",
       value: [
+        ["invalid_argument", true],
         ["invalid_argument", true],
         ["invalid_argument", true],
         ["invalid_argument", true],

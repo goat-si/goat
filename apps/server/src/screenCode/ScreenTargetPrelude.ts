@@ -299,6 +299,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
     }
     __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query']);
+    if (!tab && arg.query !== undefined) __only('observe query', arg.query, ['role', 'name', 'text', 'id']);
     const diff = arg.diff !== false && seen.observation !== undefined;
     const page = !tab && arg.after !== undefined;
     const base = diff ? { mode: 'diff', baseObservationId: seen.observation.observationId } : {};
