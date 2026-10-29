@@ -1,4 +1,8 @@
-import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@goat/contracts";
+import {
+  DEFAULT_SNOOZE_PRESETS,
+  DEFAULT_UNIFIED_SETTINGS,
+  type UnifiedSettings,
+} from "@goat/contracts";
 import { useEffect } from "react";
 import { act, render } from "../../../test/render";
 import { expect, it, vi } from "vite-plus/test";
@@ -36,6 +40,35 @@ vi.mock(import("../../localApi"), async (original) => ({
 }));
 
 import { useSettingsRestore } from "./SettingsPanels";
+import { sortSnoozeRows } from "./SnoozePresetsSettings.logic";
+
+async function changedLabels(settings: UnifiedSettings) {
+  state.settings = settings;
+  let labels: ReadonlyArray<string> = [];
+  function Probe() {
+    const result = useSettingsRestore();
+    useEffect(() => {
+      labels = result.changedSettingLabels;
+    });
+    return null;
+  }
+  await using _screen = await render(<Probe />);
+  return labels;
+}
+
+it("agrees with the snooze row that its reset restored the defaults, at any time of day", async () => {
+  // After 18:00 the passed "today" option sorts last in the row's menu order.
+  const evening = new Date(2026, 9, 28, 19, 0);
+  const rowOrder = sortSnoozeRows(DEFAULT_SNOOZE_PRESETS, [0, 1, 2, 3, 4], evening).presets;
+  expect(rowOrder).not.toEqual(DEFAULT_SNOOZE_PRESETS);
+  expect(await changedLabels({ ...DEFAULT_UNIFIED_SETTINGS, snoozePresets: rowOrder })).toEqual([]);
+  expect(
+    await changedLabels({
+      ...DEFAULT_UNIFIED_SETTINGS,
+      snoozePresets: DEFAULT_SNOOZE_PRESETS.slice(1),
+    }),
+  ).toEqual(["Snooze options"]);
+});
 
 it("restores automatic server updates after an opt-out", async () => {
   vi.clearAllMocks();

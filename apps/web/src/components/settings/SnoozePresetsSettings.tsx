@@ -16,7 +16,11 @@ import * as Schema from "effect/Schema";
 
 import { PlusIcon, XIcon } from "~/components/solar";
 import { useNowMinute } from "../../hooks/useNowMinute";
-import { reconcileSnoozeDraft, sortSnoozeRows } from "./SnoozePresetsSettings.logic";
+import {
+  reconcileSnoozeDraft,
+  sameSnoozePresets,
+  sortSnoozeRows,
+} from "./SnoozePresetsSettings.logic";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -90,16 +94,6 @@ function nextCandidate(presets: ReadonlyArray<SnoozePresetSetting>): SnoozePrese
       minutes: 60,
     }
   );
-}
-
-// Row order is only display order, so it does not make a list differ from the defaults.
-function sameSnoozePresets(
-  left: ReadonlyArray<SnoozePresetSetting>,
-  right: ReadonlyArray<SnoozePresetSetting>,
-) {
-  const ids = (presets: ReadonlyArray<SnoozePresetSetting>) =>
-    presets.map(snoozePresetId).toSorted();
-  return Equal.equals(ids(left), ids(right));
 }
 
 const isSnoozePresetDay = Schema.is(SnoozePresetDay);
@@ -194,12 +188,10 @@ export function SnoozePresetsRow() {
           <SettingResetButton
             label="snooze options"
             onClick={() => {
-              const sorted = sortSnoozeRows(
-                DEFAULT_SNOOZE_PRESETS,
-                freshKeys(DEFAULT_SNOOZE_PRESETS.length),
-                now,
-              );
-              save(sorted.presets, sorted.keys);
+              // Writes the defaults in their canonical order and shows them in menu order.
+              const resetKeys = freshKeys(DEFAULT_SNOOZE_PRESETS.length);
+              save(DEFAULT_SNOOZE_PRESETS, resetKeys);
+              setRows(sortSnoozeRows(DEFAULT_SNOOZE_PRESETS, resetKeys, now));
             }}
           />
         )

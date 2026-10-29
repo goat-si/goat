@@ -1,6 +1,19 @@
 import type { SnoozePresetSetting } from "@goat/contracts";
-import { resolveSnoozePreset } from "@goat/client-runtime/state/thread-settled";
+import { resolveSnoozePreset, snoozePresetId } from "@goat/client-runtime/state/thread-settled";
 import * as Equal from "effect/Equal";
+
+/**
+ * Whether two lists offer the same options. Order is only display order (menus sort by wake
+ * time), so the row's Reset and the full-page Restore both compare this way.
+ */
+export function sameSnoozePresets(
+  left: ReadonlyArray<SnoozePresetSetting>,
+  right: ReadonlyArray<SnoozePresetSetting>,
+): boolean {
+  const ids = (presets: ReadonlyArray<SnoozePresetSetting>) =>
+    presets.map(snoozePresetId).toSorted();
+  return Equal.equals(ids(left), ids(right));
+}
 
 /**
  * Reads a server value against the editor's writes still in flight. Matching one acknowledges
