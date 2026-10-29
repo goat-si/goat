@@ -24,6 +24,20 @@ const EDITABLE = /^(?:textbox|searchbox|combobox|spinbutton|slider)$/;
 
 const indentOf = (line: string) => line.length - line.trimStart().length;
 
+/** Text over max UTF-16 units keeps its start and its end, where a field's newest text is. */
+const clipMiddle = (text: string, max: number) => {
+  if (text.length <= max) return text;
+  const kept = max - `…[${text.length} characters omitted]…`.length;
+  let head = Math.ceil(kept / 2);
+  let tail = text.length - (kept - head);
+  // Never split a surrogate pair.
+  if (/[\uD800-\uDBFF]/.test(text.charAt(head - 1))) head--;
+  if (/[\uDC00-\uDFFF]/.test(text.charAt(tail))) tail++;
+  const cut = text.slice(head, tail);
+  const omitted = cut.length - (cut.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g)?.length ?? 0);
+  return `${text.slice(0, head)}…[${omitted} characters omitted]…${text.slice(tail)}`;
+};
+
 /** What a tab observation left out for its size, and how to read it: at most 200 characters. */
 const droppedDetail = (indexes: readonly number[]) => {
   const ranges: string[] = [];
@@ -513,7 +527,7 @@ export class ScreenObservations {
         index: element.index ?? position,
         role: element.role.slice(0, 200),
         name: element.name.slice(0, 1024),
-        ...(element.text === undefined ? {} : { text: element.text.slice(0, 4096) }),
+        ...(element.text === undefined ? {} : { text: clipMiddle(element.text, 4096) }),
         ...(actions === undefined
           ? {}
           : { actions: actions.slice(0, 16).map((action) => action.slice(0, 80)) }),

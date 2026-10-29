@@ -91,23 +91,25 @@ interface Listed {
   readonly label?: string;
   readonly value?: string;
 }
+/** A numbered line's marker; with the m flag, a carriage return also starts a line. */
+const NUMBERED_MARKER = /^(\s*- )\[(\d+)\] /gm;
 /**
- * Indexes whose one line starts as the driver writes that element from its listed role, label and
- * value. The driver writes text unescaped, so any other line for an index may be text posing as it.
+ * Indexes with one numbered line whose text, read on past line breaks, starts as the driver writes
+ * that element from its listed role, label and value. The driver writes text unescaped, so any
+ * other line for an index may be text posing as it. Lines are found as unmarkUnverified finds them.
  */
 const verifiedIndexes = (markdown: string, entries: ReadonlyArray<Listed>): ReadonlySet<number> => {
-  const byIndex = new Map<number, string[]>();
-  for (const raw of markdown.split("\n")) {
-    const line = raw.trimStart();
-    const index = /^- \[(\d+)\] /.exec(line)?.[1];
-    if (index !== undefined)
-      byIndex.set(Number(index), [...(byIndex.get(Number(index)) ?? []), line]);
+  const byIndex = new Map<number, number[]>();
+  for (const marker of markdown.matchAll(NUMBERED_MARKER)) {
+    const index = Number(marker[2]);
+    const start = marker.index + marker[0].indexOf("- [");
+    byIndex.set(index, [...(byIndex.get(index) ?? []), start]);
   }
   const verified = new Set<number>();
   for (const { index, role, label, value } of entries) {
-    const lines = byIndex.get(index);
-    const line = lines?.length === 1 ? lines[0] : undefined;
-    if (!line || /[\r\n]/.test((label ?? "") + (value ?? ""))) continue;
+    const starts = byIndex.get(index);
+    const start = starts?.length === 1 ? starts[0] : undefined;
+    if (start === undefined) continue;
     const shown =
       label === undefined
         ? [""]
@@ -121,8 +123,11 @@ const verifiedIndexes = (markdown: string, entries: ReadonlyArray<Listed>): Read
     if (
       shown.some((words) => {
         const head = `- [${index}] ${role}${words}`;
-        const next = line.charAt(head.length);
-        return line.startsWith(head) && (next === "" || next === " " || words.startsWith(" [id="));
+        const next = markdown.charAt(start + head.length);
+        return (
+          markdown.startsWith(head, start) &&
+          (/^[ \r\n\u2028\u2029]?$/.test(next) || words.startsWith(" [id="))
+        );
       })
     )
       verified.add(index);
@@ -133,7 +138,7 @@ const verifiedIndexes = (markdown: string, entries: ReadonlyArray<Listed>): Read
 /** The tree text with the number taken off every line that does not verifiably show its element. */
 export const unmarkUnverified = (markdown: string, entries: ReadonlyArray<Listed>): string => {
   const verified = verifiedIndexes(markdown, entries);
-  return markdown.replace(/^(\s*- )\[(\d+)\] /gm, (marker, head: string, index: string) =>
+  return markdown.replace(NUMBERED_MARKER, (marker, head: string, index: string) =>
     verified.has(Number(index)) ? marker : head,
   );
 };
