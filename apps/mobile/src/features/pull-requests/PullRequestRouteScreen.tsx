@@ -355,8 +355,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const [headerHeight, setHeaderHeight] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const scrollViews = useRef<Partial<Record<typeof section, LegendListRef | null>>>({});
-  // AnimatedLegendList re-attaches its handle and sets state whenever its ref changes,
-  // so an inline ref in the tab map loops the screen into "Maximum update depth exceeded".
+  // Stable refs prevent AnimatedLegendList from reattaching in a render loop.
   const [listRefs] = useState(() => {
     const listRef = (tab: typeof section) => (list: LegendListRef | null) => {
       scrollViews.current[tab] = list;
@@ -370,6 +369,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const selectSection = (next: typeof section) => {
     if (next === section) return;
     scrollOffsets.current[section] = currentScrollOffset.current;
+    requestedSection.current = next;
     const offset = restorePullRequestTabScroll(scrollViews.current[next], {
       current: currentScrollOffset.current,
       saved: scrollOffsets.current[next],
@@ -377,7 +377,6 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
       topInset: insets.top,
       platform: Platform.OS,
     });
-    requestedSection.current = next;
     scrollOffsets.current[next] = offset;
     currentScrollOffset.current = offset;
     setSection(next);
@@ -653,9 +652,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
               >
                 <AnimatedLegendList
                   ref={listRefs[tab]}
-                  // The scroll view owns its resting offset. LegendList keeps the first
-                  // initialScrollOffset it gets, and the first render has the window's top
-                  // inset (0 on the folded iPhone Duo), not the header's.
+                  // LegendList keeps its first offset, which may have the window's inset rather than the header's.
                   onScroll={(event) => {
                     const offset = event.nativeEvent.contentOffset.y;
                     scrollOffsets.current[tab] = offset;
