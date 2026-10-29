@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/6";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/7";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -12,7 +12,7 @@ const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_V
 const COMMON = `type Target = number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
-// { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
+// { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
 type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: { role?: string; name?: string; id?: string } | null; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
@@ -37,6 +37,7 @@ interface Observation extends ReadTime { text: string; observationId: string; mo
 interface Element { index: number; role: string; name: string; text?: string; actions?: string[];
   enabled?: boolean; selected?: boolean; frame?: { x: number; y: number; width: number; height: number };
   range?: { min: number; max: number }; parent?: number; id?: string }
+// An app element's frame is in window points from its window's top-left; it is left out when the read could not place the element in that window.
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site

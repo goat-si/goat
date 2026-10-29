@@ -577,3 +577,64 @@ it.effect(
       expect(observation.indexedText).toContain("| process-0 | 0.5 | 0:01.33 | 12");
     }),
 );
+
+it.effect(
+  "visible table rows outlast off-screen ones when the read cannot place frames in its window",
+  () =>
+    Effect.gen(function* () {
+      // Scrolled to the end: the first rows sit above the window and the last ones are visible.
+      const state = activityMonitor(500);
+      const scrolled = {
+        ...state,
+        elements: state.elements.map((element) =>
+          element.frame === undefined
+            ? element
+            : { ...element, frame: { ...element.frame, y: element.frame.y - 9500 } },
+        ),
+      };
+      const observation = yield* observe(scrolled);
+      expect(observation.truncated).toBe(true);
+      // The window root has no frame, so no element frame reaches the agent.
+      expect(observation.elements.filter((element) => element.frame !== undefined)).toEqual([]);
+      expect(observation.omitted).toContainEqual(expect.objectContaining({ kind: "frames" }));
+      const rows = observation.elements.filter((e) => e.role === "AXRow").map((e) => e.index);
+      // Rows 472-499 are inside the 600 pt window; the budget keeps them and cuts off-screen ones.
+      const visible = Array.from({ length: 28 }, (_, at) => 3 + (472 + at) * 4);
+      expect(rows).toEqual(expect.arrayContaining(visible));
+      expect(rows.length).toBeLessThan(500);
+    }),
+);
+
+it.effect(
+  "the budget measures visibility against the window the read found, not bounds from before it moved",
+  () =>
+    Effect.gen(function* () {
+      // Bound at (0, 0), the window has since moved to x 1000 and scrolled to the table's end.
+      const state = activityMonitor(500);
+      const moved = {
+        ...state,
+        elements: state.elements.map((element) =>
+          element.element_index === 0
+            ? { ...element, frame: { x: 1000, y: 0, w: 800, h: 600 } }
+            : element.frame === undefined
+              ? element
+              : {
+                  ...element,
+                  frame: { ...element.frame, x: element.frame.x + 1000, y: element.frame.y - 9500 },
+                },
+        ),
+      };
+      const observation = yield* observe(moved);
+      expect(observation.truncated).toBe(true);
+      const rows = observation.elements.filter((e) => e.role === "AXRow");
+      const visible = Array.from({ length: 28 }, (_, at) => 3 + (472 + at) * 4);
+      expect(rows.map((row) => row.index)).toEqual(expect.arrayContaining(visible));
+      // Frames reach the agent from the window's top-left.
+      expect(rows.find((row) => row.index === 3 + 499 * 4)?.frame).toEqual({
+        x: 0,
+        y: 540,
+        width: 800,
+        height: 20,
+      });
+    }),
+);

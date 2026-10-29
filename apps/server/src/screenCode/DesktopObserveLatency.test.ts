@@ -561,3 +561,79 @@ it.live(
     );
   },
 );
+
+it.effect(
+  "observe({after}) pages carry window-point frames until a screenshot shows the window moved, and not again before a new read",
+  () =>
+    Effect.gen(function* () {
+      const elements = Array.from({ length: 240 }, (_, index) => ({
+        role: index === 0 ? "AXWindow" : "AXButton",
+        depth: index === 0 ? 0 : 1,
+        element_index: index,
+        element_token: "s1:" + index,
+        label: index === 0 ? "Document" : "Button number " + index + " with a long name",
+        frame:
+          index === 0
+            ? { x: 100, y: 200, w: 500, h: 400 }
+            : { x: 110, y: 200 + index, w: 80, h: 1 },
+        ...(index === 0 ? {} : { parent_index: 0, actions: ["AXPress"] }),
+      }));
+      const big = {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: "s1",
+        elements_complete: false,
+        elements,
+        tree_markdown: elements
+          .map(
+            (e) =>
+              (e.depth ? "  " : "") +
+              "- [" +
+              e.element_index +
+              "] " +
+              e.role +
+              ' "' +
+              e.label +
+              '"',
+          )
+          .join("\n"),
+      };
+      let bounds = { x: 100, y: 200, width: 500, height: 400 };
+      const { host } = timedHost({
+        get_window_state: (args: Record<string, unknown>) =>
+          args.include_accessibility_tree === false
+            ? goat2WindowState(args, { snapshot_id: "s1", window_bounds: bounds })
+            : big,
+      });
+      const ref = yield* bind(host);
+      const small = { ...context, limits: { ...context.limits, treeBytes: 4096 } };
+      type Paged = ScreenObservation & {
+        elements: Array<{ index: number; frame?: { x: number; y: number } }>;
+      };
+      const first = (yield* host.observe(call("get_window_state", {}, ref), small)).value as Paged;
+      const detail = first.omitted?.find((item) => item.kind === "budget")?.detail ?? "";
+      const after = Number(/observe\(\{after:(\d+)\}\)/.exec(detail)?.[1]);
+      const page = () =>
+        host
+          .observe(call("get_window_state", { after }, ref), small)
+          .pipe(Effect.map((reply) => reply.value as Paged));
+      const placed = yield* page();
+      expect(placed.elements.length).toBeGreaterThan(0);
+      for (const element of placed.elements)
+        expect(element.frame).toEqual({ x: 10, y: element.index, width: 80, height: 1 });
+      expect(placed.omitted ?? []).not.toContainEqual(expect.objectContaining({ kind: "frames" }));
+
+      bounds = { x: 250, y: 200, width: 500, height: 400 };
+      yield* host.observe(call("screenshot", {}, ref), small);
+      const moved = yield* page();
+      expect(moved.elements.length).toBeGreaterThan(0);
+      expect(moved.elements.filter((element) => element.frame !== undefined)).toEqual([]);
+      expect(moved.omitted).toContainEqual(expect.objectContaining({ kind: "frames" }));
+
+      bounds = { x: 100, y: 200, width: 500, height: 400 };
+      yield* host.observe(call("screenshot", {}, ref), small);
+      const returned = yield* page();
+      expect(returned.elements.length).toBeGreaterThan(0);
+      expect(returned.elements.filter((element) => element.frame !== undefined)).toEqual([]);
+    }),
+);

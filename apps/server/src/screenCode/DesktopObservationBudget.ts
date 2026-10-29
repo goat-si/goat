@@ -88,8 +88,12 @@ const walk = (
   });
 };
 
-const outside = (element: Placed, viewport: Viewport | undefined) => {
-  const frame = element.frame;
+const outside = (
+  element: Placed,
+  viewport: Viewport | undefined,
+  frames: ReadonlyMap<number, Viewport> | undefined,
+) => {
+  const frame = frames ? frames.get(element.index) : element.frame;
   if (!viewport || !frame) return false;
   return (
     frame.x + frame.width <= viewport.x ||
@@ -116,6 +120,8 @@ export const desktopCutOrder = (
   elements: ReadonlyArray<Placed>,
   markdown: string,
   viewport?: Viewport,
+  /** Each element's frame by index in viewport's space, when the elements carry another one. */
+  frames?: ReadonlyMap<number, Viewport>,
 ): DesktopCut => {
   const body = new Set<number>();
   const children = new Map<number, number[]>();
@@ -179,9 +185,9 @@ export const desktopCutOrder = (
       if (element !== undefined && keep(element)) take(element.index);
     }
   };
-  fromEnd((element) => body.has(element.index) && outside(element, viewport));
+  fromEnd((element) => body.has(element.index) && outside(element, viewport, frames));
   fromEnd((element) => body.has(element.index));
-  fromEnd((element) => outside(element, viewport));
+  fromEnd((element) => outside(element, viewport, frames));
   fromEnd(() => true);
   return { order, compactRows };
 };
