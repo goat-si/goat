@@ -1,5 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { type ComputerUseLeaseUpdate, computerUseRefusalReason } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -821,22 +820,7 @@ describe("ComputerUseLeaseProxy", () => {
           }),
         );
         // The read already ran, so its refusal reads as a read that changed nothing.
-        const offScreen = refusedCall(1, "wrong_display");
-        assert.deepEqual(yield* h.nextToProvider, {
-          ...offScreen,
-          result: {
-            ...offScreen.result,
-            structuredContent: {
-              ...offScreen.result.structuredContent,
-              safety: classifyActionOutcome({
-                effect: "read",
-                status: "refused",
-                dispatched: false,
-                refusalCategory: "reobserve",
-              }),
-            },
-          },
-        });
+        assert.deepEqual(yield* h.nextToProvider, refusedCall(1, "wrong_display", true));
         yield* h.killed;
         // Nothing after it runs either.
         yield* h.send(call(2, "list_windows"));

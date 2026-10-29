@@ -1,6 +1,6 @@
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 /**
- * Driver #104's select_text and menu_bar_extras for desktop targets. A driver without them, or a
+ * The driver's select_text and menu_bar_extras for desktop targets. A driver without them, or a
  * capability manifest that does not declare them, refuses the tool before running anything.
  */
 import * as Effect from "effect/Effect";

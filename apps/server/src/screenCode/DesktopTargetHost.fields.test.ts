@@ -42,7 +42,7 @@ const observe = (state: object, limits = context.limits) =>
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
       context,
     )).value as ScreenTargetRef;
-    const read = (args: object) =>
+    const read = (args: Record<string, number | string>) =>
       host.observe(call("get_window_state", args, ref), { ...context, limits });
     return { first: (yield* read({})).value as ScreenObservation, read };
   });
