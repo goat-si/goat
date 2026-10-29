@@ -7,6 +7,35 @@ import { COMPOSER_CONTEXT_CLIPBOARD_MIME } from "@goat/shared/composerContextCli
 import { writeTextToClipboard } from "./useCopyToClipboard";
 
 describe("writeTextToClipboard", () => {
+  it("rejects a context copy if the legacy copy event never supplies clipboard data", async () => {
+    const textarea = {
+      value: "",
+      setAttribute: vi.fn(),
+      style: {},
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      focus: vi.fn(),
+      select: vi.fn(),
+      setSelectionRange: vi.fn(),
+      remove: vi.fn(),
+    };
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("document", {
+      createElement: () => textarea,
+      body: { appendChild: vi.fn() },
+      execCommand: () => true,
+      activeElement: null,
+    });
+    vi.stubGlobal("navigator", {});
+    await expect(
+      writeTextToClipboard(
+        "Thread",
+        "thread",
+        { [COMPOSER_CONTEXT_CLIPBOARD_MIME]: "fragment" },
+        true,
+      ),
+    ).rejects.toThrow();
+  });
   it("does not report a context chip copied when only plain text can be written", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("window", {});
