@@ -44,3 +44,20 @@ export function splitGoatBotTextLinks(text: string): ReadonlyArray<GoatBotTextPa
   if (cursor < text.length) parts.push({ kind: "text", text: text.slice(cursor) });
   return parts;
 }
+
+const MARKDOWN_CHARACTERS = /[*_`~[\]<>&\\$|@]|www\./iu;
+const MARKDOWN_LINE_START =
+  /^(?: {0,3}\t| {4}| {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-+](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|=+[ \t]*$|-+[ \t]*$))/mu;
+
+/**
+ * Whether bot text may hold Markdown. Text without it renders as written, which is what a parse
+ * would show, so long histories skip parsing it; a false positive only costs that parse.
+ */
+export function hasGoatBotMarkdown(text: string): boolean {
+  return (
+    MARKDOWN_CHARACTERS.test(text) ||
+    MARKDOWN_LINE_START.test(text) ||
+    // Lowercase schemes are linked as plain text; GFM also links other casings.
+    /https?:\/\//iu.test(text.replaceAll(/https?:\/\//gu, ""))
+  );
+}

@@ -1,4 +1,5 @@
 import type { Nodes } from "mdast";
+import remarkCjkFriendly from "remark-cjk-friendly/parseOnly";
 import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
@@ -52,7 +53,11 @@ function resolveFinalAssistantTextForTurn(
   return finalAssistantText;
 }
 
-const markdownPreviewParser = unified().use(remarkParse).use(remarkGfm).freeze();
+const markdownPreviewParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkCjkFriendly)
+  .freeze();
 
 const INLINE_PARENT_TYPES = new Set<Nodes["type"]>([
   "paragraph",

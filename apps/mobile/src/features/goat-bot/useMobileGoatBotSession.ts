@@ -461,6 +461,8 @@ export function useMobileGoatBotSession(visible: boolean) {
   }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
+    /** The environment of the bot whose history is shown; before a move confirms, the old one. */
+    historyEnvironmentId: bot?.environmentId ?? null,
     replyingSince,
     activity,
     canSend,

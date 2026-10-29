@@ -2108,6 +2108,15 @@ code {
 
 /* Chat markdown rendering */
 
+/* GOAT Bot bubbles keep their own type and colour for the Markdown they show. */
+.goat-bubble .chat-markdown,
+.goat-task-summary .chat-markdown {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  white-space: normal;
+}
+
 .chat-markdown > :first-child {
   margin-top: 0;
 }

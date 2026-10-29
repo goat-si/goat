@@ -1,4 +1,7 @@
-import { CHAT_MARKDOWN_REHYPE_PLUGINS } from "@goat/shared/markdownPipeline";
+import {
+  CHAT_MARKDOWN_REHYPE_PLUGINS,
+  CHAT_MARKDOWN_REMARK_PLUGINS,
+} from "@goat/shared/markdownPipeline";
 import type { Root } from "mdast";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
@@ -133,5 +136,26 @@ describe("incremental Markdown parsing", () => {
         expect(render(start + tail, incremental)).toEqual(render(start + tail));
       }
     }
+  });
+
+  it("streams CJK strong emphasis through the chat plugins the same as a full parse", () => {
+    const renderChat = (source: string, incremental?: Plugin<[], Root>) =>
+      renderToStaticMarkup(
+        <ReactMarkdown
+          remarkPlugins={[...CHAT_MARKDOWN_REMARK_PLUGINS, ...(incremental ? [incremental] : [])]}
+          rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
+        >
+          {source}
+        </ReactMarkdown>,
+      );
+    const source = prefix + "결과는 **Windows 11 Pro (빌드 26200)**이며 これは**「重要」**です。";
+    const incremental = createIncrementalMarkdownPlugin();
+    for (let end = prefix.length; end <= source.length; end++) {
+      const text = source.slice(0, end);
+      expect(renderChat(text, incremental), `prefix ${end}`).toEqual(renderChat(text));
+    }
+    expect(renderChat(source, incremental)).toContain(
+      "<strong>Windows 11 Pro (빌드 26200)</strong>이며 これは<strong>「重要」</strong>です。",
+    );
   });
 });

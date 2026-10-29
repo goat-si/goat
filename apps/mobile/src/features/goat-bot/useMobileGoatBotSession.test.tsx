@@ -135,6 +135,8 @@ describe("mobile GOAT Bot session selection", () => {
     expect(harness.run).not.toHaveBeenCalled();
     expect(harness.save).not.toHaveBeenCalled();
     expect(session.availability).toBe("offline");
+    // Links in the history still shown resolve where that history lives.
+    expect(session.historyEnvironmentId).toBe(EnvironmentId.make("missing-A"));
   });
   it("keeps a disconnected legacy stored bot offline without replacing its reference", async () => {
     harness.botRef = bot(EnvironmentId.make("offline-A"));

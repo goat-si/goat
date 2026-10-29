@@ -36,6 +36,7 @@ function GoatBotRouteSession() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <GoatBotChatView
         {...session}
+        environmentId={bot?.environmentId ?? null}
         legacyAgentRoute={legacyAgentRoute}
         homeMove={
           moveTarget

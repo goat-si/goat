@@ -16,7 +16,11 @@ const mocks = vi.hoisted(() => ({
   workerShell: { activityRunStatus: "running", pendingRuntimeRequest: null } as object,
 }));
 
-vi.mock("~/hooks/useSettings", () => ({ usePrimarySettings: () => "system" }));
+// The timeline renders Markdown through ChatMarkdown, which reads other settings exports.
+vi.mock("~/hooks/useSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/hooks/useSettings")>()),
+  usePrimarySettings: () => "system",
+}));
 vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }));
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => null }));
 vi.mock("./goatBotHooks", () => ({

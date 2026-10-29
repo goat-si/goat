@@ -3,7 +3,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-vi.mock("~/hooks/useSettings", () => ({ usePrimarySettings: () => "system" }));
+// The timeline renders Markdown through ChatMarkdown, which reads other settings exports.
+vi.mock("~/hooks/useSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/hooks/useSettings")>()),
+  usePrimarySettings: () => "system",
+}));
 vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }));
 vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => <div>Work card</div> }));
 

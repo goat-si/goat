@@ -64,6 +64,8 @@ vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
 }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
+// The native Markdown renderer cannot load under Vitest.
+vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("@legendapp/list/react-native", () => ({
   LegendList: ({ ListFooterComponent }: { ListFooterComponent?: ReactNode }) => (
     <>{ListFooterComponent}</>

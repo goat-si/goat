@@ -119,6 +119,7 @@ function GoatBotThreadSession({
       ) : null}
       <GoatBotChatView
         {...session}
+        environmentId={environmentId}
         homeMove={
           moveTarget
             ? {

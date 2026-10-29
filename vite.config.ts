@@ -904,6 +904,7 @@ export default defineConfig({
           "apps/mobile/src/native/GoatComposerEditor.native.tsx",
           "apps/mobile/src/native/SelectableMarkdownText.tsx",
           "apps/mobile/src/native/useEnrichedLinkVariants.ts",
+          "apps/mobile/src/features/goat-bot/GoatBotMarkdown.tsx",
         ],
         rules: {
           "goat/no-mobile-uniwind-theme-escape-hatches": ["error", { allowUniwindTheme: true }],

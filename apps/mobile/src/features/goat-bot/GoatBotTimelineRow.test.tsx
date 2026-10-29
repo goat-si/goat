@@ -9,6 +9,8 @@ import {
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
+// The native Markdown renderer cannot load under Vitest.
+vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: () => null,
   useKeyboardState: () => false,

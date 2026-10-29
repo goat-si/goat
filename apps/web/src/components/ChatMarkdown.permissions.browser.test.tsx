@@ -9,6 +9,7 @@ import {
 } from "@goat/contracts";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../test/render";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -294,3 +295,18 @@ it.each(["link-to-thread", "unlink-from-thread"])(
     );
   },
 );
+
+it("offers no host actions for markdown rendered with file actions off", async () => {
+  using _setup = setup();
+  await using screen = await render(
+    <ChatMarkdown
+      cwd={undefined}
+      environmentId={threadRef.environmentId}
+      fileActions={false}
+      text="[Readme](/work/docs/readme.md)"
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "File options for readme.md" }));
+  await vi.waitFor(() => expect(state.choose).toHaveBeenCalled());
+  expect(offeredActions()).toEqual(["copy-full"]);
+});
