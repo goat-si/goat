@@ -49,6 +49,28 @@ struct OverlayOrderTests {
     check("a target missing from the list is not raised", !raises(3, frontmost: 10, [window(1, pid: 10)]))
     check("no frontmost app means no raise", !raises(1, frontmost: nil, [window(1, pid: 10)]))
 
+    func stacked(_ windows: [OverlayListedWindow]) -> Bool {
+      OverlayOrder.isStacked(overlay: 7, target: 1, ownPid: own, windows: windows)
+    }
+    check(
+      "an overlay directly in front of its target needs no reordering",
+      stacked([window(2, pid: 20), window(7, pid: own), window(1, pid: 10)]))
+    check(
+      "an overlay behind its target is reordered",
+      !stacked([window(1, pid: 10), window(7, pid: own)]))
+    check(
+      "another app's window between the overlay and its target is reordered",
+      !stacked([window(7, pid: own), window(2, pid: 20), window(1, pid: 10)]))
+    check(
+      "tiny or floating windows between the overlay and its target do not count",
+      stacked([
+        window(7, pid: own), window(3, pid: 20, size: 1), window(4, pid: 20, layer: 3),
+        window(1, pid: 10),
+      ]))
+    check(
+      "an overlay missing from the list (ordered out) is reordered",
+      !stacked([window(1, pid: 10)]))
+
     exit(failures == 0 ? 0 : 1)
   }
 }

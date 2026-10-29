@@ -40,6 +40,21 @@ enum OverlayOrder {
     }
     return false
   }
+
+  /// Whether the overlay already sits where place() would put it: in front of the target with no
+  /// other app's normal-level window of a real size between them. Then ordering again would only
+  /// repeat the same stacking, so place() skips it. `windows` is front to back.
+  static func isStacked(
+    overlay: CGWindowID, target: CGWindowID, ownPid: Int, windows: [OverlayListedWindow]
+  ) -> Bool {
+    guard let overlayIndex = windows.firstIndex(where: { $0.windowId == overlay }),
+      let targetIndex = windows.firstIndex(where: { $0.windowId == target }),
+      overlayIndex < targetIndex
+    else { return false }
+    return !windows[(overlayIndex + 1)..<targetIndex].contains {
+      $0.pid != ownPid && $0.layer == 0 && $0.width > 1 && $0.height > 1
+    }
+  }
 }
 
 protocol OverlaySchedule: AnyObject {
@@ -79,42 +94,70 @@ enum OverlayFollowPhase {
 }
 
 final class OverlayFollowController {
+  /// Follow ticks in a row without the target's frame before the border goes. One empty read
+  /// happens while a window moves between Spaces or the list is rebuilt, and must not blink it.
+  static let missLimit = 3
+
   private let scheduler: OverlayScheduling
   private let frame: (CGWindowID) -> CGRect?
   private let onFrame: (CGRect?) -> Void
+  private let onSteady: () -> Void
   private let onBorder: (Bool) -> Void
   private var generation = 0
+  private var idleGeneration = 0
   private var target: CGWindowID?
   private var follow: OverlaySchedule?
   private var idle: OverlaySchedule?
+  private var lastFrame: CGRect?
+  private var misses = 0
+  private var borderVisible = false
 
+  /// `onFrame` gets a frame only when it changed, and nil once the target has been missing for
+  /// `missLimit` ticks. `onSteady` runs on a tick whose frame did not change, so the caller can
+  /// repair stacking without placing the panel again.
   init(
     scheduler: OverlayScheduling,
     frame: @escaping (CGWindowID) -> CGRect?,
     onFrame: @escaping (CGRect?) -> Void,
+    onSteady: @escaping () -> Void = {},
     onBorder: @escaping (Bool) -> Void
   ) {
     self.scheduler = scheduler
     self.frame = frame
     self.onFrame = onFrame
+    self.onSteady = onSteady
     self.onBorder = onBorder
   }
 
+  /// A show for the window already followed keeps its follow timer and frame, so a phase change
+  /// neither restarts following nor hides the border.
   func show(windowId: CGWindowID, phase: OverlayFollowPhase) {
-    generation += 1
-    cancelSchedules()
-    target = windowId
-    onBorder(true)
-    let owner = generation
-    follow = scheduler.schedule(every: 0.25, repeats: true) { [weak self] in
-      guard let self, self.generation == owner, self.target == windowId else { return }
-      self.onFrame(self.frame(windowId))
-    }
-    if phase == .resting {
-      idle = scheduler.schedule(every: 2, repeats: false) { [weak self] in
+    if target != windowId || follow == nil {
+      generation += 1
+      cancelSchedules()
+      target = windowId
+      lastFrame = nil
+      misses = 0
+      let owner = generation
+      follow = scheduler.schedule(every: 0.25, repeats: true) { [weak self] in
         guard let self, self.generation == owner, self.target == windowId else { return }
+        self.tick(windowId)
+      }
+    } else {
+      idle?.cancel()
+      idle = nil
+    }
+    setBorder(true)
+    idleGeneration += 1
+    if phase == .resting {
+      let owner = generation
+      let idleOwner = idleGeneration
+      idle = scheduler.schedule(every: 2, repeats: false) { [weak self] in
+        guard let self, self.generation == owner, self.idleGeneration == idleOwner,
+          self.target == windowId
+        else { return }
         self.target = nil
-        self.onBorder(false)
+        self.setBorder(false)
         self.cancelSchedules()
       }
     }
@@ -124,7 +167,33 @@ final class OverlayFollowController {
     generation += 1
     cancelSchedules()
     target = nil
-    onBorder(false)
+    lastFrame = nil
+    misses = 0
+    setBorder(false)
+  }
+
+  private func tick(_ windowId: CGWindowID) {
+    guard let next = frame(windowId) else {
+      misses += 1
+      if misses == Self.missLimit {
+        lastFrame = nil
+        onFrame(nil)
+      }
+      return
+    }
+    misses = 0
+    if next == lastFrame {
+      onSteady()
+    } else {
+      lastFrame = next
+      onFrame(next)
+    }
+  }
+
+  private func setBorder(_ visible: Bool) {
+    guard borderVisible != visible else { return }
+    borderVisible = visible
+    onBorder(visible)
   }
 
   private func cancelSchedules() {

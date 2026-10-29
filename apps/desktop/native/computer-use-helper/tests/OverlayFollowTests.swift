@@ -53,6 +53,7 @@ struct OverlayFollowTests {
   final class State {
     var bounds: [CGWindowID: CGRect] = [:]
     var frames: [String] = []
+    var steadyTicks = 0
     var borders: [Bool] = []
   }
 
@@ -74,6 +75,7 @@ struct OverlayFollowTests {
         scheduler: scheduler,
         frame: { state.bounds[$0] },
         onFrame: { state.frames.append($0.map(NSStringFromRect) ?? "nil") },
+        onSteady: { state.steadyTicks += 1 },
         onBorder: { state.borders.append($0) })
       body(controller, scheduler, state)
     }
@@ -87,8 +89,9 @@ struct OverlayFollowTests {
       scheduler.fire(0)
       for _ in 0..<5 { scheduler.fire(0) }
       check(
-        "visible border follows movement and resize beyond the old four samples",
-        state.frames == [NSStringFromRect(rect(30, 50)), NSStringFromRect(rect(30, 50, 500, 360)), NSStringFromRect(rect(30, 50, 500, 360)), NSStringFromRect(rect(30, 50, 500, 360)), NSStringFromRect(rect(30, 50, 500, 360)), NSStringFromRect(rect(30, 50, 500, 360)), NSStringFromRect(rect(30, 50, 500, 360))]
+        "visible border follows movement and resize, and a repeated frame places nothing again",
+        state.frames == [NSStringFromRect(rect(30, 50)), NSStringFromRect(rect(30, 50, 500, 360))]
+          && state.steadyTicks == 5
           && scheduler.activeCount == 1 && state.borders == [true]
           && scheduler.hasJob(0, every: 0.25, repeats: true))
     }
@@ -125,7 +128,22 @@ struct OverlayFollowTests {
       scheduler.fire(1, evenIfCancelled: true)
       check(
         "an old idle timer cannot hide a new target's border",
-        state.borders == [true, true] && scheduler.activeCount == 2)
+        state.borders == [true] && scheduler.activeCount == 2)
+    }
+
+    harness { controller, scheduler, state in
+      state.bounds[1] = rect(10, 20)
+      controller.show(windowId: 1, phase: .active)
+      scheduler.fire(0)
+      controller.show(windowId: 1, phase: .active)
+      controller.show(windowId: 1, phase: .resting)
+      controller.show(windowId: 1, phase: .active)
+      scheduler.fire(0)
+      scheduler.fire(1, evenIfCancelled: true)
+      check(
+        "a phase change on the same window keeps its follow timer, frame and visible border",
+        state.frames == [NSStringFromRect(rect(10, 20))] && state.steadyTicks == 1
+          && state.borders == [true] && scheduler.jobs.count == 2 && scheduler.activeCount == 1)
     }
 
     harness { controller, scheduler, state in
@@ -141,13 +159,28 @@ struct OverlayFollowTests {
     harness { controller, scheduler, state in
       state.bounds[1] = rect(10, 20)
       controller.show(windowId: 1, phase: .active)
+      scheduler.fire(0)
       state.bounds.removeValue(forKey: 1)
       scheduler.fire(0)
-      state.bounds[1] = rect(40, 60)
+      state.bounds[1] = rect(10, 20)
       scheduler.fire(0)
       check(
-        "off-screen bounds hide and a later bounds read restores the same target",
-        state.frames == ["nil", NSStringFromRect(rect(40, 60))])
+        "one missing frame keeps the border on and places nothing",
+        state.frames == [NSStringFromRect(rect(10, 20))] && state.steadyTicks == 1
+          && state.borders == [true])
+    }
+
+    harness { controller, scheduler, state in
+      state.bounds[1] = rect(10, 20)
+      controller.show(windowId: 1, phase: .active)
+      scheduler.fire(0)
+      state.bounds.removeValue(forKey: 1)
+      for _ in 0..<(OverlayFollowController.missLimit + 2) { scheduler.fire(0) }
+      state.bounds[1] = rect(10, 20)
+      scheduler.fire(0)
+      check(
+        "a target missing for several ticks hides once and a later read restores it",
+        state.frames == [NSStringFromRect(rect(10, 20)), "nil", NSStringFromRect(rect(10, 20))])
     }
 
     exit(failures == 0 ? 0 : 1)
