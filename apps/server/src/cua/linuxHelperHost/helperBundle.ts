@@ -75,7 +75,7 @@ function untrusted(stat: NodeFS.BigIntStats, sticky: boolean) {
   // anyone else write shows in the group bits as its mask.
   const shared = (Number(stat.mode) & 0o022) !== 0;
   if (shared && !(sticky && stat.isDirectory() && (Number(stat.mode) & 0o1000) !== 0))
-    return "can be changed by other users (chmod g-w,o-w it)";
+    return "can be changed by other users";
   return undefined;
 }
 
@@ -192,7 +192,9 @@ export function makeHelperBundleCheck(
       (refused) =>
         refused === undefined
           ? undefined
-          : "GOAT's Linux computer use helper was not started: " + refused + " Reinstall it.",
+          : "GOAT's Linux computer use helper was not started: " +
+            refused +
+            " Reinstall it into a folder only you or root can write.",
       (error: unknown) =>
         "GOAT's Linux computer use helper was not started: it could not be read (" +
         String(error) +

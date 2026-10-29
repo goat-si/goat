@@ -612,7 +612,9 @@ by mention, the way the Codex app does it. Only the pattern is taken.
   folder above it may be a symlink, belong to a user other than root or the server's, or be
   writable by its group or other users (a sticky folder like `/tmp` aside; a POSIX ACL that lets anyone else write shows in the group bits), and a bundle that changes while it
   is hashed is refused. So only root or the server's own user can swap files between the check and
-  the spawn; closing that window too would take running an immutable copy. Hashes alone only catch
+  the spawn; closing that window too would take running an immutable copy. A file that was once writable by others
+  may still be held open for writing, so the fix for a refused bundle is a fresh install, not a
+  permission change. Hashes alone only catch
   corruption and partial updates, since whoever can rewrite a file can rewrite the manifest.
   Authenticity comes from the Ed25519 signature check, which turns on once a release key is committed
   ([release runbook](../operations/release.md#linux-computer-use-helper-signing)).
