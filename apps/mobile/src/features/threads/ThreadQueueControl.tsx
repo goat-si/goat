@@ -58,20 +58,44 @@ type QueueTarget = { readonly environmentId: EnvironmentId; readonly threadId: T
 type QueueAction = "steer" | "edit" | "up" | "down" | "remove";
 type QueueRowLayout = { readonly id: RunId; readonly y?: number; readonly height?: number };
 
-type QueueMessage = NonNullable<NonNullable<ReturnType<typeof useThreadQueueWorkflow>>["queuedRuns"][number]["message"]>;
+type QueueMessage = NonNullable<
+  NonNullable<ReturnType<typeof useThreadQueueWorkflow>>["queuedRuns"][number]["message"]
+>;
 
-function QueuedSender({ environmentId, message }: { environmentId: EnvironmentId; message: QueueMessage }) {
+function QueuedSender({
+  environmentId,
+  message,
+}: {
+  environmentId: EnvironmentId;
+  message: QueueMessage;
+}) {
   const presentation = resolveUserMessagePresentation(message);
-  const sender = useQuietThreadShell(message.senderThreadId && presentation.attribution === "agent"
-    ? scopeThreadRef(environmentId, message.senderThreadId) : null);
-  const tasks = useEnvironmentQuery(presentation.scheduledTaskId
-    ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null);
-  const label = presentation.attribution === "automation"
-    ? tasks.data?.tasks.find((task) => task.id === presentation.scheduledTaskId)?.title ?? "Automation"
-    : presentation.attribution === "agent"
-      ? message.senderThreadId ? sender?.title.trim() || "Agent" : message.context?.remoteSender?.title ?? "Agent"
-      : presentation.attribution === "t3code" ? "Sent by GOAT" : null;
-  return label ? <Text className="font-goat-medium text-foreground-muted">{`${label}  `}</Text> : null;
+  const sender = useQuietThreadShell(
+    message.senderThreadId && presentation.attribution === "agent"
+      ? scopeThreadRef(environmentId, message.senderThreadId)
+      : null,
+  );
+  const tasks = useEnvironmentQuery(
+    presentation.scheduledTaskId
+      ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} })
+      : null,
+  );
+  const label =
+    presentation.attribution === "automation"
+      ? (tasks.data?.tasks.find((task) => task.id === presentation.scheduledTaskId)?.title ??
+        "Automation")
+      : presentation.attribution === "agent"
+        ? message.senderThreadId
+          ? sender?.title.trim() || "Agent"
+          : (message.context?.remoteSender?.title ?? "Agent")
+        : presentation.attribution !== "guest" &&
+            message.createdBy === "agent" &&
+            message.creationSource === "server"
+          ? "Sent by GOAT"
+          : null;
+  return label ? (
+    <Text className="font-goat-medium text-foreground-muted">{`${label}  `}</Text>
+  ) : null;
 }
 
 export function useThreadQueueWorkflow(target: QueueTarget) {
@@ -433,7 +457,9 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                             {`${context.guest.name}  `}
                           </Text>
                         )}
-                        {message ? <QueuedSender environmentId={target.environmentId} message={message} /> : null}
+                        {message ? (
+                          <QueuedSender environmentId={target.environmentId} message={message} />
+                        ) : null}
                         {title}
                       </Text>
                       {controls.isEditing ? (

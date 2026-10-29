@@ -53,20 +53,37 @@ export interface QueuedRunsControlHandle {
 
 type ThreadQueueProjection = Parameters<typeof deriveThreadQueueWorkflowState>[0];
 
-function QueuedSender({ environmentId, message }: {
+function QueuedSender({
+  environmentId,
+  message,
+}: {
   environmentId: EnvironmentId;
   message: ThreadQueueProjection["messages"][number];
 }) {
   const presentation = resolveUserMessagePresentation(message);
-  const sender = useQuietThreadShell(message.senderThreadId && presentation.attribution === "agent"
-    ? scopeThreadRef(environmentId, message.senderThreadId) : null);
-  const tasks = useEnvironmentQuery(presentation.scheduledTaskId
-    ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} }) : null);
-  const label = presentation.attribution === "automation"
-    ? tasks.data?.tasks.find((task) => task.id === presentation.scheduledTaskId)?.title ?? "Automation"
-    : presentation.attribution === "agent"
-      ? message.senderThreadId ? sender?.title.trim() || "Agent" : message.context?.remoteSender?.title ?? "Agent"
-      : presentation.attribution === "t3code" ? "Sent by GOAT" : null;
+  const sender = useQuietThreadShell(
+    message.senderThreadId && presentation.attribution === "agent"
+      ? scopeThreadRef(environmentId, message.senderThreadId)
+      : null,
+  );
+  const tasks = useEnvironmentQuery(
+    presentation.scheduledTaskId
+      ? serverEnvironment.scheduledTasksLive({ environmentId, input: {} })
+      : null,
+  );
+  const label =
+    presentation.attribution === "automation"
+      ? (tasks.data?.tasks.find((task) => task.id === presentation.scheduledTaskId)?.title ??
+        "Automation")
+      : presentation.attribution === "agent"
+        ? message.senderThreadId
+          ? sender?.title.trim() || "Agent"
+          : (message.context?.remoteSender?.title ?? "Agent")
+        : presentation.attribution !== "guest" &&
+            message.createdBy === "agent" &&
+            message.creationSource === "server"
+          ? "Sent by GOAT"
+          : null;
   return label ? <span className="shrink-0 text-muted-foreground">{label}</span> : null;
 }
 
@@ -415,7 +432,9 @@ export function QueuedRunsControl({
                     {item.guestName === undefined ? null : (
                       <span className="shrink-0 text-guest-foreground">{item.guestName}</span>
                     )}
-                    {item.message ? <QueuedSender environmentId={props.environmentId} message={item.message} /> : null}
+                    {item.message ? (
+                      <QueuedSender environmentId={props.environmentId} message={item.message} />
+                    ) : null}
                     <Tooltip>
                       <TooltipTrigger render={<span className="min-w-0 flex-1 truncate" />}>
                         {previewText}

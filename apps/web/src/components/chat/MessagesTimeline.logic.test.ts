@@ -581,8 +581,6 @@ describe("deriveMessagesTimelineRows", () => {
         supportsConversationRollback: false,
       });
 
-    // Only compacting on return holds a sent message back, so only it speaks through the working
-    // row; the others keep their live divider.
     for (const [reason, live, title] of [
       [
         "beforeCacheExpires",
@@ -746,7 +744,6 @@ describe("deriveMessagesTimelineRows", () => {
       },
     };
     const assistantItem = liveAssistant.item;
-    const compactionStartedAt = DateTime.makeUnsafe(fixture.time(65));
     const compactionAt = (status: "running" | "completed") => ({
       ...liveAssistant,
       item: {
@@ -754,7 +751,7 @@ describe("deriveMessagesTimelineRows", () => {
         type: "compaction" as const,
         status,
         driver: null,
-        startedAt: compactionStartedAt,
+        startedAt: DateTime.makeUnsafe(fixture.time(65)),
       },
     });
     const rowsFor = (status: "running" | "completed", laterCompaction = false) =>
@@ -792,7 +789,7 @@ describe("deriveMessagesTimelineRows", () => {
       return rows.slice(rows.findIndex((row) => row.id.includes("live-user")) + 1);
     };
     expect(liveRows("running")).toMatchObject([
-      { kind: "working", compacting: true, createdAt: DateTime.formatIso(compactionStartedAt) },
+      { kind: "working", compacting: true, createdAt: fixture.time(65) },
     ]);
     expect(liveRows("completed")).toMatchObject([
       { kind: "context-compaction", title: "Context compacted after 1h 5m idle" },

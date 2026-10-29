@@ -133,7 +133,10 @@ describe("v2 thread shell lists", () => {
     const dispose = registry.mount(inputs);
     registry.set(snapshotAtom(environmentId), { ...v2ShellSnapshot, threads: [root, child] });
     expect(registry.get(inputs).map((thread) => thread.id)).toEqual([child.id]);
-    expect(registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))?.pendingSubagentRequest).toBeNull();
+    expect(
+      registry.get(threads.threadShellAtom({ environmentId, threadId: root.id }))
+        ?.pendingSubagentRequest,
+    ).toBeNull();
     registry.set(snapshotAtom(environmentId), {
       ...v2ShellSnapshot,
       threads: [root, { ...child, status: "queued" as const }],

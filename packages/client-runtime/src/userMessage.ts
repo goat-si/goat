@@ -31,7 +31,7 @@ interface PresentedUserMessage {
   readonly text: string;
   readonly createdBy?: OrchestrationV2Actor;
   readonly creationSource?: OrchestrationV2CreationSource;
-  readonly scheduledTaskId?: ScheduledTaskId;
+  readonly scheduledTaskId?: ScheduledTaskId | undefined;
   readonly context?: { readonly guest?: GuestMessageAttribution | undefined } | undefined;
 }
 
