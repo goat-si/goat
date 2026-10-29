@@ -270,3 +270,41 @@ it.effect("memory recovery writes refuse a settings-only caller before changing 
     expect(rows[0]?.automatic_attempts).toBe(10);
   }).pipe(Effect.provide(Fixture.layer)),
 );
+
+it.effect("a GOAT thread's own credential cannot run the memory recovery writes", () =>
+  Effect.gen(function* () {
+    // A thread is issued memory and orchestration scopes, never settings:write, so these writes
+    // belong to outside MCP clients a person granted settings:write.
+    const thread = {
+      ...Fixture.scope(["memory:read", "memory:write", "orchestration:read"]),
+      client: undefined,
+      thread: {
+        threadId: M.ThreadId.make("default-thread"),
+        providerSessionId: "fixture",
+        providerInstanceId: M.ProviderInstanceId.make("codex"),
+      },
+    };
+    const report = {
+      memorySpaceId: Fixture.space,
+      environmentId: "fixture-memory-mcp",
+      reportIds: ["b".repeat(64)],
+    };
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at,report_kind,report_approved,automatic_attempts,failure_code) VALUES (${report.reportIds[0]},${Fixture.space},${Fixture.memoryId},${Fixture.id(12)},${Fixture.id(13)},${report.environmentId},'resolved','failed',0,'resolve',1,10,'unavailable')`;
+    const hub = {
+      memorySpaceId: Fixture.space,
+      environmentId: "fixture-memory-mcp",
+      expectedVersion: 1,
+    };
+    expect((yield* Fixture.call("goat_memory_hub_reconcile", hub, thread)).result.isError).toBe(
+      true,
+    );
+    expect(
+      (yield* Fixture.call("goat_memory_report_attempts_reset", report, thread)).result.isError,
+    ).toBe(true);
+    const rows = yield* sql<{
+      automatic_attempts: number;
+    }>`SELECT automatic_attempts FROM memory_report_outbox WHERE report_id=${report.reportIds[0]}`;
+    expect(rows[0]?.automatic_attempts).toBe(10);
+  }).pipe(Effect.provide(Fixture.layer)),
+);

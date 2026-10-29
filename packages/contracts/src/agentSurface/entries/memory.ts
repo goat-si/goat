@@ -246,7 +246,7 @@ export const memoryEntries = {
     summary: "Rearm recoverable memory hub holds.",
     description: "Reconcile recoverable memory hub holds against the current settings version.",
     guide:
-      "Needs settings:write and memory:read, and a session allowed to write. Read memory.hub_diagnostics to inspect the current holds.",
+      "For outside MCP clients a person granted settings:write and memory:read, in a session allowed to write; a GOAT thread's own credential never carries settings:write, so an agent in a thread asks the person to repair memory in Settings. Read memory.hub_diagnostics to inspect the current holds.",
     effect: "write",
     capability: "settings.write",
     hostRoutable: false,
@@ -265,7 +265,7 @@ export const memoryEntries = {
     summary: "Reset exhausted memory report attempts.",
     description: "Rearm eligible failed memory reports for delivery.",
     guide:
-      "Needs settings:write and memory:read, and a session allowed to write. Read memory.history to inspect reports.",
+      "For outside MCP clients a person granted settings:write and memory:read, in a session allowed to write; a GOAT thread's own credential never carries settings:write, so an agent in a thread asks the person to retry reports in Settings. Read memory.history to inspect reports.",
     effect: "write",
     capability: "settings.write",
     hostRoutable: false,
