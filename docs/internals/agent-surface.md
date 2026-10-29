@@ -762,11 +762,12 @@ who outside can reach the environment, or records a person's standing consent. T
 deliberate setup a person does rarely, and a handoff would let an agent decide when to ask a
 person to widen or cut access it works under, so the nearest tool's guide names the step as a
 person's instead. An agent never approves its own consent. A provider sign-out prompt runs only
-when a person wrote the message and no schedule delivered it, and an agent cannot turn a
-person's queued message into a slash command, because an edit keeps the author
-(`ProviderAuthService.tryHandlePromptCommand`, `goat_queue_edit`). Webhook rotation means replacing a live
-task's URL on purpose; an agent that changes or deletes a schedule it may write ends or replaces
-its URL only as part of that write.
+when a person wrote the message and no schedule delivered it, and an agent can neither turn a
+person's queued message into a slash command nor retry a person's failed one, because both keep
+the author (`ProviderAuthService.tryHandlePromptCommand`, `goat_queue_edit`, `goat_thread_retry`). For webhooks
+the person's step is the Rotate action in Settings, which replaces a live task's URL on purpose;
+an agent that moves a schedule it may write off its webhook trigger, or deletes it, ends that URL
+as part of the write, and a later webhook trigger gets a new URL.
 
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call

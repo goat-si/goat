@@ -434,16 +434,25 @@ export function makeLocalCommandHarness(input: {
         )
       : Effect.void,
   );
-  const tryHandlePromptCommand = vi.fn(() =>
-    input.logoutFailure === undefined
-      ? Effect.succeed(true)
-      : Effect.fail(
+  // Refuses a sign-out no person wrote, as ProviderAuthService does.
+  const tryHandlePromptCommand = vi.fn((request: { readonly byPerson: boolean }) =>
+    !request.byPerson
+      ? Effect.fail(
           new ProviderSetupError({
             instanceId: oldInstanceId,
             operation: "logout",
-            detail: input.logoutFailure,
+            detail: "Only a person can sign out of a provider.",
           }),
-        ),
+        )
+      : input.logoutFailure === undefined
+        ? Effect.succeed(true)
+        : Effect.fail(
+            new ProviderSetupError({
+              instanceId: oldInstanceId,
+              operation: "logout",
+              detail: input.logoutFailure,
+            }),
+          ),
   );
   const writeIfRunCurrent = vi.fn(({ events: incoming, activeAttemptId, expectedStatus }) =>
     "writeFailure" in input

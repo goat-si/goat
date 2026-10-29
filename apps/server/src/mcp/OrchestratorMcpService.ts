@@ -3943,6 +3943,18 @@ const make = Effect.gen(function* () {
           "invalid_request",
           `Run ${run.id} did not fail while preparing its workspace, so there is nothing to retry. Read the thread and send it a new message with ${goatCallText("thread.send")} instead.`,
         );
+      // A retry runs the message as its author's, so a person's command (such as /logout) is
+      // theirs to send again.
+      const message = target.messages.find((candidate) => candidate.id === run.userMessageId);
+      if (
+        message !== undefined &&
+        message.createdBy !== "agent" &&
+        message.text.trimStart().startsWith("/")
+      )
+        return yield* failure(
+          "capability_denied",
+          `Run ${run.id} carries a person's command; only they can send it again.`,
+        );
       yield* threadLaunch
         .retryPreparation({
           commandId: stableCommandId({ scope, requestKey: key, operation: "thread-retry" }),
