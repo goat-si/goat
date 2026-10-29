@@ -498,7 +498,7 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<VcsSwitchRefResult, GitCommandError>;
     readonly initRepo: (input: VcsInitInput) => Effect.Effect<void, GitCommandError>;
     readonly listLocalBranchNames: (cwd: string) => Effect.Effect<string[], GitCommandError>;
-  }
+  } & import("./GitSharedConfig.ts").SharedConfigDriver
 >()("goat/vcs/GitVcsDriver") {}
 
 const WORKSPACE_FILES_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
