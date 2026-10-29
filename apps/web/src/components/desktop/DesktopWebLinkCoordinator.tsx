@@ -214,11 +214,9 @@ export function DesktopWebLinkCoordinator() {
     // A connected server publishes its config before its project snapshot, so a PR link
     // delivered at launch would miss its project and fall through to the browser. Hold PR
     // links, and only those, until discovery settles; an ordinary link never waits for it.
-    // Discovery never settles without the local environment, so those links do not wait.
+    // With Local off, discovery settles on the saved remote environments alone.
     const hold =
-      openPullRequestsInApp &&
-      !localEnvironmentDisabled &&
-      sourceControlClients.parseChangeRequestUrl(url) !== null
+      openPullRequestsInApp && sourceControlClients.parseChangeRequestUrl(url) !== null
         ? projectsSettled()
         : Promise.resolve();
     void hold.then(() => {

@@ -206,6 +206,11 @@ function RootRouteBranch() {
         <EnvironmentThemeSync />
         <DesktopWindowMaterialSync />
         <LiquidGlassBackdrop />
+        {/* A pair link opened during setup must still reach its confirmation. */}
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopWebLinkCoordinator />
+        ) : null}
+        <ConfirmDialogHost />
         <CustomSnoozeDialogHost />
         <GuestShareDialogHost />
         <CommandPalette>
