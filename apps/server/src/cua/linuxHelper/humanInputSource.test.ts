@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
-import * as HostProcess from "@goat/shared/HostProcess";
+import { canListenOnSocketPath, listenOnSocketPath } from "../socketServer.testkit.ts";
 
 import {
   classifyDevices,
@@ -165,7 +165,7 @@ async function scriptedServer(options: {
       }
     });
   });
-  await new Promise<void>((resolve) => server.listen(path, resolve));
+  await listenOnSocketPath(server, path);
   return {
     path,
     connected: connected.promise,
@@ -220,9 +220,7 @@ describe("XInput2 human input", () => {
     expect(supportsSourceId(2, 1)).toBe(true);
     expect(supportsSourceId(2, 4)).toBe(true);
   });
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "refuses a server that negotiates XI 2.0, whose raw events name no device",
     async () => {
       const server = await scriptedServer({ minor: 0 });
@@ -236,9 +234,7 @@ describe("XInput2 human input", () => {
       server.close();
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "a keyboard plugged in after the source opened is the person's; the driver's devices never are",
     async () => {
       const server = await scriptedServer({ minor: 2 });
@@ -269,9 +265,7 @@ describe("XInput2 human input", () => {
       server.close();
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "input from a device the list does not have yet waits for the next list",
     async () => {
       const server = await scriptedServer({ minor: 2 });
@@ -294,9 +288,7 @@ describe("XInput2 human input", () => {
       server.close();
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "a device change that arrives with the first list is caught up, not lost",
     async () => {
       // The first reply carries the driver's keyboard on id 11; a change and a person's key on a
@@ -330,9 +322,7 @@ describe("XInput2 human input", () => {
       server.close();
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "input held across a change keeps waiting for a list read after that change",
     async () => {
       // Another change and the person's key arrive in the same write as the list the source was
@@ -367,9 +357,7 @@ describe("XInput2 human input", () => {
       server.close();
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "a device id reused while a list is being read never drops a person's held key",
     async () => {
       // The keyboard on 11 is a person's. An unrelated change starts a read; the person's key is
@@ -410,26 +398,21 @@ describe("XInput2 human input", () => {
       server.close();
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
-    "a server that goes away leaves the source lost",
-    async () => {
-      const server = await scriptedServer({ minor: 2 });
-      const lost = Promise.withResolvers<void>();
-      const source = await openX11HumanInput(
-        { DISPLAY: ":0" },
-        {
-          socketPath: server.path,
-          onLost: () => lost.resolve(),
-        },
-      );
-      if (!source) throw new Error("no source");
-      server.close();
-      await lost.promise;
-      expect(source.lost()).toBe(true);
-    },
-  );
+  it.skipIf(!canListenOnSocketPath)("a server that goes away leaves the source lost", async () => {
+    const server = await scriptedServer({ minor: 2 });
+    const lost = Promise.withResolvers<void>();
+    const source = await openX11HumanInput(
+      { DISPLAY: ":0" },
+      {
+        socketPath: server.path,
+        onLost: () => lost.resolve(),
+      },
+    );
+    if (!source) throw new Error("no source");
+    server.close();
+    await lost.promise;
+    expect(source.lost()).toBe(true);
+  });
 });
 
 describe("makeDeviceLedger", () => {

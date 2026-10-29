@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "vite-plus/test";
-import * as HostProcess from "@goat/shared/HostProcess";
+import { canListenOnSocketPath, listenOnSocketPath } from "../socketServer.testkit.ts";
 
 import { BusError, DAEMON, makeAtspiBus } from "./atspiBus.ts";
 import { makeSecureFocusProbe } from "./atspiFocus.ts";
@@ -116,7 +116,7 @@ async function fakeBus(onCall: (call: Incoming, client: NodeNet.Socket) => void)
     };
     client.on("data", onAuth);
   });
-  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  await listenOnSocketPath(server, socketPath);
   return {
     address: "unix:path=" + socketPath,
     clients,
@@ -135,9 +135,7 @@ const children = (destination: string) => ({
   iface: ACCESSIBLE,
   member: "GetChildren",
 });
-
-// quarantine: #2119 Its fake D-Bus daemon listens on a Unix socket path, which Windows refuses.
-describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("accessibility bus calls", () => {
+describe.skipIf(!canListenOnSocketPath)("accessibility bus calls", () => {
   it("takes a reply only from the peer it called, and a refusal from the bus daemon only as a failure", async () => {
     await using bus = await fakeBus((call, client) => {
       if (call.destination === ":1.9") client.write(reply(call, ":9.9", "a(so)", [[]]));

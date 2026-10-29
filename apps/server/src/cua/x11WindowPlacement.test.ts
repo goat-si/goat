@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
-import * as HostProcess from "@goat/shared/HostProcess";
+import { canListenOnSocketPath, listenOnSocketPath } from "./socketServer.testkit.ts";
 
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
@@ -121,7 +121,7 @@ async function scriptedServer(
       }
     });
   });
-  await new Promise<void>((resolve) => server.listen(path, resolve));
+  await listenOnSocketPath(server, path);
   return {
     path,
     [Symbol.asyncDispose]: async () => {
@@ -135,8 +135,7 @@ const display = { DISPLAY: ":0", XAUTHORITY: "/nonexistent/goat-xauthority" };
 const bounds = { x: 0, y: 0, width: 100, height: 80 };
 
 describe("X11 window placement (#1358)", () => {
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "windows on the display, owned by the pid the driver named, are on it",
     async () => {
       await using server = await scriptedServer(
@@ -157,9 +156,7 @@ describe("X11 window placement (#1358)", () => {
       ).toBe("same");
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "one window whose owner cannot be read leaves the whole answer unknown",
     async () => {
       await using server = await scriptedServer(
@@ -178,9 +175,7 @@ describe("X11 window placement (#1358)", () => {
       ).toBe("unknown");
     },
   );
-
-  // quarantine: #2119 Its fake X server listens on a Unix socket path, which Windows refuses.
-  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  it.skipIf(!canListenOnSocketPath)(
     "a window the display lacks, another process owns, or that sits elsewhere is elsewhere",
     async () => {
       await using server = await scriptedServer(new Map([[20, { pid: 10 }]]));
