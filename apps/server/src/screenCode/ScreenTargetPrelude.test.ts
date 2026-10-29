@@ -452,81 +452,106 @@ it.live(
   },
 );
 
-it.live("tab.press with a point [x, y] clicks the point first and then presses the key", () => {
-  const tab = {
-    environmentId: "env",
-    browserInstanceId: "server-browser",
-    connectionId: "connection",
-    threadId: "thread",
-    tabId: PreviewTabId.make("page"),
-    title: "Page",
-    url: "https://example.test/",
-    owner: "unclaimed" as const,
-    ownedByCaller: true,
-    controlGeneration: 0,
-  };
-  const ops: Array<string> = [];
-  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
-    listBoundTabs: () => Effect.succeed([tab]),
-    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
-      ops.push(request.operation);
-      if (request.operation === "snapshot")
+it.live(
+  "tab point clicks share one screenshot until a non-click input or navigation retires it",
+  () => {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("page"),
+      title: "Page",
+      url: "https://example.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: true,
+      controlGeneration: 0,
+    };
+    const ops: Array<string> = [];
+    const clickInputs: unknown[] = [];
+    let snapshots = 0;
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        ops.push(request.operation);
+        if (request.operation === "click") clickInputs.push(request.input);
+        if (request.operation === "snapshot") {
+          snapshots += 1;
+          return Effect.succeed({
+            url: tab.url,
+            title: tab.title,
+            loading: false,
+            accessibilityTree: "- button Go [ref=e1]",
+            treeComplete: true,
+            refGeneration: "1",
+            screenshot: {
+              mimeType: "image/png",
+              data: "AQID",
+              width: 100,
+              height: 80,
+              region: { kind: "viewport", x: 0, y: 0, width: 100, height: 80 },
+              scale: 1,
+            },
+          } as A);
+        }
         return Effect.succeed({
+          tabId: tab.tabId,
           url: tab.url,
           title: tab.title,
           loading: false,
-          accessibilityTree: "- button Go [ref=e1]",
-          treeComplete: true,
           refGeneration: "1",
-          screenshot: {
-            mimeType: "image/png",
-            data: "AQID",
-            width: 100,
-            height: 80,
-            region: { kind: "viewport", x: 0, y: 0, width: 100, height: 80 },
-            scale: 1,
-          },
+          control: { owner: "agent", ownedByCaller: true, generation: 0 },
         } as A);
-      return Effect.succeed({
-        tabId: tab.tabId,
-        url: tab.url,
-        title: tab.title,
-        loading: false,
-        refGeneration: "1",
-        control: { owner: "agent", ownedByCaller: true, generation: 0 },
-      } as A);
-    },
-  };
-  return Effect.gen(function* () {
-    const tabHost = yield* makePreviewTargetHost(broker);
-    return yield* Effect.gen(function* () {
-      const service = yield* ScreenRunService;
-      const result = yield* service.runCell({
-        runId: "r",
-        turnId: "t",
-        threadId: "thread",
-        environmentId: "env",
-        invocation,
-        source: `const tab = await screen.tab({tabId: 'page'});
-          await tab.observe({ screenshot: true });
+      },
+    };
+    return Effect.gen(function* () {
+      const tabHost = yield* makePreviewTargetHost(broker);
+      return yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const result = yield* service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation,
+          source: `const tab = await screen.tab({tabId: 'page'});
+          const page = await tab.observe({ screenshot: true });
+          const point = { observationId: page.image.observationId, regionId: page.image.regionId, x: 20, y: 30 };
+          await tab.click({ point });
+          await tab.click([40, 50], { button: 'right' });
           await tab.press('Enter', [20, 30]);
-          return true;`,
-      });
-      expect(result).toMatchObject({ status: "completed", value: true });
-      expect(ops).toContain("click");
-      expect(ops).toContain("press");
-    }).pipe(
-      Effect.provide(
-        ScreenRunService.layerWithRuntime({
-          dispatcher: createScreenDispatchRouter({ tab: tabHost }),
-          tabHost,
-          invocation: {
-            command: process.execPath,
-            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-          },
-          assetResolver: () => resolveScreenRuntimeAsset("dev"),
-        }).pipe(Layer.provide(NodeServices.layer)),
-      ),
-    );
-  });
-});
+          let afterPress;
+          try { await tab.click([10, 10]); } catch (error) { afterPress = error.code; }
+          await tab.observe({ screenshot: true });
+          await tab.navigate('https://example.test/next');
+          let afterNavigate;
+          try { await tab.click([10, 10]); } catch (error) { afterNavigate = error.code; }
+          return { afterPress, afterNavigate };`,
+        });
+        expect(result).toMatchObject({
+          status: "completed",
+          value: { afterPress: "invalid_argument", afterNavigate: "invalid_argument" },
+        });
+        expect(snapshots).toBe(2);
+        expect(clickInputs).toEqual([
+          { x: 20, y: 30 },
+          { x: 40, y: 50, button: "right" },
+          { x: 20, y: 30 },
+        ]);
+        expect(ops).toContain("press");
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+            tabHost,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    });
+  },
+);
