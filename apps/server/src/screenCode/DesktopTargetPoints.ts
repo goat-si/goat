@@ -33,6 +33,8 @@ const POINTER_METHODS: ReadonlySet<string> = new Set([
   "move_cursor",
 ]);
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
+/** Tools whose driver results carry a dispatch point and hit (cua-driver POINTER_RESULT_TOOLS). */
+const POINTER_RESULT_TOOLS: ReadonlySet<string> = new Set([...POINTER_METHODS, "double_click"]);
 const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
@@ -520,20 +522,21 @@ const observedHit = (value: unknown) => {
 };
 
 /**
- * Gives a pointer action's result GOAT's point and hit: the driver's point when it is in window
- * points, else the window point GOAT sent, else none (other spaces have no basis here). Without
- * `pointer`, a result counts as one when GOAT sent a window point or the driver reported either.
+ * Gives a pointer tool's result GOAT's point and hit: the driver's point when it is in window
+ * points, else the window point GOAT sent, else none (other spaces have no basis here). Without a
+ * tool, a result counts as a pointer's when GOAT sent a window point or the driver reported either.
  */
 export const annotatePointerResult = (
   result: ScreenHostDispatchResult,
   windowPoint: { readonly x: number; readonly y: number } | undefined,
-  options?: { readonly pointer?: boolean },
+  tool?: string,
 ): ScreenHostDispatchResult => {
   const current = object(result.value);
   const pointer =
-    options?.pointer ??
-    (windowPoint !== undefined ||
-      (current !== undefined && ("point" in current || "hit" in current)));
+    tool === undefined
+      ? windowPoint !== undefined ||
+        (current !== undefined && ("point" in current || "hit" in current))
+      : POINTER_RESULT_TOOLS.has(tool);
   if (!pointer) return result;
   const { point: driverPoint, hit, ...rest } = current ?? {};
   const reported = object(driverPoint);

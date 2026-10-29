@@ -88,20 +88,23 @@ describe("annotatePointerResult", () => {
   const at = { x: 80, y: 75 };
 
   it("a pointer reply with neither point nor hit reports GOAT's window point, or none, and hit null", () => {
-    expect(
-      annotatePointerResult(done({ effect: "confirmed" }), at, { pointer: true }).value,
-    ).toEqual({ effect: "confirmed", point: { x: 80, y: 75, unit: "window_points" }, hit: null });
-    expect(
-      annotatePointerResult(done({ effect: "confirmed" }), undefined, { pointer: true }).value,
-    ).toEqual({ effect: "confirmed", hit: null });
+    expect(annotatePointerResult(done({ effect: "confirmed" }), at, "click").value).toEqual({
+      effect: "confirmed",
+      point: { x: 80, y: 75, unit: "window_points" },
+      hit: null,
+    });
+    expect(annotatePointerResult(done({ effect: "confirmed" }), undefined, "click").value).toEqual({
+      effect: "confirmed",
+      hit: null,
+    });
   });
 
   it("a non-pointer reply comes back unchanged, whether or not the call site says so", () => {
     const typed = done({ effect: "confirmed", typed: "hello" });
     expect(annotatePointerResult(typed, undefined)).toBe(typed);
-    expect(annotatePointerResult(typed, undefined, { pointer: false })).toBe(typed);
+    expect(annotatePointerResult(typed, undefined, "type_text")).toBe(typed);
     const odd = done({ point: { x: 1, y: 2, coordinate_space: "window_points" } });
-    expect(annotatePointerResult(odd, at, { pointer: false })).toBe(odd);
+    expect(annotatePointerResult(odd, at, "type_text")).toBe(odd);
   });
 
   it("a driver point in another or an unnamed space is replaced by GOAT's window point, or left out", () => {
