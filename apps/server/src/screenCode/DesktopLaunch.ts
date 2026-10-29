@@ -21,7 +21,7 @@ import { boundsOf } from "./DesktopFrames.ts";
 import * as NodeCrypto from "node:crypto";
 
 /** How long a launch that binds keeps looking for the app's first window. */
-export const WINDOW_WAIT_MS = 5_000;
+const WINDOW_WAIT_MS = 5_000;
 // A list_windows poll takes about 10 ms; a launched window shows within a few of these.
 const POLL_MS = 100;
 /** Kept back after the last poll so the bound target's reply reaches the cell in time. */
@@ -98,7 +98,7 @@ export interface LaunchedWindow {
  * The app's own top-level windows on screen that a list_windows or launch_app answer names. An
  * off-screen one may be a window the app closed but keeps, or a bar it never shows.
  */
-export const windowsOf = (value: unknown, pid: number): LaunchedWindow[] => {
+const windowsOf = (value: unknown, pid: number): LaunchedWindow[] => {
   const listed = object(value)?.windows;
   const windows = (Array.isArray(listed) ? listed : [])
     .map(object)
@@ -135,7 +135,7 @@ export const windowsOf = (value: unknown, pid: number): LaunchedWindow[] => {
  * the deadline and costs a driver restart; a poll started before WINDOW_WAIT_MS may end up to its
  * cap (2 s) later, so the whole wait is bounded by WINDOW_WAIT_MS plus one poll cap.
  */
-export const awaitFirstWindow = Effect.fn("DesktopLaunch.awaitFirstWindow")(function* (input: {
+const awaitFirstWindow = Effect.fn("DesktopLaunch.awaitFirstWindow")(function* (input: {
   readonly pid: number;
   readonly initial: readonly LaunchedWindow[];
   readonly cellDeadlineMillis: number;
@@ -168,7 +168,7 @@ export const awaitFirstWindow = Effect.fn("DesktopLaunch.awaitFirstWindow")(func
 });
 
 /** Why a launched app could not be bound: it ran, so this keeps the launch's write safety. */
-export const noWindow = (app: string, pid: number, waitedMs: number, cut: boolean) =>
+const noWindow = (app: string, pid: number, waitedMs: number, cut: boolean) =>
   `${app} launched (pid ${pid}); no window appeared in ${seconds(waitedMs)}. ` +
   (cut
     ? "The cell had no time left to keep waiting: in a new cell, screen.discover() and pass window_id."
