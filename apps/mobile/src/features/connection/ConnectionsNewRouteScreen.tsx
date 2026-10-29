@@ -83,9 +83,23 @@ export function ConnectionsNewRouteScreen({
   });
   // Fixed once the saved environments are known, so a hub paired elsewhere while this sheet is
   // open cannot turn "Connect hub" into "Change hub" and remove that hub on the next success.
-  const [openedIntent, setOpenedIntent] = useState<ConnectHubIntent | null>(null);
-  if (pairingReady && openedIntent === null) setOpenedIntent(resolvedIntent);
-  const intent = openedIntent ?? resolvedIntent;
+  const routeIdentity = JSON.stringify([
+    params.mode,
+    params.pairingUrl,
+    params.autoConnect,
+    params.routeFor,
+    params.intent,
+    params.replaceEnvironmentId,
+  ]);
+  const [openedIntent, setOpenedIntent] = useState<{
+    readonly routeIdentity: string;
+    readonly intent: ConnectHubIntent;
+  } | null>(null);
+  const routeIntent = openedIntent?.routeIdentity === routeIdentity ? openedIntent.intent : null;
+  if (pairingReady && routeIntent === null) {
+    setOpenedIntent({ routeIdentity, intent: resolvedIntent });
+  }
+  const intent = routeIntent ?? resolvedIntent;
   const copy = CONNECT_HUB_COPY[intent];
   const replaceEnvironmentId =
     params.replaceEnvironmentId ?? selectHubEnvironmentId(localEnvironments, savedHub.storedHubId);
@@ -145,8 +159,8 @@ export function ConnectionsNewRouteScreen({
       attemptRef.current += 1;
       submittingRef.current = false;
     },
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must invalidate pending pairing attempts.
-    [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId],
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route changes invalidate pending pairing attempts.
+    [routeIdentity],
   );
 
   useEffect(() => {
@@ -171,7 +185,7 @@ export function ConnectionsNewRouteScreen({
     setHostInput(host);
     setCodeInput(code);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must reset the submission even when the pairing URL is unchanged.
-  }, [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId]);
+  }, [routeIdentity, routePairingUrl]);
 
   const clearAttempt = () => {
     attemptRef.current += 1;
@@ -323,17 +337,13 @@ export function ConnectionsNewRouteScreen({
   };
 
   useEffect(() => {
-    if (
-      !pairingReady ||
-      !shouldAutoConnect ||
-      attemptedAutoConnectRef.current === routePairingUrl
-    ) {
+    if (!pairingReady || !shouldAutoConnect || attemptedAutoConnectRef.current === routeIdentity) {
       return;
     }
 
-    attemptedAutoConnectRef.current = routePairingUrl;
+    attemptedAutoConnectRef.current = routeIdentity;
     void connectAndClose(routePairingUrl);
-  }, [connectAndClose, routePairingUrl, shouldAutoConnect, pairingReady]);
+  }, [connectAndClose, routeIdentity, routePairingUrl, shouldAutoConnect, pairingReady]);
 
   return (
     <SettingsScreen
