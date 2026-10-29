@@ -1,5 +1,4 @@
 import { vi } from "vite-plus/test";
-import { historyResponseItems } from "@goat/provider-core/server/handoffBudget";
 import { assert, describe, it } from "@effect/vitest";
 import {
   CommandId,
@@ -8,15 +7,10 @@ import {
   MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
-  type OrchestrationV2ProviderCapabilities,
-  type OrchestrationV2ProviderSession,
-  type OrchestrationV2ProviderThread,
-  type OrchestrationV2ProviderTurnTokenUsage,
   type OrchestrationV2ThreadProjection,
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
-  ProviderThreadId,
   ProviderTurnId,
   ThreadId,
   TurnItemId,
@@ -27,7 +21,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
@@ -62,8 +55,8 @@ import {
   GROK_MODEL_SELECTION,
 } from "./fixtures/shared.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
+import { type CapturedTurn, makeTestAdapter } from "./testing/providerSwitchAdapter.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
-import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
@@ -72,309 +65,6 @@ const projectId = ProjectId.make("project:provider-switch");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER = ProviderDriverKind.make("claudeAgent");
 const GROK_DRIVER = ProviderDriverKind.make("acp");
-
-interface CapturedTurn {
-  readonly driver: ProviderDriverKind;
-  readonly threadId: ThreadId;
-  readonly providerThreadId: ProviderThreadId;
-  readonly text: string;
-  readonly modelSelection: ModelSelection;
-  readonly attachments: ReadonlyArray<ChatAttachment>;
-  readonly nativeThreadId?: string | null;
-  readonly providerTurnOrdinal?: number;
-  readonly nativeThreadHasTurns?: boolean;
-}
-
-function unimplemented(driver: ProviderDriverKind, detail: string) {
-  return Effect.fail(new ProviderAdapter.ProviderAdapterProtocolError({ driver, detail }));
-}
-
-function makeTestAdapter(input: {
-  readonly instanceId: ProviderInstanceId;
-  readonly driver: ProviderDriverKind;
-  readonly capabilities: OrchestrationV2ProviderCapabilities;
-  readonly modelSelection: ModelSelection;
-  readonly responseByRunOrdinal: Readonly<Record<number, string>>;
-  readonly responseByThreadId?: Readonly<Record<string, Readonly<Record<number, string>>>>;
-  readonly capturedTurns: Ref.Ref<ReadonlyArray<CapturedTurn>>;
-  readonly injectedHistory?: Ref.Ref<ReadonlyArray<unknown>>;
-  readonly failStartOnce?: Ref.Ref<boolean>;
-  readonly refuseStarts?: Ref.Ref<number>;
-  readonly refusalCause?: unknown;
-  readonly failInjectionOnce?: Ref.Ref<boolean>;
-  readonly nativeThreadGeneration?: Ref.Ref<number>;
-  readonly failResume?: boolean;
-  readonly failResumeOnce?: Ref.Ref<boolean>;
-  readonly initialContextUsage?: OrchestrationV2ProviderThread["contextUsage"];
-  readonly getModelContextWindow?: (selection: ModelSelection) => number | undefined;
-  readonly canReuseContextUsage?: ProviderAdapter.ProviderAdapterV2SessionRuntime["canReuseContextUsage"];
-  readonly tokenUsageByRunOrdinal?: Readonly<
-    Record<number, Omit<OrchestrationV2ProviderTurnTokenUsage, "updatedAt">>
-  >;
-  readonly failure?: ReturnType<typeof makeProviderFailure>;
-  readonly failedRunOrdinals?: ReadonlySet<number>;
-  readonly interruptedRunOrdinals?: ReadonlySet<number>;
-  readonly holdRunOrdinal?: number;
-  readonly holdFirstTurn?: Deferred.Deferred<void>;
-  readonly releaseFirstTurn?: Deferred.Deferred<void>;
-}): ProviderAdapter.ProviderAdapterV2["Service"] {
-  return {
-    instanceId: input.instanceId,
-    driver: input.driver,
-    getCapabilities: () => Effect.succeed(input.capabilities),
-    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-    openSession: (sessionInput) =>
-      Effect.gen(function* () {
-        const events = yield* PubSub.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
-        const now = yield* DateTime.now;
-        const providerSession: OrchestrationV2ProviderSession = {
-          id: sessionInput.providerSessionId,
-          driver: input.driver,
-          providerInstanceId: input.instanceId,
-          status: "ready",
-          cwd: sessionInput.runtimePolicy.cwd ?? process.cwd(),
-          model: input.modelSelection.model,
-          capabilities: input.capabilities,
-          createdAt: now,
-          updatedAt: now,
-          lastError: null,
-        };
-
-        const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
-          instanceId: input.instanceId,
-          driver: input.driver,
-          providerSessionId: sessionInput.providerSessionId,
-          providerSession,
-          events: Stream.fromPubSub(events),
-          ...(input.getModelContextWindow === undefined
-            ? {}
-            : { getModelContextWindow: input.getModelContextWindow }),
-          ...(input.canReuseContextUsage === undefined
-            ? {}
-            : { canReuseContextUsage: input.canReuseContextUsage }),
-          ensureThread: (threadInput) =>
-            Effect.gen(function* () {
-              const createdAt = yield* DateTime.now;
-              const generation =
-                input.nativeThreadGeneration === undefined
-                  ? ""
-                  : `:${yield* Ref.getAndUpdate(input.nativeThreadGeneration, (value) => value + 1)}`;
-              const nativeThreadId = `${input.driver}:${threadInput.threadId}${generation}`;
-              return {
-                id: ProviderThreadId.make(`provider-thread:${nativeThreadId}`),
-                driver: input.driver,
-                providerInstanceId: input.instanceId,
-                providerSessionId: sessionInput.providerSessionId,
-                appThreadId: threadInput.threadId,
-                ownerNodeId: null,
-                nativeThreadRef: {
-                  driver: input.driver,
-                  nativeId: nativeThreadId,
-                  strength: "strong",
-                },
-                nativeConversationHeadRef: null,
-                status: "idle",
-                firstRunOrdinal: null,
-                lastRunOrdinal: null,
-                handoffIds: [],
-                contextUsage: input.initialContextUsage ?? null,
-                forkedFrom: null,
-                createdAt,
-                updatedAt: createdAt,
-              } satisfies OrchestrationV2ProviderThread;
-            }),
-          resumeThread: ({ providerThread }) =>
-            Effect.gen(function* () {
-              if (
-                input.failResume ||
-                (input.failResumeOnce !== undefined &&
-                  (yield* Ref.getAndSet(input.failResumeOnce, false)))
-              )
-                return yield* unimplemented(input.driver, "simulated native resume failure");
-              return providerThread;
-            }),
-          ...(input.injectedHistory === undefined
-            ? {}
-            : {
-                injectHistory: (history: ProviderAdapter.ProviderAdapterV2HistoricalContext) =>
-                  Ref.update(input.injectedHistory!, (current) => [
-                    ...current,
-                    ...historyResponseItems(history.messages, history.context),
-                  ]).pipe(
-                    Effect.andThen(
-                      Effect.gen(function* () {
-                        if (
-                          input.failInjectionOnce !== undefined &&
-                          (yield* Ref.getAndSet(input.failInjectionOnce, false))
-                        )
-                          return yield* unimplemented(
-                            input.driver,
-                            "lost injection acknowledgement",
-                          );
-                        return true;
-                      }),
-                    ),
-                  ),
-              }),
-          compactThread: (turnInput) => runtime.startTurn(turnInput),
-          startTurn: (turnInput) =>
-            Effect.gen(function* () {
-              if (
-                input.failStartOnce !== undefined &&
-                (yield* Ref.getAndSet(input.failStartOnce, false))
-              )
-                return yield* unimplemented(input.driver, "turn start failed after injection");
-              if (
-                input.refuseStarts !== undefined &&
-                (yield* Ref.getAndUpdate(input.refuseStarts, (left) => Math.max(0, left - 1))) > 0
-              )
-                return yield* new ProviderAdapter.ProviderAdapterTurnStartError({
-                  driver: input.driver,
-                  threadId: turnInput.threadId,
-                  providerThreadId: turnInput.providerThread.id,
-                  runId: turnInput.runId,
-                  cause:
-                    input.refusalCause ?? new ClaudeBackgroundWorkBlocksQueryReplacementError(),
-                });
-              yield* Effect.yieldNow;
-              yield* Ref.update(input.capturedTurns, (turns) => [
-                ...turns,
-                {
-                  driver: input.driver,
-                  threadId: turnInput.threadId,
-                  providerThreadId: turnInput.providerThread.id,
-                  text: turnInput.message.text,
-                  modelSelection: turnInput.modelSelection,
-                  attachments: turnInput.message.attachments,
-                  nativeThreadId: turnInput.providerThread.nativeThreadRef?.nativeId ?? null,
-                  providerTurnOrdinal: turnInput.providerTurnOrdinal,
-                  ...(turnInput.nativeThreadHasTurns === undefined
-                    ? {}
-                    : { nativeThreadHasTurns: turnInput.nativeThreadHasTurns }),
-                },
-              ]);
-              if (
-                turnInput.runOrdinal === (input.holdRunOrdinal ?? 1) &&
-                input.holdFirstTurn !== undefined
-              ) {
-                yield* Deferred.succeed(input.holdFirstTurn, undefined);
-                if (input.releaseFirstTurn === undefined) return;
-                yield* Deferred.await(input.releaseFirstTurn);
-              }
-              const eventTime = yield* DateTime.now;
-              const providerTurnId = ProviderTurnId.make(
-                `provider-turn:${input.driver}:${turnInput.threadId}:${turnInput.runOrdinal}`,
-              );
-              const terminalStatus = input.failedRunOrdinals?.has(turnInput.runOrdinal)
-                ? "failed"
-                : input.interruptedRunOrdinals?.has(turnInput.runOrdinal)
-                  ? "interrupted"
-                  : "completed";
-              const response =
-                input.responseByThreadId?.[turnInput.threadId]?.[turnInput.runOrdinal] ??
-                input.responseByRunOrdinal[turnInput.runOrdinal] ??
-                `${input.driver} response for run ${turnInput.runOrdinal}`;
-              const providerEvents: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event> = [
-                {
-                  type: "provider_turn.updated",
-                  driver: input.driver,
-                  providerTurn: {
-                    id: providerTurnId,
-                    providerThreadId: turnInput.providerThread.id,
-                    nodeId: turnInput.rootNodeId,
-                    runAttemptId: turnInput.attemptId,
-                    nativeTurnRef: {
-                      driver: input.driver,
-                      nativeId: `native-turn:${turnInput.threadId}:${turnInput.runOrdinal}`,
-                      strength: "strong",
-                    },
-                    ordinal: turnInput.runOrdinal,
-                    status: terminalStatus,
-                    startedAt: eventTime,
-                    completedAt: eventTime,
-                  },
-                },
-                {
-                  type: "turn_item.updated",
-                  driver: input.driver,
-                  turnItem: {
-                    id: TurnItemId.make(
-                      `turn-item:${input.driver}:${turnInput.threadId}:${turnInput.runOrdinal}:assistant`,
-                    ),
-                    threadId: turnInput.threadId,
-                    runId: turnInput.runId,
-                    nodeId: turnInput.rootNodeId,
-                    providerThreadId: turnInput.providerThread.id,
-                    providerTurnId,
-                    nativeItemRef: null,
-                    parentItemId: null,
-                    ordinal: turnInput.runOrdinal * 100 + 1,
-                    status: terminalStatus,
-                    title: null,
-                    startedAt: eventTime,
-                    completedAt: eventTime,
-                    updatedAt: eventTime,
-                    type: "assistant_message",
-                    messageId: MessageId.make(
-                      `message:${input.driver}:${turnInput.threadId}:${turnInput.runOrdinal}:assistant`,
-                    ),
-                    text: response,
-                    streaming: false,
-                  },
-                },
-                {
-                  type: "turn.terminal",
-                  driver: input.driver,
-                  providerThreadId: turnInput.providerThread.id,
-                  providerTurnId,
-                  runOrdinal: turnInput.runOrdinal,
-                  ...(terminalStatus === "failed"
-                    ? {
-                        status: terminalStatus,
-                        failureItemOrdinal: turnInput.runOrdinal * 100 + 2,
-                        failure:
-                          input.failure ??
-                          makeProviderFailure({
-                            message: "Simulated provider failure.",
-                            code: "simulated_failure",
-                            class: "provider_error",
-                          }),
-                      }
-                    : { status: terminalStatus, failure: null }),
-                  threadDisposition: "reusable",
-                },
-              ];
-              const reportedUsage = input.tokenUsageByRunOrdinal?.[turnInput.runOrdinal];
-              const turnEvent = providerEvents[0];
-              if (reportedUsage && turnEvent?.type === "provider_turn.updated") {
-                yield* PubSub.publish(events, {
-                  ...turnEvent,
-                  providerTurn: {
-                    ...turnEvent.providerTurn,
-                    status: "running",
-                    completedAt: null,
-                    tokenUsage: { ...reportedUsage, updatedAt: DateTime.formatIso(eventTime) },
-                  },
-                });
-              }
-              for (const event of providerEvents) {
-                yield* PubSub.publish(events, event);
-              }
-            }),
-          steerTurn: () => Effect.void,
-          interruptTurn: () => Effect.void,
-          respondToRuntimeRequest: () => Effect.void,
-          readThreadSnapshot: () =>
-            unimplemented(input.driver, "readThreadSnapshot unused in provider switch test"),
-          rollbackThread: () =>
-            unimplemented(input.driver, "rollbackThread unused in provider switch test"),
-          forkThread: () =>
-            unimplemented(input.driver, "forkThread unused in provider switch test"),
-        };
-        return runtime;
-      }),
-  };
-}
 
 const waitForIdle = Effect.fn("ProviderSwitchTest.waitForIdle")(function* (
   targetThreadId: ThreadId,
@@ -419,6 +109,13 @@ describe("orchestration v2 provider switching", () => {
     "screenshot-fallback",
     "screenshot-reported-capacity-native",
     "screenshot-option-change-retry-native",
+    "screenshot-exhausted-target-native",
+    "screenshot-exhausted-target-fallback",
+    "screenshot-exhausted-target-estimate-native",
+    "screenshot-exhausted-target-oversized-native",
+    "screenshot-exhausted-target-tight-native",
+    "screenshot-exhausted-target-background-native",
+    "screenshot-exhausted-target-subagent-native",
     "prior-images-reasoning-change-replacement-small-native",
     "imported-prior-images-fallback",
     "prior-images-telemetry-native",
@@ -438,11 +135,16 @@ describe("orchestration v2 provider switching", () => {
         const failStartOnce = yield* Ref.make(false);
         const failResumeOnce = yield* Ref.make(false);
         const generation = yield* Ref.make(0);
+        const pendingBackgroundWork = yield* Ref.make(false);
         const priorImages = scenario.includes("prior-images");
+        const exhaustedTarget = scenario.includes("exhausted-target");
         const replaceNative = scenario.includes("replacement");
         const capacityScenario = modelScenario || scenario.includes("reported-capacity");
         const returning =
-          scenario === "large-current-input" || scenario.includes("-change-") || priorImages;
+          scenario === "large-current-input" ||
+          scenario.includes("-change-") ||
+          priorImages ||
+          exhaustedTarget;
         const targetSelection: ModelSelection = !modelScenario
           ? CLAUDE_MODEL_SELECTION
           : {
@@ -467,10 +169,19 @@ describe("orchestration v2 provider switching", () => {
             driver: CLAUDE_DRIVER,
             capabilities: ClaudeProviderCapabilitiesV2,
             modelSelection: CLAUDE_MODEL_SELECTION,
-            responseByRunOrdinal: {},
+            responseByRunOrdinal: scenario.includes("target-estimate")
+              ? { 2: "x".repeat(10_000) }
+              : {},
             capturedTurns,
             ...(scenario.includes("retry") || scenario.includes("unsent") ? { failStartOnce } : {}),
             ...(replaceNative ? { failResumeOnce, nativeThreadGeneration: generation } : {}),
+            ...(exhaustedTarget ? { nativeThreadGeneration: generation } : {}),
+            ...(scenario.includes("target-background") || scenario.includes("target-subagent")
+              ? {
+                  pendingBackgroundWork,
+                  subagentOnlyBackgroundWork: scenario.includes("target-subagent"),
+                }
+              : {}),
             ...(scenario.includes("reported-capacity")
               ? { initialContextUsage: { usedTokens: 999_999, maxTokens: 1_000_000 } }
               : {}),
@@ -498,8 +209,11 @@ describe("orchestration v2 provider switching", () => {
                         ? 1_000_000
                         : 32_000,
                   }
-                : scenario === "large-current-input" || priorImages
-                  ? { getModelContextWindow: () => 32_000 }
+                : scenario === "large-current-input" || priorImages || exhaustedTarget
+                  ? {
+                      getModelContextWindow: () =>
+                        scenario.includes("target-tight") ? 25_121 : 32_000,
+                    }
                   : {}),
             ...(scenario.endsWith("-native") || scenario === "large-current-input"
               ? { injectedHistory }
@@ -546,7 +260,9 @@ describe("orchestration v2 provider switching", () => {
                     }))
                   : turnUsageScenario && ordinal >= targetOrdinal
                     ? [screenshot, { ...screenshot, id: "current-2" }]
-                    : scenario.startsWith("screenshot") && ordinal >= targetOrdinal
+                    : scenario.startsWith("screenshot") &&
+                        ordinal >= targetOrdinal &&
+                        (!exhaustedTarget || ordinal === targetOrdinal)
                       ? screenshots
                       : priorImages && ordinal === (scenario.startsWith("imported") ? 1 : 2)
                         ? [screenshot]
@@ -602,19 +318,49 @@ describe("orchestration v2 provider switching", () => {
           yield* Effect.addFinalizer(() => Effect.sync(() => spy?.mockRestore()));
           const current = scenario.startsWith("compact")
             ? "/compact"
-            : capacityScenario && !turnUsageScenario
-              ? "x".repeat(70_000)
-              : scenario === "large-current-input"
-                ? "x".repeat(9_000)
-                : "Continue work";
+            : scenario.includes("target-oversized")
+              ? "x".repeat(40_000)
+              : capacityScenario && !turnUsageScenario
+                ? "x".repeat(70_000)
+                : scenario === "large-current-input"
+                  ? "x".repeat(9_000)
+                  : "Continue work";
           if (returning) {
             if (scenario.includes("unsent")) yield* Ref.set(failStartOnce, true);
             yield* dispatch(
               2,
-              turnUsageScenario ? "x".repeat(27_460) : "Establish target",
+              turnUsageScenario
+                ? "x".repeat(27_460)
+                : scenario.includes("target-estimate")
+                  ? "x".repeat(12_000)
+                  : "Establish target",
               CLAUDE_MODEL_SELECTION,
             );
             yield* wait(2);
+            if (exhaustedTarget) {
+              assert.equal(
+                (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)?.status,
+                "completed",
+              );
+            }
+            if (exhaustedTarget && !scenario.includes("target-estimate")) {
+              const target = (yield* orchestrator.getThreadProjection(
+                threadId,
+              )).providerThreads.find(
+                (thread) => thread.providerInstanceId === CLAUDE_MODEL_SELECTION.instanceId,
+              )!;
+              yield* eventSink.write({
+                events: [
+                  {
+                    id: EventId.make("exhausted-target-usage"),
+                    type: "provider-thread.updated",
+                    threadId,
+                    occurredAt: yield* DateTime.now,
+                    payload: { ...target, contextUsage: { usedTokens: 30_000, maxTokens: 32_000 } },
+                  },
+                ],
+              });
+            }
             if (modelScenario && !turnUsageScenario) {
               const target = (yield* orchestrator.getThreadProjection(
                 threadId,
@@ -695,6 +441,8 @@ describe("orchestration v2 provider switching", () => {
             yield* Ref.set(failResumeOnce, true);
           }
           if (scenario.includes("retry")) yield* Ref.set(failStartOnce, true);
+          if (scenario.includes("target-background") || scenario.includes("target-subagent"))
+            yield* Ref.set(pendingBackgroundWork, true);
           yield* dispatch(targetOrdinal, current, targetSelection);
           yield* wait(targetOrdinal);
           if (scenario.includes("retry")) {
@@ -780,7 +528,73 @@ describe("orchestration v2 provider switching", () => {
             yield* wait(targetOrdinal + 3);
           }
           const projection = yield* orchestrator.getThreadProjection(threadId);
+          if (
+            scenario.includes("target-oversized") ||
+            scenario.includes("target-tight") ||
+            scenario.includes("target-background") ||
+            scenario.includes("target-subagent")
+          ) {
+            assert.equal(projection.runs.at(-1)?.status, "failed");
+            assert.equal(yield* Ref.get(generation), 1);
+            assert.equal(projection.messages.at(-1)!.text, current);
+            assert.deepEqual(projection.messages.at(-1)!.attachments, screenshots);
+            if (scenario.includes("target-background") || scenario.includes("target-subagent")) {
+              assert.isTrue(yield* Ref.get(pendingBackgroundWork));
+              const failure = projection.turnItems.findLast((item) => item.type === "error");
+              assert.equal(
+                failure?.type === "error" ? failure.failure.message : null,
+                "The target provider still has background work running. Wait for it to finish or stop it before retrying the handoff.",
+              );
+            }
+            return;
+          }
           assert.equal(projection.runs.at(-1)?.status, "completed");
+          if (exhaustedTarget) {
+            assert.equal(yield* Ref.get(generation), 2);
+            const turns = (yield* Ref.get(capturedTurns)).filter(
+              (turn) => turn.driver === CLAUDE_DRIVER,
+            );
+            assert.notEqual(turns[0]!.nativeThreadId, turns[1]!.nativeThreadId);
+            const latestRun = projection.runs.at(-1)!;
+            assert.equal(
+              projection.attempts.find((attempt) => attempt.id === latestRun.activeAttemptId)!
+                .nativeThreadId,
+              turns[1]!.nativeThreadId,
+            );
+            const context = scenario.endsWith("-native")
+              ? yield* encodeJson(yield* Ref.get(injectedHistory))
+              : turns[1]!.text;
+            assert.include(context, "Original request with constraints");
+            assert.include(context, "Original partial work");
+            assert.include(context, "New source constraint");
+            assert.include(turns[1]!.text, current);
+            assert.deepEqual(turns[1]!.attachments, screenshots);
+            const historyBeforeFollowup = yield* Ref.get(injectedHistory);
+            yield* dispatch(5, "Continue after automatic recovery", CLAUDE_MODEL_SELECTION);
+            yield* wait(5);
+            assert.equal(
+              (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)?.status,
+              "completed",
+            );
+            assert.equal(yield* Ref.get(generation), 2);
+            assert.equal(
+              (yield* Ref.get(capturedTurns)).at(-1)!.text,
+              "Continue after automatic recovery",
+            );
+            assert.deepEqual(yield* Ref.get(injectedHistory), historyBeforeFollowup);
+            if (scenario.includes("target-estimate")) {
+              yield* dispatch(6, "Another source turn", CODEX_MODEL_SELECTION);
+              yield* wait(6);
+              yield* dispatch(7, "Return after recovery", CLAUDE_MODEL_SELECTION);
+              yield* wait(7);
+              assert.equal(
+                (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)?.status,
+                "completed",
+              );
+              assert.equal(yield* Ref.get(generation), 2);
+            }
+            return;
+          }
           if (priorImages) {
             const handoff = projection.contextHandoffs.at(-1)!;
             const context = scenario.endsWith("-native")
@@ -901,7 +715,12 @@ describe("orchestration v2 provider switching", () => {
       }),
     ),
   );
-  it.live.each(["turn-start", "injection", "large-missed-request"] as const)(
+  it.live.each([
+    "turn-start",
+    "injection",
+    "large-missed-request",
+    "exhausted-target-retry",
+  ] as const)(
     "recovers %s failure without duplicating history in the same native thread",
     (failure) =>
       Effect.scoped(
@@ -999,6 +818,22 @@ describe("orchestration v2 provider switching", () => {
               failure !== "injection" ? "injected" : "pending",
             );
             const historyBeforeRetry = (yield* Ref.get(injectedHistory)).length;
+            if (failure === "exhausted-target-retry") {
+              const target = failed.providerThreads.find(
+                (thread) => thread.providerInstanceId === CLAUDE_MODEL_SELECTION.instanceId,
+              )!;
+              yield* (yield* EventSink.EventSinkV2).write({
+                events: [
+                  {
+                    id: EventId.make("exhausted-retry-usage"),
+                    type: "provider-thread.updated",
+                    threadId,
+                    occurredAt: yield* DateTime.now,
+                    payload: { ...target, contextUsage: { usedTokens: 30_000, maxTokens: 32_000 } },
+                  },
+                ],
+              });
+            }
             const retryText =
               failure === "large-missed-request" ? "y".repeat(10_000) : "Retry target request";
             yield* dispatch(3, retryText, CLAUDE_MODEL_SELECTION);
@@ -1006,7 +841,7 @@ describe("orchestration v2 provider switching", () => {
             const retried = yield* orchestrator.getThreadProjection(threadId);
             const lastTurn = (yield* Ref.get(capturedTurns)).at(-1)!;
             assert.equal(lastTurn.text, retryText);
-            if (failure !== "injection") {
+            if (failure !== "injection" && failure !== "exhausted-target-retry") {
               const delta = yield* encodeJson(
                 (yield* Ref.get(injectedHistory)).slice(historyBeforeRetry),
               );
