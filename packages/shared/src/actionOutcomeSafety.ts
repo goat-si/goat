@@ -131,6 +131,17 @@ export function classifyActionOutcome(input: ActionOutcomeInput): ActionOutcomeS
         code: "write_committed",
       };
     case "unapplied":
+      // Input that went out is never shown to have left the target untouched.
+      if (input.dispatched === true)
+        return withOptionalUnapplied(
+          {
+            possibleCommit: true,
+            retryClass: "never",
+            writeStatus: "may_have_applied",
+            code: "write_indeterminate",
+          },
+          input.unappliedInput,
+        );
       return withOptionalUnapplied(
         {
           possibleCommit: false,
