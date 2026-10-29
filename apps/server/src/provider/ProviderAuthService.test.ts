@@ -679,6 +679,23 @@ describe("ProviderAuthService", () => {
     }),
   );
 
+  it.effect("refuses a /logout a person did not write and stays signed in", () =>
+    Effect.gen(function* () {
+      const { service, actions } = yield* makeHarness({});
+      const error = yield* Effect.flip(
+        service.tryHandlePromptCommand({
+          instanceId,
+          text: "/logout",
+          hasAttachments: false,
+          byPerson: false,
+        }),
+      );
+      assert.instanceOf(error, ProviderSetupError);
+      assert.include(error.detail, "Only a person can sign out");
+      assert.notInclude(actions, "native-logout");
+    }),
+  );
+
   it.effect("does not log out or consume the command when stopping a session fails", () =>
     Effect.gen(function* () {
       const { service, actions, released } = yield* makeHarness({
@@ -687,7 +704,12 @@ describe("ProviderAuthService", () => {
         stopError: true,
       });
       const error = yield* Effect.flip(
-        service.tryHandlePromptCommand({ instanceId, text: "/logout", hasAttachments: false }),
+        service.tryHandlePromptCommand({
+          instanceId,
+          text: "/logout",
+          hasAttachments: false,
+          byPerson: true,
+        }),
       );
 
       assert.instanceOf(error, ProviderSetupError);
@@ -722,7 +744,12 @@ it.effect("queued logout prompts resolve the current controller after provider r
     yield* Deferred.await(entered);
     observeLookup = true;
     const queued = yield* harness.service
-      .tryHandlePromptCommand({ instanceId, text: "/logout", hasAttachments: false })
+      .tryHandlePromptCommand({
+        instanceId,
+        text: "/logout",
+        hasAttachments: false,
+        byPerson: true,
+      })
       .pipe(Effect.forkChild);
     yield* Deferred.await(lookup);
     let replacementLoggedOut = false;
@@ -787,6 +814,7 @@ it.effect.each(["start", "logout", "prompt"] as const)(
                 instanceId,
                 text: "/logout",
                 hasAttachments: false,
+                byPerson: true,
               });
       const running = yield* operation.pipe(Effect.forkChild);
       yield* Deferred.await(checked);

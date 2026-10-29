@@ -17,6 +17,7 @@ import {
   ProjectId,
   type OrchestrationV2ThreadProjection,
   OrchestrationV2DomainEvent,
+  type ScheduledTaskId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -61,6 +62,8 @@ export function makeLocalCommandHarness(input: {
   readonly previousNativeSession?: boolean;
   readonly previousMessages?: ReadonlyArray<string>;
   readonly logoutFailure?: string;
+  readonly createdBy?: "user" | "agent";
+  readonly scheduledTaskId?: ScheduledTaskId;
   readonly openFailure?: unknown;
   readonly ensureThreadFailure?: unknown;
   readonly historyReadFailureAfterFallback?: unknown;
@@ -137,8 +140,9 @@ export function makeLocalCommandHarness(input: {
     text: input.text,
     attachments: [],
     streaming: false,
-    createdBy: "user",
+    createdBy: input.createdBy ?? "user",
     creationSource: "web",
+    ...(input.scheduledTaskId === undefined ? {} : { scheduledTaskId: input.scheduledTaskId }),
     createdAt: now,
     updatedAt: now,
   };
@@ -430,16 +434,25 @@ export function makeLocalCommandHarness(input: {
         )
       : Effect.void,
   );
-  const tryHandlePromptCommand = vi.fn(() =>
-    input.logoutFailure === undefined
-      ? Effect.succeed(true)
-      : Effect.fail(
+  // Refuses a sign-out no person wrote, as ProviderAuthService does.
+  const tryHandlePromptCommand = vi.fn((request: { readonly byPerson: boolean }) =>
+    !request.byPerson
+      ? Effect.fail(
           new ProviderSetupError({
             instanceId: oldInstanceId,
             operation: "logout",
-            detail: input.logoutFailure,
+            detail: "Only a person can sign out of a provider.",
           }),
-        ),
+        )
+      : input.logoutFailure === undefined
+        ? Effect.succeed(true)
+        : Effect.fail(
+            new ProviderSetupError({
+              instanceId: oldInstanceId,
+              operation: "logout",
+              detail: input.logoutFailure,
+            }),
+          ),
   );
   const writeIfRunCurrent = vi.fn(({ events: incoming, activeAttemptId, expectedStatus }) =>
     "writeFailure" in input

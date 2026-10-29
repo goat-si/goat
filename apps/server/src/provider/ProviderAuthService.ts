@@ -59,7 +59,12 @@ export class ProviderAuthService extends Context.Service<
       ownerSessionId: string,
     ) => Stream.Stream<ProviderAuthState, ProviderSetupError>;
     readonly tryHandlePromptCommand: (
-      input: ProviderAuthTarget & { readonly text: string; readonly hasAttachments: boolean },
+      input: ProviderAuthTarget & {
+        readonly text: string;
+        readonly hasAttachments: boolean;
+        /** Whether a person wrote the message; an agent's or a schedule's sign-out is refused. */
+        readonly byPerson: boolean;
+      },
     ) => Effect.Effect<boolean, ProviderSetupError>;
   }
 >()("goat/provider/ProviderAuthService") {}
@@ -288,6 +293,13 @@ export const makeProviderAuthService = Effect.gen(function* () {
         if (!instance?.auth?.isLogoutPrompt?.(input.text, input.hasAttachments)) {
           return false;
         }
+        if (!input.byPerson)
+          return yield* new ProviderSetupError({
+            instanceId: input.instanceId,
+            operation: "logout",
+            detail:
+              "Only a person can sign out of a provider: they can send /logout themselves or sign out in Settings.",
+          });
         return yield* credentialChanges.withPermit(
           Effect.gen(function* () {
             const auth = yield* getController(input.instanceId, "logout");

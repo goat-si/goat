@@ -754,6 +754,23 @@ take no `decisionId`: they refuse a turn a person did not start and point to
 `goat_cloud_launch` on the machine that holds the account, since it does not take a remote
 holder while goatclaw is on.
 
+**Now.** Guest links, webhook token rotation, cloud machine credentials and removal, Slack and
+channel identity links, hub child automatic setup, provider sign-out and ChatGPT profile import
+stay a person's, with no agent path and no handoff
+([#2062](https://github.com/goat-si/goat/issues/2062)). Each creates or revokes a secret, sets
+who outside can reach the environment, or records a person's standing consent. These are
+deliberate setup a person does rarely, and a handoff would let an agent decide when to ask a
+person to widen or cut access it works under, so the nearest tool's guide names the step as a
+person's instead. An agent never approves its own consent. A provider sign-out prompt runs only
+when a person wrote the message and no schedule delivered it, and an agent cannot turn a
+person's queued message into a slash command, because an edit keeps the author
+(`ProviderAuthService.tryHandlePromptCommand`, `goat_queue_edit`). A person's own `/logout` runs whenever
+its run starts, whether the queue advances or an agent starts, resumes or retries it: the
+command and its consent are the person's, and only who wrote it and what it says are guarded.
+For webhooks the person's step is the Rotate action in Settings, which replaces a live task's
+URL on purpose; an agent that moves a schedule it may write off its webhook trigger, or deletes
+it, ends that URL as part of the write, and a later webhook trigger gets a new URL.
+
 When a handoff resolves or expires, GOAT wakes the thread that asked with a
 queued message naming the next call
 ([HandoffWakeReactor.ts](../../apps/server/src/handoffs/HandoffWakeReactor.ts)).
