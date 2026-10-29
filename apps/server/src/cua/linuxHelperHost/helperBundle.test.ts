@@ -120,6 +120,26 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
       expect(refused).toMatch(/^GOAT's Linux computer use helper was not started: /u);
     });
 
+    it("refuses a bundle under a folder others can write unless it is sticky or only its own group can, or under a symbolic link", async () => {
+      const b = bundle();
+      const parent = NodePath.dirname(b.directory);
+      NodeFS.chmodSync(parent, 0o777);
+      expect(await makeHelperBundleCheck(b.entry, [])()).toContain(
+        parent + " can be changed by other users",
+      );
+      // Writable by the server user's own group, as umask 002 leaves a folder: still its own.
+      NodeFS.chmodSync(parent, 0o775);
+      expect(await makeHelperBundleCheck(b.entry, [])()).toBeUndefined();
+      NodeFS.chmodSync(parent, 0o1777);
+      expect(await makeHelperBundleCheck(b.entry, [])()).toBeUndefined();
+      NodeFS.chmodSync(parent, 0o755);
+      const link = parent + "-link";
+      roots.push(link);
+      NodeFS.symlinkSync(parent, link);
+      const viaLink = NodePath.join(link, "goat-computer-use", "goat-computer-use.mjs");
+      expect(await makeHelperBundleCheck(viaLink, [])()).toContain(link + " is a symbolic link");
+    });
+
     it("does not take a file named after an object's own keys as listed", async () => {
       const b = bundle();
       NodeFS.writeFileSync(b.at("constructor"), "x");

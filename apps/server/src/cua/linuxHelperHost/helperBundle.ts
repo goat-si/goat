@@ -41,7 +41,7 @@ interface Walk {
 }
 
 const identity = (stat: NodeFS.BigIntStats) =>
-  [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+  [stat.dev, stat.ino, stat.mode, stat.uid, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
 
 const sha256 = async (path: string) => {
   const hash = NodeCrypto.createHash("sha256");
@@ -60,25 +60,55 @@ async function readBounded(path: string, max: number) {
   }
 }
 
-/** Every path under the bundle with its identity, or why the bundle cannot be trusted. */
+/** Owners whose files the server may run: root and the server's own user. */
+const trustedOwner = (uid: bigint) => uid === 0n || uid === BigInt(process.getuid?.() ?? -1);
+
+/**
+ * Why a path may not hold the helper. A folder others can write may still hold it when it is
+ * sticky (as /tmp is): only an entry's owner can then rename or replace it.
+ */
+function untrusted(stat: NodeFS.BigIntStats, sticky: boolean) {
+  if (stat.isSymbolicLink()) return "is a symbolic link";
+  if (!stat.isFile() && !stat.isDirectory()) return "is not a regular file";
+  if (!trustedOwner(stat.uid)) return "belongs to another user";
+  // Group write is the server user's own primary group by default on Ubuntu (umask 002), a
+  // group of that user alone unless an administrator shares it.
+  const ownGroup = stat.gid === 0n || stat.gid === BigInt(process.getgid?.() ?? -1);
+  const shared = (Number(stat.mode) & (ownGroup ? 0o002 : 0o022)) !== 0;
+  if (shared && !(sticky && stat.isDirectory() && (Number(stat.mode) & 0o1000) !== 0))
+    return "can be changed by other users";
+  return undefined;
+}
+
+/**
+ * Every path under the bundle, and every folder above it up to /, with its identity, or why the
+ * bundle cannot be trusted: a folder above it that someone else could rename would let them swap
+ * the whole bundle after the check.
+ */
 async function walk(directory: string): Promise<Walk | string> {
   const identities = new Map<string, string>();
   const files: string[] = [];
+  for (let above = NodePath.dirname(directory); ; above = NodePath.dirname(above)) {
+    const stat = await NodeFSP.lstat(above, { bigint: true });
+    const refused = untrusted(stat, true);
+    if (refused !== undefined) return above + " " + refused + ".";
+    // Its entries come and go (/tmp); a swap through it changes the next folder's inode instead.
+    identities.set(above, [stat.dev, stat.ino, stat.mode, stat.uid].join(":"));
+    if (NodePath.dirname(above) === above) break;
+  }
   const visit = async (path: string): Promise<string | undefined> => {
     const stat = await NodeFSP.lstat(path, { bigint: true });
     const name = NodePath.relative(directory, path);
-    if (stat.isSymbolicLink()) return name + " is a symbolic link.";
-    if (!stat.isFile() && !stat.isDirectory()) return name + " is not a regular file.";
-    if ((Number(stat.mode) & 0o022) !== 0)
-      return (name || "Its folder") + " can be changed by other users.";
+    const refused = untrusted(stat, false);
+    if (refused !== undefined) return (name || "Its folder") + " " + refused + ".";
     identities.set(path, identity(stat));
     if (stat.isFile()) {
       files.push(name);
       return undefined;
     }
     for (const entry of (await NodeFSP.readdir(path)).toSorted()) {
-      const refused = await visit(NodePath.join(path, entry));
-      if (refused !== undefined) return refused;
+      const below = await visit(NodePath.join(path, entry));
+      if (below !== undefined) return below;
     }
     return undefined;
   };
@@ -150,6 +180,11 @@ export function makeHelperBundleCheck(
     if (typeof walked === "string") return walked;
     if (last !== undefined && same(last.identities, walked.identities)) return last.refused;
     const refused = await verify(directory, file, walked, keys);
+    // A path that changed while it was hashed may not be what was hashed; nothing is kept, so
+    // the next check starts over.
+    const after = await walk(directory);
+    if (typeof after === "string") return after;
+    if (!same(walked.identities, after.identities)) return "it changed while it was checked.";
     last = { identities: walked.identities, refused };
     return refused;
   };

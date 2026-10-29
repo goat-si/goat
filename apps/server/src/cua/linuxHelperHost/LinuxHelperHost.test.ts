@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { DesktopCuaReadinessReport, DesktopCuaSafetyReport } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -140,7 +141,7 @@ describe("LinuxHelperHost (#1223)", () => {
   );
 
   it.effect(
-    "never runs a packaged helper that fails its check, says why in readiness, and runs it once it passes (#1224)",
+    "never runs a packaged helper that fails its check, says why in readiness, and runs it once it passes",
     () =>
       Effect.gen(function* () {
         let refusal: string | undefined = "cua-driver/cua-driver does not match manifest.json.";
@@ -165,6 +166,43 @@ describe("LinuxHelperHost (#1223)", () => {
         assert.lengthOf(t.spawned, 1);
         assert.deepEqual(Option.getOrUndefined(yield* t.host.liveReadiness)?.readiness, READY);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "spawns nothing for a driver or a check that ended while the helper was being checked",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<string | undefined>();
+        const t = yield* hostWith([], {}, Deferred.await(gate));
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        // The driver stops while its helper is checked; the check then passes.
+        yield* Ref.set(t.session, Option.none());
+        yield* Deferred.succeed(gate, undefined);
+        yield* TestClock.adjust(TICK_MS);
+        assert.lengthOf(t.spawned, 0);
+        // Before the first turn: computer use is turned off while the check runs.
+        const before = yield* Deferred.make<string | undefined>();
+        const u = yield* hostWith([], {}, Deferred.await(before));
+        yield* Ref.set(u.check, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        yield* Ref.set(u.check, Option.none());
+        yield* Deferred.succeed(before, undefined);
+        yield* TestClock.adjust(TICK_MS);
+        assert.lengthOf(u.spawned, 0);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("drops a refused helper's readiness once its driver stops", () =>
+    Effect.gen(function* () {
+      const t = yield* hostWith([], {}, Effect.succeed("cua-driver/cua-driver is missing."));
+      yield* Ref.set(t.session, Option.some(SESSION));
+      yield* TestClock.adjust(TICK_MS);
+      assert.isTrue(Option.isSome(yield* t.host.readiness));
+      yield* Ref.set(t.session, Option.none());
+      yield* TestClock.adjust(TICK_MS);
+      assert.deepEqual(yield* t.host.readiness, Option.none());
+    }).pipe(Effect.scoped),
   );
 
   it.effect("watches every window on screen while agents control the host, and nothing after", () =>

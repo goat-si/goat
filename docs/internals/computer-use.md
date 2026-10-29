@@ -608,10 +608,13 @@ by mention, the way the Codex app does it. Only the pattern is taken.
 - The Windows helper is signed through the existing Windows signing path and staged beside the
   driver. A standalone Linux server checks the packaged helper that `GOAT_COMPUTER_USE_HELPER`
   names before every spawn (`linuxHelperHost/helperBundle.ts`): every file must match its
-  `manifest.json` hash, the bundle may hold nothing unlisted, and no path may be a symlink or
-  writable by other users. Hashes alone only catch corruption and partial updates, since whoever
-  can rewrite a file can rewrite the manifest. Authenticity comes from the Ed25519 signature
-  check, which turns on once a release key is committed
+  `manifest.json` hash, and the bundle may hold nothing unlisted. Neither the bundle nor any
+  folder above it may be a symlink, belong to a user other than root or the server's, or be
+  writable by another user (a sticky folder like `/tmp` aside), and a bundle that changes while it
+  is hashed is refused. So only root or the server's own user can swap files between the check and
+  the spawn; closing that window too would take running an immutable copy. Hashes alone only catch
+  corruption and partial updates, since whoever can rewrite a file can rewrite the manifest.
+  Authenticity comes from the Ed25519 signature check, which turns on once a release key is committed
   ([release runbook](../operations/release.md#linux-computer-use-helper-signing)).
 - This epic adds local build and signing scripts. Wiring them into CI and release workflows is a
   separate proposal issue for maintainers.

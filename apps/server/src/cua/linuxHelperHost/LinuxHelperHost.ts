@@ -304,9 +304,12 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
   };
 
   /** A packaged helper that fails its check is never run; readiness says why instead. */
-  const refused = Effect.fnUntraced(function* (launch: number) {
+  /** The driver session whose start a failed check refused; its report ends with that session. */
+  let refusedFor: string | undefined;
+  const refused = Effect.fnUntraced(function* (launch: number, owner?: string) {
     const reason = deps.verify === undefined ? undefined : yield* deps.verify;
     if (reason === undefined) return false;
+    refusedFor = owner;
     const report = refusedBundle(reason, launch);
     yield* Ref.set(deps.report, Option.some(report));
     publish(report);
@@ -336,6 +339,15 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
       reportFromCheck = true;
       return;
     }
+    // The check took a while: a driver started meanwhile, or computer use was turned off.
+    if (
+      deps.verify !== undefined &&
+      (current !== undefined ||
+        Option.isSome(yield* deps.session) ||
+        deps.check === undefined ||
+        !(yield* deps.check.wanted))
+    )
+      return;
     const process = deps.spawn(helperEnvironment(session));
     const client = makeHelperClient({
       write: process.write,
@@ -412,7 +424,14 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
   });
   const start = Effect.fnUntraced(function* (session: DriverSession) {
     const launch = ++launches;
-    if (yield* refused(launch)) return undefined;
+    if (yield* refused(launch, sessionKey(session))) return undefined;
+    if (deps.verify !== undefined) {
+      // The check took a while: its daemon may have stopped or been replaced meanwhile.
+      const still = yield* deps.session;
+      if (Option.isNone(still) || sessionKey(still.value) !== sessionKey(session))
+        return "dismissed" as const;
+    }
+    refusedFor = undefined;
     const process = deps.spawn(helperEnvironment(session));
     const client = makeHelperClient({
       write: process.write,
@@ -569,6 +588,13 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     const session = yield* deps.session;
     const now = yield* Clock.currentTimeMillis;
     yield* dismiss(session);
+    if (
+      refusedFor !== undefined &&
+      (Option.isNone(session) || sessionKey(session.value) !== refusedFor)
+    ) {
+      refusedFor = undefined;
+      yield* Ref.set(deps.report, Option.none());
+    }
     let entry = current;
     if (entry !== undefined && entry.ended) {
       yield* Effect.logInfo("The Linux computer use helper exited", {
