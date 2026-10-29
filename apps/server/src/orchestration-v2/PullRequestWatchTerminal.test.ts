@@ -186,8 +186,12 @@ const watchedThread = (name: string) =>
           NodeServices.layer,
           ServerSettings.layerTest(),
           Layer.mock(PullRequestService.PullRequestService)({
-            detail: () =>
+            detail: (input) =>
               Effect.gen(function* () {
+                // Other pull requests read cleanly; only #41 follows the steered host.
+                if (input.number !== NUMBER) {
+                  return { ...detailOf(projectId, openAt("dddd444", [pending])), ...input };
+                }
                 yield* Ref.update(reads, (count) => count + 1);
                 yield* Effect.flatten(Ref.getAndSet(duringRead, Effect.void));
                 const state = yield* Ref.get(host);
@@ -451,5 +455,31 @@ describe("a watch that cannot read its pull request", () => {
       const later = yield* orchestrator.getThreadShell(laterId);
       assert.isDefined(later?.pullRequests?.[0]?.watch);
     }).pipe(Effect.provide(layerTest)),
+  );
+  it.effect(
+    "a readable pull request does not clear another one's failures in the same thread",
+    () =>
+      Effect.gen(function* () {
+        const { host, reads, reactor, link, records, orchestrator, threadId } =
+          yield* watchedThread("two-pulls");
+        // Watched in the same millisecond as #41, so both watches share a start time.
+        yield* orchestrator.dispatch({
+          type: "thread.pull-request.watch",
+          commandId: CommandId.make("pr-terminal-two-pulls-other"),
+          threadId,
+          ...key,
+          number: NUMBER + 1,
+          watching: true,
+          link: { url: `https://github.com/goat-si/goat/pull/${NUMBER + 1}`, source: "agent" },
+        });
+        yield* Ref.set(host, "unreachable");
+        for (let pass = 0; pass < 120 && (yield* Ref.get(reads)) < 8; pass += 1) {
+          yield* reactor.sweep;
+          yield* TestClock.adjust("2 minutes");
+        }
+        assert.strictEqual(yield* Ref.get(reads), 8);
+        assert.isUndefined((yield* link)?.watch);
+        assert.deepEqual((yield* records).summaries, ["#41: stopped watching, could not read it"]);
+      }).pipe(Effect.provide(layerTest)),
   );
 });

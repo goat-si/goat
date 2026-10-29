@@ -248,7 +248,7 @@ export const make = Effect.gen(function* () {
   const ended = (target: WatchTarget, reason: WatchEndReason) =>
     Effect.suspend(() => reportEnd(lifeKey(target), lifeOf(target), reason));
 
-  /** Consecutive failed reads by watch, so a watch started later gets its own limit. */
+  /** Consecutive failed reads by watch and pull request, so each watch has its own limit. */
   const readFailures = new Map<string, number>();
   /** When a failing group reads again, and the watches it held when it last failed. */
   const readRetryAt = new Map<string, { readonly at: number; readonly watches: Set<string> }>();
@@ -522,8 +522,8 @@ export const make = Effect.gen(function* () {
       if (Cause.hasInterruptsOnly(read.cause)) return yield* Effect.failCause(read.cause);
       lastReads.delete(group.key);
       if (isRateLimited(read.cause)) return;
-      const counts = group.targets.map((target) => (readFailures.get(watchKey(target)) ?? 0) + 1);
-      group.targets.forEach((target, index) => readFailures.set(watchKey(target), counts[index]!));
+      const counts = group.targets.map((target) => (readFailures.get(lifeKey(target)) ?? 0) + 1);
+      group.targets.forEach((target, index) => readFailures.set(lifeKey(target), counts[index]!));
       // The newest watch sets the pace, so it is not held back by older watches' failures.
       readRetryAt.set(group.key, {
         at:
@@ -533,11 +533,11 @@ export const make = Effect.gen(function* () {
       });
       const spent = group.targets.filter((_, index) => counts[index]! >= READ_FAILURE_LIMIT);
       if (spent.length > 0 && (yield* eachTarget({ ...group, targets: spent }, giveUp))) {
-        for (const target of spent) readFailures.delete(watchKey(target));
+        for (const target of spent) readFailures.delete(lifeKey(target));
       }
       return yield* Effect.failCause(read.cause);
     }
-    for (const target of group.targets) readFailures.delete(watchKey(target));
+    for (const target of group.targets) readFailures.delete(lifeKey(target));
     readRetryAt.delete(group.key);
     const [detail, activity] = read.value;
     const headSha = detail.headSha ?? null;
@@ -647,8 +647,7 @@ export const make = Effect.gen(function* () {
     for (const cache of [readRetryAt, lastReads, threadTails]) {
       for (const key of cache.keys()) if (!byPullRequest.has(key)) cache.delete(key);
     }
-    const watching = new Set(targets.map(watchKey));
-    for (const key of readFailures.keys()) if (!watching.has(key)) readFailures.delete(key);
+    for (const key of readFailures.keys()) if (!present.has(key)) readFailures.delete(key);
     yield* Effect.forEach(
       ending,
       ([target, reason]) =>
