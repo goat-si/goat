@@ -138,6 +138,37 @@ export const applyDesktopPointerArgs = (
   delete forwarded.toEnd;
   delete forwarded.scrollCenter;
 
+  const hasConflictPoint =
+    args.scrollCenter === true ||
+    finite(args.x) ||
+    finite(args.y) ||
+    finite(args.from_x) ||
+    finite(args.from_y) ||
+    finite(args.to_x) ||
+    finite(args.to_y) ||
+    args.coordinate_space !== undefined ||
+    args.window_basis !== undefined ||
+    args.regionId !== undefined ||
+    args.fromEnd !== undefined ||
+    args.toEnd !== undefined;
+  if (forwarded.element_token !== undefined && hasConflictPoint) {
+    delete forwarded.x;
+    delete forwarded.y;
+    delete forwarded.from_x;
+    delete forwarded.from_y;
+    delete forwarded.to_x;
+    delete forwarded.to_y;
+    delete forwarded.coordinate_space;
+    delete forwarded.window_basis;
+    return {
+      ok: false,
+      error: fail(
+        "invalid_argument",
+        "Pass either an element target or point coordinates, not both.",
+      ),
+    };
+  }
+
   const isMac = (state.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
 
   if (!POINTER_METHODS.has(method)) {
@@ -179,6 +210,7 @@ export const applyDesktopPointerArgs = (
     return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
 
   if (method === "scroll" && args.scrollCenter === true) {
+    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
@@ -309,6 +341,14 @@ export const buildScreenshotCapture = (input: {
     typeof bounds?.height === "number" && bounds.height > 0 ? bounds.height : height;
   const mimeType =
     imagePart.mimeType === "image/jpeg" ? ("image/jpeg" as const) : ("image/png" as const);
+  const backingScale =
+    typeof state.screenshot_scale === "number" && state.screenshot_scale > 0
+      ? state.screenshot_scale
+      : 1;
+  // Delivered image pixels per window point (width / regionWidth), so region.width * scale === pixelWidth
+  // even when the driver downscaled a large Retina capture to fit its image dimension cap.
+  const deliveredScale =
+    typeof bounds?.width === "number" && bounds.width > 0 ? width / regionWidth : backingScale;
   const metadata: ScreenImageMetadata = {
     imageRef: NodeCrypto.randomUUID(),
     callId,
@@ -324,10 +364,8 @@ export const buildScreenshotCapture = (input: {
     },
     pixelWidth: width,
     pixelHeight: height,
-    scale:
-      typeof state.screenshot_scale === "number" && state.screenshot_scale > 0
-        ? state.screenshot_scale
-        : 1,
+    scale: deliveredScale,
+    backingScale,
     pointsPerPixel: { x: regionWidth / width, y: regionHeight / height },
     mimeType,
   };

@@ -144,6 +144,8 @@ it.effect(
       const capture = yield* host.observe(call("screenshot", {}, ref), context);
       const regionId = capture.imageMetadata?.regionId;
       expect(regionId).toBeDefined();
+      expect(capture.imageMetadata?.scale).toBeCloseTo(1366 / 1325, 5);
+      expect(capture.imageMetadata?.backingScale).toBe(2);
       expect(capture.imageMetadata?.pointsPerPixel?.x).toBeCloseTo(1325 / 1366, 5);
       expect(capture.imageMetadata?.pointsPerPixel?.y).toBeCloseTo(556 / 573, 5);
 
@@ -576,13 +578,33 @@ it.effect(
 );
 
 it.effect(
-  "Linux and Windows refuse point-targeted actions until actuator-boundary window-basis validation exists on those platforms, while element-targeted actions work",
+  "Linux and Windows refuse point-targeted and conflicting mixed-target actions until actuator-boundary window-basis validation exists on those platforms, while element-targeted click and scroll pass schema validation",
   () =>
     Effect.gen(function* () {
+      const ELEMENT_SCROLL_KEYS = new Set([
+        "session",
+        "target",
+        "pid",
+        "window_id",
+        "element_token",
+        "direction",
+        "by",
+        "amount",
+        "delivery_mode",
+      ]);
       for (const platform of ["linux", "win32"] as const) {
         const platFix = fixture({
           get_window_state: (args: Record<string, unknown>) =>
             args.include_accessibility_tree === false ? goat2WindowState(args) : framedState,
+          scroll: (args: Record<string, unknown>) => {
+            const unknown = Object.keys(args).filter((k) => !ELEMENT_SCROLL_KEYS.has(k));
+            if (unknown.length > 0)
+              return new DriverError(
+                { code: "invalid_arguments" },
+                `unknown: ${unknown.join(",")}`,
+              );
+            return { effect: "confirmed", evidence: ["driver:acted"] };
+          },
         });
         const host = createDesktopTargetHost({
           primitiveChannel: platFix.channel as never,
@@ -601,13 +623,34 @@ it.effect(
         const shot = yield* host.observe(call("screenshot", {}, ref), context);
         const regionId = shot.imageMetadata?.regionId!;
 
-        // Element-targeted click works on Linux and Windows.
+        // Element-targeted click and element-targeted scroll succeed on Linux and Windows.
         const elemClick = yield* host.invoke(call("click", { elementRef: applyRef }, ref), context);
         expect(elemClick.category).toBe("confirmed");
+        const elemScroll = yield* host.invoke(
+          call("scroll", { elementRef: applyRef, direction: "down", amount: 3 }, ref),
+          context,
+        );
+        expect(elemScroll.category).toBe("confirmed");
+        expect(platFix.sent.at(-1)).toMatchObject({
+          tool: "scroll",
+          args: { element_token: "s0000000a:1", direction: "down", amount: 3 },
+        });
 
-        // All point-targeted actions are refused before dispatch on Linux and Windows because
-        // goat.9 lacks actuator-boundary window-basis validation on those platforms.
+        // Conflicting elementRef + scrollCenter or x,y is refused before dispatch with invalid_argument.
         const before = platFix.sent.length;
+        for (const conflicting of [
+          call(
+            "scroll",
+            { elementRef: applyRef, scrollCenter: true, direction: "down", amount: 3 },
+            ref,
+          ),
+          call("scroll", { elementRef: applyRef, x: 10, y: 10, direction: "down", amount: 3 }, ref),
+        ]) {
+          const refused = yield* host.invoke(conflicting, context).pipe(Effect.flip);
+          expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
+        }
+
+        // All point-targeted and unaddressed scroll actions are refused before dispatch on Linux and Windows.
         for (const unsupportedCall of [
           call("click", { x: 20, y: 16, regionId }, ref),
           call("click", { x: 20, y: 16 }, ref),
