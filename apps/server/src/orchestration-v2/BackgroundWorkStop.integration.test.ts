@@ -20,7 +20,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -29,6 +28,8 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { checkpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+
+import { makeBackgroundStopAdapter } from "./BackgroundWorkStop.adapter.testkit.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
@@ -57,101 +58,14 @@ const stopEarlierBackgroundWork = ({
       const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
       const started: ProviderAdapter.ProviderAdapterV2TurnInput[] = [];
       const interrupts: ProviderAdapter.ProviderAdapterV2InterruptInput[] = [];
-      const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
-        instanceId,
-        driver,
-        getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
-        planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
-        openSession: (input) =>
-          Effect.gen(function* () {
-            const now = yield* DateTime.now;
-            return {
-              instanceId,
-              driver,
-              providerSessionId: input.providerSessionId,
-              providerSession: {
-                id: input.providerSessionId,
-                driver,
-                providerInstanceId: instanceId,
-                status: "ready",
-                cwd,
-                model: modelSelection.model,
-                capabilities: CodexProviderCapabilitiesV2,
-                createdAt: now,
-                updatedAt: now,
-                lastError: null,
-              },
-              events: Stream.fromQueue(events),
-              ...(failedStart
-                ? {
-                    hasPendingBackgroundWorkForThread: (providerThread) =>
-                      Effect.gen(function* () {
-                        if (
-                          !interrupts.some((input) => input.providerThread.id === providerThread.id)
-                        ) {
-                          return false;
-                        }
-                        if (backgroundWorkAfterStop === "unknown") {
-                          return yield* Effect.die("Background work probe failed");
-                        }
-                        return backgroundWorkAfterStop === "running";
-                      }),
-                  }
-                : {}),
-              ensureThread: ({ threadId }) =>
-                Effect.succeed({
-                  id: ProviderThreadId.make(`provider-thread:codex:${threadId}`),
-                  driver,
-                  providerInstanceId: instanceId,
-                  providerSessionId: input.providerSessionId,
-                  appThreadId: threadId,
-                  ownerNodeId: null,
-                  nativeThreadRef: { driver, nativeId: "native-thread", strength: "strong" },
-                  nativeConversationHeadRef: null,
-                  status: "idle",
-                  firstRunOrdinal: null,
-                  lastRunOrdinal: null,
-                  handoffIds: [],
-                  forkedFrom: null,
-                  createdAt: now,
-                  updatedAt: now,
-                }),
-              resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
-              startTurn: (turn) =>
-                Effect.gen(function* () {
-                  started.push(turn);
-                  yield* Queue.offer(events, {
-                    type: "provider_turn.updated",
-                    driver,
-                    providerTurn: {
-                      id: ProviderTurnId.make(`provider-turn:${turn.attemptId}`),
-                      providerThreadId: turn.providerThread.id,
-                      nodeId: turn.rootNodeId,
-                      runAttemptId: turn.attemptId,
-                      nativeTurnRef: {
-                        driver,
-                        nativeId: `native:${turn.attemptId}`,
-                        strength: "strong",
-                      },
-                      ordinal: turn.providerTurnOrdinal,
-                      status: "running",
-                      startedAt: now,
-                      completedAt: null,
-                    },
-                  });
-                }),
-              steerTurn: () => Effect.die("unused"),
-              interruptTurn: (interrupt) =>
-                Effect.sync(() => {
-                  interrupts.push(interrupt);
-                }),
-              respondToRuntimeRequest: () => Effect.die("unused"),
-              readThreadSnapshot: () => Effect.die("unused"),
-              rollbackThread: () => Effect.die("unused"),
-              forkThread: () => Effect.die("unused"),
-            };
-          }),
-      };
+      const adapter = makeBackgroundStopAdapter({
+        cwd,
+        events,
+        started,
+        interrupts,
+        failedStart,
+        backgroundWorkAfterStop,
+      });
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
