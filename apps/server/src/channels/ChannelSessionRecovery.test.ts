@@ -51,6 +51,8 @@ describe("session receipt recovery", () => {
             assert.isTrue(yield* beforeCrash.offer(input.inputId, runtime.ownerToken));
           }),
         );
+        // Recovery happens later than the claim, so only the persisted read time can match.
+        yield* TestClock.adjust("5 seconds");
         const inbound = Effect.map(botMessages, (records) =>
           records.messages.filter(
             (message) => message.role === "user" && message.channel?.inputId === input.inputId,
