@@ -1,4 +1,6 @@
 import { requestSshThreadHandoff } from "../components/chat/sshThreadHandoffActionBus";
+import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
+import { copyThreadReference } from "../lib/copyThreadReference";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import { openGuestShareDialog } from "../components/chat/guestShareDialogState";
@@ -286,6 +288,9 @@ export function useThreadActionMenu(input: {
           if (thread.branch) {
             copyBranchToClipboard(thread.branch, { branch: thread.branch });
           }
+          return;
+        case "copy-thread":
+          void copyThreadReference(threadChipCopyTarget(threadRef, thread.title));
           return;
         case "copy-thread-id":
           copyThreadIdToClipboard(thread.id, { threadId: thread.id });

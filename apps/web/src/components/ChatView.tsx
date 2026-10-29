@@ -109,7 +109,11 @@ import {
 import { formatModelSlugName, resolveSelectableModel } from "@goat/shared/model";
 import { projectScriptCwd, resolveProjectScripts } from "@goat/shared/projectScripts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
-import { resolveThreadReferenceCopyTarget } from "@goat/client-runtime/thread-reference";
+import {
+  resolveThreadReferenceCopyTarget,
+  threadChipCopyTarget,
+} from "@goat/client-runtime/thread-reference";
+import { copyThreadReference } from "~/lib/copyThreadReference";
 import { resolveTerminalSessionLabel } from "@goat/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
 import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -144,7 +148,6 @@ import { type LegendListRef } from "@legendapp/list/react";
 import { useWorkspaceMutationRefresh } from "../hooks/useWorkspaceMutationRefresh";
 import { DEFAULT_INTERACTION_MODE, type ChatMessage } from "../types";
 import { useTheme } from "../hooks/useTheme";
-import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { subscribeSnapShotComposerFocus } from "../lib/desktopSnapShot";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { FileMetadataThreadProvider } from "../hooks/FileMetadataThreadProvider";
@@ -182,7 +185,7 @@ import { DEFAULT_RESOLVED_KEYBINDINGS } from "@goat/shared/keybindings";
 import { shortcutLabelForCommand } from "../keybindings";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
-import { stackedThreadToast, toastManager } from "./ui/toast";
+import { toastManager } from "./ui/toast";
 import { projectScriptIdFromCommand } from "~/projectScripts";
 import { newMessageId } from "~/lib/utils";
 import {
@@ -2535,26 +2538,11 @@ export default function ChatView(props: ChatViewProps) {
   const copyActiveThreadReference = () => {
     const target = activeThreadReferenceCopyTarget;
     if (target === null) return;
-    void writeTextToClipboard(target.value, target.clipboardTarget).then(
-      (didCopy) => {
-        if (!didCopy) return;
-        toastManager.add({
-          type: "success",
-          title: target.successTitle,
-          description: target.value,
-        });
-      },
-      (error) => {
-        console.error(error);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: target.failureTitle,
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      },
-    );
+    if (target.kind === "thread" && activeThreadRef !== null) {
+      void copyThreadReference(
+        threadChipCopyTarget(activeThreadRef, activeThread?.title ?? "Thread"),
+      );
+    } else void copyThreadReference(target);
   };
   const pullRequestPanelTarget = activeThread
     ? threadPullRequestPanelTarget({

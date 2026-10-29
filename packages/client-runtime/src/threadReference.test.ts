@@ -1,7 +1,11 @@
-import type { ThreadPullRequestLink } from "@goat/contracts";
+import { EnvironmentId, ThreadId, type ThreadPullRequestLink } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import {
+  decodeComposerContextFragment,
+  encodeComposerContextFragment,
+} from "@goat/shared/composerContextClipboard";
 
-import { resolveThreadReferenceCopyTarget } from "./threadReference.ts";
+import { resolveThreadReferenceCopyTarget, threadChipCopyTarget } from "./threadReference.ts";
 
 const crossRepositoryPullRequest: ThreadPullRequestLink = {
   host: "github.com",
@@ -15,6 +19,21 @@ const crossRepositoryPullRequest: ThreadPullRequestLink = {
 };
 
 describe("resolveThreadReferenceCopyTarget", () => {
+  it("copies a thread as a context fragment that retains its environment", () => {
+    const ref = {
+      environmentId: EnvironmentId.make("remote"),
+      threadId: ThreadId.make("thread-1"),
+    };
+    const target = threadChipCopyTarget(ref, "Remote work");
+    expect(target.fragment?.source.environmentId).toBe(ref.environmentId);
+    expect(target.fragment?.records).toEqual([
+      expect.objectContaining({ kind: "thread", ...ref, title: "Remote work" }),
+    ]);
+    expect(target.value).toContain("thread/");
+    expect(decodeComposerContextFragment(encodeComposerContextFragment(target.fragment!)!)).toEqual(
+      target.fragment,
+    );
+  });
   it("does not copy another reference while the open panel URL is unavailable", () => {
     expect(
       resolveThreadReferenceCopyTarget({

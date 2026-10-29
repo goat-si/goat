@@ -99,6 +99,7 @@ export async function writeTextToClipboard(
   value: string,
   target = "text",
   extraFlavors?: Readonly<Record<string, string>>,
+  requireRich = false,
 ) {
   if (typeof window === "undefined") {
     throw new ClipboardApiUnavailableError({
@@ -161,6 +162,7 @@ export async function writeTextToClipboard(
         }
       }
     }
+    if (requireRich) throw new Error("The clipboard cannot preserve thread context.");
     await navigator.clipboard.writeText(value);
     return true;
   } catch (cause) {
