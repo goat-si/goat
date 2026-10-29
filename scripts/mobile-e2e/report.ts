@@ -18,6 +18,11 @@ export interface PoseResult {
   readonly error?: string;
   /** Screenshot taken when the journey stopped early. */
   readonly stopped?: string;
+  /**
+   * Labels on the screen when the journey stopped. Diagnosis only and kept apart from `error`,
+   * so text the app shows can never make an app failure read as the pool's.
+   */
+  readonly screen?: string;
   readonly findings?: ReadonlyArray<Finding>;
 }
 
@@ -32,6 +37,27 @@ export const poseFailed = (result: PoseResult) =>
 /** The pool never let the pose finish, so it says nothing about the app. */
 export const poolBlocked = (result: PoseResult) =>
   result.error !== undefined && poolError(result.error) && failedChecks(result).length === 0;
+
+/** A pose whose journey stopped on `error`, with what the device showed at that moment. */
+export function stoppedResult(input: {
+  readonly pose: Pose;
+  readonly steps: ReadonlyArray<StepResult>;
+  readonly error: unknown;
+  readonly labels?: string;
+  readonly stopped?: string;
+}): PoseResult {
+  return {
+    pose: input.pose,
+    steps: input.steps,
+    error: input.error instanceof Error ? input.error.message : String(input.error),
+    ...(input.labels ? { screen: input.labels } : {}),
+    ...(input.stopped ? { stopped: input.stopped } : {}),
+  };
+}
+
+/** The error as people read it, with the stopped screen's labels after it. */
+export const describeError = (result: PoseResult) =>
+  result.error && result.screen ? `${result.error} (screen: ${result.screen})` : result.error;
 
 const escapeHtml = (value: string) =>
   value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -80,7 +106,7 @@ export function renderReport(results: ReadonlyArray<PoseResult>, outputDirectory
         })
         .join("");
       const error = result.error
-        ? `<td class="bad"><h3>${poolBlocked(result) ? "blocked by the pool" : "stopped"}</h3>${result.stopped ? `<a href="${relative(result.stopped)}"><img src="${relative(result.stopped)}"></a>` : ""}<p class="fail">${escapeHtml(result.error)}</p></td>`
+        ? `<td class="bad"><h3>${poolBlocked(result) ? "blocked by the pool" : "stopped"}</h3>${result.stopped ? `<a href="${relative(result.stopped)}"><img src="${relative(result.stopped)}"></a>` : ""}<p class="fail">${escapeHtml(describeError(result) ?? "")}</p></td>`
         : "";
       return `<tr><th>${escapeHtml(result.pose.id)}<br><small>${escapeHtml(describePose(result.pose))}</small></th>${cells}${error}</tr>`;
     })

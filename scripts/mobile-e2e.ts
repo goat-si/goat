@@ -14,11 +14,13 @@ import { Device, type Pool, run } from "./mobile-e2e/device.ts";
 import { runJourney, type StepResult } from "./mobile-e2e/journey.ts";
 import { POSES, type Pose } from "./mobile-e2e/poses.ts";
 import {
+  describeError,
   failedChecks,
   poolBlocked,
   poseFailed,
   type PoseResult,
   renderReport,
+  stoppedResult,
 } from "./mobile-e2e/report.ts";
 import { reviewPose } from "./mobile-e2e/review.ts";
 import {
@@ -116,8 +118,7 @@ async function runPose(
     await runJourney(device, directory, pair, steps);
     return { pose, steps };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!device) return { pose, steps, error: message };
+    if (!device) return stoppedResult({ pose, steps, error });
     // What the device showed when the journey stopped is usually the whole diagnosis.
     const stopped = NodePath.join(directory, "stopped.png");
     const shot = await device.screenshot(stopped).then(
@@ -133,12 +134,7 @@ async function runPose(
           .join(" | "),
       () => "",
     );
-    return {
-      pose,
-      steps,
-      error: labels ? `${message} (screen: ${labels})` : message,
-      ...(shot ? { stopped: shot } : {}),
-    };
+    return stoppedResult({ pose, steps, error, labels, ...(shot ? { stopped: shot } : {}) });
   } finally {
     await device?.release();
   }
@@ -303,7 +299,12 @@ async function main() {
       );
       log(
         result.pose.id,
-        [poolBlocked(result) ? `blocked by the pool: ${result.error}` : result.error, ...failures]
+        [
+          poolBlocked(result)
+            ? `blocked by the pool: ${describeError(result)}`
+            : describeError(result),
+          ...failures,
+        ]
           .filter(Boolean)
           .join("; ") ||
           `passed${result.findings?.length ? `, ${result.findings.length} review findings` : ""}`,

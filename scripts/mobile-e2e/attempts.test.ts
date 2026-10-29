@@ -2,7 +2,7 @@ import { expect, it } from "vite-plus/test";
 
 import { attemptPose } from "./attempts.ts";
 import type { Pose } from "./poses.ts";
-import { poolBlocked, type PoseResult } from "./report.ts";
+import { poolBlocked, type PoseResult, stoppedResult } from "./report.ts";
 
 const pose: Pose = {
   id: "android-phone-light",
@@ -89,4 +89,31 @@ it("a pool failure before the first screen is retried on a fresh session", async
 
   expect(sessions).toEqual(["run", "run-retry1"]);
   expect(result.error).toBeUndefined();
+});
+
+it("an app error whose stopped screen shows pool-like text stays an app failure", async () => {
+  const stopped = stoppedResult({
+    pose,
+    steps: [],
+    error: new Error("the app did not show the fixture threads after pairing"),
+    labels: "Remote daemon is unavailable | Retry",
+  });
+  const { sessions, attempt } = attempts(stopped, { pose, steps: [threads] });
+
+  const result = await attemptPose(attempt, "run", () => {});
+
+  expect(sessions).toEqual(["run"]);
+  expect(poolBlocked(result)).toBe(false);
+  expect(JSON.stringify(result)).toContain("Remote daemon is unavailable");
+});
+
+it("a pool error stays a pool failure whatever its stopped screen shows", async () => {
+  const stopped = stoppedResult({
+    pose,
+    steps: [],
+    error: new Error("agent-device open: WORKER_UNREACHABLE"),
+    labels: "Could not connect",
+  });
+
+  expect(poolBlocked(stopped)).toBe(true);
 });
