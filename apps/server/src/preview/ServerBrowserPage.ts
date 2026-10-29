@@ -697,7 +697,9 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
-): Promise<{ readonly x: number; readonly y: number } & ClickEffect> => {
+): Promise<
+  { readonly x: number; readonly y: number; readonly pressesSent?: number } & ClickEffect
+> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
@@ -768,10 +770,10 @@ export const click = async (
     page.off("dialog", onDialog);
   }
   if (!sent) watch.cancel();
-  const settled = await watch.settle(dialog).finally(() => releaseAim(aim));
+  const outcome = await watch.settle(dialog).finally(() => releaseAim(aim));
   // A dialog that stopped a multi-press click leaves it short of what was asked.
   const short = presses < (input.clickCount ?? 1);
-  return { ...point, ...settled, ...(short ? { pressesSent: presses } : {}) };
+  return { ...point, ...outcome, ...(short ? { pressesSent: presses } : {}) };
 };
 
 export const type = async (
