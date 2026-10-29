@@ -30,21 +30,23 @@ const record = (args: unknown): Readonly<Record<string, unknown>> =>
 const headExecutionBoundMs = (tool: string, args: unknown): number => {
   const given = record(args);
   if (tool === "get_window_state") {
-    const base = given.include_screenshot === false ? 4_000 : 7_000;
-    if (given.include_accessibility_tree === false) return base;
+    const wantTree = given.include_accessibility_tree !== false;
+    const shouldCapture =
+      given.include_screenshot !== false || typeof given.screenshot_out_file === "string";
     const walk =
       typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
         ? Math.min(120_000, Math.max(100, given.timeout_ms))
-        : 1_000;
-    return Math.max(base, walk * 2 + 5_000);
+        : 2_000;
+    return 2_000 + (wantTree ? walk * 2 + 5_000 : 0) + (shouldCapture ? 7_000 : 0);
   }
   if (tool === "verify_state") {
     const wait =
       typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
         ? Math.min(10_000, Math.max(0, given.timeout_ms))
         : 5_000;
-    return wait + 7_000 + (given.include_screenshot === true ? 7_000 : 0);
+    return wait + 11_000 + (given.include_screenshot === true ? 9_000 : 0);
   }
+  if (tool === "run_steps") return 75_000;
   return driverCallCapMs(tool, args);
 };
 
@@ -89,9 +91,12 @@ export const makeUnansweredWatch = <E>(
   const headByConn = new Map<string, { readonly call: object; readonly since: number }>();
   // The chain a private or taken-over target closed; no call reaches it until it is replaced.
   let fenced: string | undefined;
-  // Calls past their deadline, by key, until a reply lands or their grace ends. A new call to the
-  // same chain waits for that outcome instead of queueing behind a child that may be stuck.
-  const overdue = new Map<string, string>();
+  // Watchers waiting out a grace window, keyed by the watcher's own request key so two watchers
+  // never clear each other's fence.
+  const overdue = new Map<
+    string,
+    { readonly connectionId: string; readonly blocking: object; readonly target: object }
+  >();
   let settled = Deferred.makeUnsafe<void>();
   const wake = () => {
     Deferred.doneUnsafe(settled, Effect.void);
@@ -99,6 +104,21 @@ export const makeUnansweredWatch = <E>(
   };
   const settle = (key: string) => {
     if (overdue.delete(key)) wake();
+  };
+  const hasOverdue = (connectionId: string) => {
+    let found = false;
+    for (const [k, entry] of overdue) {
+      if (
+        replied.has(entry.blocking) ||
+        replied.has(entry.target) ||
+        proxy.outstanding.get(k) !== entry.target
+      ) {
+        overdue.delete(k);
+        continue;
+      }
+      if (entry.connectionId === connectionId) found = true;
+    }
+    return found;
   };
   const currentHead = (connectionId: string, now: number, advanced = false) => {
     for (const [k, each] of proxy.outstanding) {
@@ -119,7 +139,8 @@ export const makeUnansweredWatch = <E>(
   const close = (connectionId: string, current: boolean) => {
     if (current) fenced = connectionId;
     headByConn.delete(connectionId);
-    for (const [key, chain] of overdue) if (chain === connectionId) overdue.delete(key);
+    for (const [key, entry] of overdue)
+      if (entry.connectionId === connectionId) overdue.delete(key);
     wake();
   };
   // Only the cutoff holds the lifecycle lock. Acquiring the new driver runs outside it, so a start
@@ -150,21 +171,24 @@ export const makeUnansweredWatch = <E>(
         Effect.catchCause(() => act.end("lost")),
         Effect.asVoid,
       );
-  const replace = (key: string, expected?: { readonly connectionId: string }) =>
+  const replace = (
+    blockingKey: string,
+    blockingCall: { readonly connectionId: string },
+    watcherKey: string,
+    watcherTarget: object,
+  ) =>
     Effect.suspend(() => {
-      const current = proxy.outstanding.get(key);
-      const call = expected ?? current;
-      if (call === undefined || current !== call || replied.has(call)) return Effect.void;
-      return replaceUnder(
-        DRIVER_UNANSWERED,
-        call.connectionId,
-        () => !replied.has(call) && proxy.outstanding.get(key) === call,
-      );
+      const isDue = () =>
+        !replied.has(blockingCall) &&
+        proxy.outstanding.get(blockingKey) === blockingCall &&
+        !replied.has(watcherTarget) &&
+        proxy.outstanding.get(watcherKey) === watcherTarget;
+      if (!isDue()) return Effect.void;
+      return replaceUnder(DRIVER_UNANSWERED, blockingCall.connectionId, isDue);
     });
   return {
     /** Whether a call may not go to this chain now: it is closing, or has an overdue call. */
-    blocks: (connectionId: string) =>
-      fenced === connectionId || [...overdue.values()].includes(connectionId),
+    blocks: (connectionId: string) => fenced === connectionId || hasOverdue(connectionId),
     fenceTarget: (reason: "private" | "takeover", connectionId: string) => {
       fenced = connectionId;
       act.fenced(targetClosedInterruption(reason));
@@ -182,7 +206,7 @@ export const makeUnansweredWatch = <E>(
       for (;;) {
         // Taken before the check, so a wake between the check and the wait still ends the wait.
         const woken = Deferred.await(settled);
-        if (![...overdue.values()].includes(chain.connectionId)) break;
+        if (!hasOverdue(chain.connectionId)) break;
         const now = yield* Clock.currentTimeMillis;
         if (now >= untilMillis) return false;
         yield* Number.isFinite(untilMillis)
@@ -205,6 +229,8 @@ export const makeUnansweredWatch = <E>(
               const wasHead = currentHead(answered.connectionId, now)?.call === answered;
               replied.add(answered);
               currentHead(answered.connectionId, now, wasHead);
+              for (const [k, entry] of overdue)
+                if (entry.blocking === answered || entry.target === answered) overdue.delete(k);
             }
             overdue.delete(key);
             wake();
@@ -219,78 +245,65 @@ export const makeUnansweredWatch = <E>(
         const budgetMs = Math.max(0, deadlineMillis - started);
         const target = proxy.outstanding.get(key);
         if (!target) return;
-        let watchedHeadKey: string | undefined;
         // Wait only while the currently blocking call at the head of the pipe is within its own
         // cap; if that head call remains unanswered through its grace window, replace immediately.
-        yield* Effect.gen(function* () {
-          for (;;) {
-            const woken = Deferred.await(settled);
-            const now = yield* Clock.currentTimeMillis;
-            const call = proxy.outstanding.get(key);
-            if (
-              call !== target ||
-              replied.has(target) ||
-              proxy.lifecycle.current?.connectionId !== call.connectionId
-            )
-              return;
-            const head = currentHead(call.connectionId, now);
-            if (!head || head.call === target) break;
-            const headDeadline =
-              head.since + headExecutionBoundMs(head.call.tool ?? "", head.call.args);
-            if (now < headDeadline) {
-              const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
-              if (Option.isSome(step)) continue;
-            }
-            const afterCap = yield* Clock.currentTimeMillis;
-            if (
-              proxy.outstanding.get(key) !== target ||
-              replied.has(target) ||
-              proxy.lifecycle.current?.connectionId !== call.connectionId
-            )
-              return;
-            if (currentHead(call.connectionId, afterCap)?.call !== head.call) continue;
-            watchedHeadKey = head.key;
-            overdue.set(head.key, call.connectionId);
-            const graceEnd = afterCap + UNANSWERED_GRACE_MS;
-            for (;;) {
-              const graceWoken = Deferred.await(settled);
-              const t = yield* Clock.currentTimeMillis;
-              if (
-                proxy.outstanding.get(key) !== target ||
-                replied.has(target) ||
-                proxy.lifecycle.current?.connectionId !== call.connectionId
-              ) {
-                settle(head.key);
-                watchedHeadKey = undefined;
-                return;
-              }
-              if (currentHead(call.connectionId, t)?.call !== head.call || t >= graceEnd) break;
-              const step = yield* graceWoken.pipe(Effect.timeoutOption(graceEnd - t));
-              if (Option.isNone(step)) break;
-            }
-            const afterGrace = yield* Clock.currentTimeMillis;
-            if (
-              proxy.outstanding.get(key) !== target ||
-              replied.has(target) ||
-              proxy.lifecycle.current?.connectionId !== call.connectionId
-            ) {
-              settle(head.key);
-              watchedHeadKey = undefined;
-              return;
-            }
-            if (currentHead(call.connectionId, afterGrace)?.call === head.call) {
-              yield* replace(head.key, head.call);
-            }
-            settle(head.key);
-            watchedHeadKey = undefined;
+        for (;;) {
+          const woken = Deferred.await(settled);
+          const now = yield* Clock.currentTimeMillis;
+          const call = proxy.outstanding.get(key);
+          if (
+            call !== target ||
+            replied.has(target) ||
+            proxy.lifecycle.current?.connectionId !== call.connectionId
+          )
+            return;
+          const head = currentHead(call.connectionId, now);
+          if (!head || head.call === target) break;
+          const headDeadline =
+            head.since + headExecutionBoundMs(head.call.tool ?? "", head.call.args);
+          if (now < headDeadline) {
+            const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
+            if (Option.isSome(step)) continue;
           }
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (watchedHeadKey !== undefined) settle(watchedHeadKey);
-            }),
-          ),
-        );
+          const afterCap = yield* Clock.currentTimeMillis;
+          if (
+            proxy.outstanding.get(key) !== target ||
+            replied.has(target) ||
+            proxy.lifecycle.current?.connectionId !== call.connectionId
+          )
+            return;
+          if (currentHead(call.connectionId, afterCap)?.call !== head.call) continue;
+          overdue.set(key, {
+            connectionId: call.connectionId,
+            blocking: head.call,
+            target,
+          });
+          const graceEnd = afterCap + UNANSWERED_GRACE_MS;
+          for (;;) {
+            const graceWoken = Deferred.await(settled);
+            const t = yield* Clock.currentTimeMillis;
+            if (
+              proxy.outstanding.get(key) !== target ||
+              replied.has(target) ||
+              proxy.lifecycle.current?.connectionId !== call.connectionId
+            )
+              return;
+            if (currentHead(call.connectionId, t)?.call !== head.call || t >= graceEnd) break;
+            const step = yield* graceWoken.pipe(Effect.timeoutOption(graceEnd - t));
+            if (Option.isNone(step)) break;
+          }
+          const afterGrace = yield* Clock.currentTimeMillis;
+          if (
+            proxy.outstanding.get(key) !== target ||
+            replied.has(target) ||
+            proxy.lifecycle.current?.connectionId !== call.connectionId
+          )
+            return;
+          if (currentHead(call.connectionId, afterGrace)?.call === head.call) {
+            yield* replace(head.key, head.call, key, target);
+          }
+          settle(key);
+        }
         const activeCall = proxy.outstanding.get(key);
         if (
           activeCall !== target ||
@@ -300,9 +313,14 @@ export const makeUnansweredWatch = <E>(
           return;
         yield* Effect.sleep(budgetMs);
         const call = proxy.outstanding.get(key);
-        if (call === target && !replied.has(target)) overdue.set(key, call.connectionId);
+        if (call === target && !replied.has(target))
+          overdue.set(key, {
+            connectionId: call.connectionId,
+            blocking: target,
+            target,
+          });
         yield* Effect.sleep(UNANSWERED_GRACE_MS);
-        yield* replace(key, target);
+        yield* replace(key, target, key, target);
       },
       (effect, key) =>
         effect.pipe(
