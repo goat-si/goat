@@ -21,6 +21,7 @@ import * as Option from "effect/Option";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelWake from "./ChannelWake.ts";
 
 /** With exponential backoff capped at five minutes, ten attempts span about thirteen minutes. */
 const MAX_ATTEMPTS = 10;
@@ -69,6 +70,7 @@ export class ChannelDeliveryWorker extends Context.Service<
 const make = Effect.gen(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const gateway = yield* ChannelGateway.ChannelGateway;
+  const wake = yield* ChannelWake.ChannelWake;
   const scope = yield* Effect.scope;
   const receipts = new Set<Fiber.Fiber<void, unknown>>();
 
@@ -81,6 +83,7 @@ const make = Effect.gen(function* () {
       (delivery.receiptDeadline ?? DateTime.toEpochMillis(clock)) - DateTime.toEpochMillis(clock);
     if (remaining <= 0) {
       yield* ledger.expireReceipts({ owner, now: DateTime.formatIso(clock) });
+      yield* wake.wake;
       return;
     }
     const expiry = yield* Effect.sleep(remaining).pipe(
@@ -110,7 +113,11 @@ const make = Effect.gen(function* () {
       now: DateTime.formatIso(now),
       outcome,
     });
-    if (outcome.type !== "retry") yield* Fiber.interrupt(expiry).pipe(Effect.forkIn(scope));
+    if (outcome.type !== "retry") {
+      yield* Fiber.interrupt(expiry).pipe(Effect.forkIn(scope));
+      // Rows held for this receipt are free now; the loop would otherwise wait for its next scan.
+      yield* wake.wake;
+    }
     if (Option.isNone(result)) yield* Fiber.interrupt(send).pipe(Effect.forkIn(scope));
   });
 

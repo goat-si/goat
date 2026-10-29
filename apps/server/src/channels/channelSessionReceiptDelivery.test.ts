@@ -14,6 +14,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelWake from "./ChannelWake.ts";
 import { bindingIdFor, deliveryIdFor } from "./channelIds.ts";
 
 const owner = "deadline-owner";
@@ -89,9 +90,11 @@ const layer = (
     { deliveryId: ChannelOutboundMessage["deliveryId"]; acceptedAt: string },
     ChannelGatewayError
   >,
+  wake: Layer.Layer<ChannelWake.ChannelWake> = ChannelWake.layer,
 ) =>
   ChannelDeliveryWorker.layer.pipe(
     Layer.provide(Layer.mock(ChannelGateway.ChannelGateway)({ send })),
+    Layer.provide(wake),
     Layer.provideMerge(ChannelLedger.layer),
     Layer.provideMerge(Sqlite.layerMemory),
   );
@@ -105,6 +108,32 @@ const notSent = (retryAfterSeconds: number, rateLimited = false) =>
   });
 
 describe("absolute receipt delivery deadlines", () => {
+  it.effect("a settled receipt wakes the channel loop to send the rows it held back", () => {
+    let wakes = 0;
+    return Effect.gen(function* () {
+      const worker = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
+      yield* receipt("wake");
+      yield* worker.deliverReceipts(owner);
+      yield* worker.settleReceipts;
+      assert.strictEqual(wakes, 1);
+    }).pipe(
+      Effect.provide(
+        layer(
+          (message) =>
+            Effect.succeed({
+              deliveryId: message.deliveryId,
+              acceptedAt: "1970-01-01T00:00:00.000Z",
+            }),
+          Layer.succeed(ChannelWake.ChannelWake)({
+            wake: Effect.sync(() => {
+              wakes += 1;
+            }),
+            next: Effect.never,
+          }),
+        ),
+      ),
+    );
+  });
   it.effect("an older attempt cannot reset a receipt claimed by a newer attempt", () =>
     Effect.gen(function* () {
       const ledger = yield* ChannelLedger.ChannelLedger;
