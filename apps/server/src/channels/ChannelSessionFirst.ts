@@ -16,6 +16,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
+import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
@@ -62,10 +63,42 @@ const make = Effect.gen(function* () {
   const threads = yield* ThreadManagement.ThreadManagementService;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const wake = yield* ChannelWake.ChannelWake;
+  const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const scope = yield* Effect.scope;
   const acknowledgments = new Map<ChannelInputId, Fiber.Fiber<void, unknown>>();
   const ackStarted = new Set<ChannelInputId>();
   const scheduled = new Set<string>();
+
+  // The bot's copy of the message shows when the session took it, as reception's copy does.
+  // Same command id as reception's, so a repeat after recovery is a no-op.
+  const markRead = Effect.fn("ChannelSessionFirst.markRead")(function* (
+    stored: ChannelLedger.ChannelStoredInput,
+  ) {
+    const origin = stored.message.replyAddress;
+    if (origin.kind !== "goat") return;
+    const readAt = stored.snapshot.readAt ?? DateTime.formatIso(yield* DateTime.now);
+    yield* timeline
+      .record({
+        threadId: origin.threadId,
+        record: {
+          recordKey: "input:" + stored.snapshot.inputId,
+          entry: {
+            type: "message",
+            role: "user",
+            text: stored.message.text,
+            meta: {
+              conversationId: stored.snapshot.conversationId,
+              originKind: "goat",
+              kind: "inbound",
+              inputId: stored.snapshot.inputId,
+              readAt,
+            },
+          },
+        },
+        revision: "read",
+      })
+      .pipe(Effect.ignore);
+  });
 
   const commit = Effect.fn("ChannelSessionFirst.commit")(function* (
     stored: ChannelLedger.ChannelStoredInput,
@@ -78,6 +111,8 @@ const make = Effect.gen(function* () {
     const inputId = stored.snapshot.inputId;
     const expected = stored.snapshot.receptionId;
     if (!isSessionClaim(expected) || expected === undefined) return false;
+    // Recovery observes before it schedules, so a line sealed before a crash commits here first.
+    yield* markRead(stored);
     const causeKey = "reply:" + inputId;
     const deliveryId = deliveryIdFor(causeKey);
     const taskId = taskIdFor(inputId, 0);
@@ -105,6 +140,7 @@ const make = Effect.gen(function* () {
             kind: "receipt",
             text,
             inReplyToInputId: inputId,
+            taskId,
             ...(destination.kind === "slack" && actor !== undefined
               ? { mentionActorId: actor }
               : {}),
@@ -184,7 +220,7 @@ const make = Effect.gen(function* () {
       createdTask,
       receptionId: ChannelReceptionId.make(sessionClaim(inputId)),
     });
-    if (claimed) yield* schedule(stored, owner);
+    if (claimed) yield* schedule((yield* ledger.getInput(inputId)) ?? stored, owner);
     return claimed;
   }, Effect.mapError(mapError));
 
@@ -339,6 +375,7 @@ const make = Effect.gen(function* () {
     const key = owner + ":" + stored.snapshot.inputId;
     if (scheduled.has(key)) return;
     scheduled.add(key);
+    yield* markRead(stored);
     const accepted = Date.parse(stored.snapshot.acceptedAt);
     for (const delay of [20_000, 55_000, 60_000]) {
       const remaining = accepted + delay - DateTime.toEpochMillis(yield* DateTime.now);

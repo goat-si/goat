@@ -204,6 +204,74 @@ describe("session first receipts", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect(
+    "a session-first message reads as read and its receipt names the task it started",
+    () => {
+      const harness = makeSessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const input = yield* gateway.ingest(
+          goatInput("Inspect disk usage", "indicator"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const task = (yield* ledger.getTask(taskIdFor(input.inputId, 0)))!.task;
+        // The client shows "Reading your message" from the read time on the bot's copy.
+        const before = yield* botMessages;
+        const inbound = before.messages.find((message) => message.role === "user");
+        assert.strictEqual(inbound?.channel?.inputId, input.inputId);
+        const readAt = (yield* ledger.getInput(input.inputId))?.snapshot.readAt;
+        assert.isDefined(readAt);
+        assert.strictEqual(inbound?.channel?.readAt, readAt);
+
+        harness.assistant(task, "Checking the disks now.\n", true);
+        yield* runtime.runPass;
+        yield* runtime.settle([input.inputId]);
+        yield* runtime.drain;
+        // The client follows the task an acknowledgement names while its card is outstanding.
+        const after = yield* botMessages;
+        const receipt = after.messages.find(
+          (message) => message.role === "assistant" && message.text === "Checking the disks now.",
+        );
+        assert.strictEqual(receipt?.channel?.inReplyToInputId, input.inputId);
+        assert.strictEqual(receipt?.channel?.taskId, task.taskId);
+        const chip = after.turnItems
+          .flatMap((item) =>
+            item.type === "notification" && item.ledgerTask ? [item.ledgerTask] : [],
+          )
+          .findLast((entry) => entry.taskId === task.taskId);
+        assert.oneOf(chip?.status, ["received", "dispatching", "running", "waiting_input"]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("a silent session's acknowledgment names the task it started", () => {
+    const harness = makeHarness({ botWorkspace: true });
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const input = yield* gateway.ingest(
+        goatInput("Inspect this machine", "silent-ack"),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      yield* TestClock.adjust("20 seconds");
+      yield* runtime.expireOverdue;
+      yield* runtime.settle([input.inputId]);
+      yield* runtime.drain;
+      const { messages } = yield* botMessages;
+      const receipt = messages.find(
+        (message) =>
+          message.role === "assistant" && message.channel?.inReplyToInputId === input.inputId,
+      );
+      assert.strictEqual(receipt?.channel?.taskId, taskIdFor(input.inputId, 0));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("holds task-only outbox rows when their origin receipt is missing", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
