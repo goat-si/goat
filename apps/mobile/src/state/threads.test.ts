@@ -135,6 +135,7 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
     networkStatus: yield* SubscriptionRef.make<NetworkStatus>("online"),
     start: Effect.void,
     register: () => Effect.die("Unexpected registration"),
+    assertKnownAddress: () => Effect.die("Unexpected address check"),
     registerPlatform: () => Effect.die("Unexpected registration"),
     reconcilePlatform: () => Effect.die("Unexpected reconciliation"),
     remove: () => Effect.die("Unexpected removal"),
