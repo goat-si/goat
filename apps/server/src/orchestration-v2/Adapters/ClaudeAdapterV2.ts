@@ -5886,10 +5886,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               previous?.prompt !== prompt ||
               previous?.model !== model;
             const agentId = member.agentId;
-            let metadata =
-              previous === undefined || restarted || previous.agentId !== agentId
-                ? undefined
-                : previous.transcriptMetadata;
+            const newIdentity = previous === undefined || restarted || previous.agentId !== agentId;
+            let metadata = newIdentity ? undefined : previous.transcriptMetadata;
             if (metadata)
               reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata);
             // While the workflow runs, a settled member is read a few times. After it
@@ -5900,7 +5898,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               transcriptDir !== undefined &&
               agentId !== undefined &&
               (input.coordinator.task.status !== "running" ||
-                (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3);
+                (newIdentity ? 0 : previous.transcriptReadAttempts) < 3);
             const readLiveTranscript =
               status === "running" && transcriptDir !== undefined && agentId !== undefined;
             if (!changed && !readTranscript && !readLiveTranscript) continue;
@@ -6036,10 +6034,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
             if (restarted) yield* endOpenToolCalls();
             // Retries can rewrite transcripts past the cursor; rereading from zero repeats only already shown items.
-            let transcriptCursor =
-              previous === undefined || restarted || previous.agentId !== agentId
-                ? initialWorkflowAgentTranscriptCursor
-                : previous.transcriptCursor;
+            let transcriptCursor = newIdentity
+              ? initialWorkflowAgentTranscriptCursor
+              : previous.transcriptCursor;
             let textShown = !restarted && previous?.textShown === true;
             let resultShown = !restarted && previous?.resultShown === true;
             let turnEnded = !restarted && previous?.turnEnded === true;
@@ -6141,7 +6138,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 prompt,
                 model,
                 transcriptReadAttempts:
-                  (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
+                  (newIdentity ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
                   (readTranscript ? 1 : 0),
                 transcriptCursor,
                 transcriptMetadata: metadata,

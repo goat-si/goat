@@ -213,6 +213,29 @@ describe("mergeClaudeWorkflowProgress", () => {
     });
   });
 
+  it("drops effort and speed when another agent takes the member without a new attempt", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([agent({ agentId: "a1", state: "done", attempt: 2 })]),
+    });
+    const previous = first && {
+      ...first,
+      agents: first.agents.map((member) => ({ ...member, effort: "xhigh", speed: "standard" })),
+    };
+    const same = mergeClaudeWorkflowProgress({
+      previous,
+      message: snapshotFrame([agent({ agentId: "a1", state: "done" })]),
+    });
+    const reassigned = mergeClaudeWorkflowProgress({
+      previous,
+      message: snapshotFrame([agent({ agentId: "a2", state: "done" })]),
+    });
+    expect(same?.agents[0]).toMatchObject({ agentId: "a1", effort: "xhigh", speed: "standard" });
+    expect(reassigned?.agents[0]).toMatchObject({ agentId: "a2", attempt: 2, phaseTitle: "Alpha" });
+    expect(reassigned?.agents[0]).not.toHaveProperty("effort");
+    expect(reassigned?.agents[0]).not.toHaveProperty("speed");
+  });
+
   it("drops malformed entries instead of failing the frame", () => {
     const workflow = mergeClaudeWorkflowProgress({
       previous: undefined,

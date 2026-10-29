@@ -13598,6 +13598,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             speed: "standard",
           },
         );
+        NodeFS.writeFileSync(
+          NodePath.join(harness.transcriptDir, "agent-a9.jsonl"),
+          '{"type":"assistant","uuid":"wf-line-a9","message":{"role":"assistant","stop_reason":"end_turn","id":"msg_a9","content":[{"type":"text","text":"A9 answer"}]}}\n',
+        );
+        yield* harness.offerAndWait(
+          workflowSnapshot({
+            uuid: "00000000-0000-4000-8000-000000001024",
+            state: "done",
+            agentId: "a9",
+          }),
+        );
+        yield* harness.awaitUntil(
+          () => currentAssistantAnswers().at(-1) === "A9 answer",
+          "a9 read",
+        );
+        const a9 = workflowCoordinatorEvents(harness.events).at(-1)?.subagent.workflow?.agents[0];
+        assert.deepEqual([a9?.agentId, a9?.effort, a9?.speed], ["a9", undefined, undefined]);
         const previousStartedAt = workflowMemberEvents(harness.events, 1).at(-1)?.subagent
           .startedAt;
         yield* TestClock.adjust(1_000);

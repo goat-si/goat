@@ -68,6 +68,7 @@ export function claudeWorkflowFrames(
     readonly lastProgressAt?: number;
     readonly durationMs?: number;
     readonly label?: string;
+    readonly agentId?: string;
     readonly prompt?: string;
     readonly model?: string;
     readonly attempt?: number;
@@ -85,7 +86,7 @@ export function claudeWorkflowFrames(
           type: "workflow_agent",
           index: 1,
           label: input.label ?? "alpha:one",
-          agentId: "a1",
+          agentId: input.agentId ?? "a1",
           state: input.state,
           phaseIndex: 1,
           phaseTitle: "Alpha",
