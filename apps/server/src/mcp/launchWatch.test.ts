@@ -396,3 +396,27 @@ it("skips a found run's end when the thread went straight on, and a sender can s
   expect(skipped.reportedEnds).toEqual({});
   expect(addPendingRun(skipped, run2!, 40).pendingRuns).toEqual([run2]);
 });
+
+it("looks again at a run still under way whose start it cannot read yet, and skips one that ended so", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  // run-2 is queued before its message lands; the look stops there, run-3 included.
+  const queued = [
+    watchedRun(run1!, 1),
+    watchedRun(run2!, 2, { completedAt: null, trigger: undefined }),
+    watchedRun(run3!, 3),
+  ];
+  expect(discoverRuns(watch, queued, 5)).toBe(watch);
+  const started = [watchedRun(run1!, 1), watchedRun(run2!, 2), watchedRun(run3!, 3)];
+  expect(discoverRuns(watch, started, 6)).toMatchObject({
+    pendingRuns: [run2, run3],
+    seen: { runId: run3, ordinal: 3 },
+  });
+  // Ended with no readable start, it is left out for good.
+  const unread = [watchedRun(run1!, 1), watchedRun(run2!, 2, { trigger: undefined })];
+  expect(discoverRuns(watch, unread, 7)).toMatchObject({
+    pendingRuns: [],
+    skippedRuns: [run2],
+    seen: { runId: run2, ordinal: 2 },
+  });
+});

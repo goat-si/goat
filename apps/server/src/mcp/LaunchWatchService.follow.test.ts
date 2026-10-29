@@ -38,6 +38,7 @@ interface RunFacts {
   readonly completedAt?: number | null;
   /** The message that started it; a wake of the thread's own by default. */
   readonly trigger?: string;
+  readonly status?: "queued" | "running" | "completed";
 }
 
 /** Records a run of the target thread, which becomes its latest run. */
@@ -49,7 +50,7 @@ const addRun = (world: World, runId: RunId, ordinal: number, facts: RunFacts = {
     {
       id: runId,
       ordinal,
-      status: completedAt === null ? "running" : "completed",
+      status: facts.status ?? (completedAt === null ? "running" : "completed"),
       requestedAt: DateTime.makeUnsafe(requestedAt),
       completedAt: completedAt === null ? null : DateTime.makeUnsafe(completedAt),
       userMessageId: facts.trigger ?? `message:wake:${runId}`,
@@ -94,26 +95,67 @@ const launchAndFinish = (world: World, reported: Queue.Queue<void>) =>
     expect(yield* Queue.take(world.idleWaits)).toBe(30_000);
   });
 
+interface RemoteRun {
+  readonly runId: RunId;
+  readonly ordinal: number;
+  /** The message that started it; null when it has none yet. */
+  readonly trigger?: string | null;
+  readonly status?: "queued" | "running" | "completed";
+}
+
 /** A remote thread's runs and the messages that started them, as goat_thread_read lists them. */
-const remoteThread = (runs: ReadonlyArray<{ runId: RunId; ordinal: number; trigger?: string }>) =>
+const remoteThread = (
+  runs: ReadonlyArray<RemoteRun>,
+  more: { readonly itemCount?: number; readonly items?: ReadonlyArray<unknown> } = {},
+) =>
   remoteRead({
-    itemCount: runs.length,
-    recentRuns: runs.toReversed().map(({ runId, ordinal }) => ({
+    itemCount: more.itemCount ?? runs.length,
+    recentRuns: runs.toReversed().map(({ runId, ordinal, status = "completed" }) => ({
       runId,
       ordinal,
-      status: "completed",
+      status,
       providerInstanceId: "codex",
       model: "gpt-5",
       requestedAt: DateTime.formatIso(DateTime.makeUnsafe(ordinal * 10_000)),
       startedAt: DateTime.formatIso(DateTime.makeUnsafe(ordinal * 10_000)),
-      completedAt: DateTime.formatIso(DateTime.makeUnsafe(ordinal * 10_000 + 5_000)),
+      completedAt:
+        status === "completed"
+          ? DateTime.formatIso(DateTime.makeUnsafe(ordinal * 10_000 + 5_000))
+          : null,
     })),
-    items: runs.map(({ runId, ordinal, trigger }) => ({
-      ...remoteItem(ordinal, runId, "Do the next step."),
-      type: "user_message",
-      messageId: trigger ?? `message:wake:${runId}`,
-    })),
+    items: [
+      ...runs.flatMap(({ runId, ordinal, trigger }) =>
+        trigger === null ? [] : [userMessage(ordinal, runId, trigger ?? `message:wake:${runId}`)],
+      ),
+      ...(more.items ?? []),
+    ],
   });
+
+const userMessage = (position: number, runId: RunId, messageId: string) => ({
+  ...remoteItem(position, runId, "Do the next step."),
+  type: "user_message",
+  messageId,
+});
+
+/** A remote host that ends each followed run at once and answers reads from the current thread. */
+const remoteHost =
+  (thread: () => unknown): World["hostCall"] =>
+  (call) =>
+    Effect.succeed(
+      call.tool === "goat_thread_wait"
+        ? {
+            threadId: target,
+            runId: (call.arguments as { readonly runId: RunId }).runId,
+            status: "completed",
+            timedOut: false,
+          }
+        : thread(),
+    );
+
+const remoteWaits = (world: World) =>
+  world.hostCalls
+    .filter(({ call }) => call.tool === "goat_thread_wait")
+    .map(({ call }) => (call.arguments as { readonly runId: RunId }).runId);
 
 describe("LaunchWatchService runs the thread starts itself", () => {
   it.effect("reports each run the thread starts itself once, each time the thread goes idle", () =>
@@ -353,5 +395,115 @@ describe("LaunchWatchService runs the thread starts itself", () => {
       ).toEqual([run1, run2, run3]);
       expect(world.hostCalls.every(({ call }) => call.writes === false)).toBe(true);
     }),
+  );
+  it.effect("never takes a steer for who started a remote run whose start is out of view", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const baseDir = yield* tempDir;
+      // bot-b's long run-2: its starting send scrolled out of the last messages; a steer did not.
+      const steer = { items: [userMessage(150, run2, "message:wake:steer")], itemCount: 200 };
+      let thread = remoteThread([{ runId: run1, ordinal: 1 }]);
+      world.hostCall = remoteHost(() => thread);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(external({ host: "box" }));
+          yield* Queue.take(reported);
+          yield* Queue.take(world.idleWaits);
+          thread = remoteThread(
+            [
+              { runId: run1, ordinal: 1, trigger: null },
+              { runId: run2, ordinal: 2, trigger: null, status: "running" },
+            ],
+            steer,
+          );
+          yield* look(world);
+          yield* Queue.take(world.idleWaits);
+          thread = remoteThread(
+            [
+              { runId: run1, ordinal: 1, trigger: null },
+              { runId: run2, ordinal: 2, trigger: null },
+            ],
+            steer,
+          );
+          yield* look(world);
+          yield* Queue.take(world.idleWaits);
+          expect(yield* service.find(keyOf("client:bot-a", "box"))).toMatchObject({
+            pendingRuns: [],
+            skippedRuns: [run2],
+          });
+        }),
+      );
+      expect(reportedRuns(world)).toEqual([run1]);
+      expect(remoteWaits(world)).toEqual([run1]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reports a remote run that was queued before its message landed", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const baseDir = yield* tempDir;
+      let thread = remoteThread([{ runId: run1, ordinal: 1 }]);
+      world.hostCall = remoteHost(() => thread);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(external({ host: "box" }));
+          yield* Queue.take(reported);
+          yield* Queue.take(world.idleWaits);
+          thread = remoteThread([
+            { runId: run1, ordinal: 1 },
+            { runId: run2, ordinal: 2, trigger: null, status: "queued" },
+          ]);
+          yield* look(world);
+          yield* Queue.take(world.idleWaits);
+          expect(remoteWaits(world)).toEqual([run1]);
+          thread = remoteThread([
+            { runId: run1, ordinal: 1 },
+            { runId: run2, ordinal: 2 },
+          ]);
+          yield* look(world);
+          yield* Queue.take(reported);
+        }),
+      );
+      expect(reportedRuns(world)).toEqual([run1, run2]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("does not report another run's question while its own run waits in the queue", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const baseDir = yield* tempDir;
+      addRun(world, run1, 1);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(external());
+          yield* launchAndFinish(world, reported);
+          // bot-b's send is running and asks a question; the thread's own run-3 queues behind it.
+          addRun(world, run2, 2, {
+            completedAt: null,
+            trigger: "message:mcp:client%3Abot-b:thread-send:request-1",
+          });
+          addRun(world, run3, 3, { completedAt: null, status: "queued" });
+          world.requests.push({ id: "request-1", status: "pending", kind: "user_input" });
+          yield* Queue.offer(
+            world.waits,
+            Effect.succeed({
+              threadId: target,
+              run: { id: run3, status: "queued" } as never,
+              timedOut: true,
+            }),
+          );
+          yield* Queue.offer(world.waits, finished(run3));
+          yield* look(world);
+          yield* Queue.take(reported);
+        }),
+      );
+      expect(world.webhookReports.map(({ report }) => [report.event, report.runId])).toEqual([
+        ["run.completed", run1],
+        ["run.completed", run3],
+      ]);
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
