@@ -120,6 +120,35 @@ describe("computer use on the wire", () => {
     expect(() => decode({ ...reply, proxyChannelToken: "forged" })).toThrow();
   });
 
+  it("passes a driver's own reply members through, such as goat.12 point, hit and closure ids", () => {
+    const decode = Schema.decodeUnknownSync(ComputerUsePrimitiveReply);
+    const envelope = {
+      requestId: "request:1",
+      registrationId: "registration:1",
+      controlId: "control:1",
+      connectionGeneration: "driver:1",
+      runId: "run:1",
+      turnId: "turn:1",
+      callId: 1,
+      status: "settled",
+    } as const;
+    for (const structuredContent of [
+      {
+        effect: "unverifiable",
+        point: { x: 80.5, y: 75, coordinate_space: "window_points" },
+        hit: { index: 3, role: "AXButton", label: "OK", identifier: "ok" },
+      },
+      {
+        windows: [{ pid: 42, window_id: 7 }],
+        enumeration_complete: true,
+        authoritative_window_ids: [7, 9],
+      },
+    ]) {
+      const reply = { ...envelope, result: { structuredContent } };
+      expect(encodeComputerUsePrimitiveReply(decode(reply))).toEqual(reply);
+    }
+  });
+
   it("thread updates require snapshot expiry and bind each control end to its id", () => {
     const decode = Schema.decodeUnknownSync(ComputerUseLeaseThreadUpdate);
     expect(decode({ state: "waiting" })).toEqual({ state: "waiting" });

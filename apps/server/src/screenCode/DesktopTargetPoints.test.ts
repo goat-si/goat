@@ -84,10 +84,11 @@ const framedState = {
 };
 
 it.effect(
-  "window points go to the driver with coordinate_space window_points and the window's basis, report hit: null when the driver reply omits dispatch-time hit (never guessing from stale or overlapping observed frames), and surface driver hit when present",
+  "window points go to the driver with coordinate_space window_points and the window's basis, report hit: null when the driver reply omits dispatch-time hit (never guessing from stale or overlapping observed frames), and surface a goat.12 driver point and hit in GOAT's terms",
   () =>
     Effect.gen(function* () {
       let driverHit: unknown;
+      let driverPoint: unknown;
       const connection = { id: "driver:1" };
       const { host, sent } = fixture(
         {
@@ -105,6 +106,7 @@ it.effect(
           click: () => ({
             effect: "confirmed",
             evidence: ["driver:acted"],
+            ...(driverPoint === undefined ? {} : { point: driverPoint }),
             ...(driverHit === undefined ? {} : { hit: driverHit }),
           }),
         },
@@ -139,15 +141,16 @@ it.effect(
         point: { x: 80, y: 75, unit: "window_points" },
         hit: null,
       });
-      driverHit = { role: "AXButton", label: "Apply", element_token: "s0000000a:1" };
+      driverPoint = { x: 80.5, y: 75, coordinate_space: "window_points" };
+      driverHit = { index: 1, role: "AXButton", label: "Apply", identifier: "apply-button" };
       const withDriverHit = yield* host.invoke(
         call("click", { x: 80, y: 75, coordinate_space: "window_points" }, ref),
         context,
       );
-      expect(withDriverHit.value).toMatchObject({
-        point: { x: 80, y: 75, unit: "window_points" },
-        hit: { role: "AXButton", label: "Apply", element_token: "s0000000a:1" },
-      });
+      // The reply names no snapshot for hit.index, so no observe number can be matched to it.
+      const withDriver = withDriverHit.value as Record<string, unknown>;
+      expect(withDriver.point).toEqual({ x: 80.5, y: 75, unit: "window_points" });
+      expect(withDriver.hit).toEqual({ role: "AXButton", name: "Apply", id: "apply-button" });
     }),
 );
 

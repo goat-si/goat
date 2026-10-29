@@ -44,6 +44,7 @@ import {
   type Placed,
   type Rect,
 } from "./DesktopFrames.ts";
+import { waitForOutcome } from "./DesktopWindowClosure.ts";
 import {
   annotatePointerResult,
   applyDesktopPointerArgs,
@@ -816,11 +817,14 @@ export const createDesktopTargetHost = (deps: {
         context,
       );
       const status = string(object(driverValue(reply))?.status) ?? "unknown";
-      return {
-        value: { met: status === "satisfied", status },
-        category: status === "satisfied" ? "confirmed" : "unverifiable",
-        evidence: [`verify_state:${status}`],
-      };
+      return yield* waitForOutcome({
+        status,
+        gone: args.window === "gone",
+        list: () =>
+          boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context),
+        target: bound,
+        cellDeadlineMillis: call.deadlineMillis,
+      });
     }
     if (call.method === "end_foreground") {
       const current = Option.getOrUndefined(
@@ -880,6 +884,7 @@ export const createDesktopTargetHost = (deps: {
           const result = annotatePointerResult(
             driverResult(tool, reply),
             pointerResolved.windowPoint,
+            tool,
           );
           const replyData = object(driverValue(reply));
           const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;

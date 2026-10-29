@@ -33,6 +33,8 @@ const POINTER_METHODS: ReadonlySet<string> = new Set([
   "move_cursor",
 ]);
 const RESTARTED_POINTS = "The driver restarted; take a new screenshot before using [x, y] pixels.";
+/** Tools whose driver results carry a dispatch point and hit (cua-driver POINTER_RESULT_TOOLS). */
+const POINTER_RESULT_TOOLS: ReadonlySet<string> = new Set([...POINTER_METHODS, "double_click"]);
 const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
@@ -495,27 +497,57 @@ export const applyDesktopPointerArgs = (
   return { ok: true, needs: "points" };
 };
 
+const finitePoint = (value: Record<string, unknown> | undefined) =>
+  value && Number.isFinite(value.x) && Number.isFinite(value.y)
+    ? { x: value.x as number, y: value.y as number }
+    : undefined;
+const nonBlank = (value: unknown) =>
+  typeof value === "string" && value.trim() !== "" ? value : undefined;
+
+/** The driver's dispatch-time hit in observation terms; never guessed from cached frames. */
+const observedHit = (value: unknown) => {
+  const hit = object(value);
+  const role = nonBlank(hit?.role);
+  const name = nonBlank(hit?.label);
+  const id = nonBlank(hit?.identifier);
+  // hit.index counts in the snapshot the driver's route used, which the reply does not name, so
+  // it cannot be matched to an observe number.
+  return role === undefined && name === undefined && id === undefined
+    ? null
+    : {
+        ...(role === undefined ? {} : { role }),
+        ...(name === undefined ? {} : { name }),
+        ...(id === undefined ? {} : { id }),
+      };
+};
+
 /**
- * Attaches window-point coordinates and driver-supplied dispatch-time hit metadata to a pointer
- * action's result value; when the driver does not report a dispatch-time hit, hit is explicitly
- * null rather than guessed from cached observation frames.
+ * Gives a pointer tool's result GOAT's point and hit: the driver's point when it is in window
+ * points, else the window point GOAT sent, else none (other spaces have no basis here). Without a
+ * tool, a result counts as a pointer's when GOAT sent a window point or the driver reported either.
  */
 export const annotatePointerResult = (
   result: ScreenHostDispatchResult,
   windowPoint: { readonly x: number; readonly y: number } | undefined,
+  tool?: string,
 ): ScreenHostDispatchResult => {
-  if (windowPoint === undefined) return result;
-  const current = object(result.value) ?? {};
+  const current = object(result.value);
+  const pointer =
+    tool === undefined
+      ? windowPoint !== undefined ||
+        (current !== undefined && ("point" in current || "hit" in current))
+      : POINTER_RESULT_TOOLS.has(tool);
+  if (!pointer) return result;
+  const { point: driverPoint, hit, ...rest } = current ?? {};
+  const reported = object(driverPoint);
+  const space = reported?.coordinate_space ?? reported?.unit;
+  const point = (space === "window_points" ? finitePoint(reported) : undefined) ?? windowPoint;
   return {
     ...result,
     value: {
-      ...current,
-      point: current.point ?? {
-        x: windowPoint.x,
-        y: windowPoint.y,
-        unit: "window_points",
-      },
-      hit: "hit" in current && current.hit !== undefined ? current.hit : null,
+      ...rest,
+      ...(point === undefined ? {} : { point: { x: point.x, y: point.y, unit: "window_points" } }),
+      hit: observedHit(hit),
     },
   };
 };

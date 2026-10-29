@@ -705,7 +705,7 @@ it.live(
       expect(verifies).toBe(2);
 
       // T63a (3): a >200-byte hit object near returnBytes is measured via guestDoneBytes so returning Done directly never exceeds returnBytes.
-      bigHit = { role: "AXButton", label: "x".repeat(180), element_token: "s1:11" };
+      bigHit = { role: "AXButton", label: "x".repeat(180), identifier: "Shift" };
       const tightDone = yield* Effect.gen(function* () {
         yield* runCell(
           "globalThis.calcApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await calcApp.observe(); return 1;",
@@ -719,7 +719,7 @@ it.live(
       expect(tightDone.value).toMatchObject({
         verdict: "unverifiable",
         point: { x: 50, y: 50, unit: "window_points" },
-        hit: bigHit,
+        hit: { role: "AXButton", name: "x".repeat(180), id: "Shift" },
       });
     }),
 );

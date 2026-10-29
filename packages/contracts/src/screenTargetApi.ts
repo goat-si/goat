@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/4";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/5";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -14,7 +14,7 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
-type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
+type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: { role?: string; name?: string; id?: string } | null; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
 // App observed lists only the acted element's own state change; read other elements with observe(). A key with no target and no modifiers carries no windows report.
 // confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
@@ -57,7 +57,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
-const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }.
+const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }. "gone" is met, and bound "closed", only when the driver proves the window closed.
 // Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
