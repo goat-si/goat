@@ -514,6 +514,34 @@ it.effect(
       expect(
         yield* sql`SELECT receipt_id FROM mcp_request_reservations WHERE client_request_id = 'ssh-chan-fail'`,
       ).toHaveLength(0);
+
+      // If both the correlation update and the cleanup delete fail, the receipt is marked abandoned
+      // so same-process retries return outcome_unknown (not in_progress) and reconcile can still release it.
+      yield* Ref.set(probe.customCorrelationId, "rr-channel-child-3");
+      yield* sql`CREATE TRIGGER block_both_update BEFORE UPDATE ON mcp_request_reservations
+        BEGIN SELECT RAISE(ABORT, 'update refused'); END`;
+      yield* sql`CREATE TRIGGER block_both_delete BEFORE DELETE ON mcp_request_reservations
+        BEGIN SELECT RAISE(ABORT, 'delete refused'); END`;
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-both-fail" }),
+      ).toMatchObject({ reason: "storage_failed", mayHaveStarted: false });
+      yield* Ref.set(probe.customCorrelationId, null);
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-both-fail" }),
+      ).toMatchObject({ reason: "outcome_unknown" });
+      yield* sql`DROP TRIGGER block_both_update`;
+      yield* sql`DROP TRIGGER block_both_delete`;
+      const [abandonedRow] = yield* sql<{ readonly receipt_id: string }>`
+        SELECT receipt_id FROM mcp_request_reservations WHERE client_request_id = 'ssh-chan-both-fail'`;
+      yield* sql`INSERT INTO remote_dispatches
+        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, last_error, created_at, updated_at, memory_grant_ceiling)
+        VALUES (${`rr-${abandonedRow!.receipt_id}`}, 'thread', ${caller}, 'box', 'key', 'wake', 'cancelled',
+          'The launch never reached box; it is fenced there, so it cannot start late.',
+          '2026-10-23T00:00:00.000Z', '2026-10-23T00:00:00.000Z', 'none')`;
+      expect(yield* callTool(threadList.name, { host: "box" })).toEqual({ ok: true });
+      expect(
+        yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-both-fail" }),
+      ).toMatchObject({ run: 7 });
     }).pipe(Effect.provide(served)),
 );
 

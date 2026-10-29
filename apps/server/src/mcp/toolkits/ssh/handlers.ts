@@ -603,6 +603,8 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                       const underlying = isRemoteDispatchError(error) ? error.cause : error;
                       const refusedBeforeLaunch =
                         preSend ||
+                        (isOrchestratorMcpFailure(underlying) &&
+                          underlying.mayHaveStarted === false) ||
                         (underlying instanceof SshRemoteDispatch.SshRemoteDispatchError &&
                           (underlying.reason === "remote_refused" ||
                             underlying.reason === "invalid_request" ||

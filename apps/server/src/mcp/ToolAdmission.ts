@@ -339,7 +339,9 @@ const makeStore = (sql: SqlClient.SqlClient, bootId: string) => {
         }).pipe(
           Effect.andThen(
             sql`DELETE FROM mcp_request_reservations
-              WHERE receipt_id = ${receiptId} AND state = 'running'`.pipe(Effect.ignoreCause),
+              WHERE receipt_id = ${receiptId} AND state = 'running'`.pipe(
+              Effect.catchCause(() => abandon(receiptId)),
+            ),
           ),
           Effect.andThen(
             Effect.fail(
