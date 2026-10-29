@@ -48,11 +48,36 @@ const stepToolAndArgs = (
   return key === undefined ? undefined : { tool: key, args: step[key] };
 };
 
+const EXTRA_HEAD_BOUNDS_MS: Readonly<Record<string, number>> = {
+  get_desktop_state: 7_000,
+  set_window_frame: 5_000,
+  kill_app: 5_000,
+  check_for_update: 5_000,
+  parse_visual_regions: 10_000,
+  wait_for_window_settle: 12_000,
+  page: 35_000,
+  get_browser_state: 35_000,
+  browser_prepare: 35_000,
+  browser_navigate: 35_000,
+  browser_click: 35_000,
+  browser_type: 35_000,
+  browser_select: 35_000,
+  browser_pointer: 35_000,
+  browser_dialog: 35_000,
+  browser_set_input_files: 35_000,
+  browser_download: 35_000,
+  start_recording: 120_000,
+  stop_recording: 120_000,
+  replay_trajectory: 120_000,
+  install_ffmpeg: 120_000,
+  install_extension: 120_000,
+};
+
 /** Maximum legitimate execution bound of an earlier call on the driver before it is judged wedged. */
 const headExecutionBoundMs = (tool: string, args: unknown): number => {
   const given = record(args);
   if (tool === "get_window_state") return windowStateBoundMs(given);
-  if (tool === "type_text" || tool === "type_text_chars") {
+  if (tool === "type_text" || tool === "type_text_chars" || tool === "type") {
     const rawDelay = driverIntegerArg(given.delay_ms);
     const perChar = 24 + Math.min(200, Math.max(8, rawDelay ?? 30));
     const chars = typeof given.text === "string" ? [...given.text].length : 0;
@@ -63,7 +88,7 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
     const wait = raw !== undefined && raw <= 10_000 ? raw : 5_000;
     return wait + 11_000 + (driverBoolArg(given.include_screenshot) === true ? 9_000 : 0);
   }
-  if (tool === "run_steps") {
+  if (tool === "run_steps" || tool === "run_actions") {
     const obs = record(given.observe);
     let obsBound =
       driverBoolArg(given.observe) === false ? 18_000 : Math.max(18_000, windowStateBoundMs(obs));
@@ -75,6 +100,8 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
       if (!parsed) continue;
       if (parsed.tool === "get_window_state") {
         obsBound = Math.max(obsBound, windowStateBoundMs({ ...record(parsed.args), ...obs }));
+      } else if (parsed.tool.toLowerCase().includes("screenshot")) {
+        obsBound = Math.max(obsBound, windowStateBoundMs({ ...obs, include_screenshot: true }));
       } else if (parsed.tool === "zoom") {
         tailReadsMs += 7_000;
         obsBound = Math.max(obsBound, windowStateBoundMs({ ...obs, include_screenshot: true }));
@@ -84,7 +111,7 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
     }
     return 60_000 + lastStepMs + obsBound + tailReadsMs;
   }
-  return driverCallCapMs(tool, args);
+  return Math.max(EXTRA_HEAD_BOUNDS_MS[tool] ?? 0, driverCallCapMs(tool, args));
 };
 
 const replyKey = (line: string): string | undefined => {

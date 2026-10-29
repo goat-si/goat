@@ -265,7 +265,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
             id: "prov:batch",
             method: "tools/call",
             params: {
-              name: "run_steps",
+              name: "run_actions",
               arguments: {
                 pid: 42,
                 window_id: 1,
