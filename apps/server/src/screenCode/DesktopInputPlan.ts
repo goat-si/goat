@@ -102,17 +102,11 @@ export const buildWaitExpectation = (
   const window = args.window === "exists" || args.window === "gone" ? args.window : undefined;
   const role = string(args.role);
   const name = string(args.name);
-  const value = string(args.value);
-  const enabled = typeof args.enabled === "boolean" ? args.enabled : undefined;
-  const selected = typeof args.selected === "boolean" ? args.selected : undefined;
-  if (
-    window === undefined &&
-    role === undefined &&
-    name === undefined &&
-    value === undefined &&
-    enabled === undefined &&
-    selected === undefined
-  )
+  const value = typeof args.value === "string" ? args.value : undefined;
+  // Unlabelled value rows (such as AXStaticText = "702") use their value as their driver label,
+  // so defaulting label_contains to a non-empty value narrows role matches on goat.8/goat.9 too.
+  const label = name ?? (value !== undefined && value.trim().length > 0 ? value : undefined);
+  if (window === undefined && role === undefined && label === undefined)
     return {
       error: fail(
         "invalid_argument",
@@ -126,12 +120,12 @@ export const buildWaitExpectation = (
             element: {
               selector: {
                 ...(role === undefined ? {} : { role }),
-                ...(name === undefined ? {} : { label_contains: name }),
+                ...(label === undefined ? {} : { label_contains: label }),
               },
               exists: true,
               ...(value === undefined ? {} : { value_equals: value }),
-              ...(enabled === undefined ? {} : { enabled }),
-              ...(selected === undefined ? {} : { selected }),
+              ...(typeof args.enabled === "boolean" ? { enabled: args.enabled } : {}),
+              ...(typeof args.selected === "boolean" ? { selected: args.selected } : {}),
             },
           }
         : { window: { exists: window === "exists" } },

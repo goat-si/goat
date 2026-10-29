@@ -53,7 +53,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }.
-// Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
+// For unlabelled value rows (such as AXStaticText), waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" }; for a named control, pass { name, value }.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and

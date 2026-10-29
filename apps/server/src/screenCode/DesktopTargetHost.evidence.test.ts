@@ -457,28 +457,78 @@ it.live(
 );
 
 it.live(
-  "waitFor accepts {value} and {role, value} predicates for verify_state and rejects an empty predicate",
+  "waitFor narrows unlabelled static-text rows by value on the pinned driver, preserves empty-string value_equals, and rejects an empty predicate",
   () => {
+    const elements = [
+      { role: "AXStaticText", label: "78 × 9", value: "78 × 9", display_only: true },
+      { role: "AXStaticText", label: "702", value: "702", display_only: true },
+      { role: "AXTextField", label: "Search", value: "hello", element_index: 1 },
+    ];
     const { host, sent } = fixture({
-      verify_state: { status: "satisfied", stable: true },
+      verify_state: (args: {
+        expect: ReadonlyArray<{
+          element?: { selector: { role?: string; label_contains?: string }; value_equals?: string };
+        }>;
+      }) => {
+        const el = args.expect[0]?.element;
+        if (!el || (!el.selector.role && !el.selector.label_contains))
+          return { status: "unknown", stable: false };
+        const matched = elements.filter(
+          (item) =>
+            (!el.selector.role || item.role === el.selector.role) &&
+            (!el.selector.label_contains ||
+              item.label.toLowerCase().includes(el.selector.label_contains.toLowerCase())),
+        );
+        if (matched.length !== 1) return { status: "unknown", stable: false };
+        if (el.value_equals !== undefined && matched[0]?.value !== el.value_equals)
+          return { status: "unsatisfied", stable: false };
+        return { status: "satisfied", stable: true };
+      },
     });
     return Effect.gen(function* () {
       const ok = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
           "const v1 = await app.waitFor({value: '702'}); " +
           "const v2 = await app.waitFor({role: 'AXStaticText', value: '702'}); " +
+          "const vEmpty = await app.waitFor({role: 'AXTextField', name: 'Search', value: ''}); " +
+          "let bareEmptyErr = ''; try { await app.waitFor({value: ''}); } catch (e) { bareEmptyErr = e.code; } " +
           "let emptyErr = ''; try { await app.waitFor({}); } catch (e) { emptyErr = e.code; } " +
-          "return { m1: v1.met, m2: v2.met, emptyErr };",
+          "return { m1: v1.met, m2: v2.met, mEmpty: vEmpty.met, bareEmptyErr, emptyErr };",
       )) as ScreenRunResult;
-      expect(ok.value).toEqual({ m1: true, m2: true, emptyErr: "invalid_argument" });
+      expect(ok.value).toEqual({
+        m1: true,
+        m2: true,
+        mEmpty: false,
+        bareEmptyErr: "invalid_argument",
+        emptyErr: "invalid_argument",
+      });
       const verifies = sent.filter((s) => s.tool === "verify_state");
-      expect(verifies).toHaveLength(2);
+      expect(verifies).toHaveLength(3);
       expect(verifies[0]?.args).toMatchObject({
-        expect: [{ element: { selector: {}, exists: true, value_equals: "702" } }],
+        expect: [
+          { element: { selector: { label_contains: "702" }, exists: true, value_equals: "702" } },
+        ],
       });
       expect(verifies[1]?.args).toMatchObject({
         expect: [
-          { element: { selector: { role: "AXStaticText" }, exists: true, value_equals: "702" } },
+          {
+            element: {
+              selector: { role: "AXStaticText", label_contains: "702" },
+              exists: true,
+              value_equals: "702",
+            },
+          },
+        ],
+      });
+      expect(verifies[2]?.args).toMatchObject({
+        expect: [
+          {
+            element: {
+              selector: { role: "AXTextField", label_contains: "Search" },
+              exists: true,
+              value_equals: "",
+            },
+          },
         ],
       });
     }).pipe(Effect.provide(cellService(host)));
