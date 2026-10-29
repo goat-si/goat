@@ -589,20 +589,25 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
     const runtime = yield* makeAcpRegistryManagementRuntime(input);
     const initialized = yield* runtime.initialize();
     const listed = yield* runtime.listSessions(input.cursor);
+    // A session whose additional roots GOAT had to drop or cap no longer describes its whole scope.
+    let directoriesCut = false;
     const sessions = listed.sessions.slice(0, 256).flatMap((session) => {
       const sessionId = boundedOpaqueValue(session.sessionId, 1_024);
       const cwd = boundedOpaqueValue(session.cwd, 4_096);
       if (sessionId === undefined || cwd === undefined) return [];
+      const directories = session.additionalDirectories ?? [];
+      const additionalDirectories = directories
+        .flatMap((directory) => {
+          const normalized = boundedOpaqueValue(directory, 4_096);
+          return normalized === undefined ? [] : [normalized];
+        })
+        .slice(0, 32);
+      if (additionalDirectories.length !== directories.length) directoriesCut = true;
       return [
         {
           sessionId,
           cwd,
-          additionalDirectories: (session.additionalDirectories ?? [])
-            .flatMap((directory) => {
-              const normalized = boundedOpaqueValue(directory, 4_096);
-              return normalized === undefined ? [] : [normalized];
-            })
-            .slice(0, 32),
+          additionalDirectories,
           title:
             session.title === undefined || session.title === null
               ? null
@@ -615,12 +620,18 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
         },
       ];
     });
+    const nextCursor =
+      listed.nextCursor === undefined || listed.nextCursor === null
+        ? null
+        : boundedText(listed.nextCursor, 2_048) || null;
+    const incomplete =
+      directoriesCut ||
+      sessions.length !== listed.sessions.length ||
+      nextCursor !== (listed.nextCursor ?? null);
     return AcpRegistryListSessionsResult.make({
       sessions,
-      nextCursor:
-        listed.nextCursor === undefined || listed.nextCursor === null
-          ? null
-          : boundedText(listed.nextCursor, 2_048) || null,
+      ...(incomplete ? { truncated: true } : {}),
+      nextCursor,
       canLoad: initialized.agentCapabilities?.loadSession === true,
       canResume: initialized.agentCapabilities?.sessionCapabilities?.resume != null,
       canDelete: initialized.agentCapabilities?.sessionCapabilities?.delete != null,

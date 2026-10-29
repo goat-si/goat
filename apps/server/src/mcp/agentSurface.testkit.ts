@@ -20,6 +20,7 @@ import { NoteToolkit } from "./toolkits/note/tools.ts";
 import * as NotesService from "../notes/NotesService.ts";
 import * as SshDeviceAdd from "../sshRemote/SshDeviceAdd.ts";
 import * as Onboarding from "../provider/ProviderOnboarding.ts";
+import * as AcpSessionService from "../provider/AcpSessionService.ts";
 import * as ProviderSettingsService from "../provider/ProviderSettings.ts";
 import * as HomeRequests from "../provider/CodexHomeRequests.ts";
 import * as ProviderDiagnosisRouting from "../provider/ProviderDiagnosisRouting.ts";
@@ -259,6 +260,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(CloudAgentService.CloudAgentService)({}),
   Layer.mock(HomeRequests.CodexHomeRequests)({}),
   Layer.mock(ProviderHostSync.ProviderHostSync)({}),
+  Layer.mock(AcpSessionService.AcpSessionService)({}),
   Layer.mock(Onboarding.ProviderOnboarding)({}),
   Layer.mock(ProviderSettingsService.ProviderSettings)({
     presentDiagnosis: (result) => Effect.succeed(result),

@@ -16,6 +16,7 @@ import type * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
 
 import { mockSessionNotices } from "./acpMockNotices.ts";
+import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
 
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
@@ -797,16 +798,12 @@ const program = Effect.gen(function* () {
     yield* agent.handleListSessions((request) =>
       Effect.gen(function* () {
         yield* requireAuthentication();
-        return {
-          sessions: [
-            {
-              sessionId,
-              cwd: request.cwd ?? process.cwd(),
-              title: "Mock session",
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            },
-          ],
-        };
+        return mockSessionPage(
+          request.cwd ?? process.cwd(),
+          sessionId,
+          Number(process.env.GOAT_ACP_SESSION_LIST_COUNT ?? "1"),
+          process.env.GOAT_ACP_SESSION_LIST_SCENARIO,
+        );
       }),
     );
   }

@@ -2,6 +2,8 @@ import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
+  AcpRegistryListSessionsInput,
+  AcpRegistryListSessionsResult,
   CloudHoldersInput,
   CloudHoldersResult,
   CloudLaunchInput,
@@ -39,6 +41,7 @@ import {
 } from "@goat/contracts";
 import { Tool, Toolkit } from "effect/ai";
 
+import * as AcpSessionService from "../../../provider/AcpSessionService.ts";
 import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProviderDiagnosisRouting from "../../../provider/ProviderDiagnosisRouting.ts";
@@ -47,6 +50,15 @@ import * as ProviderOnboarding from "../../../provider/ProviderOnboarding.ts";
 import * as ProviderSettings from "../../../provider/ProviderSettings.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { withClientRequestId } from "../keyedParameters.ts";
+
+const AcpSessionListTool = Tool.make(agentSurfaceRegistry["acp_session.list"].name, {
+  description: agentSurfaceRegistry["acp_session.list"].description,
+  parameters: AcpRegistryListSessionsInput,
+  success: AcpRegistryListSessionsResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [McpInvocationContext.McpInvocationContext, AcpSessionService.AcpSessionService],
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["acp_session.list"]));
 
 const ProviderDiagnoseTool = Tool.make(agentSurfaceRegistry["provider.diagnose"].name, {
   description: agentSurfaceRegistry["provider.diagnose"].description,
@@ -234,6 +246,7 @@ const CloudRunForgetTool = Tool.make(agentSurfaceRegistry["cloud_agent.run_forge
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["cloud_agent.run_forget"]));
 
 export const ProviderToolkit = Toolkit.make(
+  AcpSessionListTool,
   ProviderDiagnoseTool,
   ProviderHomeRequestTool,
   ProviderHostMatrixTool,

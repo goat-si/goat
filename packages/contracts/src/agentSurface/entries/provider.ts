@@ -2,6 +2,28 @@ import { providerSurfaceEntries } from "../providerEntries.ts";
 import { entry } from "../entry.ts";
 
 export const providerEntries = {
+  "acp_session.list": entry({
+    resource: "acp_session",
+    verb: "list",
+    name: "goat_acp_session_list",
+    toolkit: "provider",
+    summary: "List ACP provider sessions for a project",
+    description:
+      "List native ACP sessions and imported threads. Incomplete results are refused; use Settings.",
+    guide:
+      "GOAT refuses a page if it drops sessions or changes the provider cursor. A person can manage sessions in Settings.",
+    parameters: {
+      instanceId: "ACP provider instance ID.",
+      projectId: "Project whose workspace contains the sessions.",
+      cursor: "Continuation cursor from the previous page.",
+    },
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: true, openWorldHint: true },
+  }),
   "provider.list": entry({
     resource: "provider",
     verb: "list",

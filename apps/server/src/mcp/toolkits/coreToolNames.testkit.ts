@@ -23,6 +23,7 @@ import { ThreadDiffToolkit } from "./threadDiff/tools.ts";
 import { DocsToolkit } from "./docs/tools.ts";
 
 export const CORE_GOAT_TOOL_NAMES = [
+  "goat_acp_session_list",
   "goat_attachment_discard",
   "goat_attachment_pending_list",
   "goat_attachment_prepare_upload",
