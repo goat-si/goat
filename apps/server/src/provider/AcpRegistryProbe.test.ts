@@ -3,10 +3,16 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId } from "@goat/contracts";
 import { AcpRegistrySettings } from "@goat/provider-acp-registry/settings";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { McpSchema, McpServer } from "effect/ai";
+import * as Sqlite from "../persistence/Sqlite.ts";
+import * as AcpSessionService from "./AcpSessionService.ts";
+import { catalog as mcpCatalog, client, dependencies } from "../mcp/agentSurface.testkit.ts";
+import { McpInvocationContext } from "../mcp/McpInvocationContext.ts";
 import * as Schema from "effect/Schema";
 import * as EffectAcpErrors from "effect-acp/errors";
 
@@ -26,7 +32,7 @@ const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../scripts/acp-mock-agent.ts");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
 
-const sessionListCatalog = (count: number) =>
+const sessionListCatalog = (count: number, scenario?: string) =>
   AcpRegistrySupport.AcpRegistryCatalog.of({
     search: () => Effect.die("unused search"),
     prepare: () => Effect.die("unused prepare"),
@@ -49,6 +55,7 @@ const sessionListCatalog = (count: number) =>
             ...process.env,
             GOAT_ACP_SESSION_LIFECYCLE: "1",
             GOAT_ACP_SESSION_LIST_COUNT: String(count),
+            ...(scenario === undefined ? {} : { GOAT_ACP_SESSION_LIST_SCENARIO: scenario }),
             GOAT_ACP_AUTH_METHOD_ID: "mock-login",
           },
         },
@@ -370,6 +377,7 @@ describe("ACP Registry probe", () => {
           },
         ],
       });
+      expect(listed.truncated).toBeUndefined();
       yield* logoutAcpRegistry(input);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
@@ -391,6 +399,139 @@ describe("ACP Registry probe", () => {
       expect(listed).toMatchObject({ truncated: true, nextCursor: "after-page" });
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(257)),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
+
+  it.effect.each(["id-whitespace", "id-oversized", "cwd-whitespace", "cwd-oversized"])(
+    "marks a short page incomplete when %s removes a session",
+    (scenario) => {
+      const input = {
+        instanceId,
+        settings: decodeSettings({ agentId: "mock-agent" }),
+        cwd: process.cwd(),
+        environment: process.env,
+      };
+      return Effect.gen(function* () {
+        const listed = yield* listAcpRegistrySessions(input);
+        expect(listed.sessions.map((session) => session.sessionId)).toEqual(["mock-session-2"]);
+        expect(listed.truncated).toBe(true);
+        expect(listed.nextCursor).toBeNull();
+      }).pipe(
+        Effect.provideService(
+          AcpRegistrySupport.AcpRegistryCatalog,
+          sessionListCatalog(2, scenario),
+        ),
+        Effect.provide(NodeServices.layer),
+        Effect.scoped,
+      );
+    },
+  );
+
+  it.effect.each([
+    ["cursor-whitespace", "next-page"],
+    ["cursor-oversized", "x".repeat(2_048)],
+    ["cursor-blank", null],
+  ] as const)(
+    "marks a page incomplete when %s changes the provider cursor",
+    ([scenario, expectedCursor]) => {
+      const input = {
+        instanceId,
+        settings: decodeSettings({ agentId: "mock-agent" }),
+        cwd: process.cwd(),
+        environment: process.env,
+      };
+      return Effect.gen(function* () {
+        const listed = yield* listAcpRegistrySessions(input);
+        expect(listed.sessions).toHaveLength(1);
+        expect(listed.nextCursor).toBe(expectedCursor);
+        expect(listed.truncated).toBe(true);
+      }).pipe(
+        Effect.provideService(
+          AcpRegistrySupport.AcpRegistryCatalog,
+          sessionListCatalog(1, scenario),
+        ),
+        Effect.provide(NodeServices.layer),
+        Effect.scoped,
+      );
+    },
+  );
+
+  it.effect("keeps an unchanged provider cursor and complete page unmarked", () => {
+    const input = {
+      instanceId,
+      settings: decodeSettings({ agentId: "mock-agent" }),
+      cwd: process.cwd(),
+      environment: process.env,
+    };
+    return Effect.gen(function* () {
+      const listed = yield* listAcpRegistrySessions(input);
+      expect(listed.sessions).toHaveLength(1);
+      expect(listed.nextCursor).toBe("next-page");
+      expect(listed.truncated).toBeUndefined();
+    }).pipe(
+      Effect.provideService(
+        AcpRegistrySupport.AcpRegistryCatalog,
+        sessionListCatalog(1, "cursor-unchanged"),
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
+
+  it.effect("refuses a short page with an invalid session through the served MCP path", () => {
+    const input = {
+      instanceId,
+      settings: decodeSettings({ agentId: "mock-agent" }),
+      cwd: process.cwd(),
+      environment: process.env,
+    };
+    return Effect.gen(function* () {
+      const page = yield* listAcpRegistrySessions(input);
+      const registered = mcpCatalog.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            dependencies,
+            Layer.mock(AcpSessionService.AcpSessionService)({ list: () => Effect.succeed(page) }),
+          ),
+        ),
+        Layer.provideMerge(Sqlite.layerMemory),
+        Layer.provideMerge(McpServer.McpServer.layer),
+      );
+      const result = yield* McpServer.McpServer.pipe(
+        Effect.flatMap((server) =>
+          server.callTool({
+            name: "goat_acp_session_list",
+            arguments: { instanceId, projectId: ProjectId.make("fixture-project") },
+          }),
+        ),
+        Effect.provideService(McpInvocationContext, {
+          environmentId: EnvironmentId.make("fixture-environment"),
+          requestNamespace: "fixture",
+          capabilities: new Set(["orchestration"] as const),
+          issuedAt: 0,
+          thread: undefined,
+          client: { sessionId: "reader", label: "fixture", access: "read-only" },
+          grantedScopes: ["orchestration:read"],
+          reauthorize: () => Effect.void,
+        }),
+        Effect.provideService(McpSchema.McpServerClient, client),
+        Effect.provide(registered),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            text: expect.stringContaining("could not list this ACP agent's sessions completely"),
+          }),
+        ]),
+      );
+    }).pipe(
+      Effect.provideService(
+        AcpRegistrySupport.AcpRegistryCatalog,
+        sessionListCatalog(2, "id-whitespace"),
+      ),
       Effect.provide(NodeServices.layer),
       Effect.scoped,
     );

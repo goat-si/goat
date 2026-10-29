@@ -130,7 +130,7 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
         return yield* new OrchestratorMcpFailure({
           code: "orchestration_error",
           message:
-            "The ACP agent returned more than 256 sessions in one page, which GOAT cannot list completely. A person can manage sessions in Settings.",
+            "GOAT could not list this ACP agent's sessions completely. A person can manage sessions in Settings.",
         });
       }
       return result;

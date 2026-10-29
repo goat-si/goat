@@ -615,13 +615,16 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
         },
       ];
     });
+    const nextCursor =
+      listed.nextCursor === undefined || listed.nextCursor === null
+        ? null
+        : boundedText(listed.nextCursor, 2_048) || null;
+    const incomplete =
+      sessions.length !== listed.sessions.length || nextCursor !== (listed.nextCursor ?? null);
     return AcpRegistryListSessionsResult.make({
       sessions,
-      ...(listed.sessions.length > 256 ? { truncated: true } : {}),
-      nextCursor:
-        listed.nextCursor === undefined || listed.nextCursor === null
-          ? null
-          : boundedText(listed.nextCursor, 2_048) || null,
+      ...(incomplete ? { truncated: true } : {}),
+      nextCursor,
       canLoad: initialized.agentCapabilities?.loadSession === true,
       canResume: initialized.agentCapabilities?.sessionCapabilities?.resume != null,
       canDelete: initialized.agentCapabilities?.sessionCapabilities?.delete != null,

@@ -9,9 +9,9 @@ export const providerEntries = {
     toolkit: "provider",
     summary: "List ACP provider sessions for a project",
     description:
-      "List native ACP sessions and imported threads. Pages over 256 sessions are refused; use Settings.",
+      "List native ACP sessions and imported threads. Incomplete results are refused; use Settings.",
     guide:
-      "When a provider returns more than 256 sessions in one page, GOAT cannot list that page completely. This tool returns an error; a person can manage sessions in Settings.",
+      "GOAT refuses a page if it drops sessions or changes the provider cursor. A person can manage sessions in Settings.",
     parameters: {
       instanceId: "ACP provider instance ID.",
       projectId: "Project whose workspace contains the sessions.",

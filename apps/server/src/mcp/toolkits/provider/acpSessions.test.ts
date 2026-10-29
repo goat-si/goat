@@ -138,7 +138,7 @@ it.effect("refuses an incomplete provider page through the served MCP path", () 
       if (body?.type !== "text") return yield* Effect.die("Missing MCP error");
       expect(JSON.parse(body.text)).toMatchObject({
         code: "orchestration_error",
-        message: expect.stringContaining("more than 256 sessions"),
+        message: expect.stringContaining("could not list this ACP agent's sessions completely"),
       });
       expect(body.text).toContain("Settings");
       expect(direct.structuredContent ?? {}).not.toHaveProperty("sessions");
@@ -147,7 +147,9 @@ it.effect("refuses an incomplete provider page through the served MCP path", () 
       if (text?.type !== "text") return yield* Effect.die("Missing goat_call error");
       expect(JSON.parse(text.text)).toMatchObject({
         status: "error",
-        error: { message: expect.stringContaining("more than 256 sessions") },
+        error: {
+          message: expect.stringContaining("could not list this ACP agent's sessions completely"),
+        },
       });
     }).pipe(Effect.provide(registered));
   }),
