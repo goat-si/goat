@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as HostProcess from "@goat/shared/HostProcess";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { makeHelperBundleCheck, MANIFEST, SIGNATURE } from "./helperBundle.ts";
@@ -54,80 +55,86 @@ function bundle(files: Record<string, string> = {}) {
   };
 }
 
-describe("Linux helper bundle check (#1224)", () => {
-  it("lets a bundle that matches its manifest run", async () => {
-    const b = bundle();
-    expect(await makeHelperBundleCheck(b.entry, [])()).toBeUndefined();
-  });
+// quarantine: #2191 The check reads POSIX permission bits, which Windows does not have.
+describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "Linux helper bundle check",
+  () => {
+    it("lets a bundle that matches its manifest run", async () => {
+      const b = bundle();
+      expect(await makeHelperBundleCheck(b.entry, [])()).toBeUndefined();
+    });
 
-  it("with a release key, runs only a manifest that key signed", async () => {
-    const b = bundle();
-    const check = makeHelperBundleCheck(b.entry, [b.publicKey]);
-    expect(await check()).toContain("not signed by GOAT (" + SIGNATURE + ")");
-    b.sign(NodeCrypto.generateKeyPairSync("ed25519").privateKey);
-    expect(await check()).toContain("not signed by GOAT's release key");
-    b.sign();
-    expect(await check()).toBeUndefined();
-  });
+    it("with a release key, runs only a manifest that key signed", async () => {
+      const b = bundle();
+      const check = makeHelperBundleCheck(b.entry, [b.publicKey]);
+      expect(await check()).toContain("not signed by GOAT (" + SIGNATURE + ")");
+      b.sign(NodeCrypto.generateKeyPairSync("ed25519").privateKey);
+      expect(await check()).toContain("not signed by GOAT's release key");
+      b.sign();
+      expect(await check()).toBeUndefined();
+    });
 
-  it.each([
-    [
-      "a changed file",
-      (b: ReturnType<typeof bundle>) => NodeFS.writeFileSync(b.at("cua-driver/cua-driver"), "evil"),
-      "cua-driver/cua-driver does not match",
-    ],
-    [
-      "an unlisted file",
-      (b: ReturnType<typeof bundle>) => NodeFS.writeFileSync(b.at("cua-driver/libinject.so"), "x"),
-      "cua-driver/libinject.so is not in",
-    ],
-    [
-      "a missing file",
-      (b: ReturnType<typeof bundle>) => NodeFS.rmSync(b.at("cua-driver/cua-driver")),
-      "cua-driver/cua-driver is missing",
-    ],
-    [
-      "a symbolic link",
-      (b: ReturnType<typeof bundle>) => {
-        NodeFS.rmSync(b.at("cua-driver/cua-driver"));
-        NodeFS.symlinkSync("/bin/sh", b.at("cua-driver/cua-driver"));
-      },
-      "cua-driver/cua-driver is a symbolic link",
-    ],
-    [
-      "a file other users can write",
-      (b: ReturnType<typeof bundle>) => NodeFS.chmodSync(b.at("cua-driver/cua-driver"), 0o666),
-      "cua-driver/cua-driver can be changed by other users",
-    ],
-    [
-      "a folder other users can write",
-      (b: ReturnType<typeof bundle>) => NodeFS.chmodSync(b.at("cua-driver"), 0o777),
-      "cua-driver can be changed by other users",
-    ],
-  ])("refuses a bundle with %s, and says which file", async (_name, change, reason) => {
-    const b = bundle();
-    const check = makeHelperBundleCheck(b.entry, []);
-    expect(await check()).toBeUndefined();
-    change(b);
-    const refused = await check();
-    expect(refused).toContain(reason);
-    expect(refused).toMatch(/^GOAT's Linux computer use helper was not started: /u);
-  });
+    it.each([
+      [
+        "a changed file",
+        (b: ReturnType<typeof bundle>) =>
+          NodeFS.writeFileSync(b.at("cua-driver/cua-driver"), "evil"),
+        "cua-driver/cua-driver does not match",
+      ],
+      [
+        "an unlisted file",
+        (b: ReturnType<typeof bundle>) =>
+          NodeFS.writeFileSync(b.at("cua-driver/libinject.so"), "x"),
+        "cua-driver/libinject.so is not in",
+      ],
+      [
+        "a missing file",
+        (b: ReturnType<typeof bundle>) => NodeFS.rmSync(b.at("cua-driver/cua-driver")),
+        "cua-driver/cua-driver is missing",
+      ],
+      [
+        "a symbolic link",
+        (b: ReturnType<typeof bundle>) => {
+          NodeFS.rmSync(b.at("cua-driver/cua-driver"));
+          NodeFS.symlinkSync("/bin/sh", b.at("cua-driver/cua-driver"));
+        },
+        "cua-driver/cua-driver is a symbolic link",
+      ],
+      [
+        "a file other users can write",
+        (b: ReturnType<typeof bundle>) => NodeFS.chmodSync(b.at("cua-driver/cua-driver"), 0o666),
+        "cua-driver/cua-driver can be changed by other users",
+      ],
+      [
+        "a folder other users can write",
+        (b: ReturnType<typeof bundle>) => NodeFS.chmodSync(b.at("cua-driver"), 0o777),
+        "cua-driver can be changed by other users",
+      ],
+    ])("refuses a bundle with %s, and says which file", async (_name, change, reason) => {
+      const b = bundle();
+      const check = makeHelperBundleCheck(b.entry, []);
+      expect(await check()).toBeUndefined();
+      change(b);
+      const refused = await check();
+      expect(refused).toContain(reason);
+      expect(refused).toMatch(/^GOAT's Linux computer use helper was not started: /u);
+    });
 
-  it("does not take a file named after an object's own keys as listed", async () => {
-    const b = bundle();
-    NodeFS.writeFileSync(b.at("constructor"), "x");
-    expect(await makeHelperBundleCheck(b.entry, [])()).toContain("constructor is not in");
-  });
+    it("does not take a file named after an object's own keys as listed", async () => {
+      const b = bundle();
+      NodeFS.writeFileSync(b.at("constructor"), "x");
+      expect(await makeHelperBundleCheck(b.entry, [])()).toContain("constructor is not in");
+    });
 
-  it("refuses to run a file the manifest does not name", async () => {
-    const b = bundle();
-    expect(await makeHelperBundleCheck(b.at("gone.mjs"), [])()).toContain("gone.mjs is not in");
-  });
+    it("refuses to run a file the manifest does not name", async () => {
+      const b = bundle();
+      expect(await makeHelperBundleCheck(b.at("gone.mjs"), [])()).toContain("gone.mjs is not in");
+    });
 
-  it("refuses a bundle with no manifest", async () => {
-    const b = bundle();
-    NodeFS.rmSync(b.at(MANIFEST));
-    expect(await makeHelperBundleCheck(b.entry, [])()).toContain(MANIFEST + " is missing");
-  });
-});
+    it("refuses a bundle with no manifest", async () => {
+      const b = bundle();
+      NodeFS.rmSync(b.at(MANIFEST));
+      expect(await makeHelperBundleCheck(b.entry, [])()).toContain(MANIFEST + " is missing");
+    });
+  },
+);
