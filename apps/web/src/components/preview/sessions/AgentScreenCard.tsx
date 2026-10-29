@@ -42,14 +42,13 @@ import { cn } from "~/lib/utils";
 import type { DesktopPreviewOverlay } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { useThreadShell } from "~/state/entities";
-import { useThreadPreviewState } from "~/previewStateStore";
 import { previewSessionsEnvironment } from "~/state/previewSessions";
 import { useEnvironmentScope } from "~/state/session";
 
 import { NativeAppIcon } from "../../chat/TimelineToolActivityIcon";
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { BrowserCardActions } from "./BrowserCardActions";
-import { cardServerTabSnapshot, NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
+import { NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
