@@ -3,6 +3,7 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import { McpServer } from "effect/ai";
 import * as Fixture from "../memory/handlers.testkit.ts";
 const decodeDisabled = Schema.decodeUnknownEffect(M.MemoryHubDisableResult);
 const decodeSettings = Schema.decodeUnknownEffect(M.MemorySettingsView);
@@ -96,8 +97,10 @@ it.effect("disable uses explicit settings grant and CAS, returns only the disabl
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
-it.effect("binding reads never create a binding and updates require memory write authority", () =>
+it.effect("binding reads require memory write authority and never create a binding", () =>
   Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    expect(server.tools.map(({ tool }) => tool.name)).not.toContain("goat_memory_binding_update");
     const sql = yield* SqlClient.SqlClient;
     yield* sql`CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY, workspace_root TEXT, deleted_at TEXT)`;
     yield* sql`INSERT INTO projection_projects VALUES ('project', '/synthetic', NULL)`;
@@ -114,134 +117,83 @@ it.effect("binding reads never create a binding and updates require memory write
     });
     const rows = yield* sql`SELECT * FROM memory_project_bindings`;
     expect(rows).toHaveLength(0);
-    const update = {
-      ...input,
-      requestId: Fixture.id(50),
-      expectedVersion: 0,
-      action: "setExplicit",
-      sharedProjectId: "shared",
-      clientRequestId: "binding-1",
-    };
-    expect(
-      (yield* Fixture.call("goat_memory_binding_update", update, Fixture.scope(["memory:read"])))
-        .result.isError,
-    ).toBe(true);
-    expect(
-      (yield* Fixture.call("goat_memory_binding_update", update, {
-        ...Fixture.scope(),
-        readOnly: true,
-      })).result.isError,
-    ).toBe(true);
-    const first = yield* Fixture.call("goat_memory_binding_update", update);
-    expect(first.result.isError).not.toBe(true);
-    expect(first.body).toMatchObject({
-      binding: { projectKey: { kind: "explicit", sharedProjectId: "shared" }, version: 1 },
-    });
-    expect((yield* Fixture.call("goat_memory_binding_update", update)).body).toEqual(first.body);
-    expect((yield* Fixture.call("goat_memory_binding_read", input)).body).toMatchObject({
-      binding: { projectKey: { kind: "explicit", sharedProjectId: "shared" } },
-    });
-    expect(
-      (yield* Fixture.call("goat_memory_binding_update", {
-        ...update,
-        sharedProjectId: "different",
-      })).result.isError,
-    ).toBe(true);
-  }).pipe(Effect.provide(Fixture.layer)),
-);
-
-it.effect("report reset requires settings authority and replays a keyed call", () =>
-  Effect.gen(function* () {
-    const input = {
-      memorySpaceId: Fixture.space,
-      environmentId: "fixture-memory-mcp",
-      reportIds: ["a".repeat(64)],
-      clientRequestId: "reset-1",
-    };
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at,report_kind,report_approved,automatic_attempts,failure_code) VALUES (${input.reportIds[0]},${Fixture.space},${Fixture.memoryId},${Fixture.id(10)},${Fixture.id(11)},${input.environmentId},'resolved','failed',0,'resolve',1,10,'unavailable')`;
-    expect((yield* Fixture.call("goat_memory_report_attempts_reset", input)).result.isError).toBe(
-      true,
-    );
-    const granted = Fixture.scope(["settings:write"]);
-    expect(
-      (yield* Fixture.call("goat_memory_report_attempts_reset", input, {
-        ...granted,
-        readOnly: true,
-      })).result.isError,
-    ).toBe(true);
-    const first = yield* Fixture.call("goat_memory_report_attempts_reset", input, granted);
-    expect(first.result.isError).not.toBe(true);
-    expect(first.body).toEqual({ resetCount: 1, unchangedCount: 0 });
-    yield* sql`UPDATE memory_report_outbox SET automatic_attempts=10 WHERE report_id=${input.reportIds[0]}`;
-    expect((yield* Fixture.call("goat_memory_report_attempts_reset", input, granted)).body).toEqual(
-      first.body,
-    );
-    const rows = yield* sql<{
-      automatic_attempts: number;
-    }>`SELECT automatic_attempts FROM memory_report_outbox WHERE report_id=${input.reportIds[0]}`;
-    expect(rows[0]?.automatic_attempts).toBe(10);
-    expect(
-      (yield* Fixture.call(
-        "goat_memory_report_attempts_reset",
-        { ...input, reportIds: ["b".repeat(64)] },
-        granted,
-      )).result.isError,
-    ).toBe(true);
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
 it.effect(
-  "hub diagnostics and reconciliation enforce their respective scopes and replay safely",
+  "report reset requires both scopes and repeating it leaves a reset report unchanged",
   () =>
     Effect.gen(function* () {
-      expect(
-        (yield* Fixture.call("goat_memory_hub_diagnostics", {}, Fixture.scope([]))).result.isError,
-      ).toBe(true);
-      expect(
-        (yield* Fixture.call("goat_memory_hub_diagnostics", {}, Fixture.scope(["memory:read"])))
-          .body,
-      ).toMatchObject({ reconcile: "available", recoverableHolds: ["availability"] });
       const input = {
         memorySpaceId: Fixture.space,
         environmentId: "fixture-memory-mcp",
-        expectedVersion: 1,
-        clientRequestId: "reconcile-1",
+        reportIds: ["a".repeat(64)],
       };
-      expect((yield* Fixture.call("goat_memory_hub_reconcile", input)).result.isError).toBe(true);
-      const granted = Fixture.scope(["settings:write"]);
-      const first = yield* Fixture.call("goat_memory_hub_reconcile", input, granted);
-      expect(first.body).toEqual({ version: 1, rearmedClasses: ["availability"] });
-      expect((yield* Fixture.call("goat_memory_hub_reconcile", input, granted)).body).toEqual(
-        first.body,
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at,report_kind,report_approved,automatic_attempts,failure_code) VALUES (${input.reportIds[0]},${Fixture.space},${Fixture.memoryId},${Fixture.id(10)},${Fixture.id(11)},${input.environmentId},'resolved','failed',0,'resolve',1,10,'unavailable')`;
+      expect((yield* Fixture.call("goat_memory_report_attempts_reset", input)).result.isError).toBe(
+        true,
       );
-      const revoked = {
-        ...granted,
-        reauthorize: () =>
-          Effect.fail(
-            new M.EnvironmentAuthorizationError({
-              message: "revoked",
-              requiredScope: "settings:write",
-            }),
-          ),
-      };
+      const granted = Fixture.scope(["settings:write", "memory:read"]);
       expect(
-        (yield* Fixture.call("goat_memory_hub_reconcile", input, revoked)).result.isError,
+        (yield* Fixture.call("goat_memory_report_attempts_reset", input, {
+          ...granted,
+          readOnly: true,
+        })).result.isError,
       ).toBe(true);
+      const first = yield* Fixture.call("goat_memory_report_attempts_reset", input, granted);
+      expect(first.result.isError).not.toBe(true);
+      expect(first.body).toEqual({ resetCount: 1, unchangedCount: 0 });
       expect(
-        (yield* Fixture.call(
-          "goat_memory_hub_reconcile",
-          { ...input, expectedVersion: 2 },
-          granted,
-        )).result.isError,
-      ).toBe(true);
+        (yield* Fixture.call("goat_memory_report_attempts_reset", input, granted)).body,
+      ).toEqual({ resetCount: 0, unchangedCount: 1 });
+      const rows = yield* sql<{
+        automatic_attempts: number;
+      }>`SELECT automatic_attempts FROM memory_report_outbox WHERE report_id=${input.reportIds[0]}`;
+      expect(rows[0]?.automatic_attempts).toBe(0);
     }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("hub diagnostics and reconciliation enforce their respective scopes", () =>
+  Effect.gen(function* () {
+    expect(
+      (yield* Fixture.call("goat_memory_hub_diagnostics", {}, Fixture.scope([]))).result.isError,
+    ).toBe(true);
+    expect(
+      (yield* Fixture.call("goat_memory_hub_diagnostics", {}, Fixture.scope(["memory:read"]))).body,
+    ).toMatchObject({ reconcile: "available", recoverableHolds: ["availability"] });
+    const input = {
+      memorySpaceId: Fixture.space,
+      environmentId: "fixture-memory-mcp",
+      expectedVersion: 1,
+    };
+    expect((yield* Fixture.call("goat_memory_hub_reconcile", input)).result.isError).toBe(true);
+    const granted = Fixture.scope(["settings:write", "memory:read"]);
+    const first = yield* Fixture.call("goat_memory_hub_reconcile", input, granted);
+    expect(first.body).toEqual({ version: 1, rearmedClasses: ["availability"] });
+    expect((yield* Fixture.call("goat_memory_hub_reconcile", input, granted)).body).toEqual(
+      first.body,
+    );
+    const revoked = {
+      ...granted,
+      reauthorize: () =>
+        Effect.fail(
+          new M.EnvironmentAuthorizationError({
+            message: "revoked",
+            requiredScope: "settings:write",
+          }),
+        ),
+    };
+    expect((yield* Fixture.call("goat_memory_hub_reconcile", input, revoked)).result.isError).toBe(
+      true,
+    );
+  }).pipe(Effect.provide(Fixture.layer)),
 );
 
 it.effect("plan-mode threads cannot run memory administration writes", () =>
   Effect.gen(function* () {
     const scope = {
-      ...Fixture.scope(["memory:write", "settings:write"]),
+      ...Fixture.scope(["memory:read", "settings:write"]),
       client: undefined,
       thread: {
         threadId: M.ThreadId.make("plan-thread"),
@@ -249,28 +201,17 @@ it.effect("plan-mode threads cannot run memory administration writes", () =>
         providerInstanceId: M.ProviderInstanceId.make("codex"),
       },
     };
-    const binding = {
-      memorySpaceId: Fixture.space,
-      project: { environmentId: "fixture-memory-mcp", projectId: "project" },
-      requestId: Fixture.id(50),
-      expectedVersion: 0,
-      action: "useRepository",
-      clientRequestId: "plan-binding",
-    };
     const hub = {
       memorySpaceId: Fixture.space,
       environmentId: "fixture-memory-mcp",
       expectedVersion: 1,
-      clientRequestId: "plan-hub",
     };
     const reports = {
       memorySpaceId: Fixture.space,
       environmentId: "fixture-memory-mcp",
       reportIds: ["a".repeat(64)],
-      clientRequestId: "plan-reset",
     };
     for (const [name, input] of [
-      ["goat_memory_binding_update", binding],
       ["goat_memory_hub_reconcile", hub],
       ["goat_memory_report_attempts_reset", reports],
     ] as const) {
@@ -279,4 +220,53 @@ it.effect("plan-mode threads cannot run memory administration writes", () =>
       expect(result.body).toMatchObject({ code: "capability_denied" });
     }
   }).pipe(Effect.provide(Fixture.planLayer)),
+);
+
+it.effect("memory recovery writes refuse a settings-only caller before changing anything", () =>
+  Effect.gen(function* () {
+    const settingsOnly = Fixture.scope(["settings:write"]);
+    const hub = {
+      memorySpaceId: Fixture.space,
+      environmentId: "fixture-memory-mcp",
+      expectedVersion: 1,
+    };
+    const report = {
+      memorySpaceId: Fixture.space,
+      environmentId: "fixture-memory-mcp",
+      reportIds: ["a".repeat(64)],
+    };
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at,report_kind,report_approved,automatic_attempts,failure_code) VALUES (${report.reportIds[0]},${Fixture.space},${Fixture.memoryId},${Fixture.id(10)},${Fixture.id(11)},${report.environmentId},'resolved','failed',0,'resolve',1,10,'unavailable')`;
+    expect(
+      (yield* Fixture.call("goat_memory_hub_reconcile", hub, settingsOnly)).result.isError,
+    ).toBe(true);
+    expect(
+      (yield* Fixture.call("goat_memory_report_attempts_reset", report, settingsOnly)).result
+        .isError,
+    ).toBe(true);
+    const granted = Fixture.scope(["settings:write", "memory:read"]);
+    const revokedRead = {
+      ...granted,
+      reauthorize: (required: ReadonlyArray<M.AuthEnvironmentScope>) =>
+        required.includes("memory:read")
+          ? Effect.fail(
+              new M.EnvironmentAuthorizationError({
+                message: "revoked",
+                requiredScope: "memory:read",
+              }),
+            )
+          : Effect.void,
+    };
+    expect(
+      (yield* Fixture.call("goat_memory_hub_reconcile", hub, revokedRead)).result.isError,
+    ).toBe(true);
+    expect(
+      (yield* Fixture.call("goat_memory_report_attempts_reset", report, revokedRead)).result
+        .isError,
+    ).toBe(true);
+    const rows = yield* sql<{
+      automatic_attempts: number;
+    }>`SELECT automatic_attempts FROM memory_report_outbox WHERE report_id=${report.reportIds[0]}`;
+    expect(rows[0]?.automatic_attempts).toBe(10);
+  }).pipe(Effect.provide(Fixture.layer)),
 );

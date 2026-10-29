@@ -14,9 +14,6 @@ const NOT_YET_KEYED: ReadonlySet<string> = new Set<string>([]);
 it("requires keys only on ToolAdmission-keyed writes", () => {
   const required = entries.filter((entry) => entry.keyRequired);
   expect(required.map((entry) => entry.path).sort()).toEqual([
-    "memory.binding_update",
-    "memory.hub_reconcile",
-    "memory.report_attempts_reset",
     "pull_request.comment",
     "pull_request.review_submit",
     "pull_request.thread_reply",

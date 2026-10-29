@@ -1,6 +1,5 @@
 export const MEMORY_ADMINISTRATION_MCP_TOOLS = [
   "goat_memory_binding_read",
-  "goat_memory_binding_update",
   "goat_memory_hub_diagnostics",
   "goat_memory_hub_reconcile",
   "goat_memory_report_attempts_reset",

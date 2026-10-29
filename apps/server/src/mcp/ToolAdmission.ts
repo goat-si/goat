@@ -223,7 +223,7 @@ const reservationRefusal = (
           reason,
           mayHaveStarted: true,
           reconcile,
-          message: `${call} started, but its outcome was never recorded, so GOAT will not run it again. Read ${toolNameOf(reconcile)}${where} to see whether it happened. ${entry.keyRequired ? "A partial or truncated read cannot prove the write did not run. Never resend with a new key if the outcome cannot be confirmed; tell the user." : "Only if it did not, call again with a new clientRequestId."}`,
+          message: `${call} started, but its outcome was never recorded, so GOAT will not run it again. Read ${toolNameOf(reconcile)}${where} to see whether it happened. ${entry.keyRequired ? "Absence from truncated activity is not proof it was not posted. Never resend with a new key; do not treat a partial review as complete. Tell the user if the outcome cannot be confirmed." : "Only if it did not, call again with a new clientRequestId."}`,
         }),
       );
     case "storage_failed":

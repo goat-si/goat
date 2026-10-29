@@ -12,7 +12,6 @@ const decode = Schema.decodeUnknownEffect(M.MemoryHubDisableInput);
 const disabled = Schema.decodeUnknownEffect(M.MemoryHubDisableResult);
 const decodeSettingsUpdate = Schema.decodeUnknownEffect(M.MemorySettingsUpdateInput);
 const decodeBindingRead = Schema.decodeUnknownEffect(M.MemoryProjectBindingGetInput);
-const decodeBindingUpdate = Schema.decodeUnknownEffect(M.MemoryProjectBindingUpdateInput);
 const decodeDiagnostics = Schema.decodeUnknownEffect(M.MemorySyncStatusInput);
 const decodeReconcile = Schema.decodeUnknownEffect(M.MemoryHubReconcileInput);
 const decodeReportReset = Schema.decodeUnknownEffect(M.MemoryResetReportAttemptsInput);
@@ -24,12 +23,12 @@ const requireNotPlan = Effect.gen(function* () {
       message: "Memory administration writes are unavailable in plan mode.",
     });
 });
-const writePermit = Effect.fn("MemoryAdministration.writePermit")(function* (
-  requirement: "write" | "settings",
-) {
+const writePermit = Effect.fn("MemoryAdministration.writePermit")(function* () {
   const context = yield* Effect.context<Effect.Services<typeof requireNotPlan>>();
-  const permit = yield* invocationPermit(requirement);
+  const permit = yield* invocationPermit("settings");
+  const readPermit = yield* invocationPermit("read");
   return permit.pipe(
+    Effect.andThen(readPermit),
     Effect.andThen(
       requireNotPlan.pipe(
         Effect.provideContext(context),
@@ -50,21 +49,6 @@ export const layer = McpToolAccess.toLayer(MemoryAdministrationToolkit, {
       };
     }).pipe(Effect.mapError(memoryError)),
   ),
-  goat_memory_binding_update: McpToolAccess.writesWithCapability(
-    (input) =>
-      Effect.gen(function* () {
-        yield* requireNotPlan;
-        const value = yield* decodeBindingUpdate(input, {
-          onExcessProperty: "error",
-        });
-        const permit = yield* writePermit("write");
-        yield* permit;
-        yield* McpToolAccess.admit(input);
-        const service = yield* MemoryService.MemoryService;
-        return yield* service.updateProjectBinding(value, permit);
-      }).pipe(Effect.catch(memoryFailure("goat_memory_binding_update"))),
-    { admission: "handler" },
-  ),
   goat_memory_hub_diagnostics: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const service = yield* MemorySyncService.MemorySyncService;
@@ -74,35 +58,29 @@ export const layer = McpToolAccess.toLayer(MemoryAdministrationToolkit, {
       return yield* service.hubDiagnostics(value, yield* invocationPermit("read"));
     }).pipe(Effect.mapError(memoryError)),
   ),
-  goat_memory_hub_reconcile: McpToolAccess.writesWithCapability(
-    (input) =>
-      Effect.gen(function* () {
-        yield* requireNotPlan;
-        const value = yield* decodeReconcile(input, {
-          onExcessProperty: "error",
-        });
-        const permit = yield* writePermit("settings");
-        yield* permit;
-        yield* McpToolAccess.admit(input);
-        const service = yield* MemorySyncService.MemorySyncService;
-        return yield* service.reconcileHub(value, permit);
-      }).pipe(Effect.catch(memoryFailure("goat_memory_hub_reconcile"))),
-    { admission: "handler" },
+  goat_memory_hub_reconcile: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      yield* requireNotPlan;
+      const value = yield* decodeReconcile(input, {
+        onExcessProperty: "error",
+      });
+      const permit = yield* writePermit();
+      yield* permit;
+      const service = yield* MemorySyncService.MemorySyncService;
+      return yield* service.reconcileHub(value, permit);
+    }).pipe(Effect.catch(memoryFailure("goat_memory_hub_reconcile"))),
   ),
-  goat_memory_report_attempts_reset: McpToolAccess.writesWithCapability(
-    (input) =>
-      Effect.gen(function* () {
-        yield* requireNotPlan;
-        const value = yield* decodeReportReset(input, {
-          onExcessProperty: "error",
-        });
-        const permit = yield* writePermit("settings");
-        yield* permit;
-        yield* McpToolAccess.admit(input);
-        const service = yield* MemoryService.MemoryService;
-        return yield* service.resetReportAttempts(value, permit);
-      }).pipe(Effect.catch(memoryFailure("goat_memory_report_attempts_reset"))),
-    { admission: "handler" },
+  goat_memory_report_attempts_reset: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      yield* requireNotPlan;
+      const value = yield* decodeReportReset(input, {
+        onExcessProperty: "error",
+      });
+      const permit = yield* writePermit();
+      yield* permit;
+      const service = yield* MemoryService.MemoryService;
+      return yield* service.resetReportAttempts(value, permit);
+    }).pipe(Effect.catch(memoryFailure("goat_memory_report_attempts_reset"))),
   ),
   memory_settings_get: McpToolAccess.reads(() =>
     Effect.gen(function* () {

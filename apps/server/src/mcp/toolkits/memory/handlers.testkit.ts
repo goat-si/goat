@@ -13,7 +13,6 @@ import { dispatchEnvelope } from "../agentSurface/dispatchEnvelope.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import profileMigration from "../../../persistence/Migrations/099_PermissionProfiles.ts";
 import migration from "../../../persistence/Migrations/078_Memory.ts";
-import reservationsMigration from "../../../persistence/Migrations/102_McpRequestReservations.ts";
 import searchMigration from "../../../persistence/Migrations/080_MemorySearchCounters.ts";
 import hubMigration from "../../../persistence/Migrations/079_MemoryHubSync.ts";
 import lineageMigration from "../../../persistence/Migrations/082_MemoryImportLineage.ts";
@@ -57,7 +56,6 @@ const database = Layer.effectDiscard(
     Effect.andThen(revertMigration),
     Effect.andThen(readyMigration),
     Effect.andThen(administeredMigration),
-    Effect.andThen(reservationsMigration),
   ),
 ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })));
 const storage = Store.layer.pipe(Layer.provideMerge(database));
