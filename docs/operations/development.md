@@ -93,8 +93,9 @@ different preference when needed.
 [dev-replay-agent.ts](../../apps/server/scripts/dev-replay-agent.ts). It plays recorded
 ACP transcripts with simulated streaming, so the real adapter, orchestration, and UI run
 without a paid model. Each scenario is a model, and each prompt plays the next recorded turn.
-The server writes it only into settings stored inside the checkout, such as a worktree's
-`.goat`, so a dev server on another home, the live home included, never gets it. Bundled
+The server writes it only into settings that resolve, through any links, inside the checkout,
+such as a worktree's `.goat`, so a dev server on another home, the live home included, never
+gets it. A server started without dev mode does not load it even when settings hold it. Bundled
 servers, including desktop dev, skip it because they have no agent script. Dev servers add it
 back on start, so turn it off in Settings instead of removing it.
 To add a scenario, point a `SCENARIOS` entry at a generic ACP replay fixture

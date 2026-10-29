@@ -86,20 +86,48 @@ export const deriveProviderInstanceConfigMap = (
 export const DEV_REPLAY_INSTANCE_ID = ProviderInstanceId.make("devReplay");
 
 /**
+ * Whether the settings file, with every link resolved, lives inside the checkout. A missing file
+ * resolves through its directory; a dangling link or an unreadable path counts as outside.
+ */
+const settingsInsideCheckout = Effect.fn(
+  "ProviderInstanceRegistryHydration.settingsInsideCheckout",
+)(function* (settingsPath: string, checkoutRoot: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const resolve = Effect.fn(function* () {
+    if (yield* fs.exists(settingsPath)) return yield* fs.realPath(settingsPath);
+    if (Option.isSome(yield* Effect.option(fs.readLink(settingsPath)))) {
+      return yield* Effect.fail("dangling settings link");
+    }
+    const directory = yield* fs.realPath(path.dirname(settingsPath));
+    return path.join(directory, path.basename(settingsPath));
+  });
+  const resolved = yield* Effect.option(Effect.all([resolve(), fs.realPath(checkoutRoot)]));
+  if (Option.isNone(resolved)) return false;
+  const [settingsFile, checkout] = resolved.value;
+  const fromCheckout = path.relative(checkout, settingsFile);
+  return (
+    fromCheckout !== ".." &&
+    !fromCheckout.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(fromCheckout)
+  );
+});
+
+/**
  * Dev servers run from source keep a free ACP agent that replays recorded turns, so UI checks
- * need no paid model. Only settings stored inside this checkout get it, never a live GOAT home.
+ * need no paid model. Only settings stored inside this checkout get it, never a live GOAT home,
+ * and hydration drops it outside dev (see reconcileSnapshot).
  * The write waits for the settings watcher to apply it, so it must run after hydration starts.
  */
 export const seedDevReplayInstance = Effect.fn(
   "ProviderInstanceRegistryHydration.seedDevReplayInstance",
-)(function* () {
+)(function* (checkoutRootOverride?: string) {
   const config = yield* ServerConfig.ServerConfig;
   if (config.devUrl === undefined) return;
   const path = yield* Path.Path;
-  const checkoutRoot = yield* path.fromFileUrl(new URL("../../../../", import.meta.url));
-  const fromCheckout = path.relative(checkoutRoot, config.settingsPath);
-  if (fromCheckout === ".." || fromCheckout.startsWith(`..${path.sep}`)) return;
-  if (path.isAbsolute(fromCheckout)) return;
+  const checkoutRoot =
+    checkoutRootOverride ?? (yield* path.fromFileUrl(new URL("../../../../", import.meta.url)));
+  if (!(yield* settingsInsideCheckout(config.settingsPath, checkoutRoot))) return;
   // Bundled servers, such as desktop dev, have no agent script.
   const agentPath = yield* path.fromFileUrl(
     new URL("../../scripts/dev-replay-agent.ts", import.meta.url),
@@ -138,13 +166,24 @@ const layerDevReplaySeed = Layer.effectDiscard(
   ),
 );
 
-/** Reconciles one settings snapshot; every runtime built from it is bound to its revision. */
+/**
+ * Reconciles one settings snapshot; every runtime built from it is bound to its revision.
+ * Initial hydration and every settings change pass here, so replay never starts outside dev.
+ */
 export const reconcileSnapshot = (
   mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape,
   configMap: ProviderInstanceConfigMap,
   revision: CodexRoute.SettingsRevision | undefined,
 ) =>
-  mutator.reconcile(configMap).pipe(Effect.provideService(CodexRoute.HydratingRevision, revision));
+  Effect.serviceOption(ServerConfig.ServerConfig).pipe(
+    Effect.flatMap((config) => {
+      const devServer = Option.isSome(config) && config.value.devUrl !== undefined;
+      if (devServer || !(DEV_REPLAY_INSTANCE_ID in configMap)) return mutator.reconcile(configMap);
+      const { [DEV_REPLAY_INSTANCE_ID]: _replay, ...withoutReplay } = configMap;
+      return mutator.reconcile(withoutReplay as ProviderInstanceConfigMap);
+    }),
+    Effect.provideService(CodexRoute.HydratingRevision, revision),
+  );
 
 const settingsWatcher = (
   suppliedChanges?: Stream.Stream<
