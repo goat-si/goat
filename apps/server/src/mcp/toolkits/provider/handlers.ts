@@ -117,7 +117,7 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
           .reauthorize([AuthOrchestrationReadScope])
           .pipe(Effect.mapError(reauthorizationFailure));
       }
-      return yield* (yield* AcpSessionService.AcpSessionService).list(input).pipe(
+      const result = yield* (yield* AcpSessionService.AcpSessionService).list(input).pipe(
         Effect.mapError(
           (error) =>
             new OrchestratorMcpFailure({
@@ -126,6 +126,14 @@ export const layer = McpToolAccess.toLayer(ProviderToolkit, {
             }),
         ),
       );
+      if (result.truncated === true) {
+        return yield* new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message:
+            "The ACP agent returned more than 256 sessions in one page, which GOAT cannot list completely. A person can manage sessions in Settings.",
+        });
+      }
+      return result;
     }),
   ),
   goat_provider_host_matrix: McpToolAccess.readsOrReachesHost(

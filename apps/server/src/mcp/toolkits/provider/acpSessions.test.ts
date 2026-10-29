@@ -40,7 +40,6 @@ it.effect("lists a page through the served MCP path only while read access is li
         Ref.update(calls, (n) => n + 1).pipe(
           Effect.as({
             sessions: [],
-            truncated: true,
             nextCursor: received.cursor ?? null,
             canLoad: true,
             canResume: false,
@@ -70,7 +69,6 @@ it.effect("lists a page through the served MCP path only while read access is li
       expect(allowed.structuredContent).toMatchObject({
         nextCursor: "next",
         sessions: [],
-        truncated: true,
       });
       expect(yield* Ref.get(required)).toEqual([["orchestration:read"]]);
       const denied = yield* call({
@@ -95,7 +93,7 @@ it.effect("lists a page through the served MCP path only while read access is li
       };
       const threadResult = yield* call(thread);
       expect(threadResult.isError).toBe(false);
-      expect(threadResult.structuredContent).toMatchObject({ nextCursor: "next", truncated: true });
+      expect(threadResult.structuredContent).toMatchObject({ nextCursor: "next" });
       const withoutCapability = yield* call({ ...thread, capabilities: new Set() });
       expect(withoutCapability.isError).toBe(true);
       expect(withoutCapability.content).toEqual(
@@ -104,6 +102,53 @@ it.effect("lists a page through the served MCP path only while read access is li
         ]),
       );
       expect(yield* Ref.get(calls)).toBe(2);
+    }).pipe(Effect.provide(registered));
+  }),
+);
+
+it.effect("refuses an incomplete provider page through the served MCP path", () =>
+  Effect.gen(function* () {
+    const service = Layer.mock(AcpSessionService.AcpSessionService)({
+      list: () =>
+        Effect.succeed({
+          sessions: [],
+          truncated: true,
+          nextCursor: "after-page",
+          canLoad: true,
+          canResume: true,
+          canDelete: false,
+        }),
+    });
+    const registered = catalog.pipe(
+      Layer.provide(Layer.mergeAll(dependencies, service)),
+      Layer.provideMerge(Sqlite.layerMemory),
+      Layer.provideMerge(McpServer.McpServer.layer),
+    );
+    const call = (name: string, args: object) =>
+      McpServer.McpServer.pipe(
+        Effect.flatMap((server) => server.callTool({ name, arguments: args })),
+        Effect.provideService(McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    yield* Effect.gen(function* () {
+      const direct = yield* call("goat_acp_session_list", input);
+      expect(direct.isError).toBe(true);
+      const body = direct.content.find((part) => part.type === "text");
+      expect(body?.type).toBe("text");
+      if (body?.type !== "text") return yield* Effect.die("Missing MCP error");
+      expect(JSON.parse(body.text)).toMatchObject({
+        code: "orchestration_error",
+        message: expect.stringContaining("more than 256 sessions"),
+      });
+      expect(body.text).toContain("Settings");
+      expect(direct.structuredContent ?? {}).not.toHaveProperty("sessions");
+      const wrapped = yield* call("goat_call", { path: "acp_session.list", args: input });
+      const text = wrapped.content.find((part) => part.type === "text");
+      if (text?.type !== "text") return yield* Effect.die("Missing goat_call error");
+      expect(JSON.parse(text.text)).toMatchObject({
+        status: "error",
+        error: { message: expect.stringContaining("more than 256 sessions") },
+      });
     }).pipe(Effect.provide(registered));
   }),
 );
