@@ -557,10 +557,10 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     const correlationId =
                       admissionCorrelationId(admission) ??
                       (receiptId === undefined ? undefined : `rr-${receiptId}`);
-                    if (correlationId !== undefined && receipt._tag === "Some") {
-                      yield* receipt.value.correlate(correlationId);
-                    }
                     if (scope.thread === undefined) {
+                      if (correlationId !== undefined && receipt._tag === "Some") {
+                        yield* receipt.value.correlate(correlationId);
+                      }
                       const value = yield* dispatch.launchThread(
                         guardedLaunch,
                         authorize.pipe(Effect.asVoid),
@@ -575,6 +575,9 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                           : Effect.void,
                       ),
                     );
+                    if (correlationId !== undefined && receipt._tag === "Some") {
+                      yield* receipt.value.correlate(correlationId);
+                    }
                     const value = yield* coordinator.launch(
                       {
                         kind: "thread",

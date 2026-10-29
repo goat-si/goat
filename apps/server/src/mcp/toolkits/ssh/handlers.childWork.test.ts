@@ -234,6 +234,7 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
   Effect.scoped(
     Effect.gen(function* () {
       const launches: Array<LaunchCapture> = [];
+      const correlatedIds: Array<string> = [];
       const rows: Array<{ readonly state: string; readonly remoteThreadId: string | null }> = [];
       const duringLaunchStates: Array<ReadonlyArray<string>> = [];
       let launchCalls = 0;
@@ -345,9 +346,10 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         Layer.mock(CloudMachineService.CloudMachineService)({}),
         Layer.succeed(LifecycleAdmissionReceipt, {
           held: Effect.succeed("receipt-cw"),
-          correlate: () => {
+          correlate: (correlationId) => {
             const call = correlateCalls;
             correlateCalls += 1;
+            correlatedIds.push(correlationId);
             return failures.failCorrelateOnCalls?.includes(call) === true
               ? Effect.fail(
                   new OrchestratorMcpFailure({
@@ -484,7 +486,7 @@ const launchFromWorker = (messages: ReadonlyArray<string>, failures: LaunchFailu
         Effect.flatMap((store) => store.listForTask(taskId)),
         Effect.provide(deps),
       );
-      return { responses, launches, records, duringLaunchStates };
+      return { responses, launches, correlatedIds, records, duringLaunchStates };
     }),
   );
 
@@ -582,7 +584,7 @@ it.effect(
   "regression #1387: a task stop before the claim refuses the SSH launch and returns the slot",
   () =>
     Effect.gen(function* () {
-      const { responses, launches, records } = yield* launchFromWorker(
+      const { responses, launches, correlatedIds, records } = yield* launchFromWorker(
         ["Stopped audit", "Audit one", "Audit two", "Audit three", "Audit four", "Audit five"],
         { stopBeforeClaimOnCalls: [0], maxLanes: 1 },
       );
@@ -601,6 +603,8 @@ it.effect(
       expect(released).toHaveLength(1);
       expect(bound).toHaveLength(4);
       expect(launches).toHaveLength(4);
+      expect(correlatedIds).toHaveLength(4);
+      expect(correlatedIds).not.toContain(childWorkCorrelationIdFor(released[0]!.childWorkId));
       expect(launches.map((launch) => launch.correlationId)).not.toContain(
         childWorkCorrelationIdFor(released[0]!.childWorkId),
       );
