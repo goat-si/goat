@@ -18,7 +18,8 @@ import { PlusIcon, XIcon } from "~/components/solar";
 import { useNowMinute } from "../../hooks/useNowMinute";
 import {
   reconcileSnoozeDraft,
-  sameSnoozePresets,
+  resetSnoozeRows,
+  snoozePresetsChanged,
   sortSnoozeRows,
 } from "./SnoozePresetsSettings.logic";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -157,12 +158,15 @@ export function SnoozePresetsRow() {
       setWritten(reconciled.pending);
     }
   }
+  // Rows show menu order; the order stored (our latest write, else the server's) is what
+  // breaks same-minute ties, so no-op checks and Reset compare against it.
+  const stored = written.at(-1) ?? saved;
   const save = (
     snoozePresets: ReadonlyArray<SnoozePresetSetting>,
     nextKeys: ReadonlyArray<number> = keys,
   ) => {
-    if (!mixed && Equal.equals(snoozePresets, presets)) return;
     setRows({ presets: snoozePresets, keys: nextKeys });
+    if (!mixed && Equal.equals(snoozePresets, stored)) return;
     setWritten((previous) => [...previous, snoozePresets]);
     updateSettings(
       { snoozePresets },
@@ -184,14 +188,13 @@ export function SnoozePresetsRow() {
       {...searchableSetting("snooze-options")}
       description="Choices in every snooze menu, listed soonest first. Weekdays mean the next one after today."
       resetAction={
-        !mixed && sameSnoozePresets(presets, DEFAULT_SNOOZE_PRESETS) ? null : (
+        !mixed && !snoozePresetsChanged(stored) ? null : (
           <SettingResetButton
             label="snooze options"
             onClick={() => {
-              // Writes the defaults in their canonical order and shows them in menu order.
-              const resetKeys = freshKeys(DEFAULT_SNOOZE_PRESETS.length);
-              save(DEFAULT_SNOOZE_PRESETS, resetKeys);
-              setRows(sortSnoozeRows(DEFAULT_SNOOZE_PRESETS, resetKeys, now));
+              const reset = resetSnoozeRows(freshKeys(DEFAULT_SNOOZE_PRESETS.length), now);
+              save(reset.stored, reset.rows.keys);
+              setRows(reset.rows);
             }}
           />
         )

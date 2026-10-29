@@ -40,7 +40,7 @@ vi.mock(import("../../localApi"), async (original) => ({
 }));
 
 import { useSettingsRestore } from "./SettingsPanels";
-import { sortSnoozeRows } from "./SnoozePresetsSettings.logic";
+import { resetSnoozeRows } from "./SnoozePresetsSettings.logic";
 
 async function changedLabels(settings: UnifiedSettings) {
   state.settings = settings;
@@ -59,15 +59,26 @@ async function changedLabels(settings: UnifiedSettings) {
 it("agrees with the snooze row that its reset restored the defaults, at any time of day", async () => {
   // After 18:00 the passed "today" option sorts last in the row's menu order.
   const evening = new Date(2026, 9, 28, 19, 0);
-  const rowOrder = sortSnoozeRows(DEFAULT_SNOOZE_PRESETS, [0, 1, 2, 3, 4], evening).presets;
-  expect(rowOrder).not.toEqual(DEFAULT_SNOOZE_PRESETS);
-  expect(await changedLabels({ ...DEFAULT_UNIFIED_SETTINGS, snoozePresets: rowOrder })).toEqual([]);
+  const reset = resetSnoozeRows([0, 1, 2, 3, 4], evening);
+  expect(reset.rows.presets).not.toEqual(DEFAULT_SNOOZE_PRESETS);
+  expect(await changedLabels({ ...DEFAULT_UNIFIED_SETTINGS, snoozePresets: reset.stored })).toEqual(
+    [],
+  );
   expect(
     await changedLabels({
       ...DEFAULT_UNIFIED_SETTINGS,
       snoozePresets: DEFAULT_SNOOZE_PRESETS.slice(1),
     }),
   ).toEqual(["Snooze options"]);
+});
+
+it("counts reordered defaults as changed, since stored order picks between same-minute options", async () => {
+  const [hour, threeHours, evening, ...rest] = DEFAULT_SNOOZE_PRESETS;
+  const reordered = [hour, evening, threeHours, ...rest].flatMap((preset) => preset ?? []);
+  expect(reordered).toHaveLength(DEFAULT_SNOOZE_PRESETS.length);
+  expect(await changedLabels({ ...DEFAULT_UNIFIED_SETTINGS, snoozePresets: reordered })).toEqual([
+    "Snooze options",
+  ]);
 });
 
 it("restores automatic server updates after an opt-out", async () => {

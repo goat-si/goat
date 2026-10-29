@@ -357,6 +357,13 @@ describe("resolveSnoozePresets", () => {
         { kind: "at", day: "today", time: "18:00" },
       ]),
     ).toEqual(["In 3 hours 18:00"]);
+    // Stored order breaks the tie, so the same options in another order offer the set time.
+    expect(
+      menu(now, [
+        { kind: "at", day: "today", time: "18:00" },
+        { kind: "after", minutes: 180 },
+      ]),
+    ).toEqual(["This evening 18:00"]);
   });
 
   it("offers no presets when the list is empty", () => {

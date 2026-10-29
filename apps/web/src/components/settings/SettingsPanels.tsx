@@ -98,7 +98,7 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { SnoozeSettingsSections } from "./SnoozeSettingsSections";
-import { sameSnoozePresets } from "./SnoozePresetsSettings.logic";
+import { snoozePresetsChanged } from "./SnoozePresetsSettings.logic";
 import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { PullRequestWatchSettings } from "./PullRequestWatchSettings";
 import { ComposerSettingsSection } from "./ComposerSettingsSection";
@@ -512,9 +512,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.snoozeLimitedThreads !== DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads
       ? ["Snooze until limits reset"]
       : []),
-    ...(!sameSnoozePresets(settings.snoozePresets, DEFAULT_UNIFIED_SETTINGS.snoozePresets)
-      ? ["Snooze options"]
-      : []),
+    ...(snoozePresetsChanged(settings.snoozePresets) ? ["Snooze options"] : []),
     ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
     ...(settings.persistComposerContextStrip !==
     DEFAULT_UNIFIED_SETTINGS.persistComposerContextStrip
