@@ -45,25 +45,39 @@ const framedState = {
 };
 
 it.effect(
-  "window points go to the driver with coordinate_space window_points and the window's basis, and resolve hit from the observed element frames when the pinned goat.9 driver reply omits hit",
+  "window points go to the driver with coordinate_space window_points and the window's basis, report hit: null when the driver reply omits dispatch-time hit (never guessing from stale or overlapping observed frames), and surface driver hit when present",
   () =>
     Effect.gen(function* () {
-      // Pinned goat.9 click.rs reply omits structured hit; GOAT resolves hit from the observed frames.
-      const { host, sent } = fixture({
-        get_window_state: framedState,
-        click: () => ({
-          effect: "confirmed",
-          evidence: ["driver:acted"],
-        }),
-      });
+      let driverHit: unknown;
+      const connection = { id: "driver:1" };
+      const { host, sent } = fixture(
+        {
+          list_windows: {
+            windows: [
+              {
+                pid: 42,
+                window_id: 7,
+                title: "Document",
+                bounds: { x: 100, y: 200, width: 500, height: 400 },
+              },
+            ],
+          },
+          get_window_state: framedState,
+          click: () => ({
+            effect: "confirmed",
+            evidence: ["driver:acted"],
+            ...(driverHit === undefined ? {} : { hit: driverHit }),
+          }),
+        },
+        connection,
+      );
       const bound = yield* host.bindApp(
         call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       );
       const ref = bound.value as ScreenTargetRef;
       yield* host.observe(call("get_window_state", {}, ref), context);
-      // (80, 75) in window points is screen (180, 275), inside Apply [1] (140..220, 260..290).
-      const clicked = yield* host.invoke(
+      const unhit = yield* host.invoke(
         call("click", { x: 80, y: 75, coordinate_space: "window_points" }, ref),
         context,
       );
@@ -73,24 +87,27 @@ it.effect(
         coordinate_space: "window_points",
         window_basis: { x: 100, y: 200, w: 500, h: 400 },
       });
-      expect(clicked.value).toMatchObject({
+      expect(unhit.value).toMatchObject({
         point: { x: 80, y: 75, unit: "window_points" },
-        hit: {
-          index: 1,
-          role: "AXButton",
-          name: "Apply",
-          element_token: "s0000000a:1",
-          source: "observation",
-        },
+        hit: null,
       });
-      // A point outside any observed element frame reports hit: null.
-      const missed = yield* host.invoke(
-        call("click", { x: 10, y: 10, coordinate_space: "window_points" }, ref),
+      connection.id = "driver:2";
+      const afterReplacement = yield* host.invoke(
+        call("click", { x: 80, y: 75, coordinate_space: "window_points" }, ref),
         context,
       );
-      expect(missed.value).toMatchObject({
-        point: { x: 10, y: 10, unit: "window_points" },
+      expect(afterReplacement.value).toMatchObject({
+        point: { x: 80, y: 75, unit: "window_points" },
         hit: null,
+      });
+      driverHit = { role: "AXButton", label: "Apply", element_token: "s0000000a:1" };
+      const withDriverHit = yield* host.invoke(
+        call("click", { x: 80, y: 75, coordinate_space: "window_points" }, ref),
+        context,
+      );
+      expect(withDriverHit.value).toMatchObject({
+        point: { x: 80, y: 75, unit: "window_points" },
+        hit: { role: "AXButton", label: "Apply", element_token: "s0000000a:1" },
       });
     }),
 );
@@ -245,7 +262,7 @@ it.effect(
 );
 
 it.effect(
-  "in KakaoTalk, drag on a Send button without send: true and point drags are refused before dispatch, while a safe element drag goes through",
+  "in KakaoTalk all drags are refused before dispatch, and in any app an element drag whose center overlaps a Paste menu item is refused",
   () =>
     Effect.gen(function* () {
       const kakaoApps = {
@@ -352,16 +369,94 @@ it.effect(
       expect(refusedPointDrag).toMatchObject({ code: "invalid_argument", effectStarted: false });
       expect(sent.slice(before)).toEqual([]);
 
-      // Safe element-to-element drag goes through.
-      const safeDrag = yield* host.invoke(
-        call(
-          "drag",
-          { fromEnd: { elementRef: profileBtn }, toEnd: { elementRef: headerBtn } },
-          ref,
-        ),
+      // Element-to-element drag in KakaoTalk is also refused because drag delivers coordinate events.
+      const refusedElemDragInChat = yield* host
+        .invoke(
+          call(
+            "drag",
+            { fromEnd: { elementRef: profileBtn }, toEnd: { elementRef: headerBtn }, send: true },
+            ref,
+          ),
+          context,
+        )
+        .pipe(Effect.flip);
+      expect(refusedElemDragInChat).toMatchObject({
+        code: "invalid_argument",
+        effectStarted: false,
+      });
+      expect(sent.slice(before)).toEqual([]);
+
+      // In a regular app, an element drag whose endpoint center is overlapped by a Paste menu item is refused.
+      const overlapState = {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: "s0000000p",
+        elements_complete: false,
+        tree_format: "both",
+        tree_markdown:
+          '[0] AXWindow "Editor"\n  [1] AXButton "Canvas"\n  [2] AXMenuItem "Paste"\n  [3] AXButton "Target"',
+        elements: [
+          {
+            element_index: 0,
+            element_token: "s0000000p:0",
+            role: "AXWindow",
+            label: "Editor",
+            frame: { x: 0, y: 0, w: 500, h: 400 },
+          },
+          {
+            element_index: 1,
+            element_token: "s0000000p:1",
+            role: "AXButton",
+            label: "Canvas",
+            parent_index: 0,
+            frame: { x: 100, y: 100, w: 80, h: 40 },
+          },
+          {
+            element_index: 2,
+            element_token: "s0000000p:2",
+            role: "AXMenuItem",
+            label: "Paste",
+            parent_index: 0,
+            frame: { x: 120, y: 110, w: 60, h: 22 },
+          },
+          {
+            element_index: 3,
+            element_token: "s0000000p:3",
+            role: "AXButton",
+            label: "Target",
+            parent_index: 0,
+            frame: { x: 300, y: 100, w: 80, h: 40 },
+          },
+        ],
+      };
+      const editor = fixture({ get_window_state: overlapState });
+      const editorBound = yield* editor.host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
         context,
       );
-      expect(safeDrag.category).toBe("confirmed");
+      const editorRef = editorBound.value as ScreenTargetRef;
+      const editorObs = yield* editor.host.observe(
+        call("get_window_state", {}, editorRef),
+        context,
+      );
+      const editorEls = (
+        editorObs.value as { elements: Array<{ index: number; ref: ScreenElementRef }> }
+      ).elements;
+      const canvasBtn = editorEls.find((item) => item.index === 1)!.ref;
+      const targetBtn = editorEls.find((item) => item.index === 3)!.ref;
+      const editorBefore = editor.sent.length;
+      const overlappedDrag = yield* editor.host
+        .invoke(
+          call(
+            "drag",
+            { fromEnd: { elementRef: canvasBtn }, toEnd: { elementRef: targetBtn } },
+            editorRef,
+          ),
+          context,
+        )
+        .pipe(Effect.flip);
+      expect(overlappedDrag).toMatchObject({ code: "permission_denied", effectStarted: false });
+      expect(editor.sent.slice(editorBefore)).toEqual([]);
     }),
 );
 
@@ -491,9 +586,38 @@ it.effect(
         },
       });
       for (const platform of ["linux", "win32"] as const) {
+        let winBounds = { x: 10, y: 20, width: 50, height: 40 };
+        const platFix = fixture({
+          list_windows: () => ({
+            windows: [{ pid: 42, window_id: 7, title: "Document", bounds: winBounds }],
+          }),
+          get_window_state: (args: Record<string, unknown>) =>
+            args.include_accessibility_tree === false
+              ? goat2WindowState(args, { snapshot_id: "s0000000a", window_bounds: winBounds })
+              : {
+                  ...framedState,
+                  elements: [
+                    {
+                      element_index: 0,
+                      element_token: "s0000000a:0",
+                      role: "AXWindow",
+                      label: "Editor",
+                      frame: { x: 10, y: 20, w: 50, h: 40 },
+                    },
+                    {
+                      element_index: 1,
+                      element_token: "s0000000a:1",
+                      role: "AXButton",
+                      label: "Apply",
+                      parent_index: 0,
+                      frame: { x: 20, y: 30, w: 20, h: 10 },
+                    },
+                  ],
+                },
+        });
         const host = createDesktopTargetHost({
-          primitiveChannel: base.channel as never,
-          leases: base.leases as never,
+          primitiveChannel: platFix.channel as never,
+          leases: platFix.leases as never,
           platform,
         });
         const bound = yield* host.bindApp(
@@ -501,12 +625,73 @@ it.effect(
           context,
         );
         const ref = bound.value as ScreenTargetRef;
+        const obs = yield* host.observe(call("get_window_state", {}, ref), context);
+        const applyRef = (
+          obs.value as { elements: Array<{ index: number; ref: ScreenElementRef }> }
+        ).elements.find((item) => item.index === 1)!.ref;
         const shot = yield* host.observe(call("screenshot", {}, ref), context);
         const regionId = shot.imageMetadata?.regionId!;
+
+        // 1. Screenshot click keeps 2x screenshot pixel coordinates (20, 16) without coordinate_space.
         const clicked = yield* host.invoke(call("click", { x: 20, y: 16, regionId }, ref), context);
         expect(clicked.category).toBe("confirmed");
-        expect(base.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
-        expect(base.sent.at(-1)?.args).not.toHaveProperty("window_basis");
+        expect(platFix.sent.at(-1)?.args).toMatchObject({ x: 20, y: 16 });
+        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
+        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("window_basis");
+
+        // 2. Mixed element-to-pixel drag on 2x screenshot converts element center (20, 15) pt -> (40, 30) px
+        // and keeps pixel endpoint (80, 60) px in screenshot pixels.
+        yield* host.invoke(
+          call(
+            "drag",
+            {
+              fromEnd: { elementRef: applyRef },
+              toEnd: { x: 80, y: 60, regionId },
+            },
+            ref,
+          ),
+          context,
+        );
+        expect(platFix.sent.at(-1)?.args).toMatchObject({
+          from_x: 40,
+          from_y: 30,
+          to_x: 80,
+          to_y: 60,
+        });
+        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
+
+        // 3. Center scroll on 2x screenshot (100x80 px) sends (50, 40) px without coordinate_space.
+        yield* host.invoke(
+          call("scroll", { scrollCenter: true, direction: "down", amount: 3 }, ref),
+          context,
+        );
+        expect(platFix.sent.at(-1)?.args).toMatchObject({ x: 50, y: 40, direction: "down" });
+        expect(platFix.sent.at(-1)?.args).not.toHaveProperty("coordinate_space");
+
+        // 4. { window: [x, y] } in a drag endpoint is refused as unsupported on non-macOS.
+        const unsupportedWinPtDrag = yield* host
+          .invoke(
+            call(
+              "drag",
+              {
+                fromEnd: { elementRef: applyRef },
+                toEnd: { x: 10, y: 10, coordinate_space: "window_points" },
+              },
+              ref,
+            ),
+            context,
+          )
+          .pipe(Effect.flip);
+        expect(unsupportedWinPtDrag.code).toBe("unsupported");
+
+        // 5. Window resize between capture and dispatch is caught via list_windows geometry check and refused.
+        winBounds = { x: 10, y: 20, width: 80, height: 40 };
+        const clicksBefore = platFix.sent.filter((entry) => entry.tool === "click").length;
+        const resizedClick = yield* host
+          .invoke(call("click", { x: 20, y: 16, regionId }, ref), context)
+          .pipe(Effect.flip);
+        expect(resizedClick.code).toBe("stale_reference");
+        expect(platFix.sent.filter((entry) => entry.tool === "click")).toHaveLength(clicksBefore);
       }
 
       // On macOS, legacy point-targeted type_text and press_key never acquire coordinate_space or window_basis.

@@ -46,9 +46,9 @@ import {
   type Rect,
 } from "./DesktopFrames.ts";
 import {
-  annotatePointerResult,
   applyDesktopPointerArgs,
   buildScreenshotCapture,
+  runDesktopPointerOrReplace,
   treeWindowBasis,
   type ScreenshotBasis,
 } from "./DesktopTargetPoints.ts";
@@ -816,8 +816,10 @@ export const createDesktopTargetHost = (deps: {
       if (!guardInput.ok) return yield* Effect.fail(guardInput.error);
       const admission = admitDesktopInput(guardInput.input);
       if (admission.refused !== undefined) return yield* Effect.fail(admission.refused);
+      const replaceText = call.method === "type_text" && args.replace === true;
       delete forwarded.elementRef;
       delete forwarded.send;
+      delete forwarded.replace;
       // The guest names its target in the call; the driver gets the window below instead.
       delete forwarded.targetRef;
       delete forwarded.element_token;
@@ -847,7 +849,6 @@ export const createDesktopTargetHost = (deps: {
         ...(deps.platform === undefined ? {} : { platform: deps.platform }),
         ...(bound.pointsStale === undefined ? {} : { pointsStale: bound.pointsStale }),
         ...(bound.frames === undefined ? {} : { frames: bound.frames }),
-        ...(bound.elementsByToken === undefined ? {} : { elementsByToken: bound.elementsByToken }),
         ...(bound.framesBasis === undefined ? {} : { framesBasis: bound.framesBasis }),
         ...(bound.windowBounds === undefined ? {} : { windowBounds: bound.windowBounds }),
         ...(bound.screenshots === undefined ? {} : { screenshots: bound.screenshots }),
@@ -860,26 +861,43 @@ export const createDesktopTargetHost = (deps: {
       if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
       if (admission.clickedTableCell !== undefined)
         bound.lastClickedTableCell = admission.clickedTableCell;
-      const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
-      const reply = yield* boundRequest(bound, needs, tool, forwarded, call, context, {
+      const cursor = {
         bound,
         point:
           elementToken === undefined
             ? undefined
             : aimOf(bound.frames?.get(elementToken), bound.framesBasis),
-      }).pipe(
-        // The driver refused a token another read retired: that read also ended the pages.
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            if (error.code === "stale_reference") delete bound.pages;
-          }),
-        ),
-      );
-      const result = annotatePointerResult(
-        driverResult(tool, reply),
-        pointerResolved.windowPoint,
-        pointerState,
-      );
+      };
+      const { reply, result } = yield* runDesktopPointerOrReplace({
+        ...(pointerResolved.checkBasis === undefined
+          ? {}
+          : { checkBasis: pointerResolved.checkBasis }),
+        replaceText,
+        ...(elementToken === undefined ? {} : { elementToken }),
+        target,
+        needs: elementToken !== undefined ? "element" : pointerResolved.needs,
+        tool,
+        forwarded,
+        ...(pointerResolved.windowPoint === undefined
+          ? {}
+          : { windowPoint: pointerResolved.windowPoint }),
+        checkLiveBounds: () =>
+          boundRequest(bound, "points", "list_windows", { pid: bound.pid }, call, context).pipe(
+            Effect.map((listed) =>
+              boundsOf(
+                array(object(driverValue(listed))?.windows)
+                  .map(object)
+                  .find((w) => w?.window_id === bound.windowId && w.pid === bound.pid)?.bounds,
+              ),
+            ),
+          ),
+        sendAction: (n, t, a) => boundRequest(bound, n, t, a, call, context, cursor),
+        toResult: driverResult,
+        onStaleReference: () => {
+          delete bound.pages;
+        },
+        failedCategories: BATCH_FAILED_CATEGORIES,
+      });
       const replyData = object(driverValue(reply));
       const focusConfirmed = replyData?.focused === true || replyData?.focus_confirmed === true;
       if (admission.clearClickedTableCell && focusConfirmed) delete bound.lastClickedTableCell;

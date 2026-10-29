@@ -18,6 +18,7 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import {
   context as desktopContext,
+  DriverError,
   fixture,
   goat2WindowState,
 } from "./DesktopTargetHost.testkit.ts";
@@ -280,7 +281,37 @@ it.live(
 it.live(
   "app scroll takes an element or point, points stay usable after input, a name without observe reads once, a number without observe is refused, drag mixes element and point, and type forwards replace: true",
   () => {
+    let failType = false;
+    const TYPE_KEYS = new Set([
+      "session",
+      "target",
+      "element_token",
+      "text",
+      "delay_ms",
+      "delivery_mode",
+    ]);
+    const PRESS_KEYS = new Set([
+      "session",
+      "target",
+      "element_token",
+      "key",
+      "modifiers",
+      "delivery_mode",
+    ]);
     const { host, sent } = fixture({
+      type_text: (args: Record<string, unknown>) => {
+        const unknown = Object.keys(args).filter((k) => !TYPE_KEYS.has(k));
+        if (unknown.length > 0)
+          return new DriverError({ code: "invalid_arguments" }, `unknown: ${unknown.join(",")}`);
+        if (failType) return { effect: "suspected_noop", code: "no_change" };
+        return { effect: "confirmed", evidence: ["driver:acted"] };
+      },
+      press_key: (args: Record<string, unknown>) => {
+        const unknown = Object.keys(args).filter((k) => !PRESS_KEYS.has(k));
+        if (unknown.length > 0)
+          return new DriverError({ code: "invalid_arguments" }, `unknown: ${unknown.join(",")}`);
+        return { effect: "confirmed", evidence: ["driver:acted"] };
+      },
       get_window_state: (args: Record<string, unknown>) =>
         args.include_accessibility_tree === false
           ? goat2WindowState(args)
@@ -350,19 +381,14 @@ it.live(
           await app.scroll([20, 16], 'up', 2);
           await app.click({ window: [12, 14] });
           await app.drag(1, { window: [40, 30] });
-          let replaceRefused;
-          try { await app.type('https://example.com', 3, { replace: true }); }
-          catch (e) { replaceRefused = e.nothingSent + ':' + e.message; }
-          await app.setValue(3, 'https://example.com');
-          return { numberBeforeObserve, pixelBeforeScreenshot, replaceRefused };`,
+          await app.type('https://example.com', 3, { replace: true });
+          return { numberBeforeObserve, pixelBeforeScreenshot };`,
       });
       expect(result.status).toBe("completed");
       expect(result.value).toEqual({
         numberBeforeObserve: "Numbers come from observe(); call it first.",
         pixelBeforeScreenshot:
           "[x, y] are screenshot pixels and this cell has no screenshot; use { window: [x, y] } window points, or take a screenshot.",
-        replaceRefused:
-          "true:Use setValue(target, text) to replace a field's whole value; type() inserts at the cursor.",
       });
       const actions = sent.filter(
         (entry) => !["list_apps", "list_windows", "get_window_state"].includes(entry.tool),
@@ -374,7 +400,8 @@ it.live(
         "scroll",
         "click",
         "drag",
-        "set_value",
+        "press_key",
+        "type_text",
       ]);
       expect(actions[0]?.args).toMatchObject({ element_token: "s0000000a:1" });
       expect(actions[1]?.args).toMatchObject({
@@ -409,7 +436,37 @@ it.live(
       });
       expect(actions[6]?.args).toMatchObject({
         element_token: "s0000000a:3",
-        value: "https://example.com",
+        key: "a",
+        modifiers: ["command"],
+      });
+      expect(actions[7]?.args).toMatchObject({
+        element_token: "s0000000a:3",
+        text: "https://example.com",
+      });
+      expect(actions[7]?.args).not.toHaveProperty("replace");
+
+      // When replace typing fails, Escape is sent on the addressed element to restore the field.
+      failType = true;
+      const beforeRestore = sent.length;
+      const failedReplace = yield* service.runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: desktopContext.invocation,
+        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+          await app.observe();
+          try { await app.type('bad-url', 3, { replace: true }); return 'ok'; }
+          catch (e) { return e.code; }`,
+      });
+      expect(failedReplace.value).toBe("unknown_outcome");
+      const restoreTools = sent
+        .slice(beforeRestore)
+        .filter((e) => !["list_apps", "list_windows", "get_window_state"].includes(e.tool));
+      expect(restoreTools.map((e) => e.tool)).toEqual(["press_key", "type_text", "press_key"]);
+      expect(restoreTools[2]?.args).toMatchObject({
+        element_token: "s0000000a:3",
+        key: "escape",
       });
     }).pipe(
       Effect.provide(

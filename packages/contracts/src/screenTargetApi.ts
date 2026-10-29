@@ -35,7 +35,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
   click(t: Target, o?: { button?: "right"; count?: number; send?: boolean }): Promise<Done>;
-  type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
+  type(text: string, t?: Target, o?: { replace?: boolean; send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;

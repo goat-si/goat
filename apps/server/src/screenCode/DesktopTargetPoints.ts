@@ -2,10 +2,11 @@
 /**
  * Desktop pointer coordinate resolution: converts [x, y] screenshot pixels (using the screenshot's
  * actual region-to-pixel ratio, even when downscaled), { window: [x, y] } window points, and
- * element drag endpoints into window points with a validated window_basis.
+ * element drag endpoints into window points (macOS) or validated screenshot pixels (Linux/Windows).
  */
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Effect from "effect/Effect";
 import type {
   ComputerUsePrimitiveReply,
   ScreenHostCall,
@@ -16,7 +17,6 @@ import type {
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 import { sameRect, type Placed, type Rect } from "./DesktopFrames.ts";
-import type { GuardElement } from "./DesktopInputGuards.ts";
 
 export interface ScreenshotBasis {
   readonly regionId: string;
@@ -37,6 +37,8 @@ const RESTARTED_POINTS = "The driver restarted; take a new screenshot before usi
 const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
+const UNSUPPORTED_WIN_POINTS =
+  "Window points { window: [x, y] } are only supported on macOS in this driver version; use [x, y] screenshot pixels.";
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -51,7 +53,6 @@ export interface PointResolutionState {
   readonly platform?: NodeJS.Platform;
   readonly pointsStale?: "input" | "restart";
   readonly frames?: ReadonlyMap<string, Placed>;
-  readonly elementsByToken?: ReadonlyMap<string, GuardElement>;
   readonly framesBasis?: Rect;
   readonly windowBounds?: Rect;
   readonly screenshots?: ReadonlyMap<string, ScreenshotBasis>;
@@ -62,6 +63,7 @@ export interface PointResolutionState {
 const resolveEndpoint = (
   end: Record<string, unknown>,
   state: PointResolutionState,
+  isMac: boolean,
 ):
   | {
       readonly ok: true;
@@ -71,6 +73,8 @@ const resolveEndpoint = (
       readonly needs: "element" | "points" | "nothing";
     }
   | { readonly ok: false; readonly error: ScreenRunError } => {
+  if (end.coordinate_space === "window_points" && !isMac)
+    return { ok: false, error: fail("unsupported", UNSUPPORTED_WIN_POINTS) };
   const element = object(end.elementRef);
   if (element !== undefined) {
     const token = state.resolveToken(element);
@@ -79,11 +83,17 @@ const resolveEndpoint = (
     const basis = state.framesBasis;
     if (!placed || !basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_DRAG) };
+    const wx = placed.frame.x + placed.frame.w / 2 - basis.x;
+    const wy = placed.frame.y + placed.frame.h / 2 - basis.y;
+    if (isMac) return { ok: true, x: wx, y: wy, basis, needs: "element" };
+    const shot = state.latestScreenshot;
+    if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0 || !sameRect(shot.basis, basis))
+      return { ok: false, error: fail("stale_reference", MOVED_DRAG) };
     return {
       ok: true,
-      x: placed.frame.x + placed.frame.w / 2 - basis.x,
-      y: placed.frame.y + placed.frame.h / 2 - basis.y,
-      basis,
+      x: (wx * shot.pixelWidth) / shot.basis.w,
+      y: (wy * shot.pixelHeight) / shot.basis.h,
+      basis: shot.basis,
       needs: "element",
     };
   }
@@ -102,6 +112,7 @@ const resolveEndpoint = (
   const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
   if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
     return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+  if (!isMac) return { ok: true, x, y, basis: shot.basis, needs: "points" };
   return {
     ok: true,
     x: (x * shot.basis.w) / shot.pixelWidth,
@@ -121,9 +132,17 @@ const combineNeeds = (
       ? "points"
       : "nothing";
 
+const basisMatchesLive = (basis: Rect, live: Rect | undefined): boolean =>
+  live !== undefined &&
+  Math.abs(live.x - basis.x) <= 1 &&
+  Math.abs(live.y - basis.y) <= 1 &&
+  Math.abs(live.w - basis.w) <= 1 &&
+  Math.abs(live.h - basis.h) <= 1;
+
 /**
  * Resolves pointer coordinates on forwarded desktop input arguments, returning the window point
- * used, its basis, and whether the call depends on an element or screenshot from the current driver.
+ * used, any non-macOS live-geometry basis to verify, and whether the call depends on an element
+ * or screenshot from the current driver.
  */
 export const applyDesktopPointerArgs = (
   method: ScreenHostCall["method"],
@@ -133,7 +152,8 @@ export const applyDesktopPointerArgs = (
 ):
   | {
       readonly ok: true;
-      readonly windowPoint?: { readonly x: number; readonly y: number; readonly basis?: Rect };
+      readonly windowPoint?: { readonly x: number; readonly y: number };
+      readonly checkBasis?: Rect;
       readonly needs: "element" | "points" | "nothing";
     }
   | { readonly ok: false; readonly error: ScreenRunError } => {
@@ -157,9 +177,9 @@ export const applyDesktopPointerArgs = (
     const fromObj = object(args.fromEnd);
     const toObj = object(args.toEnd);
     if (!fromObj || !toObj) return { ok: false, error: fail("invalid_argument") };
-    const fromRes = resolveEndpoint(fromObj, state);
+    const fromRes = resolveEndpoint(fromObj, state, isMac);
     if (!fromRes.ok) return fromRes;
-    const toRes = resolveEndpoint(toObj, state);
+    const toRes = resolveEndpoint(toObj, state, isMac);
     if (!toRes.ok) return toRes;
     if (!sameRect(fromRes.basis, toRes.basis))
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
@@ -170,27 +190,40 @@ export const applyDesktopPointerArgs = (
     if (isMac) {
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = fromRes.basis;
+      return {
+        ok: true,
+        windowPoint: { x: toRes.x, y: toRes.y },
+        needs: combineNeeds(fromRes.needs, toRes.needs),
+      };
     }
     return {
       ok: true,
-      windowPoint: { x: toRes.x, y: toRes.y, basis: fromRes.basis },
+      checkBasis: fromRes.basis,
       needs: combineNeeds(fromRes.needs, toRes.needs),
     };
   }
 
   if (method === "scroll" && args.scrollCenter === true) {
-    const basis = state.framesBasis ?? state.windowBounds;
-    if (!basis || basis.w <= 0 || basis.h <= 0)
-      return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
-    const cx = Math.floor(basis.w / 2);
-    const cy = Math.floor(basis.h / 2);
-    forwarded.x = cx;
-    forwarded.y = cy;
     if (isMac) {
+      const basis = state.framesBasis ?? state.windowBounds;
+      if (!basis || basis.w <= 0 || basis.h <= 0)
+        return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+      const cx = Math.floor(basis.w / 2);
+      const cy = Math.floor(basis.h / 2);
+      forwarded.x = cx;
+      forwarded.y = cy;
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = basis;
+      return { ok: true, windowPoint: { x: cx, y: cy }, needs: "nothing" };
     }
-    return { ok: true, windowPoint: { x: cx, y: cy, basis }, needs: "nothing" };
+    if (state.pointsStale === "restart")
+      return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
+    const shot = state.latestScreenshot;
+    if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
+      return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+    forwarded.x = Math.floor(shot.pixelWidth / 2);
+    forwarded.y = Math.floor(shot.pixelHeight / 2);
+    return { ok: true, checkBasis: shot.basis, needs: "points" };
   }
 
   const hasXY = finite(args.x) && finite(args.y);
@@ -202,13 +235,7 @@ export const applyDesktopPointerArgs = (
     if (!isMac) {
       delete forwarded.coordinate_space;
       delete forwarded.window_basis;
-      return {
-        ok: false,
-        error: fail(
-          "unsupported",
-          "Window points { window: [x, y] } are only supported on macOS in this driver version; use [x, y] screenshot pixels.",
-        ),
-      };
+      return { ok: false, error: fail("unsupported", UNSUPPORTED_WIN_POINTS) };
     }
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
@@ -217,7 +244,7 @@ export const applyDesktopPointerArgs = (
     forwarded.window_basis = basis;
     return {
       ok: true,
-      ...(hasXY ? { windowPoint: { x: args.x as number, y: args.y as number, basis } } : {}),
+      ...(hasXY ? { windowPoint: { x: args.x as number, y: args.y as number } } : {}),
       needs: "nothing",
     };
   }
@@ -230,7 +257,7 @@ export const applyDesktopPointerArgs = (
     const shot = state.screenshots?.get(regionId);
     if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
-    if (!isMac) return { ok: true, needs: "points" };
+    if (!isMac) return { ok: true, checkBasis: shot.basis, needs: "points" };
     if (hasXY) {
       const wx = ((args.x as number) * shot.basis.w) / shot.pixelWidth;
       const wy = ((args.y as number) * shot.basis.h) / shot.pixelHeight;
@@ -238,7 +265,7 @@ export const applyDesktopPointerArgs = (
       forwarded.y = wy;
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = shot.basis;
-      return { ok: true, windowPoint: { x: wx, y: wy, basis: shot.basis }, needs: "points" };
+      return { ok: true, windowPoint: { x: wx, y: wy }, needs: "points" };
     }
     if (hasDragXY) {
       const fx = ((args.from_x as number) * shot.basis.w) / shot.pixelWidth;
@@ -251,67 +278,24 @@ export const applyDesktopPointerArgs = (
       forwarded.to_y = ty;
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = shot.basis;
-      return { ok: true, windowPoint: { x: tx, y: ty, basis: shot.basis }, needs: "points" };
+      return { ok: true, windowPoint: { x: tx, y: ty }, needs: "points" };
     }
   }
 
   return { ok: true, needs: "points" };
 };
 
-const resolveObservationHit = (
-  windowPoint: { readonly x: number; readonly y: number; readonly basis?: Rect },
-  state: Pick<PointResolutionState, "frames" | "elementsByToken" | "framesBasis" | "windowBounds">,
-) => {
-  const basis = windowPoint.basis ?? state.framesBasis ?? state.windowBounds;
-  if (!basis || !state.frames) return null;
-  const screenX = basis.x + windowPoint.x;
-  const screenY = basis.y + windowPoint.y;
-  let bestToken: string | undefined;
-  let bestArea = Infinity;
-  for (const [token, placed] of state.frames) {
-    const el = state.elementsByToken?.get(token);
-    if (el?.role.toLowerCase().replace(/^ax/, "") === "window") continue;
-    const { frame } = placed;
-    if (
-      frame.w > 0 &&
-      frame.h > 0 &&
-      screenX >= frame.x &&
-      screenX <= frame.x + frame.w &&
-      screenY >= frame.y &&
-      screenY <= frame.y + frame.h
-    ) {
-      const area = frame.w * frame.h;
-      if (area <= bestArea) {
-        bestArea = area;
-        bestToken = token;
-      }
-    }
-  }
-  if (bestToken === undefined) return null;
-  const info = state.elementsByToken?.get(bestToken);
-  return {
-    ...(info?.index === undefined ? {} : { index: info.index }),
-    role: info?.role ?? "unknown",
-    name: info?.name ?? "",
-    element_token: bestToken,
-    source: "observation" as const,
-  };
-};
-
-/** Attaches window-point coordinates and hit metadata to a pointer action's result value. */
-export const annotatePointerResult = (
+/**
+ * Attaches window-point coordinates and driver-supplied dispatch-time hit metadata to a pointer
+ * action's result value; when the driver does not report a dispatch-time hit, hit is explicitly
+ * null rather than guessed from cached observation frames.
+ */
+const annotatePointerResult = (
   result: ScreenHostDispatchResult,
-  windowPoint: { readonly x: number; readonly y: number; readonly basis?: Rect } | undefined,
-  state?: Pick<PointResolutionState, "frames" | "elementsByToken" | "framesBasis" | "windowBounds">,
+  windowPoint: { readonly x: number; readonly y: number } | undefined,
 ): ScreenHostDispatchResult => {
   if (windowPoint === undefined) return result;
   const current = object(result.value) ?? {};
-  const hit =
-    "hit" in current && current.hit !== undefined
-      ? current.hit
-      : state !== undefined
-        ? resolveObservationHit(windowPoint, state)
-        : null;
   return {
     ...result,
     value: {
@@ -321,7 +305,7 @@ export const annotatePointerResult = (
         y: windowPoint.y,
         unit: "window_points",
       },
-      hit,
+      hit: "hit" in current && current.hit !== undefined ? current.hit : null,
     },
   };
 };
@@ -400,3 +384,66 @@ export const buildScreenshotCapture = (input: {
     shotBasis,
   };
 };
+
+/**
+ * Runs a desktop input call with optional non-macOS live-geometry verification and
+ * select-all + type + Escape-restore replacement semantics.
+ */
+export const runDesktopPointerOrReplace = Effect.fn("DesktopTargetPoints.runAction")(
+  function* (input: {
+    readonly checkBasis?: Rect;
+    readonly replaceText: boolean;
+    readonly elementToken?: string;
+    readonly target: Record<string, unknown>;
+    readonly needs: "element" | "points" | "nothing";
+    readonly tool: string;
+    readonly forwarded: Record<string, unknown>;
+    readonly windowPoint?: { readonly x: number; readonly y: number };
+    readonly checkLiveBounds: () => Effect.Effect<Rect | undefined, ScreenRunError>;
+    readonly sendAction: (
+      needs: "element" | "points" | "nothing",
+      tool: string,
+      args: Record<string, unknown>,
+    ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+    readonly toResult: (tool: string, reply: ComputerUsePrimitiveReply) => ScreenHostDispatchResult;
+    readonly onStaleReference: () => void;
+    readonly failedCategories: ReadonlySet<ScreenHostDispatchResult["category"]>;
+  }) {
+    if (input.checkBasis !== undefined) {
+      const liveBounds = yield* input.checkLiveBounds();
+      if (!basisMatchesLive(input.checkBasis, liveBounds))
+        return yield* Effect.fail(fail("stale_reference", MOVED_WINDOW));
+    }
+    const { replaceText, elementToken, target } = input;
+    if (replaceText && elementToken !== undefined) {
+      yield* input.sendAction("element", "press_key", {
+        target,
+        element_token: elementToken,
+        key: "a",
+        modifiers: ["command"],
+        delivery_mode: "background",
+      });
+    }
+    const restore =
+      replaceText && elementToken !== undefined
+        ? input
+            .sendAction("element", "press_key", {
+              target,
+              element_token: elementToken,
+              key: "escape",
+              delivery_mode: "background",
+            })
+            .pipe(Effect.ignore)
+        : Effect.void;
+    const reply = yield* input.sendAction(input.needs, input.tool, input.forwarded).pipe(
+      Effect.tapError((error) =>
+        Effect.sync(() => {
+          if (error.code === "stale_reference") input.onStaleReference();
+        }).pipe(Effect.andThen(restore)),
+      ),
+    );
+    const result = annotatePointerResult(input.toResult(input.tool, reply), input.windowPoint);
+    if (replaceText && input.failedCategories.has(result.category)) yield* restore;
+    return { reply, result };
+  },
+);

@@ -465,15 +465,11 @@ const sendPolicy = (input: {
   const send = args.send === true;
   if ((method === "click" || method === "right_click") && elementToken === undefined && aimed)
     return "refuse_point";
+  // Drag delivers coordinate pointer gestures rather than AX element actions: if an endpoint
+  // names or overlaps a Send button without send: true, report refuse_send; otherwise refuse_point.
   if (method === "drag") {
-    if (dragEndpoints && dragEndpoints.length > 0) {
-      if (dragEndpoints.some((end) => end.elementToken === undefined && end.aimed))
-        return "refuse_point";
-      if (dragEndpoints.some((end) => isSendButton(end.element)))
-        return send ? "allow" : "refuse_send";
-    } else if (elementToken === undefined && aimed) {
-      return "refuse_point";
-    }
+    if (!send && dragEndpoints?.some((end) => isSendButton(end.element))) return "refuse_send";
+    return "refuse_point";
   }
   const resolvedKey =
     method === "press_key" || method === "hotkey" ? resolveKeyPress(args) : undefined;
@@ -548,11 +544,11 @@ export const admitDesktopInput = (input: {
     lastClickedTableCell,
     dragEndpoints,
   } = input;
-  if (method === "type_text" && args.replace === true)
+  if (method === "type_text" && args.replace === true && elementToken === undefined)
     return {
       refused: fail(
-        "unsupported",
-        "Use setValue(target, text) to replace a field's whole value; type() inserts at the cursor.",
+        "invalid_argument",
+        "replace: true requires a target element; name the field to replace.",
       ),
     };
   if (
@@ -756,6 +752,31 @@ const resolveDragEndpointGuards = (
         ...(placed === undefined ? {} : { placed }),
         aimed: false,
       });
+      if (placed !== undefined && frames !== undefined && elementsByToken !== undefined) {
+        const cx = placed.frame.x + placed.frame.w / 2;
+        const cy = placed.frame.y + placed.frame.h / 2;
+        for (const [otherToken, otherPlaced] of frames) {
+          if (otherToken === token) continue;
+          const { frame } = otherPlaced;
+          if (
+            frame.w > 0 &&
+            frame.h > 0 &&
+            cx >= frame.x &&
+            cx <= frame.x + frame.w &&
+            cy >= frame.y &&
+            cy <= frame.y + frame.h
+          ) {
+            const otherEl = elementsByToken.get(otherToken);
+            if (otherEl !== undefined)
+              endpoints.push({
+                elementToken: otherToken,
+                element: otherEl,
+                placed: otherPlaced,
+                aimed: false,
+              });
+          }
+        }
+      }
     } else {
       endpoints.push({ aimed: "x" in end || "y" in end });
     }
