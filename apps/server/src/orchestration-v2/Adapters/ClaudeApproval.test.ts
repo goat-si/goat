@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { claudeApprovalPresentation, permissionResultFromDecision } from "./ClaudeApproval.ts";
+import { claudeApprovalPresentation, permissionResultFromDecision } from "./ClaudeAdapterV2.ts";
 
 describe("ClaudeAdapterV2 approval presentation", () => {
   it("marks asks that full access could not auto-allow and keeps the CLI's reason", () => {
