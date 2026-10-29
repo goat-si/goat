@@ -2285,6 +2285,8 @@ it("loads a font attachment through the lazy preview", async () => {
   const { default: fontUrl } =
     await import("../../../node_modules/@betteroffice/fonts/assets/Carlito-Regular.ttf?url");
   const file = await (await fetch(fontUrl)).blob();
+  // Both lazy chunks can take longer than waitFor allows to load cold on CI.
+  await Promise.all([import("./FontFilePreview"), import("./FontViewer")]);
   await using screen = await render(
     <AttachmentFilePreview
       name="Carlito.ttf"

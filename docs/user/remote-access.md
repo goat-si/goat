@@ -86,8 +86,8 @@ goat pair
 ```
 
 Scan the QR code from the GOAT app on your phone, or paste the pairing URL into
-**Add device → Tailscale (GOAT server)** on web and desktop. Connection settings are under **Settings → Connections**
-on web and desktop and **Settings → Environments** on mobile. A loopback address
+**Settings → Connections → Add device → Tailscale (GOAT server)** on web and desktop. On mobile,
+saved servers are under **Settings → Environments**. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
 
 On a computer with the GOAT desktop app, you can open the `App link` that
@@ -557,7 +557,7 @@ answer approval requests, and folder browsing and runtime updates still need SSH
 
 A link lasts 30 days; link again with a new code to renew it. Removing a link
 forgets it here. To end it on the other machine at once, revoke **GOAT on …** in
-that machine's **Settings → Connections**. To watch its threads yourself, add
+that machine's **Settings → Connections → Authorized clients**. To watch its threads yourself, add
 the machine under **Settings → Connections** with a pairing URL from `goat pair`.
 
 <a id="devices-on-this-hub"></a>
