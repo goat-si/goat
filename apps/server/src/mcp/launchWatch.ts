@@ -126,6 +126,8 @@ export const LaunchWatch = Schema.Struct({
    * reported run, a send that re-arms one still gets it reported.
    */
   skippedRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Runs under way whose start a look could not read yet; each later look reads them again. */
+  heldRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** The newest run a look has seen; later runs are new to the watch. */
   seen: Schema.NullOr(Schema.Struct({ runId: RunId, ordinal: Schema.Number })).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -309,6 +311,7 @@ export function newLaunchWatch(input: {
     followAgain: [],
     discoveredRuns: [],
     skippedRuns: [],
+    heldRuns: [],
     seen: null,
     reportedQuestions: [],
     lastEpisode: 0,
@@ -371,6 +374,7 @@ export function addPendingRun(watch: LaunchWatch, runId: RunId, now: number): La
     ...watch,
     pendingRuns: [...watch.pendingRuns, runId],
     skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
+    heldRuns: watch.heldRuns.filter((held) => held !== runId),
     armedAt: now,
     updatedAt: now,
   };
@@ -415,8 +419,9 @@ const wentOn = (watch: LaunchWatch, run: WatchedRun, runs: ReadonlyArray<Watched
  * Takes in the runs a look found. Each run past the last look that the watch does not know is
  * followed when it is the thread's own and the thread did not go straight on from it, and skipped
  * otherwise, so the thread is reported each time it goes idle. A run still under way whose start
- * cannot be read yet (queued before its message lands) stops the look there, to be read again
- * next time. A watch that never looked starts after the newest run it knows, else the newest run.
+ * cannot be read yet (queued before its message lands) is held and read again by later looks,
+ * which go on past it; held, it is skipped once it ends or leaves the runs a look can see. A
+ * watch that never looked starts after the newest run it knows, else the newest run.
  */
 export function discoverRuns(
   watch: LaunchWatch,
@@ -432,25 +437,44 @@ export function discoverRuns(
     watch.skippedRuns.includes(run.runId);
   const from =
     watch.seen?.ordinal ?? sorted.findLast(known)?.ordinal ?? Math.max(0, newest.ordinal - 1);
-  let next = watch;
-  let seen = watch.seen;
+  const visible = new Set(sorted.map((run) => run.runId));
+  const pending: Array<RunId> = [];
+  const held: Array<RunId> = [];
+  let skipped = watch.heldRuns
+    .filter((id) => !visible.has(id))
+    .reduce(keepRecent, watch.skippedRuns);
   for (const run of sorted) {
-    if (run.ordinal > from && !known(run)) {
-      if (run.trigger === undefined && !run.terminal) break;
-      next =
-        ownRun(watch, run.trigger) && !(run.terminal && wentOn(watch, run, sorted))
-          ? {
-              ...next,
-              pendingRuns: [...next.pendingRuns, run.runId],
-              discoveredRuns: [...next.discoveredRuns, run.runId],
-              armedAt: now,
-              updatedAt: now,
-            }
-          : { ...next, skippedRuns: keepRecent(next.skippedRuns, run.runId) };
-    }
-    if (run.ordinal > (seen?.ordinal ?? 0)) seen = { runId: run.runId, ordinal: run.ordinal };
+    if (!watch.heldRuns.includes(run.runId) && (run.ordinal <= from || known(run))) continue;
+    if (run.trigger === undefined && !run.terminal) held.push(run.runId);
+    else if (ownRun(watch, run.trigger) && !(run.terminal && wentOn(watch, run, sorted)))
+      pending.push(run.runId);
+    else skipped = keepRecent(skipped, run.runId);
   }
-  return seen?.runId === watch.seen?.runId ? next : { ...next, seen };
+  const seen =
+    newest.ordinal > (watch.seen?.ordinal ?? 0)
+      ? { runId: newest.runId, ordinal: newest.ordinal }
+      : watch.seen;
+  if (
+    seen?.runId === watch.seen?.runId &&
+    pending.length === 0 &&
+    skipped === watch.skippedRuns &&
+    held.join() === watch.heldRuns.join()
+  )
+    return watch;
+  return {
+    ...watch,
+    seen,
+    heldRuns: held,
+    skippedRuns: skipped,
+    ...(pending.length === 0
+      ? {}
+      : {
+          pendingRuns: [...watch.pendingRuns, ...pending],
+          discoveredRuns: [...watch.discoveredRuns, ...pending],
+          armedAt: now,
+          updatedAt: now,
+        }),
+  };
 }
 
 /** Whether a found run's end goes unreported because the thread went straight on to its own next run. */

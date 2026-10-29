@@ -247,7 +247,10 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
     const shell = yield* threads.getThreadShell(watch.threadId);
     if (shell === null || shell.deletedAt !== null || shell.archivedAt !== null)
       return { _tag: "Gone" } satisfies Look;
-    if (shell.latestRunId == null || shell.latestRunId === watch.seen?.runId)
+    if (
+      shell.latestRunId == null ||
+      (shell.latestRunId === watch.seen?.runId && watch.heldRuns.length === 0)
+    )
       return { _tag: "Runs", runs: [] } satisfies Look;
     const records = yield* threads.getThreadRecords(watch.threadId, ["runs"]);
     return { _tag: "Runs", runs: records.runs.map(localRun) } satisfies Look;
@@ -263,7 +266,10 @@ export const makeLaunchWatchReads = <CeilingError, HostError>(deps: {
   ) {
     const head = yield* remoteRead(watch, host, { limit: 1, runLimit: RUN_WINDOW });
     const newest = head.recentRuns[0];
-    if (newest === undefined || newest.ordinal <= (watch.seen?.ordinal ?? 0))
+    if (
+      newest === undefined ||
+      (newest.ordinal <= (watch.seen?.ordinal ?? 0) && watch.heldRuns.length === 0)
+    )
       return { _tag: "Runs", runs: [] } satisfies Look;
     const start = head.thread.itemCount - LOOK_MESSAGES - 1;
     const tail = yield* remoteRead(watch, host, {

@@ -281,11 +281,6 @@ const encodeReplicaModel = Schema.encodeEffect(
 );
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
-/** Whether a run in this state can be the one a pending question belongs to. */
-const asksQuestions = (status: string | undefined) => status !== "queued" && status !== "preparing";
-const decodeRequestIds = Schema.decodeUnknownEffect(
-  Schema.Struct({ requestIds: Schema.Array(Schema.String) }),
-);
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
@@ -532,11 +527,29 @@ export const make = Effect.gen(function* () {
           end: completedAt == null ? null : DateTime.formatIso(completedAt),
         } satisfies StepResult;
       }
-      // Only the active run asks questions; one queued behind another run must not report its.
-      if (!asksQuestions(status)) return { _tag: "Running", questions: [] } satisfies StepResult;
-      const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
+      // Requests name no run; the turn items that show them do. A request another run left
+      // pending, or the active run's when this one is queued behind it, is not this run's.
+      const asked = waited.result.run?.id ?? runId;
+      const records = yield* threads.getThreadRecords(
+        watch.threadId,
+        ["runtimeRequests", "turnItems"],
+        { turnItemRunIds: [asked], turnItemTypes: ["user_input_request", "approval_request"] },
+      );
+      const ownRequests = new Set(
+        records.turnItems.flatMap((item) =>
+          (item.type === "user_input_request" || item.type === "approval_request") &&
+          item.runId === asked
+            ? [item.requestId as string]
+            : [],
+        ),
+      );
       const questions = records.runtimeRequests
-        .filter((request) => request.status === "pending" && request.kind !== "dynamic_tool_call")
+        .filter(
+          (request) =>
+            request.status === "pending" &&
+            request.kind !== "dynamic_tool_call" &&
+            ownRequests.has(request.id),
+        )
         .map((request) => ({ id: request.id as string, kind: request.kind as string }));
       const launcherThreadId = watch.launcherThreadId;
       if (launcherThreadId === null) return { _tag: "Running", questions } satisfies StepResult;
@@ -627,39 +640,11 @@ export const make = Effect.gen(function* () {
           end: waited.completedAt ?? null,
         } satisfies StepResult;
       }
-      if (!asksQuestions(waited.status))
-        return {
-          _tag: "Running",
-          questions: [],
-          retryIfNoNewQuestions: !waited.timedOut,
-        } satisfies StepResult;
-      // Only user questions are listed remotely; approvals show up when the run ends.
-      const listedQuestions = yield* callHost(
-        watch,
-        host,
-        "goat_pending_request_list",
-        { threadId: watch.threadId },
-        REMOTE_READ_TIMEOUT_MS,
-      ).pipe(
-        Effect.flatMap(decodeRequestIds),
-        Effect.map((listed) => listed.requestIds.map((id) => ({ id, kind: "user_input" }))),
-        Effect.catch((error) =>
-          error instanceof LauncherGone
-            ? Effect.fail(error)
-            : Effect.logDebug("launch watch: pending requests unreadable", {
-                host,
-                cause: error,
-              }).pipe(Effect.as([])),
-        ),
-      );
-      const questions = [...listedQuestions];
-      if (!waited.timedOut) {
-        for (const id of waited.pendingRequestIds ?? []) {
-          if (!questions.some((question) => question.id === id)) {
-            questions.push({ id, kind: "user_input" });
-          }
-        }
-      }
+      // The wait lists the questions of the run it reports; a host too old to list them reports
+      // none early, since a thread-wide list would mix in other runs' questions.
+      const questions = waited.timedOut
+        ? []
+        : (waited.pendingRequestIds ?? []).map((id) => ({ id, kind: "user_input" }));
       return {
         _tag: "Running",
         questions,
