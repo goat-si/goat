@@ -646,6 +646,10 @@ func runService() -> Never {
   guard launcherIsSelf() else {
     refuse("untrusted_parent", "Start the helper through its launcher.", 77)
   }
+  // Started any way but WindowServer.startHelper, the first capture would abort the service.
+  guard WindowServer.connected else {
+    refuse("window_server", "The helper service started without a window server connection.", 70)
+  }
   let service = DriverService()
   for signalNumber in [SIGTERM, SIGINT, SIGHUP] {
     signal(signalNumber, SIG_IGN)

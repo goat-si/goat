@@ -412,4 +412,31 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     expect((await session.closed).signal).toBe("SIGKILL");
     expect(session.output()).toBe(ready);
   });
+
+  // The service and the agent connection both refuse to start without a window server connection,
+  // so this and the MCP tests above fail if main.swift ever skips WindowServer.startHelper.
+  it("starts the observation service through its launcher connected to the window server", async () => {
+    const child = NodeChildProcess.spawn(executable, [], {
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    onTestFinished(() => {
+      if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, "SIGKILL");
+    });
+    let output = "";
+    let errors = "";
+    child.stderr.on("data", (chunk) => (errors += chunk));
+    const greeting = await new Promise((resolve, reject) => {
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+        if (output.includes("\n")) resolve(JSON.parse(output.slice(0, output.indexOf("\n"))));
+      });
+      child.once("close", (code) => reject(new Error(`Helper exited ${code}: ${output}${errors}`)));
+    });
+    expect(greeting).toMatchObject({
+      type: "hello",
+      protocol: 1,
+      bundleId: "si.goat.relay.fixture.computer-use",
+    });
+  });
 });
