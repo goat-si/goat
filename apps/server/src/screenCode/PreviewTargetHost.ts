@@ -7,11 +7,7 @@ import type {
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
-import type {
-  PreviewAutomationSnapshot,
-  PreviewAutomationStatus,
-  PreviewTabId,
-} from "@goat/contracts";
+import type { PreviewAutomationSnapshot, PreviewAutomationStatus } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
@@ -26,23 +22,16 @@ import {
 import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetReads.ts";
 import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
+import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
-import { makeTabClaims, type TabClaim, type TabIdentity } from "./TabClaims.ts";
+import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
 const fail = (code: ScreenRunError["code"], nextStep: string): ScreenRunError => ({
   code,
   effectStarted: false,
   nextStep,
 });
-const originOf = (url: string | null) => {
-  try {
-    const parsed = new URL(url ?? "");
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.origin : null;
-  } catch {
-    return null;
-  }
-};
 const firstArg = (call: ScreenHostCall): Record<string, unknown> => {
   const value = Array.isArray(call.args) ? call.args[0] : undefined;
   return value && typeof value === "object" && !Array.isArray(value)
@@ -91,76 +80,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const closingKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
   const isClosingOwnTab = (threadId: string, tabId: string) =>
     closingTabs.has(closingKey(threadId, tabId));
-  const goneErrors = new Set([
-    "PreviewAutomationTabNotFoundError",
-    "PreviewAutomationNoAvailableHostError",
-  ]);
-  const close = (tab: TabClaim, afterStop: boolean) => {
-    const scope = tabScopes.get(`${tab.runId}\u0000${tab.turnId}`);
-    if (!scope) return Effect.die(new Error("Turn scope expired before tab cleanup"));
-    // A person's Stop moves the tab's generation before this cleanup runs. The tab is still the
-    // agent's own and no person holds it, so closing it is what that Stop asked for.
-    const route = {
-      browserInstanceId: tab.browserInstanceId,
-      connectionId: tab.connectionId,
-      tabId: tab.tabId as PreviewTabId,
-    };
-    return Effect.gen(function* () {
-      // A tab a person or a crash already closed is what cleanup wanted, so it counts as closed.
-      const gone = broker
-        .listBoundTabs(scope)
-        .pipe(
-          Effect.map(
-            (live) =>
-              !live.some(
-                (entry) =>
-                  entry.browserInstanceId === tab.browserInstanceId && entry.tabId === tab.tabId,
-              ),
-          ),
-        );
-      const status = yield* broker
-        .invoke<PreviewAutomationStatus>({
-          scope,
-          operation: "status",
-          input: {},
-          exact: route,
-          updateCurrentTab: false,
-        })
-        .pipe(Effect.result);
-      if (status._tag === "Failure") {
-        if (goneErrors.has(status.failure._tag) && (yield* gone)) return;
-        return yield* status.failure;
-      }
-      const current = status.success;
-      if (current.tabId !== tab.tabId && (yield* gone)) return;
-      // Handed to a person for a step: it outlives the turn, as a tab kept for handoff does.
-      if (current.tabId === tab.tabId && current.control?.waitingForPerson === true)
-        return "kept" as const;
-      if (
-        current.tabId !== tab.tabId ||
-        current.control === undefined ||
-        (!afterStop && current.control.generation !== tab.controlGeneration) ||
-        !current.control.ownedByCaller ||
-        current.control.owner === "human"
-      )
-        return yield* Effect.die(new Error("Tab control changed before cleanup"));
-      const closed = yield* broker
-        .invoke({
-          scope,
-          operation: "close",
-          input: {},
-          exact: {
-            ...route,
-            controlGeneration: current.control.generation,
-            origin: originOf(current.url),
-          },
-        })
-        .pipe(Effect.result);
-      if (closed._tag === "Failure" && !(goneErrors.has(closed.failure._tag) && (yield* gone)))
-        return yield* closed.failure;
-    }).pipe(Effect.orDie);
-  };
   const tabScopes = new Map<string, ScreenHostContext["invocation"]>();
+  const close = makeTurnTabClose(broker, tabScopes);
   const claims = yield* makeTabClaims(close);
   const authorize = Effect.fn("PreviewTargetHost.authorize")(function* (
     context: ScreenHostContext,
@@ -197,6 +118,22 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url }, context);
     return ref;
   };
+  /** Drops this turn's bindings and claim of a tab that is gone. */
+  const forgetTab = (tabId: string, context: ScreenHostContext) =>
+    Effect.forEach(
+      [...targets.values()].filter(
+        (target) =>
+          target.tab.tabId === tabId &&
+          target.ref.runId === context.runId &&
+          target.ref.turnId === context.turnId,
+      ),
+      (target) => {
+        observations.evictTarget(target.ref.id);
+        targets.delete(target.ref.id);
+        return claims.releaseClaim(identity(target, context)).pipe(Effect.ignore);
+      },
+      { discard: true },
+    );
   const lookup = (call: ScreenHostCall, context: ScreenHostContext) => {
     const ref = call.targetRef;
     const bound = ref ? targets.get(ref.id) : undefined;
@@ -277,11 +214,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
               ? { dispatched: error.dispatched }
               : {}),
           });
+          const failure = previewTargetFailure(error, operation);
           return {
-            ...previewTargetFailure(error, operation),
+            ...failure,
             code: safety.possibleCommit
               ? ("unknown_outcome" as const)
-              : ("downstream_failure" as const),
+              : failure.code === "target_ambiguous" || failure.code === "invalid_argument"
+                ? failure.code
+                : ("downstream_failure" as const),
             effectStarted: safety.possibleCommit,
             safety,
           };
@@ -289,6 +229,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       );
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
+      const calledAt = yield* Clock.currentTimeMillis;
       yield* authorize(context);
       const arg = firstArg(call);
       if (call.method === "list_tabs") {
@@ -356,10 +297,33 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                 },
               })
               .pipe(
-                Effect.mapError(() => ({
-                  ...fail("unknown_outcome", "Check live tabs before opening again."),
-                  effectStarted: true,
-                })),
+                Effect.catch((error) =>
+                  error._tag === "PreviewAutomationExecutionError" &&
+                  error.unloadedTab !== undefined
+                    ? // The page never connected: close the tab it left, so no error page stays behind.
+                      settleUnloadedOpen({
+                        broker,
+                        invocation: context.invocation,
+                        tabId: error.unloadedTab.tabId,
+                        loadError: error.unloadedTab.loadError,
+                        route: {
+                          browserInstanceId: error.clientId,
+                          connectionId: error.connectionId,
+                        },
+                        list: list(context).pipe(Effect.option),
+                        claim: (tab) => {
+                          const claimed = targets.get(bind(tab, context).id);
+                          return claimed
+                            ? claims.recordOpened(identity(claimed, context)).pipe(Effect.isSuccess)
+                            : Effect.succeed(false);
+                        },
+                        release: (tabId) => forgetTab(tabId, context),
+                      }).pipe(Effect.flatMap(Effect.fail))
+                    : Effect.fail({
+                        ...fail("unknown_outcome", "Check live tabs before opening again."),
+                        effectStarted: true,
+                      }),
+                ),
               );
             const abandon = (nextStep: string) =>
               broker
@@ -493,15 +457,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           origin: originOf(current.url),
         };
         observations.index.invalidateTarget(bound.ref.id);
+        const sentAt = yield* Clock.currentTimeMillis;
         const snapshot = yield* invoke(reading, context, "snapshot", {
           captureImage: arg.screenshot === true,
           fullPage: arg.fullPage === true,
           ...(arg.interactiveOnly === true ? { interactiveOnly: true } : {}),
           ...(scope ? { scope } : {}),
         }) as Effect.Effect<PreviewAutomationSnapshot, ScreenRunError>;
+        const snapshotMs = (yield* Clock.currentTimeMillis) - sentAt;
         const result = yield* observePreviewTarget({
           call,
           context,
+          startedAt: calledAt,
+          driverMs: snapshotMs,
           targetRef: bound.ref,
           connectionId: bound.tab.connectionId,
           controlGeneration: bound.tab.controlGeneration,
@@ -902,13 +870,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         (operation === "click" || call.method === "set_value") &&
         typeof result === "object" &&
         result !== null
-          ? (result as { readonly effect?: unknown; readonly evidence?: unknown })
+          ? (result as {
+              readonly effect?: unknown;
+              readonly evidence?: unknown;
+              readonly pressesCompleted?: unknown;
+            })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
-      // A range the browser set and read back is confirmed; typed text never is.
+      // A range the browser set and read back is confirmed; typed text never is, nor a click a
+      // dialog cut short of its count.
       const confirmed =
         navigated ||
         (seen?.effect === "confirmed" &&
+          seen.pressesCompleted === undefined &&
           Array.isArray(seen.evidence) &&
           (operation === "click" || seen.evidence.includes("value")));
       return {
@@ -916,7 +890,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           call.method === "close_tab"
             ? result
             : withInputTiming(
-                result,
+                // A click cut short of its count must not read as confirmed in any call form.
+                seen?.pressesCompleted === undefined ? result : { ...seen, effect: "unverifiable" },
                 { ms: endedAt - startedAt, phases: { driverMs: endedAt - sentAt } },
                 context.limits.returnBytes,
               ),

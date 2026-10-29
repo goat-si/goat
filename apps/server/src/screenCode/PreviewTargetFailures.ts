@@ -33,6 +33,16 @@ export const previewTargetFailure = (
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 200);
+  if (error._tag === "PreviewAutomationInvalidSelectorError" && !error.staleRef)
+    return {
+      code: error.matchCount === undefined ? "invalid_argument" : "target_ambiguous",
+      effectStarted: false,
+      message,
+      nextStep:
+        error.matchCount === undefined
+          ? "Name the element by a number from observe(), { role, name }, text=..., or a CSS selector."
+          : "Narrow the selector to one element, or use a number from observe().",
+    };
   return {
     code: effectStarted ? "unknown_outcome" : "downstream_failure",
     effectStarted,

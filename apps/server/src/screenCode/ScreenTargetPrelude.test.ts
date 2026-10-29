@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   PreviewAutomationTimeoutError,
+  SCREEN_TARGET_CONTRACT_VERSION,
   PreviewTabId,
   type EnvironmentId,
   type ProviderInstanceId,
@@ -247,7 +248,7 @@ it.live(
       expect(result).toMatchObject({
         status: "completed",
         value: true,
-        contractVersion: "screen-target/8",
+        contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
       });
       const presses = sent.filter((entry) => entry.tool === "press_key");
       expect(presses).toHaveLength(2);
@@ -638,6 +639,125 @@ it.live("an app verify gives the window 60 ms to show the condition", () => {
     expect(sent.find((entry) => entry.tool === "verify_state")?.args).toMatchObject({
       timeout_ms: 60,
     });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        desktopHost: host,
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
+it.live(
+  "an option or condition key a method does not take is refused unsent, naming the key it takes",
+  () => {
+    const sent: Array<string> = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([formTab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+        sent.push(request.operation);
+        return Effect.succeed({
+          tabId: formTab.tabId,
+          url: formTab.url,
+          control: { owner: "unclaimed", generation: 0 },
+        } as A);
+      },
+    };
+    return Effect.gen(function* () {
+      const [result] = yield* runCells(broker, [
+        `const tab = await screen.tab({tabId: 'form'});
+        await tab.claim();
+        const refused = [];
+        for (const attempt of [
+          () => tab.click('#cv', { clickCount: 2 }),
+          () => tab.click('#cv', { button: 'middle' }),
+          () => tab.hover('#cv', { timeout: 100 }),
+          () => tab.observe({ screenShot: true }),
+          () => tab.waitFor({ txt: 'Saved' }),
+          () => tab.type('hi', '#name', { submit: true }),
+          () => screen.openTab({ url: 'http://127.0.0.1:1/', reuse: true }),
+          () => tab.press('Enter', { sned: true }),
+          () => tab.click({ selector: '#cv' }, { count: 2 }),
+          () => tab.click({ selector: '#cv', clickCount: 2 }),
+          () => tab.click({ selector: '#cv', clicks: 2, button: 'right' }),
+          () => tab.click('#cv', { action: 'show_menu' }),
+          () => tab.click({ role: 'button', name: 'Go', clickCount: 2 }),
+          () => tab.click({ selector: '#cv' }, 2),
+        ])
+          try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent, error.message]); }
+        screen.state.refused = refused;
+        // The forms these methods do take still go out.
+        await tab.press('Enter', { send: true });
+        await tab.press('Enter', '#name', { send: true });
+        await tab.click({ selector: '#cv' });
+        await tab.waitFor({ text: 'Saved' }, 50);
+        return refused;`,
+      ]);
+      expect(result).toMatchObject({ _tag: "Success", success: { status: "completed" } });
+      const refused =
+        result?._tag === "Success"
+          ? (result.success.value as Array<[string, boolean, string]>)
+          : [];
+      expect(refused.map(([code, nothingSent]) => [code, nothingSent])).toEqual(
+        Array.from({ length: 14 }, () => ["invalid_argument", true]),
+      );
+      expect(refused[0]?.[2]).toContain("did you mean count?");
+      expect(refused[2]?.[2]).toContain("did you mean timeoutMs?");
+      expect(refused[3]?.[2]).toContain("did you mean screenshot?");
+      // Only the accepted forms reached the browser: two presses, the click before the second, a click, a wait.
+      expect(sent.filter((operation) => operation !== "status")).toEqual([
+        "press",
+        "click",
+        "press",
+        "click",
+        "waitFor",
+      ]);
+    });
+  },
+);
+
+it.live("an app target with a stray key is refused before any read or click", () => {
+  const { host, sent } = fixture({});
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: desktopContext.invocation,
+      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+      const refused = [];
+      for (const attempt of [
+        () => app.click({ role: 'AXButton', name: 'Apply', clickCount: 2 }),
+        () => app.click({ window: [12, 14], clickCount: 2 }),
+        () => app.click('Apply', { timeoutMs: 100 }),
+        () => app.observe({ query: { role: 'AXButton', nam: 'Save' } }),
+      ])
+        try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent]); }
+      return refused;`,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: [
+        ["invalid_argument", true],
+        ["invalid_argument", true],
+        ["invalid_argument", true],
+        ["invalid_argument", true],
+      ],
+    });
+    expect(
+      sent.filter(
+        (entry) =>
+          entry.tool !== "list_windows" && entry.tool !== "bind_app" && entry.tool !== "list_apps",
+      ),
+    ).toEqual([]);
   }).pipe(
     Effect.provide(
       ScreenRunService.layerWithRuntime({

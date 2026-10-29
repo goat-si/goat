@@ -894,6 +894,7 @@ export class PreviewAutomationExecutionError extends Schema.TaggedError<PreviewA
     secretFailure: Schema.optional(
       Schema.Literals(["no_candidate", "not_permitted", "unavailable"]),
     ),
+    unloadedTab: Schema.optional(Schema.Struct({ tabId: PreviewTabId, loadError: Schema.String })),
   },
 ) {
   override get message(): string {
@@ -911,11 +912,14 @@ export class PreviewAutomationInvalidSelectorError extends Schema.TaggedError<Pr
     selectorKind: Schema.optional(Schema.Literals(["locator", "selector"])),
     selectorLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     staleRef: Schema.optional(Schema.Boolean),
+    matchCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(2))),
   },
 ) {
   override get message(): string {
     if (this.staleRef)
       return "This element ref is stale. Navigation, dialogs, and new snapshots replace refs; take a fresh snapshot and use its refs.";
+    if (this.matchCount !== undefined)
+      return `Preview automation ${this.operation}: the selector matches ${this.matchCount} elements; input needs one. Narrow it (text=..., a parent, ">> nth=0" for the first) or use a snapshot ref.`;
     if (this.selectorKind !== undefined && this.selectorLength !== undefined) {
       return `Preview automation ${this.operation} received an invalid ${this.selectorKind} (${this.selectorLength} characters).`;
     }

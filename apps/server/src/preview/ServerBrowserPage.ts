@@ -92,9 +92,12 @@ export const toOperationError = (
       ...(pointerInterception(message) ? { interceptedBy: pointerInterception(message) } : {}),
     });
   }
-  if (
-    /while parsing selector|Unknown engine|Unexpected token|strict mode violation/i.test(message)
-  ) {
+  const matched = /strict mode violation:.*resolved to (\d+) elements/i.exec(message)?.[1];
+  if (matched !== undefined)
+    return new ServerBrowserOperationError("PreviewAutomationInvalidSelectorError", firstLine, {
+      matchCount: Number(matched),
+    });
+  if (/while parsing selector|Unknown engine|Unexpected token/i.test(message)) {
     return new ServerBrowserOperationError("PreviewAutomationInvalidSelectorError", firstLine);
   }
   if (/not an <input>|not editable|not an editable/i.test(message)) {
@@ -694,7 +697,9 @@ export const click = async (
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
-): Promise<{ readonly x: number; readonly y: number } & ClickEffect> => {
+): Promise<
+  { readonly x: number; readonly y: number; readonly pressesCompleted?: number } & ClickEffect
+> => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
@@ -743,6 +748,7 @@ export const click = async (
       .down({ button, clickCount: count })
       .then(() => page.mouse.up({ button, clickCount: count }));
   };
+  let presses = 0;
   try {
     await watch.arm(aim);
     for (let count = 1; count <= (input.clickCount ?? 1); count++) {
@@ -754,6 +760,7 @@ export const click = async (
         void pressed.catch(constVoid);
         break;
       }
+      presses = count;
     }
   } catch (cause) {
     watch.cancel();
@@ -763,7 +770,10 @@ export const click = async (
     page.off("dialog", onDialog);
   }
   if (!sent) watch.cancel();
-  return { ...point, ...(await watch.settle(dialog).finally(() => releaseAim(aim))) };
+  const outcome = await watch.settle(dialog).finally(() => releaseAim(aim));
+  // A dialog that stopped a multi-press click leaves it short of what was asked.
+  const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
+  return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
 };
 
 export const type = async (
@@ -865,7 +875,8 @@ export const hover = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
-  const locator = targetLocator(page, input);
+  // Hovering only shows things, so a selector naming several rows hovers the first of them.
+  const locator = targetLocator(page, input)?.first() ?? null;
   await pointer(await targetPoint(page, locator, input, deadline), "move");
   if (locator === null) {
     remaining(deadline);

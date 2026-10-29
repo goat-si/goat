@@ -129,3 +129,66 @@ it.effect.each([
     }),
   ),
 );
+
+it.effect("names how many elements an ambiguous selector matched", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const host = makeHost({ clientId, supportedOperations: ["hover"] });
+      const requests = requestsFrom(yield* broker.connect(host, SERVER_BROWSER));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationInvalidSelectorError",
+            message: "strict mode violation: locator('.row') resolved to 2 elements:",
+            detail: { matchCount: 2 },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "hover", input: { locator: ".row" } })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "PreviewAutomationInvalidSelectorError", matchCount: 2 });
+      expect(error.message).toContain("matches 2 elements");
+    }),
+  ),
+);
+
+it.effect("names the tab an open made whose page never connected", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const requests = requestsFrom(yield* broker.connect(makeHost({ clientId }), SERVER_BROWSER));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationExecutionError",
+            message:
+              "The page did not load (ERR_CONNECTION_REFUSED); its new tab t1 is still open.",
+            detail: { openedTabId: "t1", loadError: "ERR_CONNECTION_REFUSED" },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "open", input: {} })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationExecutionError",
+        unloadedTab: { tabId: "t1", loadError: "ERR_CONNECTION_REFUSED" },
+      });
+      expect(error).not.toHaveProperty("dispatched");
+    }),
+  ),
+);

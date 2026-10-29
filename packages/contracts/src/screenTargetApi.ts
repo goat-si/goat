@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/8";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/9";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -17,7 +17,8 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: { role?: string; name?: string; id?: string } | null; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
-// ReadTime on app observe and screenshot: host time of the read (the driver call, tree parsing, rendering, the rest); absent when it would not fit the reply.
+// ReadTime on observe (tabs and apps) and app screenshot: host time of the read (the driver call, for a tab the browser's snapshot; tree parsing; rendering; the rest); absent when it would not fit the reply.
+// An option, query or tab condition key a method below does not take is refused unsent (invalid_argument), naming the keys it takes.
 // App observed lists only the acted element's own state change; read other elements with observe(). A key with no target and no modifiers carries no windows report.
 // confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
 // deciding whether to act again, and never resend it. A refused or failed call, in any call form, throws
@@ -42,7 +43,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3; waits up to timeoutMs (5 s) for the target
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action is apps only
   type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
@@ -56,7 +57,7 @@ const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContent
 // text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
 // Any input but a click retires the screenshot's [x, y] points (stale_reference): take a new one. scroll's result.settled false: the page may still be moving.
 interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<object>; // tabs you opened need no claim
-  hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls
+  hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls; a selector matching several hovers the first
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object> }`;
 
@@ -74,7 +75,7 @@ interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }):
   screenshot(): Promise<ReadTime & { imageRef: string; pixelWidth: number; pixelHeight: number; [k: string]: unknown }>; windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
 
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
-  openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1`;
+  openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1; an address that does not connect throws and closes its tab, or names it if it could not`;
 const SCREEN_APP = `  // app() without window_id: a running app with one window on screen binds it, never opening another; several
   // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass window_id explicitly instead of opening a new window.
   // A closed app is launched in the background and bound to its first window in the same call; a running

@@ -115,6 +115,21 @@ const __keys = (key, tab) => {
   });
   return { key: last, ...(modifiers.length ? { modifiers } : {}) };
 };
+// A documented method's options, query or tab condition with a key it does not take is refused
+// unsent: a misnamed key (clickCount for count) would otherwise be dropped while the call succeeds.
+const __aliases = { clickCount: 'count', clicks: 'count', timeout: 'timeoutMs', submit: 'send' };
+const __only = (what, given, allowed) => {
+  if (given === undefined || given === null) return {};
+  if (typeof given !== 'object' || Array.isArray(given))
+    throw new ScreenError('invalid_argument', what + ' is an object with ' + allowed.join(', ') + '; nothing was sent.', true);
+  for (const key of Object.keys(given)) {
+    if (allowed.includes(key)) continue;
+    const hint = allowed.includes(__aliases[key]) ? __aliases[key] : allowed.find((each) => each.toLowerCase() === key.toLowerCase());
+    throw new ScreenError('invalid_argument', what + ' does not take ' + key + (hint ? '; did you mean ' + hint + '?' : '.') +
+      ' It takes ' + allowed.join(', ') + '; nothing was sent.', true);
+  }
+  return given;
+};
 const __winPt = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) &&
   Array.isArray(arg.window) && arg.window.length === 2;
@@ -234,13 +249,21 @@ const __target = (binding, note, owner, extraProps = {}) => {
     if (!tab) return { x: target[0], y: target[1], regionId: image.regionId };
     return { point: { observationId: image.observationId, regionId: image.regionId, x: target[0], y: target[1] } };
   };
+  // A misnamed key beside role and name or a window point (clickCount) would otherwise be dropped
+  // unseen, so it is refused before any read or input.
+  const checkTarget = (target) => {
+    if (target === null || typeof target !== 'object' || Array.isArray(target) || __legacy(target)) return;
+    __only('A target', target, __winPt(target) ? ['window'] : ['role', 'name', 'id']);
+  };
   const aim = (target) => {
+    checkTarget(target);
     if (Array.isArray(target) || __winPt(target)) return point(target);
     if (tab && typeof target === 'string') return { selector: target };
     const found = element(target);
     return tab ? { ref: found.ref } : { elementRef: found.ref };
   };
   const needsImplicitObserve = (target) =>
+    (checkTarget(target), true) &&
     !tab &&
     !seen.observation &&
     target !== null &&
@@ -275,6 +298,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
       try { return remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); }
       catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
     }
+    __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query']);
+    if (!tab && arg.query !== undefined) __only('observe query', arg.query, ['role', 'name', 'text', 'id']);
     const diff = arg.diff !== false && seen.observation !== undefined;
     const page = !tab && arg.after !== undefined;
     const base = diff ? { mode: 'diff', baseObservationId: seen.observation.observationId } : {};
@@ -312,6 +337,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const arg = timeoutMs === undefined ? {} : { timeoutMs };
     if (!tab) return { ...wanted, ...arg };
     if (__legacy(wanted)) return { ...wanted, ...arg };
+    __only('A tab condition', wanted, ['text', 'url', 'load', 'target', 'role', 'name', 'enabled', 'value', 'checked', 'selected', 'state']);
     return {
       ...arg,
       ...(wanted.text === undefined ? {} : { text: wanted.text }),
@@ -349,7 +375,15 @@ const __target = (binding, note, owner, extraProps = {}) => {
     ...(note === undefined ? {} : { note }),
     observe,
     click: (target = {}, options = {}) => {
-      if (__legacy(target)) return call('click', target);
+      if (__legacy(target)) {
+        if (options !== null && (typeof options !== 'object' || Object.keys(options).length > 0))
+          throw new ScreenError('invalid_argument', 'click({selector, ...}) takes its options inside that object; nothing was sent.', true);
+        return call('click', target);
+      }
+      // timeoutMs is a tab's wait for its target; action names an app's accessibility action.
+      options = __only('click options', options, ['button', 'count', 'send', tab ? 'timeoutMs' : 'action']);
+      if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
+        throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);
       if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
         throw new ScreenError('invalid_argument', 'A tab click count is 1, 2 or 3.', true);
       const run = () =>
@@ -365,12 +399,14 @@ const __target = (binding, note, owner, extraProps = {}) => {
     // Tabs move the pointer over the target, which shows hover-only controls; apps cannot yet.
     hover: (target, options = {}) => {
       if (!tab) throw new ScreenError('unsupported', 'Apps cannot hover yet; nothing was sent.', true);
+      options = __only('hover options', options, ['timeoutMs']);
       return act('hover', 'hover', {
         ...aim(target),
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       });
     },
     type: (text, target, options = {}) => {
+      options = __only('type options', options, tab ? ['send'] : ['send', 'replace']);
       if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Click the point first, then type without a target.', true);
       const run = () =>
@@ -383,11 +419,12 @@ const __target = (binding, note, owner, extraProps = {}) => {
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     press: async (key, target, options = {}) => {
+      // An object naming no element is the options, so a misspelt key is refused rather than aimed at.
       const targetIsSendOpts =
-        target !== null && typeof target === 'object' && !Array.isArray(target) &&
-        'send' in target && !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
+        target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
+        !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
-      const actualOpts = targetIsSendOpts ? target : (options ?? {});
+      const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send']);
       if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
         throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
       if (needsImplicitObserve(actualTarget)) await ensureObserved();
@@ -425,6 +462,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
     drag: (from, to, options = {}) => {
       if (to === undefined) return call('drag', from ?? {});
+      options = __only('drag options', options, ['send']);
       if (tab) {
         const source = aim(from);
         const target = aim(to);
@@ -448,7 +486,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
         : run();
     },
     // The timeout comes as a number, waitFor(c, 5000), or as options, waitFor(c, {timeoutMs: 5000}).
-    waitFor: (wanted = {}, options = {}) => wait(wanted, typeof options === 'number' ? options : options.timeoutMs),
+    waitFor: (wanted = {}, options = {}) =>
+      wait(wanted, typeof options === 'number' ? options : __only('waitFor options', options, ['timeoutMs']).timeoutMs),
     // An app input no longer waits for its effect to settle, so verify gives the app 60 ms to show it.
     verify: (wanted = {}) => wait(wanted, tab ? 250 : 60),
     rightClick: (arg = {}) => call('right_click', arg),
@@ -469,7 +508,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     ...common,
     status: () => call('tab_status'),
     read: (arg = {}) => call('read_page', arg),
-    fetch: async (url, options = {}) => (await __checked('fetch_tab', { ...options, url, targetRef: ref })).v,
+    fetch: async (url, options = {}) =>
+      (await __checked('fetch_tab', { ...__only('fetch options', options, ['format', 'maxChars']), url, targetRef: ref })).v,
     claim: () => call('claim_tab'),
     keep: (reason = 'deliverable') => call('keep_tab', { reason }),
     goto: (url) => act('goto', 'navigate_tab', { url }),
@@ -482,7 +522,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
   } : {
     ...common,
     ...extraProps,
-    menu: (path, options = {}) => act('menu', 'invoke_menu', { path, ...(options && options.send === true ? { send: true } : {}) }),
+    menu: (path, options = {}) =>
+      act('menu', 'invoke_menu', { path, ...(__only('menu options', options, ['send']).send === true ? { send: true } : {}) }),
     launch: () => act('launch', 'launch_app', {}),
     getWindowState: async (arg = {}) => {
       try { return remember(await call('get_window_state', arg)); }
@@ -529,7 +570,7 @@ const __app = async (rawQuery) => {
     throw new ScreenError('invalid_argument', 'Name the app to bind.', true);
   if (typeof rawQuery !== 'string' && (rawQuery === null || typeof rawQuery !== 'object' || Array.isArray(rawQuery)))
     throw new ScreenError('invalid_argument', 'Pass an app name or {bundle_id, name, path, window_id}.', true);
-  const query = typeof rawQuery === 'string' ? { name: rawQuery.trim() } : rawQuery;
+  const query = typeof rawQuery === 'string' ? { name: rawQuery.trim() } : __only('app query', rawQuery, ['bundle_id', 'bundleId', 'name', 'path', 'window_id', 'windowId']);
   const windowId = query.window_id ?? query.windowId;
   const bundle = query.bundle_id ?? query.bundleId;
   const { name, path } = query;
@@ -621,6 +662,7 @@ const __app = async (rawQuery) => {
   return __appTarget(reply.v, reply.v.bundle_id ?? label, true, reply.v.windowId);
 };
 const __launch = async (query = {}) => {
+  query = __only('launch query', query, ['bundle_id', 'bundleId', 'name', 'path']);
   const bundle = query.bundle_id ?? query.bundleId;
   const reply = await __checked('launch_app', {
     ...(bundle === undefined ? {} : { bundle_id: bundle }),
@@ -646,8 +688,9 @@ globalThis.screen = Object.freeze({ values: __values, state: {},
     ...(options && Number.isSafeInteger(options.pid) ? { pid: options.pid } : {}),
     ...(options && Number.isSafeInteger(options.owner_pid) ? { owner_pid: options.owner_pid } : {}),
   }),
-  tab: async (query = {}) => __tab(await __call('select_tab', __tabQuery(query))),
-  openTab: async (arg = {}) => __tab(await __call('open_tab', arg)),
+  tab: async (query = {}) =>
+    __tab(await __call('select_tab', __tabQuery(typeof query === 'string' ? query : __only('tab query', query, ['tabId', 'url', 'mentionId', 'identity'])))),
+  openTab: async (arg = {}) => __tab(await __call('open_tab', __only('openTab', arg, ['url']))),
   listTabs: () => __call('list_tabs', {}),
   ${methods.map((method) => `${method}: async (...args) => __plain((await __reply(${JSON.stringify(method)}, args)).v)`).join(",\n  ")}
 });
