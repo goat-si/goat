@@ -16,6 +16,8 @@ import {
 import { canCommitPendingModel, pendingModelAfterPress } from "./thread-settings-sheet-state";
 import { ThreadComposer, type ThreadComposerProps } from "./ThreadComposer";
 
+vi.hoisted(() => Object.assign(globalThis, { __DEV__: true, expo: { EventEmitter: class {} } }));
+
 const route = vi.hoisted(() => ({
   session: null as { readonly ownerId: string } | null,
   focus: () => {},
@@ -76,8 +78,22 @@ vi.mock("../../components/ComposerModelControl", async () => {
 vi.mock("react-native", async () => {
   const { createElement } = await import("react");
   const View = ({ children }: { children?: ReactNode }) => createElement("div", null, children);
-  return { View, Platform: { OS: "android" }, Keyboard: { dismiss: () => {} } };
+  return {
+    View,
+    Platform: { OS: "android" },
+    Keyboard: { dismiss: () => {} },
+  };
 });
+vi.mock("expo", () => ({ requireNativeModule: vi.fn(), requireOptionalNativeModule: vi.fn() }));
+vi.mock("expo-crypto", () => ({
+  EncryptionKey: class {},
+  getRandomBytes: (length: number) => new Uint8Array(length),
+  digest: async () => new Uint8Array(32),
+  CryptoDigestAlgorithm: { SHA1: "SHA-1", SHA256: "SHA-256", SHA384: "SHA-384", SHA512: "SHA-512" },
+}));
+vi.mock("expo-secure-store", () => ({ AFTER_FIRST_UNLOCK: "afterFirstUnlock" }));
+vi.mock("expo-constants", () => ({ default: {} }));
+vi.mock("expo-modules-core", () => ({ EventEmitter: class {} }));
 vi.mock("react-native-reanimated", async () => {
   const { useRef } = await import("react");
   const { View } = await import("react-native");
@@ -96,7 +112,7 @@ vi.mock("react-native-reanimated", async () => {
     withTiming: (value: number) => value,
   };
 });
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({}) }));
+vi.mock("@effect/atom-react", () => ({ useAtomValue: () => ({}), useAtomRefresh: () => () => {} }));
 vi.mock("../../state/queued-run-edit", () => ({ setActiveComposerDraftText: () => {} }));
 vi.mock("../../state/use-composer-drafts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/use-composer-drafts")>()),
