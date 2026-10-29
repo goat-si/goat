@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/5";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/6";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -16,6 +16,8 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
 type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: { role?: string; name?: string; id?: string } | null; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
+type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
+// ReadTime on app observe and screenshot: host time of the read (the driver call, tree parsing, rendering, the rest); absent when it would not fit the reply.
 // App observed lists only the acted element's own state change; read other elements with observe(). A key with no target and no modifiers carries no windows report.
 // confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
 // deciding whether to act again, and never resend it. A refused or failed call, in any call form, throws
@@ -24,7 +26,7 @@ type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?
 // later input, but observe, read, status, waitFor and verify still run.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
-interface Observation { text: string; observationId: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
+interface Observation extends ReadTime { text: string; observationId: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
   scope: string; complete: boolean; truncated: boolean; loading: boolean;
@@ -68,7 +70,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
 interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }): Promise<Done>; launch(): Promise<Done>;
-  screenshot(): Promise<object>; windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
+  screenshot(): Promise<ReadTime & { imageRef: string; pixelWidth: number; pixelHeight: number; [k: string]: unknown }>; windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
 
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
   openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1`;

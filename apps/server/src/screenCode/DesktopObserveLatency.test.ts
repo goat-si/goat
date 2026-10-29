@@ -5,7 +5,12 @@ import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
-import { ScreenObservation, type ScreenElementRef, type ScreenTargetRef } from "@goat/contracts";
+import {
+  ScreenObservation,
+  screenTargetApi,
+  type ScreenElementRef,
+  type ScreenTargetRef,
+} from "@goat/contracts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { elementFrames } from "./DesktopFrames.ts";
 import {
@@ -266,6 +271,28 @@ it.effect("a screenshot leaves its timing out when it would not fit returnBytes"
     }
     // Every capture kept the tree's snapshot, so none of them rendered the tree again.
     expect(observations.renders).toBe(renders);
+  }),
+);
+
+it.effect("the app cell API declares the timing app observe and screenshot return", () =>
+  Effect.gen(function* () {
+    const { host } = timedHost({ get_window_state: goat2WindowState });
+    const ref = yield* bind(host);
+    const observed = (yield* host.observe(call("get_window_state", {}, ref), context))
+      .value as Timed;
+    const shot = (yield* host.observe(call("screenshot", {}, ref), context)).value as Timed;
+    const api = screenTargetApi({ app: true, tab: false });
+    const declared = /type ReadTime = \{ ms\?: number; phases\?: \{ ([^}]*) \} \}/.exec(api)?.[1];
+    for (const value of [observed, shot]) {
+      expect(value.ms).toBeTypeOf("number");
+      expect(declared).toBe(
+        Object.keys(value.phases ?? {})
+          .map((key) => key + ": number")
+          .join("; "),
+      );
+    }
+    expect(api).toContain("interface Observation extends ReadTime");
+    expect(api).toContain("screenshot(): Promise<ReadTime & { imageRef: string;");
   }),
 );
 
