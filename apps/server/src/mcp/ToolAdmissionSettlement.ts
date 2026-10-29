@@ -199,7 +199,13 @@ const settleUnsettledRow = Effect.fn("ToolAdmissionSettlement.settleRow")(functi
   }
 
   if (row.path === "ssh.thread_launch") {
-    const correlationId = recordedCorrelationId(row.grant_json) ?? `rr-${row.receipt_id}`;
+    if (!isCorrelatedGrant(row.grant_json)) return;
+    const correlationId = recordedCorrelationId(row.grant_json);
+    // correlate runs before any remote launch starts; absence of correlationId proves pre-send failure.
+    if (correlationId === undefined) {
+      yield* release;
+      return;
+    }
     const [dispatch] = yield* sql<{
       readonly state: string;
       readonly remote_thread_id: string | null;

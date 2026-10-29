@@ -97,12 +97,23 @@ const runWrite = McpToolAccess.writesWithCapability(() =>
     const probe = yield* SettlementProbe;
     const commandId = yield* newCommandId();
     yield* Ref.set(probe.lastCommandId, commandId);
+    const run = yield* Ref.updateAndGet(probe.runs, (n) => n + 1);
+    return { run, commandId };
+  }),
+);
+
+const runSshWrite = McpToolAccess.writesWithCapability(() =>
+  Effect.gen(function* () {
+    const probe = yield* SettlementProbe;
+    const commandId = yield* newCommandId();
+    yield* Ref.set(probe.lastCommandId, commandId);
+    const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
+    const receiptId = receipt._tag === "Some" ? yield* receipt.value.held : undefined;
     const customCorrelation = yield* Ref.get(probe.customCorrelationId);
-    if (customCorrelation !== null) {
-      const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
-      if (receipt._tag === "Some") {
-        yield* receipt.value.correlate(customCorrelation);
-      }
+    const correlationId =
+      customCorrelation ?? (receiptId === undefined ? undefined : `rr-${receiptId}`);
+    if (correlationId !== undefined && receipt._tag === "Some") {
+      yield* receipt.value.correlate(correlationId);
     }
     const run = yield* Ref.updateAndGet(probe.runs, (n) => n + 1);
     if (yield* Ref.get(probe.failUncertain)) {
@@ -123,7 +134,7 @@ const handlers = {
   [projectDelete.name]: runWrite,
   [threadFork.name]: runWrite,
   [threadOrganize.name]: runWrite,
-  [sshLaunch.name]: runWrite,
+  [sshLaunch.name]: runSshWrite,
   [projectList.name]: runRead,
   [threadList.name]: runRead,
   [threadRead.name]: runRead,
@@ -408,7 +419,7 @@ it.effect(
     Effect.gen(function* () {
       yield* seed;
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`CREATE TRIGGER block_ssh_settle BEFORE UPDATE ON mcp_request_reservations
+      yield* sql`CREATE TRIGGER block_ssh_settle BEFORE UPDATE OF state ON mcp_request_reservations
         BEGIN SELECT RAISE(ABORT, 'refused'); END`;
       yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-1" });
       const [row] = yield* sql<{ readonly receipt_id: string }>`
@@ -444,7 +455,7 @@ it.effect(
       ).toMatchObject({ run: 2 });
 
       // A role-scoped SSH launch also releases on reconcile when fenced and the caller still holds the role.
-      yield* sql`CREATE TRIGGER block_role_ssh_settle BEFORE UPDATE ON mcp_request_reservations
+      yield* sql`CREATE TRIGGER block_role_ssh_settle BEFORE UPDATE OF state ON mcp_request_reservations
         BEGIN SELECT RAISE(ABORT, 'refused'); END`;
       yield* callTool(sshLaunch.name, {
         host: "box",
@@ -531,13 +542,6 @@ it.effect(
       ).toMatchObject({ reason: "outcome_unknown" });
       yield* sql`DROP TRIGGER block_both_update`;
       yield* sql`DROP TRIGGER block_both_delete`;
-      const [abandonedRow] = yield* sql<{ readonly receipt_id: string }>`
-        SELECT receipt_id FROM mcp_request_reservations WHERE client_request_id = 'ssh-chan-both-fail'`;
-      yield* sql`INSERT INTO remote_dispatches
-        (correlation_id, kind, origin_thread_id, host, read_key, delivery, state, last_error, created_at, updated_at, memory_grant_ceiling)
-        VALUES (${`rr-${abandonedRow!.receipt_id}`}, 'thread', ${caller}, 'box', 'key', 'wake', 'cancelled',
-          'The launch never reached box; it is fenced there, so it cannot start late.',
-          '2026-10-23T00:00:00.000Z', '2026-10-23T00:00:00.000Z', 'none')`;
       expect(yield* callTool(threadList.name, { host: "box" })).toEqual({ ok: true });
       expect(
         yield* callTool(sshLaunch.name, { host: "box", clientRequestId: "ssh-chan-both-fail" }),

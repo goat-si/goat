@@ -551,6 +551,15 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                     ),
                   );
                   const result = yield* Effect.gen(function* () {
+                    const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
+                    const receiptId =
+                      receipt._tag === "Some" ? yield* receipt.value.held : undefined;
+                    const correlationId =
+                      admissionCorrelationId(admission) ??
+                      (receiptId === undefined ? undefined : `rr-${receiptId}`);
+                    if (correlationId !== undefined && receipt._tag === "Some") {
+                      yield* receipt.value.correlate(correlationId);
+                    }
                     if (scope.thread === undefined) {
                       const value = yield* dispatch.launchThread(
                         guardedLaunch,
@@ -566,15 +575,6 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
                           : Effect.void,
                       ),
                     );
-                    const receipt = yield* Effect.serviceOption(LifecycleAdmissionReceipt);
-                    const receiptId =
-                      receipt._tag === "Some" ? yield* receipt.value.held : undefined;
-                    const correlationId =
-                      admissionCorrelationId(admission) ??
-                      (receiptId === undefined ? undefined : `rr-${receiptId}`);
-                    if (correlationId !== undefined && receipt._tag === "Some") {
-                      yield* receipt.value.correlate(correlationId);
-                    }
                     const value = yield* coordinator.launch(
                       {
                         kind: "thread",
