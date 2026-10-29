@@ -106,7 +106,9 @@ const finder = (
         ? {
             windows,
             enumeration_complete: true,
-            authoritative_window_ids: windows.map((each) => each.window_id),
+            authoritative_window_ids: windows.map(
+              (each) => (each as { window_id: number }).window_id,
+            ),
           }
         : { windows };
     },
