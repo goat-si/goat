@@ -2,6 +2,7 @@ import {
   canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
+  pickSnoozePreset,
   QUEUED_TURN_START_GRACE_MS,
   resolveSnoozePresets,
   snoozeWakeLabel,
@@ -28,7 +29,7 @@ import {
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@goat/client-runtime/state/thread-sort";
-import type { EnvironmentId, ProjectId } from "@goat/contracts";
+import type { EnvironmentId, ProjectId, SnoozePresetSetting } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
@@ -73,29 +74,34 @@ export type ThreadListV2Status =
   | "limited"
   | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
+export type ThreadListV2SnoozePresetSettings = ReadonlyArray<SnoozePresetSetting> | undefined;
+
+/** The row's snooze menu, from its environment's presets (undefined before its config loads). */
+export function resolveThreadListV2SnoozePresets(
+  secondary: ThreadListV2SwipeAction | null,
+  now: Date,
+  presets: ThreadListV2SnoozePresetSettings,
+): ReadonlyArray<SnoozePreset> {
+  return secondary === "snooze" ? resolveSnoozePresets(now, presets ? { presets } : {}) : [];
+}
 
 export function resolveThreadListV2SnoozeMenuSelection(input: {
   readonly event: string;
   readonly displayedPresets: ReadonlyArray<SnoozePreset>;
   readonly now: Date;
+  readonly presets: ThreadListV2SnoozePresetSettings;
 }):
   | { readonly _tag: "selected"; readonly preset: SnoozePreset }
   | { readonly _tag: "expired" }
   | { readonly _tag: "not-snooze" } {
   if (!input.event.startsWith("snooze:")) return { _tag: "not-snooze" };
-
-  const currentPreset = resolveSnoozePresets(input.now).find(
-    (candidate) => input.event === `snooze:${candidate.id}`,
-  );
-  if (currentPreset) return { _tag: "selected", preset: currentPreset };
-
-  const displayedPreset = input.displayedPresets.find(
-    (candidate) => input.event === `snooze:${candidate.id}`,
-  );
-  if (displayedPreset && Date.parse(displayedPreset.snoozedUntil) > input.now.getTime()) {
-    return { _tag: "selected", preset: displayedPreset };
-  }
-  return { _tag: "expired" };
+  const preset = pickSnoozePreset({
+    shown: input.displayedPresets,
+    id: input.event.slice("snooze:".length),
+    now: input.now,
+    ...(input.presets ? { presets: input.presets } : {}),
+  });
+  return preset ? { _tag: "selected", preset } : { _tag: "expired" };
 }
 
 export function resolveThreadListV2SwipeActions(input: {

@@ -92,7 +92,7 @@ export function resolveHour12(timestampFormat: TimestampFormat): boolean {
   return getTimestampFormatter(timestampFormat, false).resolvedOptions().hour12 ?? false;
 }
 
-export function parseTimestampDate(isoDate: string): Date | null {
+function parseTimestampDate(isoDate: string): Date | null {
   const date = new Date(isoDate);
   return Number.isNaN(date.getTime()) ? null : date;
 }

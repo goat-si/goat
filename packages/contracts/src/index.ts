@@ -25,6 +25,7 @@ export * from "./sshHost.ts";
 export * from "./ipc.ts";
 export * from "./desktopPermissions.ts";
 export * from "./desktopWindowMaterial.ts";
+export * from "./snoozePresets.ts";
 export * from "./terminal.ts";
 export * from "./provider.ts";
 export * from "./providerInstance.ts";
