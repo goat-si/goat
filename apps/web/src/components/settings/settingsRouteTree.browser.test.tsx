@@ -5,6 +5,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import { routeTree } from "../../routeTree.gen";
 import { startMainAppLocationTracking } from "../sidebar/mainAppLocation";
+import "../../index.css";
 
 // The real root and chat shells bootstrap server auth and the whole app; keep only their outlets.
 vi.mock("../../routes/__root", async () => {
@@ -31,6 +32,18 @@ vi.mock("../../routes/_chat.index", async () => {
 });
 
 const SETTINGS_LAYOUT_ID = "/_chat/settings";
+const SHOW_BOT_THREADS_KEY = "goat:sidebar:show-bot-threads";
+
+function withoutStoredBotThreadsChoice() {
+  const saved = localStorage.getItem(SHOW_BOT_THREADS_KEY);
+  localStorage.removeItem(SHOW_BOT_THREADS_KEY);
+  return {
+    [Symbol.dispose]: () =>
+      saved === null
+        ? localStorage.removeItem(SHOW_BOT_THREADS_KEY)
+        : localStorage.setItem(SHOW_BOT_THREADS_KEY, saved),
+  };
+}
 
 async function openSettings(url: string) {
   const router = createRouter({
@@ -76,6 +89,22 @@ it("keeps a Memory deep link's target through the settings layout's search handl
     memorySpaceId: "space-1",
     memoryId: "memory-1",
   });
+});
+
+it("brings GOAT Bot threads back from General > Sidebar and remembers the choice on this device", async () => {
+  using _choice = withoutStoredBotThreadsChoice();
+  const { screen } = await openSettings("/settings/general");
+  await using _screen = screen;
+  const reveal = page.getByRole("switch", { name: "Show GOAT Bot threads" });
+  await expect.element(reveal).not.toBeChecked();
+
+  await userEvent.click(reveal);
+  await expect.element(reveal).toBeChecked();
+  expect(localStorage.getItem(SHOW_BOT_THREADS_KEY)).toBe("true");
+
+  await userEvent.click(reveal);
+  await expect.element(reveal).not.toBeChecked();
+  expect(localStorage.getItem(SHOW_BOT_THREADS_KEY)).toBe("false");
 });
 
 async function openSettingsFromHome() {

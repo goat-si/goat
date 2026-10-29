@@ -98,6 +98,8 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { SnoozeSettingsSections } from "./SnoozeSettingsSections";
+import { ShowBotThreadsSetting } from "./ShowBotThreadsSetting";
+import { useShowBotThreads } from "../sidebar/useBotThreadKeys";
 import { snoozePresetsChanged } from "./SnoozePresetsSettings.logic";
 import { BackgroundActivitySettingsRow } from "./BackgroundActivitySettings";
 import { PullRequestWatchSettings } from "./PullRequestWatchSettings";
@@ -434,6 +436,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   } = useTheme();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const [botThreadsShown, setBotThreadsShown] = useShowBotThreads();
 
   const isTextGenerationModelDirty = !Equal.equals(
     settings.textGenerationModelSelection ?? null,
@@ -485,6 +488,7 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarProjectSortOrder !== DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder
       ? ["Project order"]
       : []),
+    ...(botThreadsShown ? ["Show GOAT Bot threads"] : []),
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? ["Working section"]
       : []),
@@ -638,6 +642,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       notifyThemeRestoreFailure();
       return;
     }
+    if (botThreadsShown) setBotThreadsShown(false);
     updateSettings({
       appearancePreset: DEFAULT_UNIFIED_SETTINGS.appearancePreset,
       glassBackdrop: DEFAULT_UNIFIED_SETTINGS.glassBackdrop,
@@ -1002,6 +1007,7 @@ export function GeneralSettingsPanel() {
             </Select>
           }
         />
+        <ShowBotThreadsSetting />
       </SettingsSection>
 
       <SnoozeSettingsSections />

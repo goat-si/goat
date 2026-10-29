@@ -98,3 +98,28 @@ it("restores automatic server updates after an opt-out", async () => {
   await act(() => restore!.restoreDefaults());
   expect(state.update.mock.calls[0]?.[0].automaticServerUpdates).toBe(true);
 });
+
+it("restores Show GOAT Bot threads to off with the other device defaults", async () => {
+  vi.clearAllMocks();
+  const key = "goat:sidebar:show-bot-threads";
+  const saved = localStorage.getItem(key);
+  using _choice = {
+    [Symbol.dispose]: () =>
+      saved === null ? localStorage.removeItem(key) : localStorage.setItem(key, saved),
+  };
+  localStorage.setItem(key, "true");
+  state.settings = DEFAULT_UNIFIED_SETTINGS;
+  state.confirm.mockResolvedValue(true);
+  let restore: ReturnType<typeof useSettingsRestore>;
+  function Probe() {
+    const result = useSettingsRestore();
+    useEffect(() => {
+      restore = result;
+    });
+    return null;
+  }
+  await using _screen = await render(<Probe />);
+  expect(restore!.changedSettingLabels).toEqual(["Show GOAT Bot threads"]);
+  await act(() => restore!.restoreDefaults());
+  expect(localStorage.getItem(key)).toBe("false");
+});
