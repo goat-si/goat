@@ -47,7 +47,7 @@ export function ThreadContextChip(props: {
         {props.state === "invalid"
           ? "On another machine, so this machine's agent can't read it. Remove it or switch back to send."
           : props.state === "unavailable"
-            ? `Host ${props.record.host} is not connected. The connection is unavailable or reconnecting; the agent can still try reading it over SSH.`
+            ? `Host ${props.record.host} is not connected. The connection is unavailable or reconnecting; the agent can still try reading it through this host.`
             : shell
               ? "Open thread"
               : "Thread no longer available"}

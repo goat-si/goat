@@ -1,4 +1,6 @@
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
+import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
+import { copyThreadReference } from "~/lib/copyThreadReference";
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
 import { ThreadContextDragGhost } from "./chat/ThreadContextDragGhost";
 import { threadContextDragListProps, useThreadContextDrag } from "./sidebar/useThreadContextDrag";
@@ -2670,6 +2672,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             if (thread.branch) {
               copyBranchToClipboard(thread.branch, { branch: thread.branch });
             }
+            return;
+          case "copy-thread":
+            void copyThreadReference(threadChipCopyTarget(threadRef, thread.title));
             return;
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });

@@ -26,6 +26,18 @@ const search = (provider: ServerProvider, terms: ReadonlyArray<string>) =>
   });
 
 describe("listCapabilityModels", () => {
+  it("matches provider words without filtering out its models", () => {
+    const provider = providerWith(["gpt-6", "gpt-5"]);
+    assert.deepStrictEqual(
+      search(provider, ["codex"]).listed.map((model) => model.slug),
+      ["gpt-6", "gpt-5"],
+    );
+    assert.deepStrictEqual(
+      search(provider, ["codex", "gpt-5"]).listed.map((model) => model.slug),
+      ["gpt-5"],
+    );
+  });
+
   it("lists an exact slug match above the truncation cap", () => {
     // Ten rows match the term and the exact slug sorts last in the user's order.
     const provider = providerWith([

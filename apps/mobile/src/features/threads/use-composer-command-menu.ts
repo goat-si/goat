@@ -22,6 +22,7 @@ const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = [];
 import { COMPOSER_CONTEXT_MAX_RECORDS } from "@goat/contracts";
 import { formatComposerContextReference } from "@goat/shared/composerContextReferences";
 import { pullRequestComposerContext, threadComposerContext } from "../../lib/composerContext";
+import { useThreadContextHosts } from "../../lib/useThreadContextHosts";
 import { uuidv4 } from "../../lib/uuid";
 import {
   getComposerDraftSnapshot,
@@ -315,6 +316,7 @@ export function useComposerCommandMenu({
     return detectComposerTrigger(draftMessage, selection.end);
   })();
   const currentShell = threadShells.find((shell) => shell.id === currentThreadId);
+  const verifiedThreadHosts = useThreadContextHosts(environmentId);
   const capabilityContext = useComposerCapabilityContext({
     environmentId,
     active: trigger?.kind === "path",
@@ -499,6 +501,7 @@ export function useComposerCommandMenu({
             excludeThreadId: currentThreadId,
             query: trigger.query,
             now,
+            sshHostsByEnvironment: verifiedThreadHosts,
           })
         : [];
       return [
@@ -572,7 +575,15 @@ export function useComposerCommandMenu({
           candidate.id === item.thread.threadId,
       );
       if (!shell) return;
-      const record = threadComposerContext(item.thread, shell.title);
+      const host =
+        item.thread.environmentId === environmentId
+          ? undefined
+          : verifiedThreadHosts.get(item.thread.environmentId);
+      if (item.thread.environmentId !== environmentId && host === undefined) return;
+      const record = {
+        ...threadComposerContext(item.thread, shell.title),
+        ...(host ? { host } : {}),
+      };
       const existing = getComposerDraftSnapshot(ownerKey).context?.records ?? [];
       const alreadyAttached = existing.some((entry) => entry.contextId === record.contextId);
       if (!alreadyAttached && existing.length >= COMPOSER_CONTEXT_MAX_RECORDS) {

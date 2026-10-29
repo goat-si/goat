@@ -351,22 +351,19 @@ pull request is older than the recent list. Type a single word after `#` to sear
 the repository by text. Choose a result to insert it as a chip.
 
 Another thread can be context too. Type `@` followed by part of its title to pick one from
-the same server, or on web and desktop drag a thread from the sidebar or Fleet onto the
+the same server or a connected, linked environment, on web, desktop, or mobile. On web and
+desktop, drag a thread from the sidebar or Fleet onto the
 composer; a sidebar multi-selection drops together. The chip shows the thread's current title and
 opens it when selected. Your prompt only carries a reference: the agent reads the thread's
 history on demand, so attaching a long thread costs nothing until the agent looks. Attaching a
 thread does not change it, and the agent cannot send messages to it unless you ask.
 
-Dropping a thread from another environment attaches a saved transcript file. The source
-environment must be connected and up to date. The transcript includes the visible history and
-saved text context at the time of the drop; later messages and the contents of attached files
-are not copied. The agent can read the saved transcript after the source disconnects. Normal
-file attachment limits apply.
-
-In the desktop app, threads from SSH hosts can also be picked with `@` or dragged into a thread
-that runs on this computer. They attach as references with their SSH host alias; the agent reads
-them through SSH. If a host is disconnected, its chip shows “Host not connected”. You can still
-send, and the agent will try to read it.
+Threads from another environment attach as references, not saved transcripts. The agent's server
+must have a verified SSH or linked-host route to that environment, and the environment must be
+connected to the client. If a route cannot be verified, connect the environment or resolve any
+conflicting host names before attaching the thread. An SSH reference uses its host alias; a linked
+reference uses the link name. A chip can show “Host not connected” when the client's connection is
+interrupted while the agent's route remains available.
 
 Images keep their thumbnail shelf above the text and also get a chip at your cursor, so you can
 say exactly which image you mean. Deleting an image chip leaves the image on the shelf; removing

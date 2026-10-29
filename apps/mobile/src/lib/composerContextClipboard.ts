@@ -13,7 +13,10 @@ import {
   decodeComposerContextFragment,
   encodeComposerContextFragment,
 } from "@goat/shared/composerContextClipboard";
-import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
+import {
+  threadContextsOutsideEnvironment,
+  type VerifiedThreadHosts,
+} from "@goat/shared/composerContextReferences";
 import { executeAtomQuery, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import * as Option from "effect/Option";
@@ -67,22 +70,35 @@ export async function importComposerContextClipboard(
   signal: AbortSignal,
   existingContextCount = 0,
   destinationEnvironmentId?: EnvironmentId,
+  verifiedHosts?: VerifiedThreadHosts,
 ) {
   const fragment =
     decodeComposerContextFragment(input.fragment) ?? decodeComposerContextClipboardHtml(input.html);
   if (!fragment) return null;
   const selected = referencedComposerContext(input.text, { version: 1, records: fragment.records });
   const imported = reidentifyComposerContext(input.text, selected?.records ?? [], uuidv4);
+  const routedRecords = imported.context.records.map((record) => {
+    if (record.kind !== "thread" || !("threadId" in record)) return record;
+    if (record.environmentId === destinationEnvironmentId) {
+      const { host: _host, ...local } = record;
+      return local;
+    }
+    if (record.host) return record;
+    const host = verifiedHosts?.get(record.environmentId);
+    if (!host) return record;
+    return { ...record, host };
+  });
   const skippedThreads =
     destinationEnvironmentId === undefined
       ? []
       : threadContextsOutsideEnvironment({
           text: imported.text,
-          records: imported.context.records,
+          records: routedRecords,
           environmentId: destinationEnvironmentId,
+          verifiedHosts,
         });
   const skippedIds = new Set(skippedThreads.map((record) => record.contextId));
-  const retained = imported.context.records.filter((record) => !skippedIds.has(record.contextId));
+  const retained = routedRecords.filter((record) => !skippedIds.has(record.contextId));
   if (existingContextCount + retained.length > COMPOSER_CONTEXT_MAX_RECORDS)
     throw new Error("Remove some context items from the draft before pasting more.");
   const attachments: DraftComposerAttachment[] = [];

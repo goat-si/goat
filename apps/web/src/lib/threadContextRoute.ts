@@ -1,18 +1,12 @@
 import { connectionRoutes, type ConnectionCatalogEntry } from "@goat/client-runtime/connection";
 import type { EnvironmentId, ThreadContextRecord } from "@goat/contracts";
+import {
+  isVerifiedThreadHost,
+  type VerifiedThreadHosts,
+} from "@goat/shared/composerContextReferences";
 import * as Option from "effect/Option";
 
-/**
- * How the agent of one environment reaches a thread attached as context.
- *
- * The thread tools route by SSH alias (`goat_thread_read({ threadId, host })`), and the
- * agent's server resolves that alias with its own SSH config. The only aliases this client
- * knows are the ones on its saved SSH connections, which the desktop app resolved with the
- * SSH config of the machine it runs on. So a saved alias is meaningful to exactly one
- * server: the desktop app's own primary backend, which runs on that machine as the same user.
- * Anything else (a browser, a remote agent, a WSL or GOAT Connect environment) has no alias
- * this client can vouch for, and the attachment is refused with the reason.
- */
+/** Without verified hub routes, a saved SSH alias is valid only for the desktop's primary server. */
 export type ThreadContextRoute =
   | { readonly kind: "local" }
   | { readonly kind: "ssh"; readonly host: string }
@@ -23,6 +17,7 @@ export type ThreadContextUnreachableReason =
   | "agent-not-on-this-device"
   /** The thread's environment is saved without an SSH connection (GOAT Connect or a URL only). */
   | "no-ssh-connection"
+  | "unverified-route"
   /** The thread's environment is not saved on this client anymore. */
   | "unknown-environment";
 
@@ -31,8 +26,13 @@ export function resolveThreadContextRoute(input: {
   readonly threadEnvironmentId: EnvironmentId;
   readonly entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
   readonly isDesktopRenderer: boolean;
+  readonly verifiedHosts?: VerifiedThreadHosts | undefined;
 }): ThreadContextRoute {
   if (input.threadEnvironmentId === input.agentEnvironmentId) return { kind: "local" };
+  if (input.verifiedHosts !== undefined) {
+    const host = input.verifiedHosts.get(input.threadEnvironmentId);
+    return host ? { kind: "ssh", host } : { kind: "unreachable", reason: "unverified-route" };
+  }
   const agentEntry = input.entries.get(input.agentEnvironmentId);
   if (!input.isDesktopRenderer || agentEntry?.target._tag !== "PrimaryConnectionTarget") {
     return { kind: "unreachable", reason: "agent-not-on-this-device" };
@@ -65,6 +65,7 @@ export function routeThreadContextRecords(input: {
   readonly agentEnvironmentId: EnvironmentId;
   readonly entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
   readonly isDesktopRenderer: boolean;
+  readonly verifiedHosts?: VerifiedThreadHosts;
 }): {
   readonly routed: ReadonlyArray<ThreadContextRecord>;
   readonly refusal: { readonly title: string; readonly description: string } | null;
@@ -72,11 +73,33 @@ export function routeThreadContextRecords(input: {
   const routed: ThreadContextRecord[] = [];
   let refusal: { readonly title: string; readonly description: string } | null = null;
   for (const record of input.records) {
+    if (
+      record.environmentId !== input.agentEnvironmentId &&
+      record.host &&
+      input.verifiedHosts !== undefined &&
+      !isVerifiedThreadHost(input.verifiedHosts, record.environmentId, record.host)
+    ) {
+      refusal ??= threadContextUnreachableMessage({
+        reason: "unverified-route",
+        threadEnvironmentLabel: input.entries.get(record.environmentId)?.target.label ?? null,
+        agentEnvironmentLabel: input.entries.get(input.agentEnvironmentId)?.target.label ?? null,
+      });
+      continue;
+    }
+    if (
+      record.environmentId !== input.agentEnvironmentId &&
+      record.host &&
+      input.verifiedHosts !== undefined
+    ) {
+      routed.push(record);
+      continue;
+    }
     const route = resolveThreadContextRoute({
       agentEnvironmentId: input.agentEnvironmentId,
       threadEnvironmentId: record.environmentId,
       entries: input.entries,
       isDesktopRenderer: input.isDesktopRenderer,
+      verifiedHosts: input.verifiedHosts,
     });
     if (route.kind !== "unreachable") {
       routed.push(routeThreadContextRecord(record, route));
@@ -101,13 +124,29 @@ export function settleThreadContextsForAgent(input: {
   readonly agentEnvironmentId: EnvironmentId;
   readonly entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
   readonly isDesktopRenderer: boolean;
+  readonly verifiedHosts?: VerifiedThreadHosts;
 }): ReadonlyArray<ThreadContextRecord> {
   return input.records.map((record) => {
+    if (
+      record.environmentId !== input.agentEnvironmentId &&
+      record.host &&
+      input.verifiedHosts !== undefined &&
+      !isVerifiedThreadHost(input.verifiedHosts, record.environmentId, record.host)
+    ) {
+      return routeThreadContextRecord(record, { kind: "local" });
+    }
+    if (
+      record.environmentId !== input.agentEnvironmentId &&
+      record.host &&
+      input.verifiedHosts !== undefined
+    )
+      return record;
     const route = resolveThreadContextRoute({
       agentEnvironmentId: input.agentEnvironmentId,
       threadEnvironmentId: record.environmentId,
       entries: input.entries,
       isDesktopRenderer: input.isDesktopRenderer,
+      verifiedHosts: input.verifiedHosts,
     });
     return routeThreadContextRecord(
       record,
@@ -125,6 +164,12 @@ function threadContextUnreachableMessage(input: {
   const threadPlace = input.threadEnvironmentLabel ?? "another environment";
   const agentPlace = input.agentEnvironmentLabel ?? "this environment";
   switch (input.reason) {
+    case "unverified-route":
+      return {
+        title: `Can't verify the route to ${threadPlace}`,
+        description:
+          "Connect this environment to the agent's server over SSH or as a linked host, and resolve any conflicting host names before attaching this thread.",
+      };
     case "agent-not-on-this-device":
       return {
         title: `Can't attach threads from ${threadPlace} here`,

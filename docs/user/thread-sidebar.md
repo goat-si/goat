@@ -343,8 +343,9 @@ the matching message; on an iPad with a keyboard, `Cmd+K` opens the same
 palette.
 
 Use **Settings → Keybindings** to find or customize shortcuts for searching files
-and copying a thread reference. A copied reference uses the thread's pull request
-link when available, otherwise its thread ID. See [keybindings](./keybindings.md)
+and copying a thread reference. The shortcut copies the thread's pull request
+link when available, otherwise a thread chip that can be pasted into a composer.
+The thread menu also offers a separate **Thread ID** copy. See [keybindings](./keybindings.md)
 for custom configuration.
 
 ## Inspect agent work

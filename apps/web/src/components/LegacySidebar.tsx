@@ -1,4 +1,6 @@
 import { ThreadHistoryArchiveHint } from "./ThreadHistoryArchiveHint";
+import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
+import { copyThreadReference } from "~/lib/copyThreadReference";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { resolveThreadCurrentPullRequestLink } from "@goat/client-runtime/thread-pull-requests";
 import { Spinner } from "~/components/ui/spinner";
@@ -2163,6 +2165,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             : []),
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
+          { id: "copy-thread", label: "Copy Thread" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
           { id: "project-settings", label: "Project settings" },
           {
@@ -2255,6 +2258,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           return;
         }
         copyPathToClipboard(threadWorkspacePath, { path: threadWorkspacePath });
+        return;
+      }
+      if (clicked === "copy-thread") {
+        void copyThreadReference(
+          threadChipCopyTarget(
+            { environmentId: thread.environmentId, threadId: thread.id },
+            thread.title,
+          ),
+        );
         return;
       }
       if (clicked === "copy-thread-id") {

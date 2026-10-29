@@ -32,15 +32,11 @@ import type {
   ThreadId,
 } from "@goat/contracts";
 import {
-  EnvironmentRequestInvalidError,
   AuthOrchestrationOperateScope,
   ProviderDriverKind,
   ProviderInstanceId,
-  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
 } from "@goat/contracts";
 import type { EnvironmentConnectionPresentation } from "@goat/client-runtime/connection";
-import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import * as Schema from "effect/Schema";
 import { isPasteAsTextShortcut } from "@goat/client-runtime/text-paste";
 import { serializeComposerFileLink } from "@goat/shared/composerTrigger";
 import { folderDropTarget, resolveDroppedFolderPath } from "./folderDrop";
@@ -51,7 +47,6 @@ import {
   memo,
   type ReactNode,
   useEffect,
-  useEffectEvent,
   useId,
   useImperativeHandle,
   useLayoutEffect,
@@ -195,7 +190,6 @@ import { useThreadContextDrop, threadContextDropTargetProps } from "./threadCont
 import { readThreadShell } from "~/state/entities";
 import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import type { ComposerContextRecord, ThreadPullRequestLink } from "@goat/contracts";
-import { threadContextAttachment } from "~/lib/threadContextAttachment";
 import {
   type ComposerCommandItem,
   ComposerCommandMenu,
@@ -237,7 +231,6 @@ import {
 } from "./composerSubmission";
 import { ComposerPromptLengthValidation } from "./ComposerPromptLengthValidation";
 import { pendingDraftWork } from "./pendingDraftWork";
-import { importComposerThreadAttachment } from "./composerThreadImport";
 import { isTimelineScrollTarget } from "./timelineScrollTarget";
 import {
   createComposerScrollGestureState,
@@ -252,10 +245,8 @@ import { ContextWindowMeter } from "./ContextWindowMeter";
 import { ComposerAttachAction } from "./ComposerAttachAction";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
-import { resolveThreadContextRoute } from "~/lib/threadContextRoute";
 import { settleThreadContextsForAgent } from "~/lib/threadContextRoute";
-
-const isEnvironmentRequestInvalidError = Schema.is(EnvironmentRequestInvalidError);
+import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 
 const COMPOSER_SCROLL_COLLAPSE_THRESHOLD_PX = 24;
 const COMPOSER_SCROLL_GESTURE_RESET_MS = 120;
@@ -651,6 +642,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     editingQueuedAttachments,
     onRemoveEditingQueuedAttachment,
   } = props;
+  const verifiedThreadHosts = useThreadContextHosts(environmentId);
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const composerDraftTargetKey = composerTargetKey(composerDraftTarget);
   const {
@@ -768,6 +760,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const previewFile = composerFiles.find((file) => file.id === previewFileId);
   const composerContextActions = {
     environmentId,
+    verifiedHosts: verifiedThreadHosts,
     cwd: gitCwd ?? undefined,
     expandImage: (imageId: string) => {
       const preview = buildExpandedImagePreview(composerImages, imageId);
@@ -1434,9 +1427,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const buildContextClipboardFragmentStable = useStableCallback(buildContextClipboardFragment);
   const {
     routeThreadContexts,
-    loadThreadTranscript,
     countReservedAttachments,
-    countReservedAttachmentsStable,
     importContextRecords,
     importContextFragment,
     importContextFragmentStable,
@@ -2916,81 +2907,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
   });
 
-  const attachDroppedThreadFile = useEffectEvent((file: File) => addComposerAttachments([file]));
-  const importDroppedThread = useEffectEvent(
-    async (ref: ScopedThreadRef, isActive: () => boolean) => {
-      const targetKey = attachmentTargetKey;
-      pendingDraftWork.begin(targetKey);
-      const loadingToast = toastManager.add({
-        type: "loading",
-        title: "Loading thread context…",
-        timeout: 0,
-        data: { threadRef: routeThreadRef, hideCopyButton: true },
-      });
-      const importResult = await settlePromise(() =>
-        importComposerThreadAttachment({
-          targetKey,
-          pendingImports: pendingThreadImportsRef.current,
-          countReservedAttachments: countReservedAttachmentsStable,
-          load: async () => {
-            const result = await loadThreadTranscript({
-              environmentId: ref.environmentId,
-              input: { threadId: ref.threadId },
-            });
-            if (result._tag !== "Success") {
-              throw squashAtomCommandFailure(result);
-            }
-            return threadContextAttachment(ref.environmentId, result.value);
-          },
-          isActive,
-          attach: attachDroppedThreadFile,
-          onLimitReached: () => {
-            if (activeThreadId) {
-              setThreadError(
-                activeThreadId,
-                `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`,
-              );
-            }
-          },
-        }),
-      );
-      if (importResult._tag === "Failure" && isActive()) {
-        const error = squashAtomCommandFailure(importResult);
-        toastManager.add({
-          type: "error",
-          title: "Unable to read the dropped thread",
-          description:
-            isEnvironmentRequestInvalidError(error) &&
-            error.reason === "thread_transcript_too_large"
-              ? "This thread exceeds the attachment size limit. Try a shorter thread."
-              : "Check that its environment is connected and up to date, then try again.",
-        });
-      }
-      toastManager.close(loadingToast);
-      pendingDraftWork.end(targetKey);
-    },
-  );
-
-  useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs, isActive) => {
-    const catalogEntries = appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries;
+  useThreadContextDrop(composerFormRef, environmentId, attachmentTargetKey, (refs) => {
     const records = refs.flatMap((ref) => {
-      // A foreign thread this agent reaches over SSH stays a live reference; any other one
-      // is attached as a transcript snapshot.
-      if (
-        ref.environmentId !== environmentId &&
-        resolveThreadContextRoute({
-          agentEnvironmentId: environmentId,
-          threadEnvironmentId: ref.environmentId,
-          entries: catalogEntries,
-          isDesktopRenderer: window.desktopBridge !== undefined,
-        }).kind === "unreachable"
-      ) {
-        void importDroppedThread(
-          ref,
-          () => isActive() && attachmentTargetKeyRef.current === attachmentTargetKey,
-        );
-        return [];
-      }
       const shell = readThreadShell(ref);
       return shell ? [threadContextRecord(ref, shell.title)] : [];
     });
@@ -3322,6 +3240,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             agentEnvironmentId: environmentId,
             entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
             isDesktopRenderer: window.desktopBridge !== undefined,
+            verifiedHosts: verifiedThreadHosts,
           }),
         ],
         previewTabs: composerPreviewTabs,
