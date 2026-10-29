@@ -688,11 +688,10 @@ func runService() -> Never {
   dispatchMain()
 }
 
-if ProcessInfo.processInfo.environment[disclaimedVariable] == "1" {
-  WindowServer.startService {
-    if CommandLine.arguments.contains("--mcp") { runMcp() }
-    runService()
-  }
-} else {
-  runLauncher()
-}
+WindowServer.startHelper(
+  disclaimed: ProcessInfo.processInfo.environment[disclaimedVariable] == "1",
+  mcp: CommandLine.arguments.contains("--mcp"),
+  launcher: runLauncher,
+  mcpServer: runMcp,
+  service: runService
+)

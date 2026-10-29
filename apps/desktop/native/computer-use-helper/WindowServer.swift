@@ -6,13 +6,28 @@
 import CoreGraphics
 
 enum WindowServer {
-  /// Opens the connection; cheap, and safe to call again.
-  static func connect() { _ = CGMainDisplayID() }
+  /// Whether this process opened the connection; checks read it without a Screen Recording grant.
+  private(set) static var connected = false
 
-  /// The disclaimed service's start. It connects before any capture, window listing or overlay:
-  /// without it the first live-picture capture aborted the service (CGS_REQUIRE_INIT).
-  static func startService(_ run: () -> Never) -> Never {
+  /// Opens the connection; cheap, and safe to call again.
+  static func connect() {
+    _ = CGMainDisplayID()
+    connected = true
+  }
+
+  /// The helper's entry. The launcher re-execs itself disclaimed, and the disclaimed process
+  /// connects before any capture, window listing or overlay: without it the first live-picture
+  /// capture aborted the service (CGS_REQUIRE_INIT).
+  static func startHelper(
+    disclaimed: Bool,
+    mcp: Bool,
+    launcher: () -> Never,
+    mcpServer: () -> Never,
+    service: () -> Never
+  ) -> Never {
+    guard disclaimed else { launcher() }
     connect()
-    run()
+    if mcp { mcpServer() }
+    service()
   }
 }
