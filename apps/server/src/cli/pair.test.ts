@@ -246,6 +246,10 @@ describe("goat pair", () => {
             output,
             renderTerminalQrCode(buildMobilePairingLink(`${origin}/pair#token=${token}`)),
           );
+          assert.include(
+            output,
+            `App link: ${buildMobilePairingLink(`${origin}/pair#token=${token}`)}`,
+          );
 
           const listed = yield* captureStdout(
             runCli(["auth", "pairing", "list", "--base-dir", baseDir, "--json"]),

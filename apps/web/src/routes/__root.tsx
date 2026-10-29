@@ -169,6 +169,8 @@ function RootRouteBranch() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  // A sync IPC read; the setting only changes across a relaunch.
+  const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
   // Once true, stays true: a visit to /welcome means the bootstrap already chose a route.
   const [returningFromWelcome, setReturningFromWelcome] = useState(pathname === "/welcome");
   if (pathname === "/welcome" && !returningFromWelcome) setReturningFromWelcome(true);
@@ -204,6 +206,11 @@ function RootRouteBranch() {
         <EnvironmentThemeSync />
         <DesktopWindowMaterialSync />
         <LiquidGlassBackdrop />
+        {/* A pair link opened during setup must still reach its confirmation. */}
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopWebLinkCoordinator />
+        ) : null}
+        <ConfirmDialogHost />
         <CustomSnoozeDialogHost />
         <GuestShareDialogHost />
         <CommandPalette>
@@ -246,7 +253,9 @@ function RootRouteBranch() {
         {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <HubNodesImportCoordinator /> : null}
-        {primaryEnvironmentAuthenticated ? <DesktopWebLinkCoordinator /> : null}
+        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+          <DesktopWebLinkCoordinator />
+        ) : null}
         {isElectron ? <DesktopTrayNewThread /> : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
         {hasCloudPublicConfig() ? <RelayClientInstallDialog /> : null}
