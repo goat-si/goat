@@ -401,6 +401,8 @@ and `xdotool`. On Ubuntu: `sudo apt-get install -y xvfb xcompmgr xdotool at-spi2
 Without a writable `/dev/uinput` and an X server that accepts new input devices, which Xvfb is
 not, background keys and pixel clicks are refused with `backgroundUnavailable`; AT-SPI clicks and
 value writes still run in the background.
+goat-ci runs this check as `smoke-linux-computer-use` on a hosted Ubuntu runner, in full runs and
+on pull requests that change the Linux helper or its build and smoke scripts.
 
 ### Windows installer prerequisites
 
