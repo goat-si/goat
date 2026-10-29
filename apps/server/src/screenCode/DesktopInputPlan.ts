@@ -102,12 +102,21 @@ export const buildWaitExpectation = (
   const window = args.window === "exists" || args.window === "gone" ? args.window : undefined;
   const role = string(args.role);
   const name = string(args.name);
-  const value = typeof args.value === "string" ? args.value : undefined;
-  if (window === undefined && role === undefined && name === undefined)
+  const value = string(args.value);
+  const enabled = typeof args.enabled === "boolean" ? args.enabled : undefined;
+  const selected = typeof args.selected === "boolean" ? args.selected : undefined;
+  if (
+    window === undefined &&
+    role === undefined &&
+    name === undefined &&
+    value === undefined &&
+    enabled === undefined &&
+    selected === undefined
+  )
     return {
       error: fail(
         "invalid_argument",
-        "Wait for {role, name, value?, enabled?, selected?} or {window}.",
+        "Wait for {role?, name?, value?, enabled?, selected?} or {window}.",
       ),
     };
   return {
@@ -121,8 +130,8 @@ export const buildWaitExpectation = (
               },
               exists: true,
               ...(value === undefined ? {} : { value_equals: value }),
-              ...(typeof args.enabled === "boolean" ? { enabled: args.enabled } : {}),
-              ...(typeof args.selected === "boolean" ? { selected: args.selected } : {}),
+              ...(enabled === undefined ? {} : { enabled }),
+              ...(selected === undefined ? {} : { selected }),
             },
           }
         : { window: { exists: window === "exists" } },

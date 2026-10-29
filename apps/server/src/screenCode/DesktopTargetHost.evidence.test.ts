@@ -455,3 +455,32 @@ it.live(
     }).pipe(Effect.provide(cellService(host)));
   },
 );
+
+it.live(
+  "waitFor accepts {value} and {role, value} predicates for verify_state and rejects an empty predicate",
+  () => {
+    const { host, sent } = fixture({
+      verify_state: { status: "satisfied", stable: true },
+    });
+    return Effect.gen(function* () {
+      const ok = (yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "const v1 = await app.waitFor({value: '702'}); " +
+          "const v2 = await app.waitFor({role: 'AXStaticText', value: '702'}); " +
+          "let emptyErr = ''; try { await app.waitFor({}); } catch (e) { emptyErr = e.code; } " +
+          "return { m1: v1.met, m2: v2.met, emptyErr };",
+      )) as ScreenRunResult;
+      expect(ok.value).toEqual({ m1: true, m2: true, emptyErr: "invalid_argument" });
+      const verifies = sent.filter((s) => s.tool === "verify_state");
+      expect(verifies).toHaveLength(2);
+      expect(verifies[0]?.args).toMatchObject({
+        expect: [{ element: { selector: {}, exists: true, value_equals: "702" } }],
+      });
+      expect(verifies[1]?.args).toMatchObject({
+        expect: [
+          { element: { selector: { role: "AXStaticText" }, exists: true, value_equals: "702" } },
+        ],
+      });
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
