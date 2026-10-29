@@ -10,11 +10,7 @@ import type {
   ScreenRunError,
   ScreenTargetRef,
 } from "@goat/contracts";
-import {
-  COMPUTER_USE_PRIMITIVE_ARGS_BYTES,
-  COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
-  EnvironmentId,
-} from "@goat/contracts";
+import { COMPUTER_USE_PRIMITIVE_ARGS_BYTES, EnvironmentId } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
 import type { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
@@ -24,7 +20,6 @@ import type {
   ScreenHostDispatcher,
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
-import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { dispatchInTurn } from "./ScreenBatchGroups.ts";
 import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
@@ -32,25 +27,15 @@ import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
 import {
   BATCH_FAILED_CATEGORIES,
-  inspectTreeElements,
   preflightDesktopBatch,
   type GuardElement,
 } from "./DesktopInputGuards.ts";
-import {
-  aimOf,
-  boundsOf,
-  elementFrames,
-  sameRect,
-  type Placed,
-  type Rect,
-} from "./DesktopFrames.ts";
+import { aimOf, type Placed, type Rect } from "./DesktopFrames.ts";
 import { waitForOutcome } from "./DesktopWindowClosure.ts";
 import {
   annotatePointerResult,
   applyDesktopPointerArgs,
-  buildScreenshotCapture,
   pointerStateFor,
-  treeWindowBasis,
   type ScreenshotBasis,
 } from "./DesktopTargetPoints.ts";
 import {
@@ -58,7 +43,6 @@ import {
   pollHiddenWindow,
   runInputWithEvidence,
   seedBatchBaseline,
-  settleCaptureIfNeeded,
 } from "./DesktopEvidence.ts";
 import {
   availabilityFromControlState,
@@ -70,32 +54,14 @@ import {
 } from "./DesktopInputPlan.ts";
 import {
   CellWindowTracker,
-  checkWindowReplyState,
   type CellWindowsOutcome,
   matchBindWindow,
   parseWindowList,
-  sheetParentId,
   type WindowEntry,
   withHolders,
 } from "./DesktopWindows.ts";
-import { isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
-import {
-  boundedReadDetail,
-  buildObservedDraft,
-  desktopQuery,
-  desktopRows,
-  driverQuery,
-  matchesQuery,
-  observeScope,
-  renderPageObservation,
-  queryOmission,
-  renderFailure,
-  shownTree,
-  treeOf,
-  READ_BOUNDS,
-  type DesktopPages,
-  type DesktopRow,
-} from "./DesktopObserveRead.ts";
+import { runDesktopObserve } from "./DesktopObserveLatency.ts";
+import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 
 const isJson = Schema.is(Schema.Json);
@@ -448,26 +414,13 @@ export const createDesktopTargetHost = (deps: {
   });
   const selectText = makeSelectText({ send, tokenOf });
   const menuBarExtras = makeMenuBarExtras({ send });
-  /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
-  const page = Effect.fn("DesktopTargetHost.page")(function* (
-    bound: BoundWindow,
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-  ) {
-    const res = renderPageObservation(
-      observations,
-      bound.pages,
-      bound.observationId,
-      bound.ref,
-      bound.epoch,
-      bound.windowBounds,
-      callArgs(call.args),
-      observationReplyBudget(call, context.limits),
-    );
-    if (res.error || !res.observation)
-      return yield* Effect.fail(res.error ?? fail("downstream_failure"));
-    return { value: res.observation, category: "unverifiable" as const };
-  });
+  const observeDeps = {
+    observations,
+    targets,
+    boundRequest,
+    epoch: () => epoch,
+    setEpoch: (next: number) => void (epoch = next),
+  };
   const observe: DesktopTargetHost["observe"] = Effect.fn("DesktopTargetHost.observe")(
     function* (call, context) {
       const bound = resolve(call, context);
@@ -478,242 +431,7 @@ export const createDesktopTargetHost = (deps: {
         )
       )
         return yield* Effect.fail(fail("unsupported"));
-      const capture = call.method === "screenshot";
-      const args = callArgs(call.args);
-      if (!capture && args.after !== undefined) return yield* page(bound, call, context);
-      const query = !capture && args.mode === "query" ? desktopQuery(args.query) : undefined;
-      if (!capture && args.mode === "query" && !query)
-        return yield* Effect.fail(
-          fail("invalid_argument", "Query by {role, name, text, id}: name at least one."),
-        );
-      const search = query && driverQuery(query);
-      // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
-      // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
-      const read = (limit: number, filter?: string, windowId = bound.windowId) =>
-        boundRequest(
-          bound,
-          "nothing",
-          "get_window_state",
-          {
-            pid: bound.pid,
-            window_id: windowId,
-            include_accessibility_tree: !capture,
-            include_screenshot: capture,
-            max_elements: limit,
-            ...(capture ? {} : { tree_format: "both" }),
-            ...(filter === undefined ? {} : { query: filter }),
-          },
-          call,
-          context,
-        );
-      // A read that ran retired the driver's earlier tokens, so their refs go even when its
-      // answer is unusable; only a driver naming another window makes the binding stale.
-      const retire = () => {
-        observations.evictTarget(bound.ref.id);
-        delete bound.observationId;
-        delete bound.snapshotId;
-        delete bound.pages;
-        delete bound.elementsByToken;
-        delete bound.rows;
-      };
-      let limit: number = READ_BOUNDS[0];
-      yield* settleCaptureIfNeeded(capture, bound, call.deadlineMillis);
-      let reply = yield* read(limit);
-      const oversized = () =>
-        object(driverValue(reply))?.code === COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE;
-      // Retire before any retry, which may fail after this read already retired the old tokens.
-      if (oversized()) retire();
-      // A query reads the bounded window whole, where names from nearby text are known, and asks
-      // the driver to filter only when that is too large.
-      const filtered = query !== undefined && search !== undefined && oversized();
-      if (filtered) reply = yield* read(limit, search);
-      // A whole tree too large to carry walks fewer elements, within the call's deadline; a
-      // query walks at least the driver's own floor, so a smaller bound would not shrink it.
-      for (const smaller of capture || query ? [] : READ_BOUNDS.slice(1)) {
-        if (!oversized() || (yield* Clock.currentTimeMillis) >= call.deadlineMillis) break;
-        limit = smaller;
-        reply = yield* read(limit);
-      }
-      const verifyReply = (raw: Record<string, unknown> | undefined, expectedWid: number) => {
-        const checked = checkWindowReplyState(
-          raw,
-          bound.pid,
-          expectedWid,
-          capture,
-          query !== undefined,
-        );
-        if (checked.ok) return Effect.succeed(checked.state);
-        retire();
-        if (checked.evictTarget) targets.delete(bound.ref.id);
-        return Effect.fail(checked.error);
-      };
-      let state = yield* verifyReply(object(driverValue(reply)), bound.windowId);
-      const fromSheetId = bound.windowId;
-      const parentId = !capture ? sheetParentId(state) : undefined;
-      const followedSheet =
-        parentId !== undefined &&
-        parentId !== fromSheetId &&
-        (yield* Clock.currentTimeMillis) < call.deadlineMillis;
-      if (followedSheet && parentId !== undefined) {
-        retire();
-        reply = yield* read(limit, filtered ? search : undefined, parentId);
-        state = yield* verifyReply(object(driverValue(reply)), parentId);
-      }
-      const expectedWindowId = followedSheet && parentId !== undefined ? parentId : bound.windowId;
-      const elements = array(state.elements)
-        .map(object)
-        .filter((entry) => entry !== undefined);
-      const markdown = treeOf(state, elements, filtered);
-      const rows = desktopRows(elements, markdown);
-      // An interactive-only read keeps controls, fields, disabled controls and named rows, and
-      // spends the reply budget on them alone; a query keeps the elements matching every field.
-      const interactive = !capture && args.interactiveOnly === true;
-      const shown = query
-        ? rows.filter((row) => matchesQuery(row, query))
-        : interactive
-          ? rows.filter(isInteractive)
-          : rows;
-      const treeText = shownTree(markdown, filtered ? undefined : elements);
-      const shownText =
-        query || interactive
-          ? keepTreeLines(
-              treeText,
-              new Set(shown.flatMap((row) => (row.index === undefined ? [] : [row.index]))),
-            )
-          : treeText;
-      const omitted = query
-        ? queryOmission(state, shown.length, filtered)
-        : limit < READ_BOUNDS[0]
-          ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
-          : [];
-      // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the
-      // tree's observation stays and only gains this region. Any other read has retired them in
-      // the driver, so the old refs go now, before a render that may fail.
-      const invalidated = array(state.invalidated_snapshot_ids);
-      const kept =
-        capture &&
-        bound.snapshotId !== undefined &&
-        string(state.snapshot_id) === bound.snapshotId &&
-        !invalidated.includes(bound.snapshotId)
-          ? bound.observationId
-          : undefined;
-      const nextBounds = followedSheet
-        ? (boundsOf(state.window_bounds) ??
-          bound.boundWindows?.find((w) => w.window_id === expectedWindowId)?.bounds)
-        : bound.windowBounds;
-      const fallbackTitle = bound.boundWindows?.find(
-        (w) => w.window_id === expectedWindowId,
-      )?.title;
-      if (kept === undefined) {
-        observations.evictTarget(bound.ref.id);
-        delete bound.observationId;
-        delete bound.snapshotId;
-        bound.rows = shown;
-        bound.frames = elementFrames(elements);
-        bound.elementsByToken = inspectTreeElements(elements, rows);
-        const basis = treeWindowBasis(bound.frames, nextBounds);
-        if (basis === undefined) delete bound.framesBasis;
-        else bound.framesBasis = basis;
-      }
-      const nextEpoch = followedSheet ? epoch + 1 : bound.epoch;
-      const nextRef = followedSheet ? { ...bound.ref, generation: nextEpoch } : bound.ref;
-      const scope = observeScope(
-        followedSheet,
-        fromSheetId,
-        expectedWindowId,
-        query !== undefined,
-        interactive,
-      );
-      const render = Effect.try({
-        try: () =>
-          observations.renderObservation({
-            draft: observations.normalizeAppTree(
-              buildObservedDraft({
-                targetRef: nextRef,
-                generation: nextEpoch,
-                state,
-                filtered,
-                limit,
-                shown,
-                shownText,
-                omitted,
-                nextBounds,
-                fallbackTitle,
-              }),
-            ),
-            mode: query ? "query" : "full",
-            ...(scope === undefined ? {} : { scope }),
-            ...(!capture && args.mode === "diff" ? { resetReason: "desktop_reads_full" } : {}),
-            limits: { treeBytes: observationReplyBudget(call, context.limits) },
-          }),
-        catch: renderFailure,
-      });
-      if (!capture) {
-        const observation = yield* render;
-        delete bound.needsSettleBeforeCapture;
-        if (followedSheet && parentId !== undefined) {
-          Object.assign(bound, {
-            windowId: parentId,
-            epoch: (epoch = nextEpoch),
-            ref: nextRef,
-            pointsStale: "restart" as const,
-          });
-          if (nextBounds === undefined) delete bound.windowBounds;
-          else bound.windowBounds = nextBounds;
-          bound.screenshots?.clear();
-          delete bound.latestScreenshot;
-        }
-        bound.observationId = observation.observationId;
-        const snapshotId = string(state.snapshot_id);
-        if (snapshotId !== undefined) bound.snapshotId = snapshotId;
-        // A read its budget cut keeps the rest for observe({after}) until the next read.
-        if (observation.elements.length < shown.length)
-          bound.pages = {
-            base: observation.observationId,
-            rows: shown,
-            text: shownText,
-            given: new Set(observation.elements.map((element) => element.index)),
-            ids: new Set(),
-          };
-        else delete bound.pages;
-        return { value: observation, category: "unverifiable" };
-      }
-      let observationId = kept;
-      if (observationId === undefined) {
-        observationId = (yield* render).observationId;
-        bound.observationId = observationId;
-      }
-      const imagePart = reply.image;
-      const width = integer(state.screenshot_width);
-      const height = integer(state.screenshot_height);
-      const bounds = object(state.window_bounds);
-      const shotBounds = boundsOf(bounds);
-      if (shotBounds !== undefined) bound.windowBounds = shotBounds;
-      // Once shown wrong, the basis stays dropped until the next tree read, even if it matches again.
-      if (shotBounds && bound.framesBasis && !sameRect(bound.framesBasis, shotBounds))
-        delete bound.framesBasis;
-      const captured = buildScreenshotCapture({
-        callId: call.callId,
-        targetId: bound.ref.id,
-        observationId,
-        state,
-        imagePart,
-        width,
-        height,
-      });
-      if (!captured) return yield* Effect.fail(fail("downstream_failure"));
-      const { metadata, image, shotBasis } = captured;
-      observations.index.putRegion(bound.ref.id, observationId, metadata.regionId, {
-        ...metadata.region,
-        pixelWidth: metadata.pixelWidth,
-        pixelHeight: metadata.pixelHeight,
-        scale: metadata.scale,
-      });
-      bound.screenshots ??= new Map();
-      bound.screenshots.set(metadata.regionId, shotBasis);
-      bound.latestScreenshot = shotBasis;
-      delete bound.pointsStale;
-      return { value: metadata, image, imageMetadata: metadata, category: "unverifiable" };
+      return yield* runDesktopObserve(observeDeps, bound, call, context, callArgs(call.args));
     },
   );
   const invoke = Effect.fn("DesktopTargetHost.invoke")(function* (

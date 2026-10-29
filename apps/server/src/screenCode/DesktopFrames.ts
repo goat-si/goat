@@ -34,6 +34,10 @@ export type Rect = {
 };
 /** A framed element and, when the tree indexed it, the window it sits in. */
 export type Placed = { readonly frame: Rect; readonly window?: Rect };
+/** Where a parent chain ends and after how many parent steps; Infinity for a cycle. */
+type Chain = { readonly steps: number; readonly root: Record<string, unknown> | undefined };
+/** A root more than this many parent steps above an element is not looked for. */
+const MAX_PARENT_STEPS = 64;
 /**
  * Each framed element by driver token, with its window when the tree has one. Frames share the
  * driver's screen space; the fraction is taken at action time (aimOf), against the window's
@@ -45,14 +49,50 @@ export const elementFrames = (entries: readonly Record<string, unknown>[]) => {
     const index = natural(entry.element_index);
     if (index !== undefined) byIndex.set(index, entry);
   }
+  // Each index's chain is walked once and shared by every element below it.
+  const chains = new Map<number, Chain>();
+  const chainOf = (start: number): Chain => {
+    const path: number[] = [];
+    const onPath = new Set<number>();
+    let next = start;
+    let tail: Chain;
+    for (;;) {
+      const known = chains.get(next);
+      if (known !== undefined) {
+        tail = known;
+        break;
+      }
+      if (onPath.has(next)) {
+        tail = { steps: Infinity, root: undefined };
+        break;
+      }
+      const node = byIndex.get(next);
+      const parent = node === undefined ? undefined : natural(node.parent_index);
+      if (parent === undefined) {
+        tail = { steps: 0, root: node };
+        chains.set(next, tail);
+        break;
+      }
+      path.push(next);
+      onPath.add(next);
+      next = parent;
+    }
+    for (let at = path.length - 1; at >= 0; at--) {
+      tail = { steps: tail.steps + 1, root: tail.root };
+      chains.set(path[at] ?? -1, tail);
+    }
+    return tail;
+  };
   const placed = new Map<string, Placed>();
   for (const entry of entries) {
     const token = string(entry.element_token);
     const frame = frameOf(entry);
     if (!token || !frame) continue;
-    let root: Record<string, unknown> | undefined = entry;
-    for (let hops = 0; root && natural(root.parent_index) !== undefined; hops++)
-      root = hops < 64 ? byIndex.get(natural(root.parent_index) ?? -1) : undefined;
+    // The element itself is the first step; its parent is looked up by index like every other.
+    const parent = natural(entry.parent_index);
+    const chain = parent === undefined ? undefined : chainOf(parent);
+    const root =
+      chain === undefined ? entry : chain.steps < MAX_PARENT_STEPS ? chain.root : undefined;
     const role = string(root?.role)?.toLowerCase() ?? "";
     const window = WINDOW_ROLES.has(role) ? frameOf(root) : undefined;
     placed.set(token, window ? { frame, window } : { frame });

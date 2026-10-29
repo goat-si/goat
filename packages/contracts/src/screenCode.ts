@@ -220,6 +220,15 @@ const base64 = Schema.String.check(
 export const ScreenImage = Schema.Struct({ ...imageFields, bytes: base64 });
 export type ScreenImage = typeof ScreenImage.Type;
 
+/** Host time of one read by step: driver calls, tree parsing, rendering, and the rest of the host. */
+export const ScreenReadPhases = Schema.Struct({
+  driverMs: natural,
+  parseMs: natural,
+  renderMs: natural,
+  bridgeMs: natural,
+});
+export type ScreenReadPhases = typeof ScreenReadPhases.Type;
+
 export const ScreenObservation = Schema.Struct({
   observationId: id,
   targetRef: ScreenTargetRef,
@@ -277,6 +286,9 @@ export const ScreenObservation = Schema.Struct({
     ).check(Schema.isMaxLength(16)),
   ),
   incompleteSearch: Schema.optionalKey(Schema.Boolean),
+  /** Host time of this read in total and by step; left out when it would not fit the reply. */
+  ms: Schema.optionalKey(natural),
+  phases: Schema.optionalKey(ScreenReadPhases),
 }).check(Schema.makeFilter((value) => jsonBytes(value) <= 128 * 1024));
 export type ScreenObservation = typeof ScreenObservation.Type;
 

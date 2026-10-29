@@ -55,8 +55,8 @@ const PASSIVE: ReadonlySet<string> = new Set([
   "AXRaise",
 ]);
 
-const parse = (markdown: string): ReadonlyArray<Line | undefined> =>
-  markdown.split("\n").map((line) => {
+const parseLines = (raw: ReadonlyArray<string>): ReadonlyArray<Line | undefined> =>
+  raw.map((line) => {
     const parsed = LINE.exec(line);
     return parsed
       ? {
@@ -81,7 +81,8 @@ const walk = (
   lines.forEach((line, position) => {
     if (!line) return;
     while (open.length > 0 && (open.at(-1)?.depth ?? 0) >= line.depth) open.pop();
-    const owner = [...open].reverse().find((ancestor) => ancestor.index !== undefined)?.index;
+    let owner: number | undefined;
+    for (let at = open.length - 1; at >= 0 && owner === undefined; at--) owner = open[at]?.index;
     visit(line, owner, open, position);
     open.push(line);
   });
@@ -118,7 +119,8 @@ export const desktopCutOrder = (
 ): DesktopCut => {
   const body = new Set<number>();
   const children = new Map<number, number[]>();
-  walk(parse(markdown), (line, owner, ancestors) => {
+  const byIndex = new Map(elements.map((element) => [element.index, element]));
+  walk(parseLines(markdown.split("\n")), (line, owner, ancestors) => {
     if (line.index === undefined) return;
     const table = ancestors.findIndex((ancestor) => TABLES.has(ancestor.role));
     const inside = table < 0 ? [] : ancestors.slice(table + 1);
@@ -128,58 +130,59 @@ export const desktopCutOrder = (
       inside.some((ancestor) => HEADERS.has(ancestor.role)) ||
       (line.role === "AXButton" && !inside.some((ancestor) => ROWS.has(ancestor.role)));
     if (table >= 0 && !header) body.add(line.index);
-    if (owner !== undefined) children.set(owner, [...(children.get(owner) ?? []), line.index]);
+    // Only listed elements count as children, so a list holds no index the read left out.
+    if (owner === undefined || !byIndex.has(line.index)) return;
+    const kids = children.get(owner);
+    if (kids === undefined) children.set(owner, [line.index]);
+    else kids.push(line.index);
   });
-  const byIndex = new Map(elements.map((element) => [element.index, element]));
   const acts = (element: Placed | undefined) =>
     (element?.actions ?? []).some((action) => !PASSIVE.has(action));
   const order: number[] = [];
   const taken = new Set<number>();
-  const take = (indexes: Iterable<number>) => {
-    for (const index of indexes)
-      if (byIndex.has(index) && !taken.has(index)) {
-        taken.add(index);
-        order.push(index);
-      }
+  const take = (index: number) => {
+    if (byIndex.has(index) && !taken.has(index)) {
+      taken.add(index);
+      order.push(index);
+    }
   };
-  const kids = (index: number) => (children.get(index) ?? []).filter((child) => byIndex.has(child));
-  take(
-    elements
-      .filter(
-        (element) =>
-          CONTAINERS.has(element.role) &&
-          element.name === "" &&
-          !acts(element) &&
-          kids(element.index).length > 0,
-      )
-      .map((element) => element.index),
-  );
-  take(
-    elements
-      .filter((element) => {
-        if (!ROWS.has(element.role)) return false;
-        const rowKids = kids(element.index);
-        const firstKid = rowKids.length === 1 ? rowKids[0] : undefined;
-        if (firstKid === undefined) return false;
-        const cell = byIndex.get(firstKid);
-        return cell !== undefined && cell.name !== "" && cell.name === element.name && acts(cell);
-      })
-      .map((element) => element.index),
-  );
+  const kids = (index: number): ReadonlyArray<number> => children.get(index) ?? [];
+  for (const element of elements)
+    if (
+      CONTAINERS.has(element.role) &&
+      element.name === "" &&
+      !acts(element) &&
+      kids(element.index).length > 0
+    )
+      take(element.index);
+  for (const element of elements) {
+    if (!ROWS.has(element.role)) continue;
+    const rowKids = kids(element.index);
+    const firstKid = rowKids.length === 1 ? rowKids[0] : undefined;
+    if (firstKid === undefined) continue;
+    const cell = byIndex.get(firstKid);
+    if (cell !== undefined && cell.name !== "" && cell.name === element.name && acts(cell))
+      take(element.index);
+  }
   const compactRows = new Set<number>();
   for (const element of elements)
     if (ROWS.has(element.role) && body.has(element.index) && !taken.has(element.index)) {
       const cells = kids(element.index);
       if (cells.length === 0) continue;
       compactRows.add(element.index);
-      take(cells);
+      for (const cell of cells) take(cell);
     }
-  const last = [...elements].reverse();
-  const indexes = (list: ReadonlyArray<Placed>) => list.map((element) => element.index);
-  take(indexes(last.filter((element) => body.has(element.index) && outside(element, viewport))));
-  take(indexes(last.filter((element) => body.has(element.index))));
-  take(indexes(last.filter((element) => outside(element, viewport))));
-  take(indexes(last));
+  // From the end: table body outside the window, the rest of it, chrome outside it, then all.
+  const fromEnd = (keep: (element: Placed) => boolean) => {
+    for (let at = elements.length - 1; at >= 0; at--) {
+      const element = elements[at];
+      if (element !== undefined && keep(element)) take(element.index);
+    }
+  };
+  fromEnd((element) => body.has(element.index) && outside(element, viewport));
+  fromEnd((element) => body.has(element.index));
+  fromEnd((element) => outside(element, viewport));
+  fromEnd(() => true);
   return { order, compactRows };
 };
 
@@ -195,9 +198,10 @@ export const cutTreeText = (
   wordsOf: (index: number) => string,
 ): string => {
   const raw = markdown.split("\n");
-  const keep = raw.map(() => true);
+  const lines = parseLines(raw);
+  const keep = new Array<boolean>(raw.length).fill(true);
   const rowWords = new Map<number, string[]>();
-  walk(parse(markdown), (line, owner, _ancestors, position) => {
+  walk(lines, (line, owner, _ancestors, position) => {
     if (line.index === undefined) {
       keep[position] = owner === undefined || !dropped.has(owner);
       return;
@@ -206,10 +210,12 @@ export const cutTreeText = (
     keep[position] = false;
     if (owner !== undefined && compactRows.has(owner) && !dropped.has(owner)) {
       const words = wordsOf(line.index).trim();
-      if (words) rowWords.set(owner, [...(rowWords.get(owner) ?? []), words]);
+      if (!words) return;
+      const list = rowWords.get(owner);
+      if (list === undefined) rowWords.set(owner, [words]);
+      else list.push(words);
     }
   });
-  const lines = parse(markdown);
   return raw
     .flatMap((text, position) => {
       if (!keep[position]) return [];
