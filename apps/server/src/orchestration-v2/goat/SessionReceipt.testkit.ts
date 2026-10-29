@@ -31,10 +31,10 @@ import {
 
 export const threadId = ThreadId.make("goat-bot-session:receipt:1");
 export const runId = RunId.make("receipt-run");
-export const attemptId = RunAttemptId.make("receipt-attempt");
+const attemptId = RunAttemptId.make("receipt-attempt");
 export const providerInstanceId = ProviderInstanceId.make("codex");
 export const providerSessionId = ProviderSessionId.make("receipt-provider");
-export const layerIngestor = ProviderEventIngestor.layer.pipe(
+const layerIngestor = ProviderEventIngestor.layer.pipe(
   Layer.provideMerge(Foundation.layerTest),
   Layer.provide(
     Layer.mergeAll(Layer.mock(GitVcsDriver.GitVcsDriver)({}), ThreadCommandExecutor.layer),
