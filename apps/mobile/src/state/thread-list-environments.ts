@@ -6,6 +6,7 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
+import * as Equal from "effect/Equal";
 
 export type ThreadListProvider = Pick<
   ServerProvider,
@@ -36,6 +37,7 @@ function selectEnvironment(config: ServerConfig) {
     ),
     machineKind: resolveEnvironmentMachineKind(config),
     capabilities: config.environment.capabilities,
+    snoozePresets: config.settings.snoozePresets,
   };
 }
 
@@ -71,8 +73,10 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
   const pinReorderEnvironmentIds = new Set<EnvironmentId>();
   const activeReorderEnvironmentIds = new Set<EnvironmentId>();
   const titleRegenerationEnvironmentIds = new Set<EnvironmentId>();
-  for (const [id, { providers, machineKind, capabilities }] of environments) {
+  const snoozePresetsByEnvironmentId = new Map<EnvironmentId, ListEnvironment["snoozePresets"]>();
+  for (const [id, { providers, machineKind, capabilities, snoozePresets }] of environments) {
     providersByEnvironmentId.set(id, providers);
+    snoozePresetsByEnvironmentId.set(id, snoozePresets);
     machineByEnvironmentId.set(id, machineKind);
     if (capabilities.threadSettlement === true) settlementEnvironmentIds.add(id);
     if (capabilities.threadSnooze === true) snoozeEnvironmentIds.add(id);
@@ -92,6 +96,7 @@ function collectEnvironments(environments: ReadonlyMap<EnvironmentId, ListEnviro
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
+    snoozePresetsByEnvironmentId,
   };
 }
 
@@ -110,10 +115,14 @@ export function createThreadListEnvironmentsAtom(
       if (prior && sameProviders(prior.providers, selected.providers)) {
         selected.providers = prior.providers;
       }
+      if (prior && Equal.equals(prior.snoozePresets, selected.snoozePresets)) {
+        selected.snoozePresets = prior.snoozePresets;
+      }
       const unchanged =
         prior &&
         prior.providers === selected.providers &&
         prior.machineKind === selected.machineKind &&
+        prior.snoozePresets === selected.snoozePresets &&
         capabilityKeys.every(
           (key) => (prior.capabilities[key] === true) === (selected.capabilities[key] === true),
         );

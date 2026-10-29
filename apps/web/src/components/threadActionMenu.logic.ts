@@ -175,7 +175,11 @@ export function buildThreadActionMenuItems(
                     id: `snooze:${preset.id}` as const,
                     label: `${preset.label} (${preset.whenLabel})`,
                   })),
-                  { id: "snooze:custom" as const, label: "Custom…", separatorBefore: true },
+                  {
+                    id: "snooze:custom" as const,
+                    label: "Custom…",
+                    separatorBefore: state.snoozePresets.length > 0,
+                  },
                 ],
               },
         ]
