@@ -23,6 +23,31 @@ const DRIVER_UNANSWERED: Interruption = {
     "The driver did not answer a call within its deadline, so GOAT started it again. Observe again before acting.",
 };
 
+const record = (args: unknown): Readonly<Record<string, unknown>> =>
+  typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+
+/** Maximum legitimate execution bound of an earlier call on the driver before it is judged wedged. */
+const headExecutionBoundMs = (tool: string, args: unknown): number => {
+  const given = record(args);
+  if (tool === "get_window_state") {
+    const base = given.include_screenshot === false ? 4_000 : 7_000;
+    if (given.include_accessibility_tree === false) return base;
+    const walk =
+      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
+        ? Math.min(120_000, Math.max(100, given.timeout_ms))
+        : 1_000;
+    return Math.max(base, walk * 2 + 5_000);
+  }
+  if (tool === "verify_state") {
+    const wait =
+      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
+        ? Math.min(10_000, Math.max(0, given.timeout_ms))
+        : 5_000;
+    return wait + 7_000 + (given.include_screenshot === true ? 7_000 : 0);
+  }
+  return driverCallCapMs(tool, args);
+};
+
 const replyKey = (line: string): string | undefined => {
   try {
     const parsed = JSON.parse(line) as { id?: unknown; method?: unknown };
@@ -210,12 +235,19 @@ export const makeUnansweredWatch = <E>(
               return;
             const head = currentHead(call.connectionId, now);
             if (!head || head.call === target) break;
-            const headDeadline = head.since + driverCallCapMs(head.call.tool ?? "", head.call.args);
+            const headDeadline =
+              head.since + headExecutionBoundMs(head.call.tool ?? "", head.call.args);
             if (now < headDeadline) {
               const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
               if (Option.isSome(step)) continue;
             }
             const afterCap = yield* Clock.currentTimeMillis;
+            if (
+              proxy.outstanding.get(key) !== target ||
+              replied.has(target) ||
+              proxy.lifecycle.current?.connectionId !== call.connectionId
+            )
+              return;
             if (currentHead(call.connectionId, afterCap)?.call !== head.call) continue;
             watchedHeadKey = head.key;
             overdue.set(head.key, call.connectionId);
@@ -223,11 +255,29 @@ export const makeUnansweredWatch = <E>(
             for (;;) {
               const graceWoken = Deferred.await(settled);
               const t = yield* Clock.currentTimeMillis;
+              if (
+                proxy.outstanding.get(key) !== target ||
+                replied.has(target) ||
+                proxy.lifecycle.current?.connectionId !== call.connectionId
+              ) {
+                settle(head.key);
+                watchedHeadKey = undefined;
+                return;
+              }
               if (currentHead(call.connectionId, t)?.call !== head.call || t >= graceEnd) break;
               const step = yield* graceWoken.pipe(Effect.timeoutOption(graceEnd - t));
               if (Option.isNone(step)) break;
             }
             const afterGrace = yield* Clock.currentTimeMillis;
+            if (
+              proxy.outstanding.get(key) !== target ||
+              replied.has(target) ||
+              proxy.lifecycle.current?.connectionId !== call.connectionId
+            ) {
+              settle(head.key);
+              watchedHeadKey = undefined;
+              return;
+            }
             if (currentHead(call.connectionId, afterGrace)?.call === head.call) {
               yield* replace(head.key, head.call);
             }

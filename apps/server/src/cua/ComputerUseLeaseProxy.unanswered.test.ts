@@ -379,6 +379,52 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         );
         assert.equal((yield* h.primitiveReply).status, "settled");
 
+        // Omitted timeout_ms on verify_state gets the 5 s default + 7 s sample bound (12 s), so an 8 s verify_state is not cut off at 3 s;
+        // and if a queued primitive answers during the head call's grace window (because the driver processes MCP calls concurrently),
+        // the primitive's watchdog stops immediately without replacing the still-running provider call.
+        yield* h.send(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: "prov:verifyDefault",
+            method: "tools/call",
+            params: {
+              name: "verify_state",
+              arguments: { pid: 42, window_id: 1, expect: [{ window: { exists: true } }] },
+            },
+          }),
+        );
+        const verifyDefault = yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          state: "primitive-request",
+          requestId: "req:auxConcurrent",
+          registrationId: "registration:one",
+          controlId: CONTROL,
+          connectionGeneration: current.connectionId,
+          runId: "run:one",
+          turnId: "cell:one",
+          callId: 12,
+          deadlineMillis: 32_000,
+          tool: "list_windows",
+          args: { pid: 42 },
+        });
+        const auxConcurrent = yield* h.nextToDriver;
+        // At +12.2 s (200 ms into verifyDefault's 1 s grace after its 12 s bound), auxConcurrent answers first!
+        yield* TestClock.adjust("12200 millis");
+        assert.isFalse(yield* h.isKilled);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: auxConcurrent.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.primitiveReply).status, "settled");
+        // Advance past the rest of verifyDefault's grace (another 1 s): because auxConcurrent already answered, its watchdog
+        // exited and does NOT replace the child while verifyDefault finishes.
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* h.isKilled);
+        assert.equal(h.drivers.length, 1);
+        yield* h.reply(
+          JSON.stringify({ jsonrpc: "2.0", id: verifyDefault.id, result: { content: [] } }),
+        );
+        assert.equal((yield* h.nextToProvider).id, "prov:verifyDefault");
+
         // (a2) A 90 s provider run_script (timeout_ms: 120_000, cap 121.5 s) followed by a 1.5 s auxiliary read is not cut off at 61 s;
         // an unrelated reply during grace does not end grace early; and a head reply while replacement waits for the lifecycle lock
         // keeps the child and gives the queued read its own 1.5 s budget.
@@ -401,7 +447,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 1,
-          deadlineMillis: 82_000,
+          deadlineMillis: 95_200,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -471,7 +517,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 2,
-          deadlineMillis: 155_600,
+          deadlineMillis: 168_800,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -506,7 +552,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 3,
-          deadlineMillis: 171_200,
+          deadlineMillis: 184_400,
           tool: "list_windows",
           args: { pid: 42 },
         });
