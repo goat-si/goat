@@ -19,24 +19,50 @@ const windowId = (value: unknown): value is number =>
 
 export type WindowClosure = "closed" | "present" | "unproven";
 
-export const windowClosure = (value: unknown, pid: number, target: number): WindowClosure => {
+/**
+ * Every window id WindowServer gave a pid at snapshot time, when the reply is a complete
+ * enumeration whose listing agrees with its ids; otherwise nothing, since a missing id proves nothing.
+ */
+export const authoritativeIds = (value: unknown, pid: number): ReadonlySet<number> | undefined => {
   const reply = record(value);
   const ids = reply?.authoritative_window_ids;
   if (reply?.enumeration_complete !== true || !Array.isArray(ids) || !ids.every(windowId))
-    return "unproven";
+    return undefined;
   // The listing and the id snapshot are read separately; an entry the listing cannot be read
   // from could be the window, and a listed window the ids omit is a contradiction.
   const listed = reply.windows;
-  if (!Array.isArray(listed)) return "unproven";
-  let shown = false;
+  if (!Array.isArray(listed)) return undefined;
   for (const item of listed) {
     const entry = record(item);
-    if (!entry || !windowId(entry.window_id)) return "unproven";
-    if (entry.pid !== undefined && !Number.isSafeInteger(entry.pid)) return "unproven";
-    if (entry.window_id === target && (entry.pid ?? pid) === pid) shown = true;
+    if (!entry || !windowId(entry.window_id)) return undefined;
+    if (entry.pid !== undefined && !Number.isSafeInteger(entry.pid)) return undefined;
+    if ((entry.pid ?? pid) === pid && !ids.includes(entry.window_id)) return undefined;
   }
-  if (ids.includes(target)) return "present";
-  return shown ? "unproven" : "closed";
+  return new Set(ids);
+};
+
+export const windowClosure = (value: unknown, pid: number, target: number): WindowClosure => {
+  const ids = authoritativeIds(value, pid);
+  return ids === undefined ? "unproven" : ids.has(target) ? "present" : "closed";
+};
+
+/**
+ * Windows that entered a pid's complete id snapshot between two listings. A menu or other
+ * non-zero layer a click can show, as the listing names it, is not a window it opened.
+ */
+export const openedWindowIds = (before: unknown, after: unknown, pid: number): number[] => {
+  const pre = authoritativeIds(before, pid);
+  const post = authoritativeIds(after, pid);
+  const listed = record(after)?.windows;
+  if (pre === undefined || post === undefined || !Array.isArray(listed)) return [];
+  const layered = new Set(
+    listed
+      .map(record)
+      .filter((entry) => entry !== undefined && (entry.pid ?? pid) === pid)
+      .filter((entry) => entry?.layer !== undefined && entry.layer !== 0)
+      .map((entry) => entry?.window_id),
+  );
+  return [...post].filter((id) => !pre.has(id) && !layered.has(id));
 };
 
 /**

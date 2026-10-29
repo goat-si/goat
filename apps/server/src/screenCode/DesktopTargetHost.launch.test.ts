@@ -111,7 +111,7 @@ it.live("a closed app launches and binds its first window in one screen.app call
   });
 });
 
-it.live("a running app with no window is reopened and its new window bound", () => {
+it.live("a running app with no window yet is not launched again", () => {
   const { host, sent } = fixture({
     list_apps: { apps: [running] },
     list_windows: { windows: [] },
@@ -120,11 +120,11 @@ it.live("a running app with no window is reopened and its new window bound", () 
   return Effect.gen(function* () {
     const result = yield* cell(
       host,
-      "const app = await screen.app({bundle_id: 'org.example.Editor'}); return {launched: app.launched, windowId: app.windowId};",
+      caught("await screen.app({bundle_id: 'org.example.Editor'});"),
     );
-    expect(result.value).toEqual({ launched: true, windowId: 7 });
-    expect(tools(sent)).toEqual(["list_apps", "list_windows", "launch_app"]);
-    expect(sent[2]?.args).toEqual({ bundle_id: "org.example.Editor" });
+    expect(result.value).toMatchObject({ code: "target_missing", nothingSent: true });
+    expect((result.value as { message: string }).message).toContain("pid 42");
+    expect(tools(sent)).toEqual(["list_apps", "list_windows"]);
   });
 });
 
@@ -584,6 +584,56 @@ it.live(
       }
       expect(SCREEN_TARGET_API).toContain("app(q: string | {");
       expect(SCREEN_TARGET_API).toContain("observed?: string[]");
+    });
+  },
+);
+
+it.live(
+  "an app already running as two processes names each pid and window, and launches nothing",
+  () => {
+    const { host, sent } = fixture({
+      list_apps: { apps: [running, { ...running, pid: 43 }] },
+      list_windows: (args: unknown) => ({
+        windows:
+          (args as { pid?: number }).pid === 43
+            ? [{ ...document, pid: 43, window_id: 8, is_on_screen: false }]
+            : [document],
+      }),
+    });
+    return Effect.gen(function* () {
+      const result = yield* cell(
+        host,
+        caught("await screen.app({bundle_id: 'org.example.Editor'});"),
+      );
+      expect(result.value).toMatchObject({ code: "target_ambiguous", nothingSent: true });
+      const message = (result.value as { message: string }).message;
+      expect(message).toContain("pid 42 window_id 7");
+      expect(message).toContain("pid 43 window_id 8 (off screen)");
+      expect(tools(sent)).not.toContain("launch_app");
+    });
+  },
+);
+
+it.live(
+  "once an app runs, the next screen.app binds its process and never launches it again",
+  () => {
+    let started = false;
+    const { host, sent } = fixture({
+      list_apps: () => ({ apps: [started ? running : installed] }),
+      list_windows: () => ({ windows: started ? [document] : [] }),
+      launch_app: () => {
+        started = true;
+        return launched([document]);
+      },
+    });
+    const source =
+      "const app = await screen.app({bundle_id: 'org.example.Editor'}); return {launched: app.launched, windowId: app.windowId};";
+    return Effect.gen(function* () {
+      const first = yield* cell(host, source);
+      const second = yield* cell(host, source);
+      expect(first.value).toEqual({ launched: true, windowId: 7 });
+      expect(second.value).toEqual({ launched: false, windowId: 7 });
+      expect(tools(sent).filter((tool) => tool === "launch_app")).toHaveLength(1);
     });
   },
 );

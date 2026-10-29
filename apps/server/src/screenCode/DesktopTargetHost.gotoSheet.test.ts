@@ -87,6 +87,8 @@ const finder = (
     opened?: () => unknown[];
     /** Window lists read after the key, before Go to Folder shows in one. */
     lateLists?: number;
+    /** Lists carry a complete id snapshot, which names the sheet as soon as it exists. */
+    complete?: boolean;
   } = {},
 ) => {
   const state = { open: false, readFails: false, navigated: false, pendingLists: -1 };
@@ -95,13 +97,20 @@ const finder = (
     list_windows: () => {
       if (state.pendingLists === 0) state.open = true;
       if (state.pendingLists >= 0) state.pendingLists--;
-      return {
-        windows: [
-          win(72907, { title: title() }),
-          win(72908, { title: "Downloads" }),
-          ...(state.open ? (options.opened?.() ?? [win(82779, GOTO_WINDOW)]) : []),
-        ],
-      };
+      const windows = [
+        win(72907, { title: title() }),
+        win(72908, { title: "Downloads" }),
+        ...(state.open ? (options.opened?.() ?? [win(82779, GOTO_WINDOW)]) : []),
+      ];
+      return options.complete === true
+        ? {
+            windows,
+            enumeration_complete: true,
+            authoritative_window_ids: windows.map(
+              (each) => (each as { window_id: number }).window_id,
+            ),
+          }
+        : { windows };
     },
     get_window_state: (args: Record<string, unknown>) => {
       if (args.window_id !== 82779) return finderTree(Number(args.window_id), title());
@@ -220,17 +229,19 @@ it.live(
       const cases = [
         { press: "app.press('cmd+shift+g')", late: () => finder({ lateLists: 1 }) },
         { press: "app.pressKey({ key: 'cmd+shift+g' })", late: () => finder({ lateLists: 1 }) },
-        // Listed off screen in the first read after the key, on screen in the next.
-        {
+        // Listed off screen in the first read after the key, on screen in the next, also when
+        // a complete id snapshot already names it in the first.
+        ...[false, true].map((complete) => ({
           press: "app.press('cmd+shift+g')",
           late: () => {
             let lists = 0;
             return finder({
               lateLists: 0,
+              complete,
               opened: () => [win(82779, { ...GOTO_WINDOW, is_on_screen: lists++ > 0 })],
             });
           },
-        },
+        })),
       ];
       for (const { press, late } of cases) {
         const { host } = late();

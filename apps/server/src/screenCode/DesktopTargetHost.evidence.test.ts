@@ -21,11 +21,16 @@ import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 10000 });
 
-const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
+// A close or open shortcut re-reads windows a few times, so its caller moves the clock past them.
+const invokeEv = (
+  host: ReturnType<typeof fixture>["host"],
+  c: ReturnType<typeof evCall>,
+  advance: "60 millis" | "1 second" = "60 millis",
+) =>
   Effect.gen(function* () {
     const fiber = yield* host.invoke(c, context).pipe(Effect.forkChild);
     yield* Effect.yieldNow;
-    yield* TestClock.adjust("60 millis");
+    yield* TestClock.adjust(advance);
     return yield* Fiber.join(fiber);
   });
 
@@ -100,6 +105,7 @@ it.effect(
       const closedWithWitness = yield* invokeEv(
         host,
         evCall("press_key", { key: "w", modifiers: ["command"] }, ref),
+        "1 second",
       );
       expect(closedWithWitness.category).toBe("unverifiable");
       expect(closedWithWitness.evidence).toContain("observed:window_not_listed");
@@ -146,6 +152,7 @@ it.effect(
       const uRes = yield* invokeEv(
         unverifiedHost,
         evCall("press_key", { key: "w", modifiers: ["command"] }, uBound.value as ScreenTargetRef),
+        "1 second",
       );
       expect(uRes.category).toBe("unverifiable");
       expect(uRes.evidence).toContain("observed:window_list_unverified");

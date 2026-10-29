@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/7";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/8";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -77,8 +77,8 @@ const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?
   openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1`;
 const SCREEN_APP = `  // app() without window_id: a running app with one window on screen binds it, never opening another; several
   // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass window_id explicitly instead of opening a new window.
-  // A closed app, or one running with no window at all, is launched in the background
-  // (reopened when running) and bound to its first window in the same call. It is looked for during 5 s, and a
+  // A closed app is launched in the background and bound to its first window in the same call; a running
+  // one is never launched again, so with no window yet it throws: call app() again once it shows one. It is looked for during 5 s, and a
   // last check started then may take 2 s more; no window then throws, with the app still running. Several
   // installed copies: a running one wins, else /Applications. A name shared by apps with different ids is ambiguous.
   // path: a launch_path list_apps lists (macOS) picks the copy to launch.

@@ -9,8 +9,10 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
+import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { driverError, driverValue } from "./DesktopDriverReplies.ts";
-import { windowClosure } from "./DesktopWindowClosure.ts";
+import { authoritativeIds, openedWindowIds, windowClosure } from "./DesktopWindowClosure.ts";
+import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import type { ScreenHostContext, ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import {
   type CellWindowTracker,
@@ -27,9 +29,32 @@ import type { BoundWindow } from "./DesktopTargetHost.ts";
 
 /** How long a window's main run loop gets to show an input's effect before it is read. */
 const SETTLE_MS = 60;
-// A sheet such as Go to Folder can appear after the key's post returns; its input re-reads windows.
+// A window an input opens or closes, such as Go to Folder or a quitting app, can change after the
+// input returns; those inputs re-read windows a few times.
 const OPENING_POLL_MS = 100;
 const OPENING_POLLS = 4;
+const COMPLETED_WRITE = classifyActionOutcome({
+  effect: "write",
+  status: "completed",
+  dispatched: true,
+});
+const INDETERMINATE_WRITE = classifyActionOutcome({
+  effect: "write",
+  status: "indeterminate",
+  dispatched: true,
+});
+
+/**
+ * A grouped click reads no windows, so one the driver says hit a close button cannot show the
+ * window closed: the driver's confirmed becomes unverifiable.
+ */
+export const withoutUnprovenClose = (
+  tool: string,
+  result: ScreenHostDispatchResult,
+): ScreenHostDispatchResult =>
+  result.category === "confirmed" && hitCloseButton(tool, result.value)
+    ? { ...result, category: "unverifiable", safety: INDETERMINATE_WRITE }
+    : result;
 
 /**
  * An input no longer waits for its effect to settle unless it reads the acted element back, so
@@ -243,13 +268,15 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     readonly opensWindow?: boolean;
   }) {
     const { call, context, pid, windowId, tracker, tool, forwarded, acted, runInput } = deps;
+    const intent = windowIntentOf(tool, forwarded, acted);
+    const opening = deps.opensWindow === true || intent === "open";
     const read = (method: string, args: Record<string, unknown>, reserveAfterMs: number) =>
       quietRead(deps.send, call, context, deps.connectionGeneration, method, args, reserveAfterMs);
     const inputCapMs = driverCallCapMs(tool, forwarded);
     const startedAt = yield* Clock.currentTimeMillis;
     // A simple key rarely opens or closes a window; the cell's end read still compares windows
     // against the cell's first baseline, so it reads one only when the cell has none yet.
-    if (deps.opensWindow !== true && isSimpleKey(tool, forwarded, acted)) {
+    if (!opening && intent === undefined && isSimpleKey(tool, forwarded, acted)) {
       const seeds = !tracker.hasPid(pid);
       if (seeds)
         tracker.recordBefore(
@@ -275,15 +302,23 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       expect: toVerifyExpectations(watched),
       timeout_ms: 0,
     };
-    const preWins = parseWindowList(
-      yield* read("list_windows", { pid }, inputCapMs + (watched.length > 0 ? 1500 : 0)),
-      pid,
+    const preRaw = yield* read(
+      "list_windows",
+      { pid },
+      inputCapMs + (watched.length > 0 ? 1500 : 0),
     );
+    const preWins = parseWindowList(preRaw, pid);
     tracker.recordBefore(pid, preWins);
     const preVerifyRaw =
       watched.length > 0 ? yield* read("verify_state", verifyArgs, inputCapMs) : undefined;
     const sentAt = yield* Clock.currentTimeMillis;
-    const base = yield* runInput;
+    const sent = yield* Effect.result(runInput);
+    // A close that errors after it went out may still have closed the window; the listing decides.
+    if (sent._tag === "Failure" && !(intent === "close" && sent.failure.effectStarted === true))
+      return yield* Effect.fail(sent.failure);
+    const base = sent._tag === "Success" ? sent.success : undefined;
+    // A click by point closes when the driver says it hit the close button.
+    const closing = intent === "close" || hitCloseButton(tool, base?.value);
     const drivenAt = yield* Clock.currentTimeMillis;
     // Only a read-back of the acted element waits here; otherwise the next read of the window does.
     const settles =
@@ -297,10 +332,26 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     let postRaw = yield* read("list_windows", { pid }, 0);
     let postWins = parseWindowList(postRaw, pid);
     const preIds = new Set(preWins?.map((w) => w.window_id));
-    for (let polls = 0; deps.opensWindow === true && polls < OPENING_POLLS; polls++) {
-      // A window listed off screen first is not yet one a sheet read can follow.
-      if (!preWins || !postWins || postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen))
-        break;
+    // A window listed off screen first is not yet one a sheet read can follow; a sheet that opens
+    // on a close (an unsaved document) ends the wait as well. A new window in an incomplete
+    // listing is read again while a complete one could still prove it.
+    const changed = () => {
+      if (!preWins) return true;
+      if (!postWins) return !closing;
+      const appeared = postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen);
+      if (closing) return appeared || windowClosure(postRaw, pid, windowId) === "closed";
+      // A sheet a later read follows must be on screen, whatever the id snapshot already shows.
+      if (deps.opensWindow === true) return appeared;
+      if (openedWindowIds(preRaw, postRaw, pid).length > 0) return true;
+      return (
+        appeared &&
+        (authoritativeIds(preRaw, pid) === undefined ||
+          authoritativeIds(postRaw, pid) !== undefined)
+      );
+    };
+    const rereads = opening || closing ? OPENING_POLLS : 0;
+    for (let polls = 0; polls < rereads; polls++) {
+      if (changed()) break;
       const now = yield* Clock.currentTimeMillis;
       if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
       yield* Effect.sleep(OPENING_POLL_MS);
@@ -317,6 +368,17 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       windowId,
       windowClosure(postRaw, pid, windowId),
     );
+    const opened = openedWindowIds(preRaw, postRaw, pid);
+    // A close is proven only by the bound window leaving the process's complete id snapshot: a
+    // sheet it opens (an unsaved document) leaves the window open. Any other input is proven by a
+    // window entering that snapshot; a closure it coincides with may have had another cause.
+    const closedByClose = closing && winDiff.report.bound === "closed";
+    if (sent._tag === "Failure" && !closedByClose) return yield* Effect.fail(sent.failure);
+    const proven = closing ? closedByClose : opened.length > 0;
+    const openedEvidence = opened
+      .slice(0, 4)
+      .map((id) => `observed:window_opened:${id}`)
+      .filter((line) => !winDiff.evidence.includes(line));
     const elDiff =
       preVerifyRaw !== undefined && postVerifyRaw !== undefined
         ? diffWatchedEvidence(
@@ -325,7 +387,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
             parseVerifyObservations(postVerifyRaw, watched.length),
           )
         : [];
-    const allObserved = [...elDiff, ...winDiff.evidence].slice(0, 16);
+    const allObserved = [...elDiff, ...winDiff.evidence, ...openedEvidence].slice(0, 16);
     const timing: InputTiming = {
       ms: endedAt - startedAt,
       phases: {
@@ -335,16 +397,21 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
         postMs: endedAt - settledAt,
       },
     };
+    const upgrade = proven && base?.category !== "confirmed" && base?.category !== "refused";
+    // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
+    const unproven = closing && !closedByClose && base?.category === "confirmed";
     return {
       ...base,
+      category: upgrade ? "confirmed" : unproven ? "unverifiable" : (base?.category ?? "confirmed"),
+      ...(upgrade ? { safety: COMPLETED_WRITE } : unproven ? { safety: INDETERMINATE_WRITE } : {}),
       value: fitInputWindows(
-        base.value,
+        base?.value,
         winDiff.report,
         context.limits.returnBytes,
         allObserved,
         timing,
       ),
-      evidence: [...(base.evidence ?? []), ...allObserved].slice(0, 16),
+      evidence: [...(base?.evidence ?? []), ...allObserved].slice(0, 16),
     };
   },
 );
