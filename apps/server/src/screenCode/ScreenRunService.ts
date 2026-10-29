@@ -548,81 +548,65 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const contextReset = running.consumeLost(input.threadId) && input.resetValues !== true;
       const startedAt = yield* Clock.currentTimeMillis;
       let failed: ScreenCellFailure | undefined;
-      const cellContext = {
-        runId: input.runId,
-        turnId: input.turnId,
-        cellId,
-        threadId: input.threadId,
-        environmentId: input.environmentId,
-        invocation: input.invocation,
-        limits: cellLimits,
-        ...(input.bindingHints ? { bindingHints: input.bindingHints } : {}),
-      };
-      const runCellCleanup =
-        options.dispatcher?.cleanupCell === undefined
-          ? Effect.succeed([] as ReadonlyArray<ScreenJournalEntry>)
-          : options.dispatcher.cleanupCell(cellContext).pipe(Effect.orElseSucceed(() => []));
       return yield* running
         .runCell(
           {
             runId: input.runId,
             turnId: input.turnId,
-            context: cellContext,
+            context: {
+              runId: input.runId,
+              turnId: input.turnId,
+              cellId,
+              threadId: input.threadId,
+              environmentId: input.environmentId,
+              invocation: input.invocation,
+              limits: cellLimits,
+              ...(input.bindingHints ? { bindingHints: input.bindingHints } : {}),
+            },
           },
           input.source,
           input.resetValues === true || contextReset,
         )
         .pipe(
-          Effect.catch((cause) =>
-            Effect.gen(function* () {
-              const cellCleanupNotices = yield* runCellCleanup;
-              const cleanupReceipts = cellCleanupNotices.map((entry) => entry.receipt);
-              const baseReceipts = cause.receipts ?? [];
-              const allReceipts =
-                cleanupReceipts.length > 0 ? [...baseReceipts, ...cleanupReceipts] : baseReceipts;
-              failed = {
-                code: cause.endedBy ?? cause.code,
-                receipts: [...(cause.journal ?? baseReceipts), ...cleanupReceipts],
-              };
-              return yield* Effect.fail({
-                ...fail(cause.code),
-                cellId,
-                ...cellErrorSafety({ effectStarted: cause.effectStarted === true }, allReceipts),
-                ...(cause.receipts === undefined && cleanupReceipts.length === 0
-                  ? {}
-                  : { receipts: allReceipts.slice(-16) }),
-                ...(cause.code === "wall_limit"
-                  ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
-                  : cause.code === "live_children_limit"
-                    ? { limit: { name: "activeChildren", maximum: cellLimits.activeChildren } }
-                    : cause.code === "output_limit"
-                      ? { limit: { name: "returnBytes", maximum: cellLimits.returnBytes } }
-                      : {}),
-              });
-            }),
-          ),
-          Effect.flatMap((result) =>
-            Effect.gen(function* () {
-              const cellCleanupNotices = yield* runCellCleanup;
-              const notices = [...(cleanupJournal.get(id) ?? []), ...cellCleanupNotices];
-              cleanupJournal.delete(id);
-              const journal = [
-                ...result.journal,
-                ...notices.map((entry, index) => ({
-                  ...entry,
-                  sequence: result.journal.length + index + 1,
-                })),
-              ].slice(-64);
-              const classified = cellResultSafety(result);
-              if (classified.error && isScreenRunErrorSchema(classified.error)) {
-                const receipts = journal.map((entry) => entry.receipt);
-                failed = { code: classified.error.code, receipts };
-                return yield* Effect.fail({
-                  ...classified.error,
-                  cellId,
-                  receipts: receipts.slice(-16),
-                });
-              }
+          Effect.mapError((cause) => {
+            failed = {
+              code: cause.endedBy ?? cause.code,
+              receipts: cause.journal ?? cause.receipts ?? [],
+            };
+            return {
+              ...fail(cause.code),
+              cellId,
+              ...cellErrorSafety(
+                { effectStarted: cause.effectStarted === true },
+                cause.receipts ?? [],
+              ),
+              ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
+              ...(cause.code === "wall_limit"
+                ? { limit: { name: "cellWallMs", maximum: cellLimits.cellWallMs } }
+                : cause.code === "live_children_limit"
+                  ? { limit: { name: "activeChildren", maximum: cellLimits.activeChildren } }
+                  : cause.code === "output_limit"
+                    ? { limit: { name: "returnBytes", maximum: cellLimits.returnBytes } }
+                    : {}),
+            };
+          }),
+          Effect.flatMap((result) => {
+            const notices = cleanupJournal.get(id) ?? [];
+            cleanupJournal.delete(id);
+            const journal = [
+              ...result.journal,
+              ...notices.map((entry, index) => ({
+                ...entry,
+                sequence: result.journal.length + index + 1,
+              })),
+            ].slice(-64);
+            const classified = cellResultSafety(result);
+            if (classified.error && isScreenRunErrorSchema(classified.error)) {
+              const receipts = journal.map((entry) => entry.receipt);
+              failed = { code: classified.error.code, receipts };
+              return Effect.fail({ ...classified.error, cellId, receipts: receipts.slice(-16) });
+            }
+            return Effect.sync(() => {
               const api = apiFor(input.invocation, result.availability, input.resetValues === true);
               return {
                 ...classified,
@@ -633,8 +617,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 ...(api === undefined ? {} : { api }),
                 contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
               };
-            }),
-          ),
+            });
+          }),
           // Before the provider sees the result, so its row can say what the cell did.
           Effect.onExit((exit) =>
             Effect.map(Clock.currentTimeMillis, (now) =>

@@ -512,35 +512,6 @@ const hasVisibleClickBounds = (
 
 const PASTE_REFUSAL =
   "Paste would insert the person's clipboard. Insert text with type(text, N); it restores the clipboard.";
-const MENU_BAR_EXTRA_DESTRUCTIVE_REFUSAL =
-  "This item changes the app or the system; ask the person.";
-const MENU_BAR_EXTRA_DESTRUCTIVE_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bquit\b/i,
-  /\blog\s*out\b/i,
-  /\bsign\s*out\b/i,
-  /\bdisconnect\b/i,
-  /\bturn\s*off\b/i,
-  /\brestart\b/i,
-  /\bshut\s*down\b/i,
-  /종료/,
-  /로그아웃/,
-  /연결\s*해제/,
-];
-
-const isDestructiveMenuBarExtraLabel = (raw: string | undefined): boolean => {
-  if (raw === undefined) return false;
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return false;
-  return MENU_BAR_EXTRA_DESTRUCTIVE_PATTERNS.some((pattern) => pattern.test(trimmed));
-};
-
-/** Early warning check for menu-bar status item clicks before dispatch. */
-const admitMenuBarExtraItem = (label: string | undefined): ScreenRunError | undefined => {
-  if (label !== undefined && isPasteLabel(label)) return fail("permission_denied", PASTE_REFUSAL);
-  if (isDestructiveMenuBarExtraLabel(label))
-    return fail("permission_denied", MENU_BAR_EXTRA_DESTRUCTIVE_REFUSAL);
-  return undefined;
-};
 
 /** Checks one desktop input call before dispatch and returns its refusal or table-cell click state. */
 export const admitDesktopInput = (input: {
@@ -576,12 +547,6 @@ export const admitDesktopInput = (input: {
         "Use setValue(target, text) to replace a field's whole value; type() inserts at the cursor.",
       ),
     };
-  if (method === "press_menu_item") {
-    const itemLabel =
-      typeof args.label === "string" ? args.label : (element?.name ?? element?.rawLabel);
-    const refused = admitMenuBarExtraItem(itemLabel);
-    if (refused !== undefined) return { refused };
-  }
   if (
     isPasteMenuItem(element) ||
     dragEndpoints?.some((end) => isPasteMenuItem(end.element)) === true

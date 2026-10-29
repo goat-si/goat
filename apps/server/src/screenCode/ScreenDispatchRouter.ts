@@ -32,9 +32,6 @@ export const createScreenDispatchRouter = (hosts: {
       (call.method === "list_apps" ||
       call.method === "list_windows" ||
       call.method === "list_menu_bar_extras" ||
-      call.method === "open_menu_bar_extra" ||
-      call.method === "press_menu_item" ||
-      call.method === "close_menu" ||
       call.method === "bind_app" ||
       call.method === "launch_app"
         ? "app"
@@ -47,5 +44,4 @@ export const createScreenDispatchRouter = (hosts: {
   },
   // Batch groups are desktop input only (ScreenBatchGroups).
   ...(hosts.app?.dispatchBatch === undefined ? {} : { dispatchBatch: hosts.app.dispatchBatch }),
-  ...(hosts.app?.cleanupCell === undefined ? {} : { cleanupCell: hosts.app.cleanupCell }),
 });

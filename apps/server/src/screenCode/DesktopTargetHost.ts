@@ -30,7 +30,6 @@ import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
-import { createDesktopMenuBarExtras } from "./DesktopMenuBarExtras.ts";
 import {
   admitDesktopInput,
   BATCH_FAILED_CATEGORIES,
@@ -397,11 +396,6 @@ export const createDesktopTargetHost = (deps: {
     request,
     leases: deps.leases,
     bind: bindWindow,
-  });
-  const menuBarExtras = createDesktopMenuBarExtras({
-    request,
-    leases: deps.leases,
-    nextEpoch: () => ++epoch,
   });
   /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
   const page = Effect.fn("DesktopTargetHost.page")(function* (
@@ -871,25 +865,21 @@ export const createDesktopTargetHost = (deps: {
     call.method === "tab_status" || call.method === "read_page"
       ? Effect.fail(fail("unsupported"))
       : call.method === "list_menu_bar_extras"
-        ? menuBarExtras.list(call, context)
-        : call.method === "open_menu_bar_extra"
-          ? menuBarExtras.open(call, context)
-          : call.method === "press_menu_item"
-            ? menuBarExtras.pressItem(call, context)
-            : call.method === "close_menu"
-              ? menuBarExtras.close(call, context)
-              : call.method === "bind_app"
-                ? bindApp(call, context)
-                : call.method === "list_apps" || call.method === "list_windows"
-                  ? discover(call, context)
-                  : [
-                        "get_window_state",
-                        "get_accessibility_tree",
-                        "verify_state",
-                        "screenshot",
-                      ].includes(call.method)
-                    ? observe(call, context)
-                    : invoke(call, context);
+        ? Effect.fail(
+            fail(
+              "unsupported",
+              "Menu bar extras are unavailable until the 030 §3.13 driver update is pinned; bind an app window with screen.app() or hand the status item to the person.",
+            ),
+          )
+        : call.method === "bind_app"
+          ? bindApp(call, context)
+          : call.method === "list_apps" || call.method === "list_windows"
+            ? discover(call, context)
+            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
+                  call.method,
+                )
+              ? observe(call, context)
+              : invoke(call, context);
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
@@ -922,21 +912,17 @@ export const createDesktopTargetHost = (deps: {
     observe,
     invoke,
     dispatchBatch,
-    cleanupCell: menuBarExtras.cleanupCell,
     invalidateTarget: (targetId) => {
       observations.evictTarget(targetId);
       targets.delete(targetId);
-      menuBarExtras.invalidateTarget(targetId);
     },
     matchesControl: (targetId, controlId, windowId) => {
-      if (windowId === undefined && menuBarExtras.matchesControl(targetId, controlId)) return true;
       const target = targets.get(targetId);
       return (
         target?.controlId === controlId && (windowId === undefined || target.windowId === windowId)
       );
     },
-    controlIdForTarget: (targetId) =>
-      targets.get(targetId)?.controlId ?? menuBarExtras.controlIdForTarget(targetId),
+    controlIdForTarget: (targetId) => targets.get(targetId)?.controlId,
     windowForTarget: (targetId) => {
       const target = targets.get(targetId);
       return target && { pid: target.pid, windowId: target.windowId };
@@ -948,7 +934,6 @@ export const createDesktopTargetHost = (deps: {
           observations.evictTarget(targetId);
           targets.delete(targetId);
         }
-      menuBarExtras.finishTurn(runId, turnId);
     },
     availability: Effect.fn("DesktopTargetHost.availability")(function* (context) {
       const current = Option.getOrUndefined(
