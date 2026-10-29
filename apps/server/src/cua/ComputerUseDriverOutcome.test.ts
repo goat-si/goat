@@ -2,7 +2,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { driverExitReason } from "./ComputerUseDriverExit.ts";
-import { captureStalled, driverOutcomeSafety, markUnverified } from "./ComputerUseDriverOutcome.ts";
+import {
+  captureStalled,
+  driverOutcomeSafety,
+  driverRefused,
+  markUnverified,
+} from "./ComputerUseDriverOutcome.ts";
 
 const reply = (structuredContent: unknown, isError = true) =>
   JSON.stringify({
@@ -377,5 +382,8 @@ describe("a reply already marked as possibly committed keeps that mark", () => {
     const fresh = parsed(markUnverified("select_text", reply({ code: "unknown_tool" }))).result
       .structuredContent.safety;
     assert.deepInclude(fresh, { possibleCommit: false });
+    // The app lease reads the same answer: such a write is not called unsent.
+    assert.isFalse(driverRefused("select_text", JSON.parse(line)));
+    assert.isTrue(driverRefused("select_text", JSON.parse(reply({ code: "unknown_tool" }))));
   });
 });

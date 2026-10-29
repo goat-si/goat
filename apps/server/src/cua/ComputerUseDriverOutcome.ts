@@ -94,7 +94,32 @@ const scriptSentNothing = (structured: Record<string, unknown>): boolean =>
       call.driver_calls.every((each: unknown) => isRecord(each) && readTool(each.tool)),
   );
 
+/** The safety a reply already carries, as GOAT marked it on an earlier pass. */
+const markedSafety = (message: unknown): unknown => {
+  const envelope = isRecord(message) ? message : {};
+  if (isRecord(envelope.error))
+    return isRecord(envelope.error.data) ? envelope.error.data.safety : undefined;
+  const result = isRecord(envelope.result) ? envelope.result : {};
+  return isRecord(result.structuredContent) ? result.structuredContent.safety : undefined;
+};
+
+/** A write's outcome safety; a reply already marked as possibly committed keeps that mark. */
 export function driverOutcomeSafety(
+  tool: string | undefined,
+  message: unknown,
+  args?: unknown,
+): ActionOutcomeSafety {
+  const safety = classifiedSafety(tool, message, args);
+  const marked = markedSafety(message);
+  return !safety.possibleCommit &&
+    !isReadOnlyCall(tool, args) &&
+    isRecord(marked) &&
+    marked.possibleCommit === true
+    ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
+    : safety;
+}
+
+function classifiedSafety(
   tool: string | undefined,
   message: unknown,
   args?: unknown,
@@ -192,19 +217,7 @@ export function markUnverified(tool: string | undefined, line: string, args?: un
   }
   if (!isRecord(message)) return line;
   const read = isReadOnlyCall(tool, args);
-  const computed = driverOutcomeSafety(tool, message, args);
-  const given = isRecord(message.error)
-    ? isRecord(message.error.data)
-      ? message.error.data.safety
-      : undefined
-    : isRecord(message.result) && isRecord(message.result.structuredContent)
-      ? message.result.structuredContent.safety
-      : undefined;
-  // A reply already marked as possibly committed keeps that mark.
-  const safety =
-    !read && !computed.possibleCommit && isRecord(given) && given.possibleCommit === true
-      ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
-      : computed;
+  const safety = driverOutcomeSafety(tool, message, args);
   if (isRecord(message.error)) {
     const raw = message.error.data;
     const data = raw === undefined ? {} : isRecord(raw) ? raw : { driverData: raw };
