@@ -90,6 +90,11 @@ Scan the QR code from the GOAT app on your phone, or paste the pairing URL into
 on web and desktop and **Settings → Environments** on mobile. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
 
+On a computer with the GOAT desktop app, you can open the `App link` that
+`goat pair` and `goat serve` print (a `goat://pair` link) instead. The desktop
+app asks you to confirm the server address, then adds it. `t3code://pair` links
+from older T3 Code versions work the same way.
+
 Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while
