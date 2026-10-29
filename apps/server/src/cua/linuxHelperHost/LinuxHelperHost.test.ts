@@ -25,6 +25,7 @@ const SESSION: DriverSession = {
 const hostWith = (
   windows: ReadonlyArray<{ pid: number; windowId: number; onScreen?: boolean }>,
   options: FakeHelperOptions = {},
+  verify?: Effect.Effect<string | undefined>,
 ) =>
   Effect.gen(function* () {
     const session = yield* Ref.make(Option.none<DriverSession>());
@@ -41,6 +42,7 @@ const hostWith = (
     const host = yield* makeLinuxHelperHost({
       session: Ref.get(session),
       check: { wanted: Ref.get(check).pipe(Effect.map(Option.isSome)), session: Ref.get(check) },
+      ...(verify === undefined ? {} : { verify }),
       spawn: (env) => {
         const helper = fakeHelper({
           ...options,
@@ -134,6 +136,34 @@ describe("LinuxHelperHost (#1223)", () => {
         yield* TestClock.adjust(TICK_MS);
         assert.isTrue(t.spawned[0]?.helper.stopped());
         assert.deepEqual(yield* t.host.readiness, Option.none());
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "never runs a packaged helper that fails its check, says why in readiness, and runs it once it passes (#1224)",
+    () =>
+      Effect.gen(function* () {
+        let refusal: string | undefined = "cua-driver/cua-driver does not match manifest.json.";
+        const t = yield* hostWith(
+          [],
+          {},
+          Effect.sync(() => refusal),
+        );
+        // Before the first turn, and with the driver running: nothing is spawned either time.
+        yield* Ref.set(t.check, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        yield* Ref.set(t.check, Option.none());
+        yield* Ref.set(t.session, Option.some(SESSION));
+        yield* TestClock.adjust(TICK_MS);
+        assert.lengthOf(t.spawned, 0);
+        const report = Option.getOrUndefined(yield* t.host.liveReadiness);
+        assert.deepEqual(report?.readiness.reasons, [refusal]);
+        assert.strictEqual(report?.readiness.helper, "unauthenticated");
+        assert.isTrue((yield* Queue.take(t.safety)).type === "cuaReadiness");
+        refusal = undefined;
+        yield* TestClock.adjust(60_000);
+        assert.lengthOf(t.spawned, 1);
+        assert.deepEqual(Option.getOrUndefined(yield* t.host.liveReadiness)?.readiness, READY);
       }).pipe(Effect.scoped),
   );
 

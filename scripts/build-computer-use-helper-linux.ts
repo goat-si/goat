@@ -3,9 +3,9 @@
 // @effect-diagnostics globalFetch:off -- One download in a one-shot script; the archive's sha256 is checked below.
 // Builds "goat-computer-use" for Linux, the helper GOAT spawns for computer use (WS10 #1138):
 // a bundled Node program, the pinned Cua Driver payload it runs as its child, a launcher and a
-// manifest of every file's hash. Local builds only; CI signing and release are a proposal.
+// manifest of every file's hash, signed with --signing-key (an Ed25519 PEM) for a release.
 //
-//   node scripts/build-computer-use-helper-linux.ts [--out <dir>] [--arch x64|arm64] [--driver-archive <file>]
+//   node scripts/build-computer-use-helper-linux.ts [--out <dir>] [--arch x64|arm64] [--driver-archive <file>] [--signing-key <file>]
 //
 // The launcher runs the bundle with GOAT_COMPUTER_USE_NODE, else node on PATH. Electron's
 // binary works as that Node only with ELECTRON_RUN_AS_NODE=1, which its launcher sets.
@@ -18,7 +18,10 @@ import * as NodeUtil from "node:util";
 import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 import { build } from "vite-plus/pack";
 
-import { writeLinuxHelperManifest } from "./lib/computer-use-helper-linux-manifest.ts";
+import {
+  signLinuxHelperManifest,
+  writeLinuxHelperManifest,
+} from "./lib/computer-use-helper-linux-manifest.ts";
 
 import serverPackage from "../apps/server/package.json" with { type: "json" };
 
@@ -32,6 +35,7 @@ const { values } = NodeUtil.parseArgs({
     // oxlint-disable-next-line goat/no-global-process-runtime -- A one-shot script with no Effect runtime.
     arch: { type: "string", default: process.arch },
     "driver-archive": { type: "string" },
+    "signing-key": { type: "string" },
   },
 });
 const out = NodePath.resolve(values.out);
@@ -100,4 +104,6 @@ await writeLinuxHelperManifest({
   helperVersion: serverPackage.version,
   release,
 });
+if (values["signing-key"])
+  await signLinuxHelperManifest(out, await NodeFSP.readFile(values["signing-key"], "utf8"));
 process.stdout.write("Built " + launcher + " with Cua Driver " + release.version + ".\n");

@@ -43,6 +43,7 @@ import * as ServerConfig from "../../config.ts";
 import * as CuaDriver from "../CuaDriver.ts";
 import { killDriverGroup, spawnDriverProcess } from "../driverProcess.ts";
 import { SESSION_NAMES } from "../linuxHelper/linuxSession.ts";
+import { makeHelperBundleCheck } from "./helperBundle.ts";
 import { type HelperClient, makeHelperClient } from "./helperClient.ts";
 import { LinuxHelperReport } from "./LinuxHelperReport.ts";
 
@@ -94,6 +95,11 @@ export interface HostDeps {
     readonly session: Effect.Effect<Option.Option<DriverSession>>;
   };
   readonly spawn: (env: Readonly<Record<string, string>>) => HelperProcess;
+  /**
+   * Checks a packaged helper before each spawn: undefined when it may run, else why
+   * not. A source checkout's helper has no bundle to check.
+   */
+  readonly verify?: Effect.Effect<string | undefined>;
   /** The server's own environment; only SESSION_NAMES reach the helper. */
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly report: Ref.Ref<Option.Option<DesktopCuaReadinessReport>>;
@@ -153,6 +159,23 @@ const unanswered = (
     blockers: previous?.readiness.blockers ?? [],
     reasons: [UNANSWERED_REASON],
     ...(previous?.readiness.platform ? { platform: previous.readiness.platform } : {}),
+  },
+  signals: { privateMode: "unsupported", humanInput: "unsupported" },
+});
+
+/** A helper that failed its check: nothing ran, so nothing is proven. */
+const refusedBundle = (reason: string, launch: number): DesktopCuaReadinessReport => ({
+  version: 1,
+  type: "cuaReadiness",
+  generation: launch,
+  readiness: {
+    grants: { accessibility: "unknown", screenCapture: "unknown" },
+    helper: "unauthenticated",
+    capture: "unavailable",
+    tree: "unavailable",
+    input: "unavailable",
+    blockers: [],
+    reasons: [reason],
   },
   signals: { privateMode: "unsupported", humanInput: "unsupported" },
 });
@@ -280,6 +303,17 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
     return env;
   };
 
+  /** A packaged helper that fails its check is never run; readiness says why instead. */
+  const refused = Effect.fnUntraced(function* (launch: number) {
+    const reason = deps.verify === undefined ? undefined : yield* deps.verify;
+    if (reason === undefined) return false;
+    const report = refusedBundle(reason, launch);
+    yield* Ref.set(deps.report, Option.some(report));
+    publish(report);
+    yield* Effect.logWarning("The Linux computer use helper failed its check", { launch, reason });
+    return true;
+  });
+
   /** When the last check before a turn may run again, and whether its report is the one shown. */
   let checked: { readonly next: number } | undefined;
   let reportFromCheck = false;
@@ -297,6 +331,11 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
    */
   const check = Effect.fnUntraced(function* (session: DriverSession, now: number) {
     const launch = ++launches;
+    if (yield* refused(launch)) {
+      checked = { next: now + CHECK_RETRY_MS };
+      reportFromCheck = true;
+      return;
+    }
     const process = deps.spawn(helperEnvironment(session));
     const client = makeHelperClient({
       write: process.write,
@@ -373,6 +412,7 @@ export const makeLinuxHelperHost = Effect.fn("LinuxHelperHost.make")(function* (
   });
   const start = Effect.fnUntraced(function* (session: DriverSession) {
     const launch = ++launches;
+    if (yield* refused(launch)) return undefined;
     const process = deps.spawn(helperEnvironment(session));
     const client = makeHelperClient({
       write: process.write,
@@ -591,14 +631,14 @@ const MAX_LINE = 4 * 1024 * 1024;
 const KILL_AFTER_MS = 5_000;
 
 /**
- * Where the helper is: a packaged bundle that GOAT_COMPUTER_USE_HELPER names, or its source
- * beside this server in development. Staging the bundle with a released server is #1224.
+ * Where the helper is: a packaged bundle's goat-computer-use.mjs that GOAT_COMPUTER_USE_HELPER
+ * names, checked before each spawn, or its source beside this server in development.
  */
 const helperEntry = (environment: Readonly<Record<string, string | undefined>>) => {
   const named = environment.GOAT_COMPUTER_USE_HELPER?.trim();
-  if (named) return named;
+  if (named) return { entry: named, packaged: true };
   const source = NodeURL.fileURLToPath(new URL("../linuxHelper/main.ts", import.meta.url));
-  return NodeFS.existsSync(source) ? source : undefined;
+  return NodeFS.existsSync(source) ? { entry: source, packaged: false } : undefined;
 };
 
 const spawnHelper =
@@ -657,10 +697,10 @@ export const layer = Layer.effect(
     const environment = yield* HostProcess.Environment;
     const node = yield* HostProcess.ExecutablePath;
     const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
-    const entry = platform === "linux" ? helperEntry(environment) : undefined;
+    const helper = platform === "linux" ? helperEntry(environment) : undefined;
     // The desktop app's own helper reports through desktop telemetry instead.
     if (
-      entry === undefined ||
+      helper === undefined ||
       config.mode === "desktop" ||
       Option.isNone(driver) ||
       driver.value.driverSession === undefined
@@ -692,7 +732,8 @@ export const layer = Layer.effect(
               ),
             },
           }),
-      spawn: spawnHelper(platform, node, entry),
+      spawn: spawnHelper(platform, node, helper.entry),
+      ...(helper.packaged ? { verify: Effect.promise(makeHelperBundleCheck(helper.entry)) } : {}),
       environment,
       report: latest,
       newId: () => NodeCrypto.randomUUID(),

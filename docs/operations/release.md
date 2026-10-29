@@ -498,6 +498,25 @@ Checklist:
 6. Add Azure secrets listed above in GitHub Actions secrets.
 7. Re-run a tag release and confirm Windows installer is signed.
 
+## Linux computer use helper signing
+
+A standalone Linux server runs the computer use helper bundle that `GOAT_COMPUTER_USE_HELPER`
+names only after checking it against its `manifest.json`. Once the server carries a release key,
+it also requires `manifest.json.sig`, an Ed25519 signature of the manifest by that key. No key is
+provisioned yet, so bundles are held to their hashes only. To turn signing on:
+
+1. Generate the key pair once, offline: `openssl genpkey -algorithm ed25519 -out helper-signing.pem`,
+   then `openssl pkey -in helper-signing.pem -pubout`.
+2. Store the private key as a release secret (for example `GOAT_LINUX_HELPER_SIGNING_KEY`) on the
+   job that builds the helper, and pass it as `--signing-key <file>` to
+   `scripts/build-computer-use-helper-linux.ts`.
+3. Add the public key PEM to `LINUX_HELPER_SIGNING_KEYS` in
+   `apps/server/src/cua/linuxHelperHost/helperBundle.ts`. From that release on, an unsigned or
+   wrongly signed bundle is refused, and setup shows why. A local build then needs
+   `--signing-key` with a key in that list, or runs the helper from a source checkout.
+
+To rotate the key, ship the new public key beside the old one for a release before signing with it.
+
 ## 4) Ongoing release checklist
 
 1. Pick the latest nightly and verify it: run the smoke test above against its artifacts and

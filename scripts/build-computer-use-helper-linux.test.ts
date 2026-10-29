@@ -7,7 +7,10 @@ import * as NodePath from "node:path";
 import { expect, it } from "@effect/vitest";
 import { cuaDriverRelease } from "@goat/shared/cuaDriverRelease";
 
-import { writeLinuxHelperManifest } from "./lib/computer-use-helper-linux-manifest.ts";
+import {
+  signLinuxHelperManifest,
+  writeLinuxHelperManifest,
+} from "./lib/computer-use-helper-linux-manifest.ts";
 
 it("ships and hashes all Cua Driver notices with the Linux standalone helper (#1605)", async () => {
   const out = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-linux-helper-"));
@@ -61,6 +64,43 @@ it("ships and hashes all Cua Driver notices with the Linux standalone helper (#1
         release,
       }),
     ).rejects.toThrow();
+  } finally {
+    await NodeFSP.rm(out, { recursive: true, force: true });
+  }
+});
+
+it("signs manifest.json as the server checks it: base64 Ed25519 over its bytes, in manifest.json.sig", async () => {
+  const out = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-linux-helper-"));
+  try {
+    await NodeFSP.mkdir(NodePath.join(out, "cua-driver"));
+    await NodeFSP.writeFile(NodePath.join(out, "cua-driver", "cua-driver"), "driver");
+    await NodeFSP.writeFile(NodePath.join(out, "goat-computer-use.mjs"), "helper");
+    await writeLinuxHelperManifest({
+      out,
+      noticesDirectory: NodePath.resolve(import.meta.dirname, "../apps/desktop/src/cua/notices"),
+      arch: "x64",
+      helperVersion: "1.0.0",
+      release: cuaDriverRelease("linux", "x64")!,
+    });
+    const keys = NodeCrypto.generateKeyPairSync("ed25519");
+    await signLinuxHelperManifest(
+      out,
+      keys.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    );
+    const signature = Buffer.from(
+      await NodeFSP.readFile(NodePath.join(out, "manifest.json.sig"), "utf8"),
+      "base64",
+    );
+    const manifest = await NodeFSP.readFile(NodePath.join(out, "manifest.json"));
+    expect(NodeCrypto.verify(null, manifest, keys.publicKey, signature)).toBe(true);
+    await expect(
+      signLinuxHelperManifest(
+        out,
+        NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
+          .privateKey.export({ type: "pkcs8", format: "pem" })
+          .toString(),
+      ),
+    ).rejects.toThrow("Ed25519");
   } finally {
     await NodeFSP.rm(out, { recursive: true, force: true });
   }
