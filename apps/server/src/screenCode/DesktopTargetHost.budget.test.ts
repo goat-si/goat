@@ -604,3 +604,37 @@ it.effect(
       expect(rows.length).toBeLessThan(500);
     }),
 );
+
+it.effect(
+  "the budget measures visibility against the window the read found, not bounds from before it moved",
+  () =>
+    Effect.gen(function* () {
+      // Bound at (0, 0), the window has since moved to x 1000 and scrolled to the table's end.
+      const state = activityMonitor(500);
+      const moved = {
+        ...state,
+        elements: state.elements.map((element) =>
+          element.element_index === 0
+            ? { ...element, frame: { x: 1000, y: 0, w: 800, h: 600 } }
+            : element.frame === undefined
+              ? element
+              : {
+                  ...element,
+                  frame: { ...element.frame, x: element.frame.x + 1000, y: element.frame.y - 9500 },
+                },
+        ),
+      };
+      const observation = yield* observe(moved);
+      expect(observation.truncated).toBe(true);
+      const rows = observation.elements.filter((e) => e.role === "AXRow");
+      const visible = Array.from({ length: 28 }, (_, at) => 3 + (472 + at) * 4);
+      expect(rows.map((row) => row.index)).toEqual(expect.arrayContaining(visible));
+      // Frames reach the agent from the window's top-left.
+      expect(rows.find((row) => row.index === 3 + 499 * 4)?.frame).toEqual({
+        x: 0,
+        y: 540,
+        width: 800,
+        height: 20,
+      });
+    }),
+);

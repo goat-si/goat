@@ -424,7 +424,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       ...sheet.extraOmitted,
       ...framesOmission(placed.dropped),
     ];
-    const screen = screenPlacement(tree.shown, nextBounds);
+    // The read's own window frame, when it has one, is where its elements were measured.
+    const screen = screenPlacement(tree.shown, origin ?? nextBounds);
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
