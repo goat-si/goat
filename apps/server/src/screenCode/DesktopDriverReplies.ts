@@ -75,10 +75,12 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   // GOAT refused before the driver: keep its reason so the receipt says why.
   if (reply.status === "not_started")
     return { ...fail("unavailable", said), ...refusalOf(structured) };
-  // The bound window closed: binding again is the way on, and nothing ran on it.
+  // The bound window closed before the call ran: binding again is the way on. An input the
+  // driver says may already have acted keeps that below.
   if (
+    structured?.effect !== "unverifiable" &&
     (string(object(structured?.refusal)?.code) ?? string(structured?.code)) ===
-    "window_id_not_found"
+      "window_id_not_found"
   )
     return {
       ...fail("target_missing", "That window is closed; pick one from screen.discover()."),

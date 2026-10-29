@@ -46,3 +46,12 @@ export const windowIntentOf = (
     ? "close"
     : undefined;
 };
+
+/** A pointer click the driver says landed on a window's close button, as its result's hit names it. */
+export const hitCloseButton = (tool: string, value: unknown): boolean => {
+  if (tool !== "click" || typeof value !== "object" || value === null) return false;
+  const hit = (value as { hit?: unknown }).hit;
+  const name =
+    typeof hit === "object" && hit !== null ? (hit as { name?: unknown }).name : undefined;
+  return typeof name === "string" && CLOSE_BUTTON.test(name.trim());
+};

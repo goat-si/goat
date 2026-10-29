@@ -297,3 +297,86 @@ it.live(
     );
   },
 );
+
+it.effect("cmd+w that opens a save sheet over a window that stays open is not confirmed", () =>
+  Effect.gen(function* () {
+    const { host } = desktop(listing([7]), [listing([7, 8])]);
+    const out = ok(yield* input(host, yield* bind(host), "press_key", press("w")));
+    expect(out.category).toBe("unverifiable");
+    expect(out.evidence).toContain("observed:window_opened:8");
+    expect(boundOf(out.value)).toBe("present");
+  }),
+);
+
+it.effect(
+  "a window the complete snapshot names before the listing shows its row is confirmed",
+  () =>
+    Effect.gen(function* () {
+      const { host } = desktop(listing([7]), [
+        { windows: [shown(7)], enumeration_complete: true, authoritative_window_ids: [7, 8] },
+      ]);
+      const out = ok(yield* input(host, yield* bind(host), "press_key", press("t")));
+      expect(out.category).toBe("confirmed");
+      expect(out.evidence).toContain("observed:window_opened:8");
+    }),
+);
+
+it.effect(
+  "a new window first listed incompletely is read again until a complete listing proves it",
+  () =>
+    Effect.gen(function* () {
+      const { host, state } = desktop(listing([7]), [listing([7, 8], false), listing([7, 8])]);
+      const out = ok(yield* input(host, yield* bind(host), "press_key", press("t")));
+      expect(out.category).toBe("confirmed");
+      expect(state.readsAfter).toBe(2);
+    }),
+);
+
+it.effect("a click by point the driver says hit the close button is confirmed by closure", () =>
+  Effect.gen(function* () {
+    const { host } = desktop(listing([7, 9]), [listing([9])], {
+      effect: "unverifiable",
+      hit: { role: "AXButton", label: "close button" },
+    });
+    const out = ok(yield* input(host, yield* bind(host), "click", { x: 10, y: 10 }));
+    expect(out.category).toBe("confirmed");
+    expect(boundOf(out.value)).toBe("closed");
+  }),
+);
+
+it.effect(
+  "an input the driver says may have acted on a window it no longer finds keeps that safety",
+  () =>
+    Effect.gen(function* () {
+      const { host } = desktop(
+        listing([7]),
+        [listing([7])],
+        new DriverError(
+          { effect: "unverifiable", code: "window_id_not_found" },
+          "window 7 not found after posting",
+        ),
+      );
+      const failed = yield* input(host, yield* bind(host), "press_key", press("a"));
+      expect(failed._tag === "Failure" && failed.failure).toMatchObject({
+        code: "unknown_outcome",
+        effectStarted: true,
+      });
+    }),
+);
+
+it.effect(
+  "a window the listing still shows after cmd+w, though its id left the snapshot, is unproven",
+  () =>
+    Effect.gen(function* () {
+      const { host } = desktop(listing([7, 9]), [
+        {
+          windows: [shown(7), shown(9)],
+          enumeration_complete: true,
+          authoritative_window_ids: [9],
+        },
+      ]);
+      const out = ok(yield* input(host, yield* bind(host), "press_key", press("w")));
+      expect(out.category).toBe("unverifiable");
+      expect(out.evidence).not.toContain("observed:window_closed");
+    }),
+);

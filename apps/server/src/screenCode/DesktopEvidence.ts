@@ -11,8 +11,8 @@ import * as Option from "effect/Option";
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { driverError, driverValue } from "./DesktopDriverReplies.ts";
-import { openedWindowIds, windowClosure } from "./DesktopWindowClosure.ts";
-import { windowIntentOf } from "./DesktopWindowIntent.ts";
+import { authoritativeIds, openedWindowIds, windowClosure } from "./DesktopWindowClosure.ts";
+import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import type { ScreenHostContext, ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import {
   type CellWindowTracker,
@@ -300,6 +300,8 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     if (sent._tag === "Failure" && !(intent === "close" && sent.failure.effectStarted === true))
       return yield* Effect.fail(sent.failure);
     const base = sent._tag === "Success" ? sent.success : undefined;
+    // A click by point closes when the driver says it hit the close button.
+    const closing = intent === "close" || hitCloseButton(tool, base?.value);
     const drivenAt = yield* Clock.currentTimeMillis;
     // Only a read-back of the acted element waits here; otherwise the next read of the window does.
     const settles =
@@ -314,14 +316,22 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     let postWins = parseWindowList(postRaw, pid);
     const preIds = new Set(preWins?.map((w) => w.window_id));
     // A window listed off screen first is not yet one a sheet read can follow; a sheet that opens
-    // on a close (an unsaved document) ends the wait as well.
+    // on a close (an unsaved document) ends the wait as well. A new window in an incomplete
+    // listing is read again while a complete one could still prove it.
     const changed = () => {
       if (!preWins) return true;
-      if (!postWins) return intent !== "close";
-      if (postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen)) return true;
-      return intent === "close" && windowClosure(postRaw, pid, windowId) === "closed";
+      if (!postWins) return !closing;
+      const appeared = postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen);
+      if (closing) return appeared || windowClosure(postRaw, pid, windowId) === "closed";
+      if (openedWindowIds(preRaw, postRaw, pid).length > 0) return true;
+      return (
+        appeared &&
+        (authoritativeIds(preRaw, pid) === undefined ||
+          authoritativeIds(postRaw, pid) !== undefined)
+      );
     };
-    for (let polls = 0; (opening || intent === "close") && polls < OPENING_POLLS; polls++) {
+    const rereads = opening || closing ? OPENING_POLLS : 0;
+    for (let polls = 0; polls < rereads; polls++) {
       if (changed()) break;
       const now = yield* Clock.currentTimeMillis;
       if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
@@ -340,11 +350,12 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       windowClosure(postRaw, pid, windowId),
     );
     const opened = openedWindowIds(preRaw, postRaw, pid);
-    // A window that entered the process's complete id snapshot shows the input acted, and so does
-    // the bound window leaving it after a close; any other closure may have had another cause.
-    const closedByClose = intent === "close" && winDiff.report.bound === "closed";
+    // A close is proven only by the bound window leaving the process's complete id snapshot: a
+    // sheet it opens (an unsaved document) leaves the window open. Any other input is proven by a
+    // window entering that snapshot; a closure it coincides with may have had another cause.
+    const closedByClose = closing && winDiff.report.bound === "closed";
     if (sent._tag === "Failure" && !closedByClose) return yield* Effect.fail(sent.failure);
-    const proven = opened.length > 0 || closedByClose;
+    const proven = closing ? closedByClose : opened.length > 0;
     const openedEvidence = opened
       .slice(0, 4)
       .map((id) => `observed:window_opened:${id}`)

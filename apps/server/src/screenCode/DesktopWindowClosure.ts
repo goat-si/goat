@@ -47,20 +47,22 @@ export const windowClosure = (value: unknown, pid: number, target: number): Wind
 };
 
 /**
- * Top-level windows that entered a pid's complete id snapshot between two listings. Menus and
- * other non-zero layers a click can show are not windows it opened.
+ * Windows that entered a pid's complete id snapshot between two listings. A menu or other
+ * non-zero layer a click can show, as the listing names it, is not a window it opened.
  */
 export const openedWindowIds = (before: unknown, after: unknown, pid: number): number[] => {
   const pre = authoritativeIds(before, pid);
   const post = authoritativeIds(after, pid);
   const listed = record(after)?.windows;
   if (pre === undefined || post === undefined || !Array.isArray(listed)) return [];
-  return listed
-    .map(record)
-    .filter((entry) => entry !== undefined && (entry.pid ?? pid) === pid)
-    .filter((entry) => entry?.layer === undefined || entry.layer === 0)
-    .map((entry) => entry?.window_id)
-    .filter((id): id is number => windowId(id) && post.has(id) && !pre.has(id));
+  const layered = new Set(
+    listed
+      .map(record)
+      .filter((entry) => entry !== undefined && (entry.pid ?? pid) === pid)
+      .filter((entry) => entry?.layer !== undefined && entry.layer !== 0)
+      .map((entry) => entry?.window_id),
+  );
+  return [...post].filter((id) => !pre.has(id) && !layered.has(id));
 };
 
 /**

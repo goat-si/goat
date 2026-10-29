@@ -522,8 +522,8 @@ const __own = (listed, pid) => (listed && listed.windows ? listed.windows : []).
   !(item.bounds && (item.bounds.width <= 1 || item.bounds.height <= 1)));
 // Without window_id: an app running with one window on screen binds it and nothing launches;
 // several windows or processes are ambiguous, and windows all off screen are named, not guessed.
-// An app with no window, closed or running, is launched (reopened when running) and its first
-// window bound in that one launch_app call.
+// A running app is never launched again, even with no window yet; a closed one is launched and
+// its first window bound in that one launch_app call.
 const __app = async (rawQuery) => {
   if (typeof rawQuery === 'string' && rawQuery.trim().length === 0)
     throw new ScreenError('invalid_argument', 'Name the app to bind.', true);
@@ -576,13 +576,14 @@ const __app = async (rawQuery) => {
   }
   const pids = [...new Set(running.map((item) => item.pid))];
   if (pids.length > 1) {
-    // Several processes already run, so nothing launches; each is named with its windows on screen.
-    let every;
-    try { every = await __call('list_windows', {}); } catch (_) { every = undefined; }
-    const each = pids.map((pid) => {
-      const ids = __own(every, pid).filter((item) => item.is_on_screen !== false).map((item) => item.window_id);
-      return 'pid ' + pid + (ids.length ? ' window_id ' + ids.join(', ') : '');
-    });
+    // Several processes already run, so nothing launches; each is named with all of its windows.
+    const each = [];
+    for (const pid of pids) {
+      let listedWindows;
+      try { listedWindows = await __call('list_windows', { pid }); } catch (_) { listedWindows = undefined; }
+      const ids = __own(listedWindows, pid).map((item) => item.window_id + (item.is_on_screen === false ? ' (off screen)' : ''));
+      each.push('pid ' + pid + (ids.length ? ' window_id ' + ids.join(', ') : listedWindows ? ' no window' : ' windows unknown'));
+    }
     throw new ScreenError('target_ambiguous', label + ' runs as ' + pids.length + ' processes (' + each.join('; ') + '); nothing was launched. Pass one window_id to screen.app.', true);
   }
   const by = (row) => (row.bundle_id ? { bundle_id: row.bundle_id } : { name: row.name });
@@ -600,7 +601,7 @@ const __app = async (rawQuery) => {
       return __appTarget(await __call('bind_app', { ...by(running[0]), window_id: own[0].window_id }), label, false, own[0].window_id);
     if (all.length > 0)
       throw new ScreenError('target_missing', label + ' is running with no window on screen; ' + named(all) + ' may be minimized, hidden, on another Space or closed. Pass window_id to bind one, or ask the person to show it.', true);
-    wanted = by(running[0]);
+    throw new ScreenError('target_missing', label + ' is running (pid ' + pids[0] + ') with no window yet, so nothing was launched. Call screen.app again once it shows a window, or ask the person to open one.', true);
   } else if (path !== undefined) {
     wanted = { path };
   } else {
