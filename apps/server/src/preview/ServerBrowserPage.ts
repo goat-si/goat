@@ -698,7 +698,7 @@ export const click = async (
   pointer: PointerReporter = noPointer,
   gate: DispatchGate = open,
 ): Promise<
-  { readonly x: number; readonly y: number; readonly pressesSent?: number } & ClickEffect
+  { readonly x: number; readonly y: number; readonly pressesCompleted?: number } & ClickEffect
 > => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
@@ -753,7 +753,6 @@ export const click = async (
     await watch.arm(aim);
     for (let count = 1; count <= (input.clickCount ?? 1); count++) {
       const pressed = press(count);
-      presses = count;
       if ((await Promise.race([pressed, dialogOpened])) === "dialog") {
         // That press waits on the dialog, past this action; later presses are never sent.
         dialog = true;
@@ -761,6 +760,7 @@ export const click = async (
         void pressed.catch(constVoid);
         break;
       }
+      presses = count;
     }
   } catch (cause) {
     watch.cancel();
@@ -772,8 +772,8 @@ export const click = async (
   if (!sent) watch.cancel();
   const outcome = await watch.settle(dialog).finally(() => releaseAim(aim));
   // A dialog that stopped a multi-press click leaves it short of what was asked.
-  const short = presses < (input.clickCount ?? 1);
-  return { ...point, ...outcome, ...(short ? { pressesSent: presses } : {}) };
+  const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
+  return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
 };
 
 export const type = async (

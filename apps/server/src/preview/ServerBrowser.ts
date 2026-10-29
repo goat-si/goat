@@ -1912,14 +1912,14 @@ const make = Effect.gen(function* () {
         );
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
-        const { effect, evidence, pressesSent } = await recordAction(tab, "click", () =>
+        const { effect, evidence, pressesCompleted } = await recordAction(tab, "click", () =>
           ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
         );
         return {
           effect,
           evidence,
           url: tab.page.url(),
-          ...(pressesSent === undefined ? {} : { pressesSent }),
+          ...(pressesCompleted === undefined ? {} : { pressesCompleted }),
         };
       }
       case "hover":

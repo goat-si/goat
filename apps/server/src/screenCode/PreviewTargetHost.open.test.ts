@@ -198,8 +198,10 @@ it.effect("a double click a dialog cut short after its first press is never conf
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
     yield* fixture.dispatch("claim_tab");
-    fixture.state.clickResult = { effect: "confirmed", evidence: ["dialog"], pressesSent: 1 };
+    fixture.state.clickResult = { effect: "confirmed", evidence: ["dialog"], pressesCompleted: 1 };
     const reply = yield* fixture.dispatch("click", { selector: "#b", count: 2 });
     expect(reply).toMatchObject({ outcome: "ok", category: "unverifiable" });
+    // The object call form returns this value as is, so it carries no confirmed effect either.
+    expect(reply?.value).toMatchObject({ effect: "unverifiable", pressesCompleted: 1 });
   }),
 );

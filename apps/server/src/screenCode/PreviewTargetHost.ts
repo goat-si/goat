@@ -873,7 +873,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ? (result as {
               readonly effect?: unknown;
               readonly evidence?: unknown;
-              readonly pressesSent?: unknown;
+              readonly pressesCompleted?: unknown;
             })
           : undefined;
       const navigated = operation === "navigate" && typeof reached === "string";
@@ -882,7 +882,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const confirmed =
         navigated ||
         (seen?.effect === "confirmed" &&
-          seen.pressesSent === undefined &&
+          seen.pressesCompleted === undefined &&
           Array.isArray(seen.evidence) &&
           (operation === "click" || seen.evidence.includes("value")));
       return {
@@ -890,7 +890,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           call.method === "close_tab"
             ? result
             : withInputTiming(
-                result,
+                // A click cut short of its count must not read as confirmed in any call form.
+                seen?.pressesCompleted === undefined ? result : { ...seen, effect: "unverifiable" },
                 { ms: endedAt - startedAt, phases: { driverMs: endedAt - sentAt } },
                 context.limits.returnBytes,
               ),

@@ -191,6 +191,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
   };
   const element = (target) => {
+    // A misnamed key beside role and name (clickCount) would otherwise be dropped unseen.
+    if (typeof target === 'object' && target !== null) __only('A target', target, ['role', 'name', 'id']);
     const observation = seen.observation;
     if (!observation)
       throw new ScreenError(

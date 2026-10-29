@@ -687,6 +687,7 @@ it.live(
           () => tab.click({ selector: '#cv', clickCount: 2 }),
           () => tab.click({ selector: '#cv', clicks: 2, button: 'right' }),
           () => tab.click('#cv', { action: 'show_menu' }),
+          () => tab.click({ role: 'button', name: 'Go', clickCount: 2 }),
         ])
           try { await attempt(); refused.push('sent'); } catch (error) { refused.push([error.code, error.nothingSent, error.message]); }
         screen.state.refused = refused;
@@ -703,7 +704,7 @@ it.live(
           ? (result.success.value as Array<[string, boolean, string]>)
           : [];
       expect(refused.map(([code, nothingSent]) => [code, nothingSent])).toEqual(
-        Array.from({ length: 12 }, () => ["invalid_argument", true]),
+        Array.from({ length: 13 }, () => ["invalid_argument", true]),
       );
       expect(refused[0]?.[2]).toContain("did you mean count?");
       expect(refused[2]?.[2]).toContain("did you mean timeoutMs?");

@@ -190,7 +190,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await control.system(async () => {});
     expect(await page.evaluate("window.hits")).toBe(1);
     // The answer says the click fell short, so it is never read as a double click.
-    expect(clicked).toMatchObject({ pressesSent: 1 });
+    expect(clicked).toMatchObject({ pressesCompleted: 0 });
   });
 
   it("clears a single select when given no values", async () => {
