@@ -128,7 +128,10 @@ describe("mergeClaudeWorkflowProgress", () => {
     expect(first?.agents[0]?.completedAt).toBe(2010);
     expect(first?.agents[1]).not.toHaveProperty("completedAt");
     const second = mergeClaudeWorkflowProgress({
-      previous: first,
+      previous: first && {
+        ...first,
+        agents: first.agents.map((member) => ({ ...member, effort: "max", speed: "standard" })),
+      },
       message: snapshotFrame([
         { type: "workflow_agent", index: 1, label: "alpha:one", state: "start", attempt: 2 },
       ]),
@@ -142,7 +145,7 @@ describe("mergeClaudeWorkflowProgress", () => {
         phaseIndex: 1,
         phaseTitle: "Alpha",
       },
-      first?.agents[1],
+      { ...first?.agents[1], effort: "max", speed: "standard" },
     ]);
     expect(second?.phases).toEqual(first?.phases);
   });
@@ -177,6 +180,60 @@ describe("mergeClaudeWorkflowProgress", () => {
       ]),
     });
     expect(second?.agents).toEqual(first?.agents);
+  });
+
+  it("retains member fields omitted by a later frame in the same attempt", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([
+        agent({
+          attempt: 2,
+          model: "claude-opus-5[1m]",
+          promptPreview: "Current prompt",
+          tokens: 100,
+        }),
+      ]),
+    });
+    const second = mergeClaudeWorkflowProgress({
+      previous: first && {
+        ...first,
+        agents: first.agents.map((member) => ({ ...member, effort: "xhigh", speed: "standard" })),
+      },
+      message: snapshotFrame([agent({ state: "done", resultPreview: "Current result" })]),
+    });
+    expect(second?.agents[0]).toMatchObject({
+      state: "completed",
+      attempt: 2,
+      prompt: "Current prompt",
+      result: "Current result",
+      totalTokens: 100,
+      model: "claude-opus-5[1m]",
+      effort: "xhigh",
+      speed: "standard",
+    });
+  });
+
+  it("drops effort and speed when another agent takes the member without a new attempt", () => {
+    const first = mergeClaudeWorkflowProgress({
+      previous: undefined,
+      message: snapshotFrame([agent({ agentId: "a1", state: "done", attempt: 2 })]),
+    });
+    const previous = first && {
+      ...first,
+      agents: first.agents.map((member) => ({ ...member, effort: "xhigh", speed: "standard" })),
+    };
+    const same = mergeClaudeWorkflowProgress({
+      previous,
+      message: snapshotFrame([agent({ agentId: "a1", state: "done" })]),
+    });
+    const reassigned = mergeClaudeWorkflowProgress({
+      previous,
+      message: snapshotFrame([agent({ agentId: "a2", state: "done" })]),
+    });
+    expect(same?.agents[0]).toMatchObject({ agentId: "a1", effort: "xhigh", speed: "standard" });
+    expect(reassigned?.agents[0]).toMatchObject({ agentId: "a2", attempt: 2, phaseTitle: "Alpha" });
+    expect(reassigned?.agents[0]).not.toHaveProperty("effort");
+    expect(reassigned?.agents[0]).not.toHaveProperty("speed");
   });
 
   it("drops malformed entries instead of failing the frame", () => {

@@ -7,6 +7,7 @@ const reactTests = [
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
+  "src/features/files/ZipArchiveView.test.tsx",
   "src/lib/clock.test.ts",
   "src/lib/useNotificationPermissionStatus.test.tsx",
   "src/components/VideoPreviewModal.ios.test.tsx",

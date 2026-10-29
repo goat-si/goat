@@ -42,6 +42,14 @@ function optional<T>(key: string, value: T | undefined): Record<string, T> {
   return value === undefined ? {} : ({ [key]: value } as Record<string, T>);
 }
 
+function withoutAgentMetadata({
+  effort: _effort,
+  speed: _speed,
+  ...member
+}: OrchestrationV2WorkflowAgent): OrchestrationV2WorkflowAgent {
+  return member;
+}
+
 function parsePhase(entry: unknown): OrchestrationV2WorkflowPhase | null {
   const index = count(field(entry, "index"));
   const title = text(field(entry, "title"));
@@ -145,6 +153,11 @@ export function mergeClaudeWorkflowProgress(input: {
     const attempt = agent.attempt ?? prior?.attempt ?? 1;
     if (prior !== undefined && attempt < (prior.attempt ?? 1)) continue;
     const restarted = prior !== undefined && attempt > (prior.attempt ?? 1);
+    // Effort and speed describe one agent; a different agent on the same member starts without them.
+    const reassigned =
+      prior?.agentId !== undefined &&
+      agent.agentId !== undefined &&
+      agent.agentId !== prior.agentId;
     const regressed =
       !restarted &&
       (((prior?.state === "completed" || prior?.state === "failed") &&
@@ -160,7 +173,9 @@ export function mergeClaudeWorkflowProgress(input: {
                   ...optional("phaseIndex", prior.phaseIndex),
                   ...optional("phaseTitle", prior.phaseTitle),
                 }
-              : prior),
+              : prior !== undefined && reassigned
+                ? withoutAgentMetadata(prior)
+                : prior),
             ...agent,
           },
     );
