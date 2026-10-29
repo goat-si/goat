@@ -1105,7 +1105,13 @@ const make = Effect.gen(function* () {
                 connectionId: message.connectionId,
                 externalActorId: requester.externalActorId,
               });
-        if (linked === undefined) return undefined;
+        // A link removed or handed to someone else since intake is no longer this sender.
+        if (
+          linked === undefined ||
+          linked.ownerId !== requester.ownerId ||
+          linked.principalId !== requester.principalId
+        )
+          return undefined;
         return {
           ...requester,
           runtimeModeCeiling: lowerRuntimeMode(
@@ -1301,10 +1307,14 @@ const make = Effect.gen(function* () {
                     Effect.orElseSucceed((): ReadonlyArray<ChannelTask> => []),
                   ),
                 );
-                const { journal: _journal, ...rest } = base;
+                const { journal: _journal, recentThreads: _recent, ...rest } = base;
+                const recentNow = reader.grantedScopes.includes("orchestration:read")
+                  ? recentThreads(shells, targets, bot?.threadId)
+                  : [];
                 const second = yield* generateOutcome({
                   ...rest,
                   ...(journalNow === "" ? {} : { journal: journalNow }),
+                  ...(recentNow.length === 0 ? {} : { recentThreads: recentNow }),
                   readsAllowed: false,
                   readResults,
                 });

@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLayers from "./ChannelLayers.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
@@ -225,6 +226,25 @@ describe("Slack people without a linked account", () => {
   });
 });
 
+/** A thread of the owner's own, which only someone allowed to read other work should see. */
+const createOwnerThread = Effect.gen(function* () {
+  const orchestrator = yield* Orchestrator.OrchestratorV2;
+  yield* orchestrator.dispatch({
+    type: "thread.create",
+    commandId: CommandId.make("create-owner-thread"),
+    threadId: ThreadId.make("thread:owner-private"),
+    projectId: scratchProjectId,
+    title: "Fix the release pipeline",
+    modelSelection,
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    createdBy: "system",
+    creationSource: "server",
+  });
+});
+
 describe("what people without a link may not reach", () => {
   it.effect("never shows them the owner's other threads", () => {
     const { harness } = scenario();
@@ -232,7 +252,7 @@ describe("what people without a link may not reach", () => {
     harness.script.current = (input) => {
       if (input.mode === "input") {
         seen.push({
-          text: input.inputText,
+          text: input.inputText ?? "",
           titles: (input.recentThreads ?? []).map((thread) => thread.title),
         });
       }
@@ -240,21 +260,7 @@ describe("what people without a link may not reach", () => {
     };
     return Effect.gen(function* () {
       yield* setupBot;
-      const orchestrator = yield* Orchestrator.OrchestratorV2;
-      yield* orchestrator.dispatch({
-        type: "thread.create",
-        commandId: CommandId.make("create-owner-thread"),
-        threadId: ThreadId.make("thread:owner-private"),
-        projectId: scratchProjectId,
-        title: "Fix the release pipeline",
-        modelSelection,
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        createdBy: "system",
-        creationSource: "server",
-      });
+      yield* createOwnerThread;
       const gateway = yield* ChannelGateway.ChannelGateway;
       const runtime = yield* ChannelRuntime.ChannelRuntime;
       yield* gateway.ingest(goatInput("what is running?", "owner-look"), rpcContext);
@@ -296,6 +302,81 @@ describe("what people without a link may not reach", () => {
       );
       yield* runtime.drain;
       yield* gateway.ingest(goatInput("what machine is this?", "owner-after"), rpcContext);
+      yield* runtime.drain;
+      const later = seen.find((input) => input.inputText === "what machine is this?");
+      assert.isDefined(later);
+      assert.notInclude(later?.notes ?? "", "Reply in Korean.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+describe("a link removed while the message waits", () => {
+  const unlinkU1 = Effect.flatMap(ChannelIdentityService.ChannelIdentityService, (identities) =>
+    identities.unlink({ connectionId: "slack-1", externalActorId: "U1" }),
+  );
+
+  it.effect("keeps the owner's thread titles out of the answer after a read", () => {
+    const { harness } = scenario();
+    const passes: Array<ReadonlyArray<string>> = [];
+    let unlink: Effect.Effect<void> = Effect.void;
+    harness.script.current = (input) => {
+      if (input.mode !== "input") return defaultScript(input);
+      passes.push((input.recentThreads ?? []).map((thread) => thread.title));
+      return input.readsAllowed === true
+        ? unlink.pipe(
+            Effect.as({
+              replyText: "",
+              action: {
+                type: "read" as const,
+                reads: [{ kind: "conversation" as const, query: "release" }],
+              },
+            }),
+          )
+        : Effect.succeed({ replyText: "Done.", action: { type: "report_only" as const } });
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser("U1");
+      yield* createOwnerThread;
+
+      const context = yield* Effect.context<ChannelIdentityService.ChannelIdentityService>();
+      unlink = unlinkU1.pipe(Effect.provide(context), Effect.orDie);
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("what about the release?", "Ev-read"), workspaceContext);
+      yield* runtime.drain;
+      assert.strictEqual(passes.length, 2);
+      assert.include(passes[0] ?? [], "Fix the release pipeline");
+      assert.deepStrictEqual(passes[1], []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("does not save a note the sender asked for before losing the link", () => {
+    const { harness } = scenario();
+    const seen: Array<ChannelReceptionInput> = [];
+    harness.script.current = (input) => {
+      seen.push(input);
+      return input.inputText === "Always reply in Korean, remember that"
+        ? Effect.succeed({
+            replyText: "I'll keep that.",
+            action: { type: "report_only" as const },
+            remember: "Reply in Korean.",
+            rememberQuote: "remember that",
+          })
+        : defaultScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser("U1");
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(
+        slackInput("Always reply in Korean, remember that", "Ev-note"),
+        workspaceContext,
+      );
+      yield* unlinkU1;
+      yield* runtime.drain;
+      yield* gateway.ingest(goatInput("what machine is this?", "owner-after-unlink"), rpcContext);
       yield* runtime.drain;
       const later = seen.find((input) => input.inputText === "what machine is this?");
       assert.isDefined(later);
