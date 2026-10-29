@@ -8,8 +8,9 @@ export const providerEntries = {
     name: "goat_acp_session_list",
     toolkit: "provider",
     summary: "List ACP provider sessions for a project",
-    description:
-      "List native ACP sessions and imported GOAT threads. Continue with nextCursor until it is null.",
+    description: "List native ACP sessions and indicate which have been imported as GOAT threads.",
+    guide:
+      "If truncated is true, the provider returned more than 256 sessions on one page and some were omitted. nextCursor advances past that entire provider page, so it cannot recover the omitted sessions; do not treat the listing as complete.",
     parameters: {
       instanceId: "ACP provider instance ID.",
       projectId: "Project whose workspace contains the sessions.",

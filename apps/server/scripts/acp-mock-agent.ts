@@ -802,7 +802,6 @@ const program = Effect.gen(function* () {
           request.cwd ?? process.cwd(),
           sessionId,
           Number(process.env.GOAT_ACP_SESSION_LIST_COUNT ?? "1"),
-          request.cursor,
         );
       }),
     );

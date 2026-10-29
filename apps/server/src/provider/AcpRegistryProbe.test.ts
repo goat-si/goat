@@ -378,7 +378,7 @@ describe("ACP Registry probe", () => {
     );
   });
 
-  it.effect("pages a large provider page without gaps before advancing to its next page", () => {
+  it.effect("reports an oversized provider page instead of silently losing sessions", () => {
     const input = {
       instanceId,
       settings: decodeSettings({ agentId: "mock-agent" }),
@@ -386,67 +386,11 @@ describe("ACP Registry probe", () => {
       environment: process.env,
     };
     return Effect.gen(function* () {
-      const first = yield* listAcpRegistrySessions(input);
-      expect(first.sessions).toHaveLength(256);
-      expect(first.nextCursor).toMatch(/^goat-acp:v1:/);
-      if (first.nextCursor === null) return yield* Effect.die("Missing second page cursor");
-      const second = yield* listAcpRegistrySessions({ ...input, cursor: first.nextCursor });
-      expect(second.sessions).toHaveLength(256);
-      if (second.nextCursor === null) return yield* Effect.die("Missing third page cursor");
-      const third = yield* listAcpRegistrySessions({ ...input, cursor: second.nextCursor });
-      expect(third.sessions).toHaveLength(88);
-      expect(
-        [...first.sessions, ...second.sessions, ...third.sessions].map(
-          (session) => session.sessionId,
-        ),
-      ).toEqual(Array.from({ length: 600 }, (_, index) => `mock-session-${index + 1}`));
-      if (third.nextCursor === null) return yield* Effect.die("Missing provider next page cursor");
-      expect(third.nextCursor).toMatch(/^goat-acp:v1:/);
-      const fourth = yield* listAcpRegistrySessions({ ...input, cursor: third.nextCursor });
-      expect(fourth.sessions.map((session) => session.sessionId)).toEqual(["next-page-session"]);
-      expect(fourth.nextCursor).toBeNull();
+      const listed = yield* listAcpRegistrySessions(input);
+      expect(listed.sessions).toHaveLength(256);
+      expect(listed).toMatchObject({ truncated: true, nextCursor: "after-page" });
     }).pipe(
-      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(600)),
-      Effect.provide(NodeServices.layer),
-      Effect.scoped,
-    );
-  });
-
-  it.effect("passes legacy cursors through and refuses malformed or oversized cursors", () => {
-    const input = {
-      instanceId,
-      settings: decodeSettings({ agentId: "mock-agent" }),
-      cwd: process.cwd(),
-      environment: process.env,
-    };
-    const encoded = (value: unknown) =>
-      `goat-acp:v1:${Buffer.from(JSON.stringify(value)).toString("base64url")}`;
-    return Effect.gen(function* () {
-      const legacy = yield* listAcpRegistrySessions({ ...input, cursor: "legacy-cursor" });
-      expect(legacy.sessions.map((session) => session.sessionId)).toEqual(["legacy-page-session"]);
-      for (const cursor of [
-        "goat-acp:v1:invalid!",
-        `goat-acp:v1:${Buffer.concat([
-          Buffer.from('{"providerCursor":"'),
-          Buffer.from([0xff]),
-          Buffer.from('","offset":0}'),
-        ]).toString("base64url")}`,
-        "goat-acp:v1:",
-        "x".repeat(2_049),
-        encoded({ providerCursor: null, offset: -1 }),
-        encoded({ providerCursor: null, offset: 1.5 }),
-        encoded({ providerCursor: null, offset: 1_000_001 }),
-        encoded({ providerCursor: 42, offset: 0 }),
-      ]) {
-        const failure = yield* Effect.flip(listAcpRegistrySessions({ ...input, cursor }));
-        expect(failure.message).toContain("cursor");
-      }
-      const oversized = yield* Effect.flip(
-        listAcpRegistrySessions({ ...input, cursor: "oversized-cursor" }),
-      );
-      expect(oversized.message).toContain("cursor is too long");
-    }).pipe(
-      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(1)),
+      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(257)),
       Effect.provide(NodeServices.layer),
       Effect.scoped,
     );

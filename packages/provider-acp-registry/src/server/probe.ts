@@ -35,7 +35,6 @@ import {
 } from "@goat/provider-acp/server/sessionConfig";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
-import { decodeSessionCursor, encodeSessionCursor } from "./sessionCursor.ts";
 
 const MAX_AUTH_METHODS = 32;
 const MAX_MODELS = 256;
@@ -587,37 +586,10 @@ function managementFailure(
 
 export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions")(
   function* (input: AcpRegistryManagementInput & { readonly cursor?: string }) {
-    const cursor = decodeSessionCursor(input.cursor);
-    if (cursor === undefined) {
-      return yield* new AcpRegistryOperationError({
-        reason: "probe_failed",
-        message: "The ACP session cursor is invalid.",
-      });
-    }
     const runtime = yield* makeAcpRegistryManagementRuntime(input);
     const initialized = yield* runtime.initialize();
-    const listed = yield* runtime.listSessions(cursor.providerCursor ?? undefined);
-    if (cursor.offset > listed.sessions.length) {
-      return yield* new AcpRegistryOperationError({
-        reason: "probe_failed",
-        message: "The ACP session cursor no longer matches the provider page.",
-      });
-    }
-    const nextOffset = cursor.offset + 256;
-    const continuation =
-      nextOffset < listed.sessions.length
-        ? { providerCursor: cursor.providerCursor, offset: nextOffset }
-        : listed.nextCursor === undefined || listed.nextCursor === null
-          ? null
-          : { providerCursor: listed.nextCursor, offset: 0 };
-    const nextCursor = continuation === null ? null : encodeSessionCursor(continuation);
-    if (nextCursor === undefined) {
-      return yield* new AcpRegistryOperationError({
-        reason: "probe_failed",
-        message: "The ACP session cursor is too long or its offset exceeds the supported limit.",
-      });
-    }
-    const sessions = listed.sessions.slice(cursor.offset, nextOffset).flatMap((session) => {
+    const listed = yield* runtime.listSessions(input.cursor);
+    const sessions = listed.sessions.slice(0, 256).flatMap((session) => {
       const sessionId = boundedOpaqueValue(session.sessionId, 1_024);
       const cwd = boundedOpaqueValue(session.cwd, 4_096);
       if (sessionId === undefined || cwd === undefined) return [];
@@ -645,7 +617,11 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
     });
     return AcpRegistryListSessionsResult.make({
       sessions,
-      nextCursor,
+      ...(listed.sessions.length > 256 ? { truncated: true } : {}),
+      nextCursor:
+        listed.nextCursor === undefined || listed.nextCursor === null
+          ? null
+          : boundedText(listed.nextCursor, 2_048) || null,
       canLoad: initialized.agentCapabilities?.loadSession === true,
       canResume: initialized.agentCapabilities?.sessionCapabilities?.resume != null,
       canDelete: initialized.agentCapabilities?.sessionCapabilities?.delete != null,

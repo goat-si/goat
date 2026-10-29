@@ -40,6 +40,7 @@ it.effect("lists a page through the served MCP path only while read access is li
         Ref.update(calls, (n) => n + 1).pipe(
           Effect.as({
             sessions: [],
+            truncated: true,
             nextCursor: received.cursor ?? null,
             canLoad: true,
             canResume: false,
@@ -69,6 +70,7 @@ it.effect("lists a page through the served MCP path only while read access is li
       expect(allowed.structuredContent).toMatchObject({
         nextCursor: "next",
         sessions: [],
+        truncated: true,
       });
       expect(yield* Ref.get(required)).toEqual([["orchestration:read"]]);
       const denied = yield* call({
@@ -93,7 +95,7 @@ it.effect("lists a page through the served MCP path only while read access is li
       };
       const threadResult = yield* call(thread);
       expect(threadResult.isError).toBe(false);
-      expect(threadResult.structuredContent).toMatchObject({ nextCursor: "next" });
+      expect(threadResult.structuredContent).toMatchObject({ nextCursor: "next", truncated: true });
       const withoutCapability = yield* call({ ...thread, capabilities: new Set() });
       expect(withoutCapability.isError).toBe(true);
       expect(withoutCapability.content).toEqual(
