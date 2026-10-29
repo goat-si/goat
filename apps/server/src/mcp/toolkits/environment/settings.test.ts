@@ -181,6 +181,25 @@ it.effect("lists every setting with its access and shows values only agents may 
       access: "person",
       reason: expect.any(String),
     });
+    expect(byKey.get("memoryOwnerSourceReadPolicy")).toMatchObject({
+      key: "memoryOwnerSourceReadPolicy",
+      access: "person",
+      reason: expect.stringContaining("standing consent"),
+    });
+    const policy = yield* call(threadScope, "goat_environment_settings_read", {
+      keys: ["memoryOwnerSourceReadPolicy"],
+    });
+    expect(policy.result.settings).toEqual([
+      expect.objectContaining({
+        key: "memoryOwnerSourceReadPolicy",
+        access: "person",
+        schema: expect.any(Object),
+      }),
+    ]);
+    const refused = yield* call(threadScope, "goat_environment_settings_update", {
+      patch: { memoryOwnerSourceReadPolicy: {} },
+    });
+    expect(refused.result).toMatchObject({ code: "capability_denied" });
     expect(byKey.get("providerInstances")).toEqual({
       key: "providerInstances",
       access: "path",

@@ -11,7 +11,7 @@ export type SettingsAccess =
   | { readonly access: "path"; readonly path: AgentSurfacePath }
   | { readonly access: "person"; readonly reason: string };
 
-export type SettingsKey = keyof typeof ServerSettingsPatch.fields;
+export type SettingsKey = keyof typeof ServerSettingsPatch.fields | "memoryOwnerSourceReadPolicy";
 
 const agent = { access: "agent" } as const;
 const path = (owner: AgentSurfacePath) => ({ access: "path", path: owner }) as const;
@@ -33,6 +33,9 @@ export const SETTINGS_ACCESS = {
   enableAgentMemoryAccess: person(GRANTS_AGENTS),
   agentWorkspaceAccess: person(GRANTS_AGENTS),
   agentTerminalAccess: person(GRANTS_AGENTS),
+  memoryOwnerSourceReadPolicy: person(
+    "It widens what memory reaches and grants standing consent; a person decides in Settings.",
+  ),
   memoryEnabled: path("memory.settings_update"),
   memoryModelSelection: path("memory.settings_update"),
   goatBotModelSelection: agent,
@@ -122,6 +125,8 @@ export const SETTINGS_WRITE_EXCEPTIONS = {
   "fallback_chain.set": "Validates chain steps against provider instances and selects the default.",
   "memory.settings_update": "Versioned compare-and-swap on the memory service's settings.",
   "memory.hub_disable": "Disables the memory hub through its versioned transition.",
+  "memory.hub_reconcile": "Rearms recoverable hub holds after verifying the published hub version.",
+  "memory.report_attempts_reset": "Rearms eligible failed reports for delivery.",
   "provider.update": "Installs agents, routes approvals and audits provider changes.",
   "provider.add": "Creates a provider instance and starts its setup.",
   "provider.link": "Links a provider instance to credentials.",

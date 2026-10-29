@@ -1849,11 +1849,7 @@ export const MemorySettingsUpdateInput = struct({
   ),
 );
 export type MemorySettingsUpdateInput = typeof MemorySettingsUpdateInput.Type;
-export const MEMORY_ADMINISTRATION_MCP_TOOLS = [
-  "memory_hub_disable",
-  "memory_settings_get",
-  "memory_settings_update",
-] as const;
+export { MEMORY_ADMINISTRATION_MCP_TOOLS } from "./memoryAdministrationTools.ts";
 
 export const MemoryHubSettingsGetInput = struct({});
 export type MemoryHubSettingsGetInput = typeof MemoryHubSettingsGetInput.Type;

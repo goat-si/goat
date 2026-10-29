@@ -153,6 +153,10 @@ export class MemoryService extends Context.Service<
       operation: { operationId: M.MemoryOperationId; operationDigest: string };
       reauthorize: Permit;
     }) => Effect.Effect<Store.Settlement, MemoryServiceError>;
+    readonly peekProjectBinding: (
+      input: M.MemoryProjectBindingGetInput,
+      permit: Permit,
+    ) => Effect.Effect<M.MemoryProjectBinding | null, MemoryServiceError>;
     readonly getProjectBinding: (
       input: M.MemoryProjectBindingGetInput,
       permit: Permit,
@@ -449,6 +453,17 @@ const make = Effect.fnUntraced(function* (
       projectKey: old?.projectKey?.kind === "explicit" ? old.projectKey : repositoryKey,
       version: old?.version ?? 0,
     };
+  });
+  const peekProjectBinding = Effect.fn("MemoryService.peekProjectBinding")(function* (
+    input: M.MemoryProjectBindingGetInput,
+    permit: Permit,
+  ) {
+    const value = yield* decode(decodeBindingGet(input, strict));
+    yield* permit;
+    yield* projectRoot(value.project);
+    const binding = yield* store.getProjectBinding(value.memorySpaceId, value.project);
+    yield* permit;
+    return binding ?? null;
   });
   const getProjectBinding = Effect.fn("MemoryService.getProjectBinding")(function* (
     input: M.MemoryProjectBindingGetInput,
@@ -2691,6 +2706,7 @@ const make = Effect.fnUntraced(function* (
     receiveHubPage,
     reconcileResolutionSubmission,
     settleHubAcknowledgement,
+    peekProjectBinding,
     getProjectBinding,
     updateProjectBinding,
     resolveProjectKey,

@@ -13,6 +13,7 @@ import { dispatchEnvelope } from "../agentSurface/dispatchEnvelope.ts";
 import * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
 import profileMigration from "../../../persistence/Migrations/099_PermissionProfiles.ts";
 import migration from "../../../persistence/Migrations/078_Memory.ts";
+import reservationsMigration from "../../../persistence/Migrations/102_McpRequestReservations.ts";
 import searchMigration from "../../../persistence/Migrations/080_MemorySearchCounters.ts";
 import hubMigration from "../../../persistence/Migrations/079_MemoryHubSync.ts";
 import lineageMigration from "../../../persistence/Migrations/082_MemoryImportLineage.ts";
@@ -25,6 +26,7 @@ import readyMigration from "../../../persistence/Migrations/088_MemoryLastReadyS
 import administeredMigration from "../../../persistence/Migrations/089_MemoryHubAdministered.ts";
 import * as RepositoryResolver from "../../../project/RepositoryIdentityResolver.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
 import * as Quota from "../../../memory/MemoryQuotaService.ts";
 import * as Service from "../../../memory/MemoryService.ts";
@@ -55,6 +57,7 @@ const database = Layer.effectDiscard(
     Effect.andThen(revertMigration),
     Effect.andThen(readyMigration),
     Effect.andThen(administeredMigration),
+    Effect.andThen(reservationsMigration),
   ),
 ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })));
 const storage = Store.layer.pipe(Layer.provideMerge(database));
@@ -101,6 +104,22 @@ const sync = Layer.unwrap(
     return Layer.mock(Sync.MemorySyncService)({
       syncStatus: (_input, permit) =>
         permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
+      hubDiagnostics: (_input, permit) =>
+        permit.pipe(
+          Effect.as({
+            version: 1,
+            publication: { state: "current" as const },
+            readiness: "ready" as const,
+            connection: "connected" as const,
+            recoverableHolds: ["availability" as const],
+            permanentHolds: [],
+            reconcile: "available" as const,
+          }),
+        ),
+      reconcileHub: (input, permit) =>
+        permit.pipe(
+          Effect.as({ version: input.expectedVersion, rearmedClasses: ["availability" as const] }),
+        ),
       updateHubSettings: (input, permit) =>
         administrator.update(
           input,
@@ -113,6 +132,7 @@ const sync = Layer.unwrap(
 const makeLayer = <E, R, E2, R2>(
   serviceCore: Layer.Layer<Layer.Success<typeof core>, E, R>,
   profiles: Layer.Layer<Profiles.PermissionProfiles, E2, R2>,
+  threads = McpToolAccessTestkit.liveThreadsLayer,
 ) =>
   Layer.mergeAll(
     McpHttpServer.layerMemoryToolkit,
@@ -124,10 +144,18 @@ const makeLayer = <E, R, E2, R2>(
       MemorySettings.layer.pipe(Layer.provideMerge(sync), Layer.provideMerge(settings)),
     ),
     Layer.provideMerge(McpServer.McpServer.layer),
-    Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+    Layer.provideMerge(threads),
     Layer.provide(NodeServices.layer),
   );
 export const layer = makeLayer(core, McpToolAccessTestkit.layerPermissionProfilesOff);
+export const planLayer = makeLayer(
+  core,
+  McpToolAccessTestkit.layerPermissionProfilesOff,
+  Layer.mock(Threads.ThreadManagementService)({
+    getThreadShell: (id) =>
+      Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { interactionMode: "plan" })),
+  }),
+);
 const profileCore = Layer.effectDiscard(
   Effect.gen(function* () {
     yield* profileMigration;
