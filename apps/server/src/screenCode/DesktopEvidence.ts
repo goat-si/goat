@@ -340,6 +340,8 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       if (!postWins) return !closing;
       const appeared = postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen);
       if (closing) return appeared || windowClosure(postRaw, pid, windowId) === "closed";
+      // A sheet a later read follows must be on screen, whatever the id snapshot already shows.
+      if (deps.opensWindow === true) return appeared;
       if (openedWindowIds(preRaw, postRaw, pid).length > 0) return true;
       return (
         appeared &&
