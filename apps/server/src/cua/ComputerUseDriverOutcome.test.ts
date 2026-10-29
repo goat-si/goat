@@ -364,3 +364,18 @@ describe("menu_bar_extras reads only when it finds SystemUIServer or lists statu
     }
   });
 });
+
+describe("a reply already marked as possibly committed keeps that mark", () => {
+  it("a write's earlier possibleCommit survives a code that reads as a refusal; a read's does not", () => {
+    const line = reply({ code: "unknown_tool", safety: { possibleCommit: true } });
+    const write = parsed(markUnverified("select_text", line)).result.structuredContent.safety;
+    assert.deepInclude(write, { possibleCommit: true, writeStatus: "may_have_applied" });
+    const read = parsed(markUnverified("menu_bar_extras", line, { operation: "list" })).result
+      .structuredContent.safety;
+    assert.deepInclude(read, { possibleCommit: false });
+    // Without an earlier mark, an unknown tool was refused before anything ran.
+    const fresh = parsed(markUnverified("select_text", reply({ code: "unknown_tool" }))).result
+      .structuredContent.safety;
+    assert.deepInclude(fresh, { possibleCommit: false });
+  });
+});

@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
 import { computerUseRefusalReason } from "@goat/contracts";
+import { markUnverified } from "../cua/ComputerUseDriverOutcome.ts";
 import { context, DriverError, fixture, UnknownOutcome } from "./DesktopTargetHost.testkit.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
@@ -163,6 +164,26 @@ it.live("an answer that may have changed the selection is never called unsupport
       "app.selectText(1, 'world')",
     );
     expect(result.value).toMatchObject({
+      caught: { code: "unknown_outcome", nothingSent: false, possibleCommit: true },
+    });
+    // The same reply as the lease proxy forwards it, after its own outcome marking.
+    const proxied = JSON.parse(
+      markUnverified(
+        "select_text",
+        JSON.stringify({
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "Unknown tool: select_text" }],
+            structuredContent: { code: "unknown_tool", safety: { possibleCommit: true } },
+          },
+        }),
+      ),
+    ).result.structuredContent;
+    const marked = yield* run(
+      new DriverError(proxied, "Unknown tool: select_text"),
+      "app.selectText(1, 'world')",
+    );
+    expect(marked.result.value).toMatchObject({
       caught: { code: "unknown_outcome", nothingSent: false, possibleCommit: true },
     });
   }),

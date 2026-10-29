@@ -191,8 +191,20 @@ export function markUnverified(tool: string | undefined, line: string, args?: un
     return line;
   }
   if (!isRecord(message)) return line;
-  const safety = driverOutcomeSafety(tool, message, args);
   const read = isReadOnlyCall(tool, args);
+  const computed = driverOutcomeSafety(tool, message, args);
+  const given = isRecord(message.error)
+    ? isRecord(message.error.data)
+      ? message.error.data.safety
+      : undefined
+    : isRecord(message.result) && isRecord(message.result.structuredContent)
+      ? message.result.structuredContent.safety
+      : undefined;
+  // A reply already marked as possibly committed keeps that mark.
+  const safety =
+    !read && !computed.possibleCommit && isRecord(given) && given.possibleCommit === true
+      ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
+      : computed;
   if (isRecord(message.error)) {
     const raw = message.error.data;
     const data = raw === undefined ? {} : isRecord(raw) ? raw : { driverData: raw };
