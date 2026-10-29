@@ -53,6 +53,18 @@ export const waitConditions = (
 };
 
 const CLICK_WAIT_MS = 5_000;
+// What a tab click or hover reads from its call; any other key would be dropped unseen.
+const POINTER_KEYS = new Set([
+  "targetRef",
+  "selector",
+  "ref",
+  "point",
+  "x",
+  "y",
+  "count",
+  "timeoutMs",
+  "batch",
+]);
 // The browser's answer still has to reach the cell after the click gave up on its target.
 const ANSWER_RESERVE_MS = 500;
 const MIN_POINTER_MS = 250;
@@ -88,8 +100,16 @@ export const pointerInput = (
 ): { readonly fields: Record<string, unknown> } | { readonly error: ScreenRunError } => {
   if (target === undefined)
     return { error: fail("invalid_argument", "Use a current element or image point.") };
-  if (arg.clickCount !== undefined)
-    return { error: fail("invalid_argument", "A tab click's count is count, not clickCount.") };
+  const unknown = Object.keys(arg).find((key) => !POINTER_KEYS.has(key));
+  if (unknown !== undefined)
+    return {
+      error: fail(
+        "invalid_argument",
+        `A tab ${method === "hover" ? "hover" : "click"} does not take ${unknown}${
+          unknown === "clickCount" || unknown === "clicks" ? "; its click count is count" : ""
+        }. It takes a selector, ref or point, count and timeoutMs.`,
+      ),
+    };
   const count = method === "hover" ? undefined : arg.count;
   if (count !== undefined && !(Number.isInteger(count) && Number(count) >= 1 && Number(count) <= 3))
     return { error: fail("invalid_argument", "A tab click count is 1, 2 or 3.") };

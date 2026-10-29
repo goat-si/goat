@@ -306,6 +306,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                         invocation: context.invocation,
                         tabId: error.unloadedTab.tabId,
                         loadError: error.unloadedTab.loadError,
+                        route: {
+                          browserInstanceId: error.clientId,
+                          connectionId: error.connectionId,
+                        },
                         list: list(context).pipe(Effect.option),
                         claim: (tab) => {
                           const claimed = targets.get(bind(tab, context).id);

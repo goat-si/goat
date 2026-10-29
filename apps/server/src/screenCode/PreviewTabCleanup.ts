@@ -103,6 +103,8 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
     readonly invocation: ScreenHostContext["invocation"];
     readonly tabId: PreviewTabId;
     readonly loadError: string;
+    /** The browser that answered the open; status and close go only to it. */
+    readonly route: { readonly browserInstanceId: string; readonly connectionId: string };
     /** The live tabs, or none when they could not be listed. */
     readonly list: Effect.Effect<Option.Option<ReadonlyArray<BoundPreviewTab>>>;
     readonly claim: (tab: BoundPreviewTab) => Effect.Effect<void>;
@@ -112,35 +114,30 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
     const tab = Option.isSome(listed)
       ? listed.value.find((entry) => entry.tabId === input.tabId)
       : undefined;
-    if (tab) {
-      yield* input.claim(tab);
-      yield* input.broker
-        .invoke({
-          scope: input.invocation,
-          operation: "close",
-          input: {},
-          exact: {
-            browserInstanceId: tab.browserInstanceId,
-            connectionId: tab.connectionId,
-            tabId: input.tabId,
-            controlGeneration: tab.controlGeneration,
-            origin: originOf(tab.url),
-          },
-        })
-        .pipe(Effect.ignore);
-    }
-    if (!tab)
-      yield* input.broker
-        .invoke({ scope: input.invocation, operation: "close", input: {}, tabId: input.tabId })
-        .pipe(Effect.ignore);
-    // The list leaves out a tab whose status it could not read, so only the browser saying it
-    // has no such tab counts as closed.
+    const route = tab
+      ? { browserInstanceId: tab.browserInstanceId, connectionId: tab.connectionId }
+      : input.route;
+    if (tab) yield* input.claim(tab);
+    yield* input.broker
+      .invoke({
+        scope: input.invocation,
+        operation: "close",
+        input: {},
+        exact: {
+          ...route,
+          tabId: input.tabId,
+          ...(tab ? { controlGeneration: tab.controlGeneration, origin: originOf(tab.url) } : {}),
+        },
+      })
+      .pipe(Effect.ignore);
+    // The list leaves out a tab whose status it could not read, so only that same browser saying
+    // it has no such tab counts as closed.
     const gone = yield* input.broker
       .invoke<PreviewAutomationStatus>({
         scope: input.invocation,
         operation: "status",
         input: {},
-        tabId: input.tabId,
+        exact: { ...route, tabId: input.tabId },
         updateCurrentTab: false,
       })
       .pipe(
@@ -155,7 +152,7 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
         code: "downstream_failure" as const,
         effectStarted: true,
         message: `${reason}; its tab ${input.tabId} is still open.`,
-        nextStep: `screen.tab({tabId: "${input.tabId}"}) shows it; close it there or leave it to turn cleanup.`,
+        nextStep: `screen.tab({tabId: "${input.tabId}"}) shows it; close it there${tab ? " or leave it to turn cleanup" : ""}.`,
       } satisfies ScreenRunError;
     yield* input.release(input.tabId);
     return {

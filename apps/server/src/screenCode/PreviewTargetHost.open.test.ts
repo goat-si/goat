@@ -37,11 +37,16 @@ const refusingBrowser = (
   failure = refused(),
   options: { readonly unlisted?: boolean } = {},
 ) => {
-  const state = { tabs: [errorPage], operations: [] as string[] };
+  const state = {
+    tabs: [errorPage],
+    operations: [] as string[],
+    routes: [] as Array<string | undefined>,
+  };
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
     // A tab whose status the list could not read is left out of it while it stays live.
     listBoundTabs: () => Effect.succeed(options.unlisted ? [] : state.tabs),
     invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation !== "open") state.routes.push(request.exact?.browserInstanceId);
       if (request.operation === "status")
         return state.tabs.length > 0
           ? Effect.succeed({ tabId: errorPage.tabId } as A)
@@ -110,6 +115,10 @@ it.effect("an error-page tab the list left out is not reported closed while it s
     expect(result).toMatchObject({ code: "downstream_failure", effectStarted: true });
     expect(result.message).toContain("refused is still open");
     expect(state.operations).toEqual(["open", "close"]);
+    // No claim holds it, so the answer does not promise turn cleanup, and both calls stayed on
+    // the browser that answered the open.
+    expect(result.nextStep).not.toContain("turn cleanup");
+    expect(state.routes).toEqual(["server-browser", "server-browser"]);
   }),
 );
 
