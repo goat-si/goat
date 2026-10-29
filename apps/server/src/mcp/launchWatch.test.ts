@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import {
   addPendingRun,
+  discoverRun,
   endReported,
   finishedWake,
   LaunchWatchDocument,
@@ -13,6 +14,7 @@ import {
   normalizeHost,
   outageWake,
   questionWake,
+  quietEnd,
   rearmRetriedRun,
   recordContact,
   recordFailure,
@@ -284,3 +286,56 @@ it.effect("normalizes blank hosts and distinguishes local watches from remote wa
     );
   }),
 );
+
+it("follows a run the thread started itself once, and counts finding it as arming the watch", () => {
+  const run1 = RunId.make("run-1");
+  const run2 = RunId.make("run-2");
+  const reported = settleEnd(addPendingRun(makeWatch(), run1, 0), run1, "end-1", 10);
+  const found = discoverRun(reported, run2, 500);
+  expect(found).toMatchObject({ pendingRuns: [run2], discoveredRuns: [run2], armedAt: 500 });
+  // Seeing the same run, or one already reported, again changes nothing.
+  expect(discoverRun(found, run2, 900)).toBe(found);
+  expect(discoverRun(reported, run1, 900)).toBe(reported);
+  // Its end settles it like any other run, so it is never reported twice.
+  const ended = settleEnd(found, run2, "end-2", 600);
+  expect(ended).toMatchObject({ pendingRuns: [], discoveredRuns: [], reportedRuns: [run1, run2] });
+  expect(discoverRun(ended, run2, 900)).toBe(ended);
+});
+
+it("makes a found run owed once its caller sends into it or retries it", () => {
+  const run = RunId.make("run-2");
+  const found = discoverRun(makeWatch(), run, 0);
+  expect(addPendingRun(found, run, 5)).toMatchObject({ pendingRuns: [run], discoveredRuns: [] });
+  expect(rearmRetriedRun(found, run, 5)).toMatchObject({
+    pendingRuns: [run],
+    followAgain: [run],
+    discoveredRuns: [],
+  });
+});
+
+it("settles a found run's end unreported when the thread went on, a send started it, or it echoes", () => {
+  const run = RunId.make("run-2");
+  const watch = makeWatch(null);
+  const found = discoverRun(watch, run, 0);
+  const quiet = (trigger: string | null, continuedIn: RunId | null = null) =>
+    quietEnd(found, run, { trigger, continuedIn });
+  // The thread is reported once it goes idle, not for each short wake on the way.
+  expect(quiet(null, RunId.make("run-3"))).toBe("continued");
+  // Another caller's goat_thread_send reports to that caller's own watch.
+  expect(quiet("message:mcp:client%3Abot-b:thread-send:request-1")).toBe("sent");
+  // The launcher's own report about this thread woke it: reporting that back would loop.
+  const echo = launchWatchId({ launcherThreadId: watch.threadId, host: "mac", threadId: "caller" });
+  expect(quiet(`message:launch-watch:${echo}:run:run-9`)).toBe("echo");
+  // Wakes from anything else, typed messages, and unknown starts are the thread's own work.
+  const other = launchWatchId({ launcherThreadId: watch.threadId, host: null, threadId: "child" });
+  expect(quiet(`message:launch-watch:${other}:run:run-9`)).toBeNull();
+  expect(quiet("message:mcp:goat-thread:origin-report:1")).toBeNull();
+  expect(quiet(null)).toBeNull();
+  expect(quiet(null, run)).toBeNull();
+  // A run the watch was armed for is always reported.
+  const armed = addPendingRun(watch, run, 0);
+  expect(quietEnd(armed, run, { trigger: null, continuedIn: RunId.make("run-3") })).toBeNull();
+  expect(
+    quietEnd(armed, run, { trigger: "message:mcp:client:thread-send:1", continuedIn: null }),
+  ).toBeNull();
+});
