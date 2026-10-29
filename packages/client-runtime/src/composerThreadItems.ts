@@ -6,11 +6,21 @@ import { threadSearchSubject, type ThreadSearchShell } from "./state/threadSearc
 
 const COMPOSER_THREAD_RESULT_LIMIT = 5;
 
+export class ComposerThreadHosts extends Map<EnvironmentId, string> {
+  private readonly aliases = new Map<string, EnvironmentId>();
+  allow(id: EnvironmentId, host: string) {
+    this.aliases.set(host, id);
+  }
+  allows(id: EnvironmentId, host: string) {
+    return this.aliases.get(host) === id;
+  }
+}
+
 export function composerThreadHosts(input: {
   readonly nodes: ReadonlyArray<HubNode>;
   readonly mounted: ReadonlySet<EnvironmentId>;
   readonly sshHosts: ReadonlyMap<EnvironmentId, string>;
-}): Map<EnvironmentId, string> {
+}): ComposerThreadHosts {
   const names = new Map<string, Set<EnvironmentId | null>>();
   const remember = (name: string, id: EnvironmentId | null) => {
     const ids = names.get(name) ?? new Set<EnvironmentId | null>();
@@ -27,24 +37,28 @@ export function composerThreadHosts(input: {
     const ids = names.get(name);
     return ids?.size === 1 && ids.has(id);
   };
-  const result = new Map<EnvironmentId, string>();
+  const result = new ComposerThreadHosts();
   for (const [id, host] of input.sshHosts) {
     const node = input.nodes.find((candidate) => candidate.environmentId === id);
-    if (input.mounted.has(id) && node?.status !== "offline" && safe(host, id)) result.set(id, host);
+    if (input.mounted.has(id) && node?.status !== "offline" && safe(host, id)) {
+      result.allow(id, host);
+      result.set(id, host);
+    }
   }
   for (const node of input.nodes) {
     const id = node.environmentId;
-    if (id === null || !input.mounted.has(id) || node.status === "offline" || result.has(id))
-      continue;
+    if (id === null || !input.mounted.has(id) || node.status === "offline") continue;
     for (const route of node.routes) {
-      if (
-        route.target.kind === "linked" &&
-        route.status === "online" &&
-        safe(route.target.name, id)
-      ) {
-        result.set(id, route.target.name);
-        break;
-      }
+      if (route.status !== "online") continue;
+      const host =
+        route.target.kind === "linked"
+          ? route.target.name
+          : route.target.kind === "ssh"
+            ? route.target.alias
+            : null;
+      if (host === null || !safe(host, id)) continue;
+      result.allow(id, host);
+      if (route.target.kind === "linked" && !result.has(id)) result.set(id, host);
     }
   }
   return result;

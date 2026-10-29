@@ -8,6 +8,7 @@ import {
   type ConnectionCatalogEntry,
 } from "@goat/client-runtime/connection";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { ComposerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import {
   formatComposerContextReference,
   threadContextsOutsideEnvironment,
@@ -196,6 +197,28 @@ describe("routeThreadContextRecords", () => {
         .routed[0]?.host,
     ).toBe("linked-box");
     expect(routeThreadContextRecords({ ...input, verifiedHosts: new Map() }).routed).toEqual([]);
+  });
+
+  it("preserves a verified SSH chip when the preferred route is a linked host", () => {
+    const record = {
+      ...threadContextRecord(
+        { environmentId: cloudId, threadId: ThreadId.make("remote") },
+        "Remote",
+      ),
+      host: "ssh-alias",
+    };
+    const verifiedHosts = new ComposerThreadHosts([[cloudId, "linked-box"]]);
+    verifiedHosts.allow(cloudId, "ssh-alias");
+    verifiedHosts.allow(cloudId, "linked-box");
+    const input = {
+      records: [record],
+      agentEnvironmentId: primaryId,
+      entries,
+      isDesktopRenderer: false,
+      verifiedHosts,
+    };
+    expect(routeThreadContextRecords(input).routed).toEqual([record]);
+    expect(settleThreadContextsForAgent(input)).toEqual([record]);
   });
   it("attaches the reachable part of a mixed drop and explains the refused part", () => {
     const { routed, refusal } = routeThreadContextRecords({

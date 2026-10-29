@@ -1,5 +1,9 @@
 import { connectionRoutes, type ConnectionCatalogEntry } from "@goat/client-runtime/connection";
 import type { EnvironmentId, ThreadContextRecord } from "@goat/contracts";
+import {
+  isVerifiedThreadHost,
+  type VerifiedThreadHosts,
+} from "@goat/shared/composerContextReferences";
 import * as Option from "effect/Option";
 
 /**
@@ -32,7 +36,7 @@ export function resolveThreadContextRoute(input: {
   readonly threadEnvironmentId: EnvironmentId;
   readonly entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
   readonly isDesktopRenderer: boolean;
-  readonly verifiedHosts?: ReadonlyMap<EnvironmentId, string> | undefined;
+  readonly verifiedHosts?: VerifiedThreadHosts | undefined;
 }): ThreadContextRoute {
   if (input.threadEnvironmentId === input.agentEnvironmentId) return { kind: "local" };
   if (input.verifiedHosts !== undefined) {
@@ -71,7 +75,7 @@ export function routeThreadContextRecords(input: {
   readonly agentEnvironmentId: EnvironmentId;
   readonly entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
   readonly isDesktopRenderer: boolean;
-  readonly verifiedHosts?: ReadonlyMap<EnvironmentId, string>;
+  readonly verifiedHosts?: VerifiedThreadHosts;
 }): {
   readonly routed: ReadonlyArray<ThreadContextRecord>;
   readonly refusal: { readonly title: string; readonly description: string } | null;
@@ -83,13 +87,21 @@ export function routeThreadContextRecords(input: {
       record.environmentId !== input.agentEnvironmentId &&
       record.host &&
       input.verifiedHosts !== undefined &&
-      input.verifiedHosts.get(record.environmentId) !== record.host
+      !isVerifiedThreadHost(input.verifiedHosts, record.environmentId, record.host)
     ) {
       refusal ??= threadContextUnreachableMessage({
         reason: "unverified-route",
         threadEnvironmentLabel: input.entries.get(record.environmentId)?.target.label ?? null,
         agentEnvironmentLabel: input.entries.get(input.agentEnvironmentId)?.target.label ?? null,
       });
+      continue;
+    }
+    if (
+      record.environmentId !== input.agentEnvironmentId &&
+      record.host &&
+      input.verifiedHosts !== undefined
+    ) {
+      routed.push(record);
       continue;
     }
     const route = resolveThreadContextRoute({
@@ -122,17 +134,23 @@ export function settleThreadContextsForAgent(input: {
   readonly agentEnvironmentId: EnvironmentId;
   readonly entries: ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>;
   readonly isDesktopRenderer: boolean;
-  readonly verifiedHosts?: ReadonlyMap<EnvironmentId, string>;
+  readonly verifiedHosts?: VerifiedThreadHosts;
 }): ReadonlyArray<ThreadContextRecord> {
   return input.records.map((record) => {
     if (
       record.environmentId !== input.agentEnvironmentId &&
       record.host &&
       input.verifiedHosts !== undefined &&
-      input.verifiedHosts.get(record.environmentId) !== record.host
+      !isVerifiedThreadHost(input.verifiedHosts, record.environmentId, record.host)
     ) {
       return routeThreadContextRecord(record, { kind: "local" });
     }
+    if (
+      record.environmentId !== input.agentEnvironmentId &&
+      record.host &&
+      input.verifiedHosts !== undefined
+    )
+      return record;
     const route = resolveThreadContextRoute({
       agentEnvironmentId: input.agentEnvironmentId,
       threadEnvironmentId: record.environmentId,

@@ -399,17 +399,31 @@ export function projectComposerContextForProvider(input: {
   return `${body}\n\n<${CONTEXT_ENVELOPE_TAG} version="1">\n${entries.join("\n")}\n</${CONTEXT_ENVELOPE_TAG}>`;
 }
 
+export type VerifiedThreadHosts = ReadonlyMap<EnvironmentId, string> & {
+  readonly allows?: (environmentId: EnvironmentId, host: string) => boolean;
+};
+
+export function isVerifiedThreadHost(
+  hosts: VerifiedThreadHosts,
+  environmentId: EnvironmentId,
+  host: string,
+): boolean {
+  return hosts.allows?.(environmentId, host) ?? hosts.get(environmentId) === host;
+}
+
 export function isThreadContextReadable(input: {
   record: ThreadContextRecord;
   environmentId: EnvironmentId;
   hostRoutingEnvironmentId?: EnvironmentId | undefined;
-  verifiedHosts?: ReadonlyMap<EnvironmentId, string> | undefined;
+  verifiedHosts?: VerifiedThreadHosts | undefined;
 }): boolean {
+  const host = input.record.host;
   return (
     input.record.environmentId === input.environmentId ||
     (input.verifiedHosts !== undefined
-      ? Boolean(input.record.host?.trim()) &&
-        input.verifiedHosts.get(input.record.environmentId) === input.record.host
+      ? host !== undefined &&
+        host.trim().length > 0 &&
+        isVerifiedThreadHost(input.verifiedHosts, input.record.environmentId, host)
       : input.hostRoutingEnvironmentId === input.environmentId &&
         Boolean(input.record.host?.trim()))
   );
@@ -421,7 +435,7 @@ export function threadContextsOutsideEnvironment(input: {
   records: ReadonlyArray<ComposerContextRecord>;
   environmentId: EnvironmentId;
   hostRoutingEnvironmentId?: EnvironmentId | undefined;
-  verifiedHosts?: ReadonlyMap<EnvironmentId, string> | undefined;
+  verifiedHosts?: VerifiedThreadHosts | undefined;
 }): ThreadContextRecord[] {
   const referenced = new Set(
     collectComposerContextReferences(input.text).map((occurrence) => occurrence.contextId),

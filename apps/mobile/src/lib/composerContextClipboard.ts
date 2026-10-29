@@ -13,7 +13,10 @@ import {
   decodeComposerContextFragment,
   encodeComposerContextFragment,
 } from "@goat/shared/composerContextClipboard";
-import { threadContextsOutsideEnvironment } from "@goat/shared/composerContextReferences";
+import {
+  threadContextsOutsideEnvironment,
+  type VerifiedThreadHosts,
+} from "@goat/shared/composerContextReferences";
 import { executeAtomQuery, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import * as Option from "effect/Option";
@@ -67,7 +70,7 @@ export async function importComposerContextClipboard(
   signal: AbortSignal,
   existingContextCount = 0,
   destinationEnvironmentId?: EnvironmentId,
-  verifiedHosts?: ReadonlyMap<EnvironmentId, string>,
+  verifiedHosts?: VerifiedThreadHosts,
 ) {
   const fragment =
     decodeComposerContextFragment(input.fragment) ?? decodeComposerContextClipboardHtml(input.html);
@@ -80,8 +83,9 @@ export async function importComposerContextClipboard(
       const { host: _host, ...local } = record;
       return local;
     }
+    if (record.host) return record;
     const host = verifiedHosts?.get(record.environmentId);
-    if (!host || (record.host && record.host !== host)) return record;
+    if (!host) return record;
     return { ...record, host };
   });
   const skippedThreads =

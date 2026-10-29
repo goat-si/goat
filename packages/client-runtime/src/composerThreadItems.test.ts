@@ -57,6 +57,12 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
   expect([
     ...composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh }),
   ]).toEqual([[remote, "same"]]);
+  const routes = composerThreadHosts({ nodes, mounted: new Set([remote, other]), sshHosts: ssh });
+  expect(routes.allows(remote, "same")).toBe(true);
+  expect(routes.allows(remote, "build")).toBe(true);
+  expect(routes.allows(remote, "collision")).toBe(false);
+  expect(routes.allows(remote, "unknown")).toBe(false);
+  expect(routes.allows(other, "offline")).toBe(false);
   expect([
     ...composerThreadHosts({
       nodes: [node(remote, "build")],
@@ -71,6 +77,13 @@ it("admits only mounted online linked routes with unambiguous identity", () => {
       sshHosts: new Map(),
     }),
   ]).toEqual([]);
+  expect(
+    composerThreadHosts({
+      nodes: [node(remote, "build")],
+      mounted: new Set(),
+      sshHosts: new Map(),
+    }).allows(remote, "build"),
+  ).toBe(false);
 });
 
 function shell(

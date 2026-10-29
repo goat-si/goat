@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { ComposerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import {
   COMPOSER_CONTEXT_MAX_RECORDS,
   ComposerContextId,
@@ -190,6 +191,32 @@ describe("mobile context clipboard imports", () => {
     );
     expect(refused?.context.records).toEqual([]);
     expect(refused?.skippedThreads).toHaveLength(1);
+  });
+
+  it("retains an SSH chip when another verified route is preferred", async () => {
+    const record = { ...foreignThread, host: "ssh-alias" };
+    const clipboard = {
+      text: formatComposerContextReference(record),
+      html: "",
+      fragment: encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: record.environmentId },
+        records: [record],
+      })!,
+    };
+    const hosts = new ComposerThreadHosts([[record.environmentId, "linked-box"]]);
+    hosts.allow(record.environmentId, "ssh-alias");
+    const result = await importComposerContextClipboard(
+      clipboard,
+      0,
+      new AbortController().signal,
+      0,
+      localThread.environmentId,
+      hosts,
+    );
+    expect(result?.context.records).toContainEqual(
+      expect.objectContaining({ threadId: record.threadId, host: "ssh-alias" }),
+    );
   });
   it("copies original bytes and rewrites file bindings using a signal without throwIfAborted", async () => {
     const signal = { aborted: false } as AbortSignal;
