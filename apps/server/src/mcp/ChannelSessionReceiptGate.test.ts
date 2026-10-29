@@ -314,3 +314,29 @@ it.effect("refuses a session credential without an authenticated run identity", 
     expect(result._tag).toBe("Failure");
   }).pipe(Effect.provide(testLayer)),
 );
+
+it.effect("restart settlement to ambiguous wakes a waiting write without reserving it", () =>
+  Effect.gen(function* () {
+    yield* Fixture.seed;
+    const sql = yield* SqlClient.SqlClient;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const gate = yield* ChannelSessionReceiptGate.ChannelSessionReceiptGate;
+    yield* ledger.claimOwnership({
+      token: "restart-owner",
+      now: "1970-01-01T00:00:00.000Z",
+      staleBefore: "1969-01-01T00:00:00.000Z",
+    });
+    yield* sql`UPDATE channel_outbox SET destination_kind = 'slack'`;
+    const pending = yield* gate
+      .require(sessionScope().thread!)
+      .pipe(Effect.result, Effect.forkChild);
+    yield* TestClock.adjust("1 second");
+    yield* ledger.settleInterruptedDeliveries({
+      owner: "restart-owner",
+      now: "1970-01-01T00:00:01.000Z",
+    });
+    yield* TestClock.adjust("10 seconds");
+    expect((yield* Fiber.join(pending))._tag).toBe("Success");
+    expect(yield* sql`SELECT * FROM mcp_request_reservations`).toHaveLength(0);
+  }).pipe(Effect.provide(testLayer)),
+);

@@ -74,6 +74,7 @@ export const layerRunExecutionTest = RunExecutionService.layer.pipe(
 );
 
 export function captureRootRunTermination(input: {
+  readonly session?: boolean;
   readonly key: string;
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
@@ -98,7 +99,10 @@ export function captureRootRunTermination(input: {
   ) => Effect.Effect<boolean, EventSink.EventSinkV2Error>;
 }) {
   return Effect.gen(function* () {
-    const ids = backgroundScenarioIds(input.key);
+    const ids = {
+      ...backgroundScenarioIds(input.key),
+      ...(input.session ? { threadId: ThreadId.make("goat-bot-session:" + input.key + ":1") } : {}),
+    };
     const providerInstanceId = ProviderInstanceId.make("codex");
     const runningSubagent = makeRunOwnedSubagentFixture({
       ids,

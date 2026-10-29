@@ -104,6 +104,7 @@ it.effect.each([
           ).toBe("run-b");
           yield* prepare("run-b");
           expect((yield* sessions.read(threadId))?.providerSessionId).toBe(b!.providerSessionId);
+          expect((yield* sessions.read(threadId))?.nativeSubagentLimit).toBe(0);
         } else expect(b!.providerSessionId).toBe(a!.providerSessionId);
       }),
     ).pipe(Effect.provide(testLayer(driver))),

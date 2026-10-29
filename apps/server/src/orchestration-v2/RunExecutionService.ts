@@ -4,6 +4,7 @@ import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
 import { turnText } from "./TurnDigest.ts";
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
+import * as SessionReceiptHold from "./goat/SessionReceiptHold.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import {
   isOrchestrationV2WorkActive,
@@ -660,7 +661,7 @@ export const layer: Layer.Layer<
     const checkpointService = yield* CheckpointService.CheckpointServiceV2;
     const eventSink = yield* EventSink.EventSinkV2;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
-    const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+    const providerEventIngestor = yield* SessionReceiptHold.wrap();
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const mcpAppModelContext = yield* McpAppModelContext.McpAppModelContext;
     const remoteReportInbox = yield* RemoteReportInbox.RemoteReportInbox;
@@ -1462,7 +1463,7 @@ export const layer: Layer.Layer<
         const receipt = { receiptLine: isGoatBotSessionThreadId(input.run.threadId) };
         const filterAssistantEvent = makeAssistantStreamingFilter(responseStreamingMode, receipt);
         const closeEventSubscription = Effect.andThen(
-          eventSubscription.close,
+          providerEventIngestor.close(input.run.id, eventSubscription.close),
           cloud
             ? Ref.update(cloudObservers, (current) => {
                 const next = new Set(current);
@@ -1591,6 +1592,7 @@ export const layer: Layer.Layer<
                   event.type === "provider_thread.updated" &&
                   event.providerThread.id === input.providerThread.id;
                 const storedEvents = yield* providerEventIngestor.ingestNormalized({
+                  receiptAttemptId: input.attempt.id,
                   analyticsContext: {
                     modelSelection: input.modelSelection,
                     runtimeMode: input.runtimePolicy.runtimeMode,

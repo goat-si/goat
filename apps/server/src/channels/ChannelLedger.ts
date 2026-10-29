@@ -1638,7 +1638,10 @@ const make = Effect.gen(function* () {
             `;
           }),
         )
-        .pipe(Effect.mapError(toLedgerError("settleInterruptedDeliveries"))),
+        .pipe(
+          Effect.tap(() => receiptGate.changed),
+          Effect.mapError(toLedgerError("settleInterruptedDeliveries")),
+        ),
 
     getDeliveryState: (deliveryId) =>
       sql<{ readonly state: string }>`
