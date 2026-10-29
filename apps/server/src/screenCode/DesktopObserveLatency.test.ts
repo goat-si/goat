@@ -19,17 +19,31 @@ import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { call, context, fixture, goat2WindowState } from "./DesktopTargetHost.testkit.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
+import { observationReplyBudget } from "./ScreenHostBridge.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
 const isObservation = Schema.is(ScreenObservation);
 
-/** Counts renders, so a test can tell a screenshot that skipped the tree from one that read it. */
+type RenderInput = Parameters<ScreenObservations["renderObservation"]>[0];
+/**
+ * Records every render: its input and output, so a test can tell a screenshot that skipped the
+ * tree from one that read it, and compare what the host returned with what was rendered.
+ */
 class CountingObservations extends ScreenObservations {
   renders = 0;
-  override renderObservation(input: Parameters<ScreenObservations["renderObservation"]>[0]) {
+  inputs: RenderInput[] = [];
+  outputs: ScreenObservation[] = [];
+  /** The render that throws the tree budget error, as an over-budget window does. */
+  failOn = 0;
+  override renderObservation(input: RenderInput) {
     this.renders++;
-    return super.renderObservation(input);
+    this.inputs.push(input);
+    if (this.renders === this.failOn)
+      throw new Error("Screen observation metadata exceeds tree budget");
+    const output = super.renderObservation(input);
+    this.outputs.push(output);
+    return output;
   }
 }
 
@@ -118,6 +132,12 @@ it.effect(
       const replaced = yield* host.observe(call("screenshot", {}, ref), context);
       expect(observations.renders).toBe(2);
       expect(replaced.imageMetadata?.observationId).not.toBe(tree.observationId);
+      // The replacing reply's tree was parsed into the rendered draft, rows and text alike.
+      expect(observations.inputs[1]?.draft.elements).toMatchObject([
+        { role: "AXWindow", name: "Document", index: 0, driverToken: "s0000000e:0" },
+      ]);
+      expect(observations.inputs[1]?.draft.indexedText).toBe('- [0] AXWindow "Document"');
+      expect(replaced.imageMetadata?.observationId).toBe(observations.outputs[1]?.observationId);
       const before = sent.length;
       const stale = yield* host
         .invoke(call("click", { elementRef: apply as ScreenElementRef }, ref), context)
@@ -125,6 +145,128 @@ it.effect(
       expect(stale._tag === "Failure" && stale.failure.code).toBe("stale_reference");
       expect(sent).toHaveLength(before);
     }),
+);
+
+it.effect(
+  "a replacing screenshot whose tree does not fit fails as tree_limit and still retires the tree's refs",
+  () =>
+    Effect.gen(function* () {
+      let screenshot: Record<string, unknown> = { snapshot_id: "s0000000a" };
+      const observations = new CountingObservations();
+      observations.failOn = 2;
+      const { host, sent } = timedHost(
+        { get_window_state: (args: Record<string, unknown>) => goat2WindowState(args, screenshot) },
+        observations,
+      );
+      const ref = yield* bind(host);
+      const tree = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+        .value as ScreenObservation;
+      screenshot = {
+        snapshot_id: "s0000000e",
+        tree_markdown: '- [0] AXWindow "Document"',
+        elements: [
+          { role: "AXWindow", element_index: 0, element_token: "s0000000e:0", label: "Document" },
+        ],
+      };
+      const failed = yield* host.observe(call("screenshot", {}, ref), context).pipe(Effect.result);
+      expect(failed._tag === "Failure" && failed.failure.code).toBe("tree_limit");
+      const before = sent.length;
+      const stale = yield* host
+        .invoke(
+          call("click", { elementRef: tree.elements[1]?.ref as ScreenElementRef }, ref),
+          context,
+        )
+        .pipe(Effect.result);
+      expect(stale._tag === "Failure" && stale.failure.code).toBe("stale_reference");
+      expect(sent).toHaveLength(before);
+    }),
+);
+
+it.effect(
+  "at tight budgets a read renders with the whole budget and returns exactly what was rendered, with timing only when it fits",
+  () =>
+    Effect.gen(function* () {
+      const elements = Array.from({ length: 40 }, (_, index) => ({
+        role: index === 0 ? "AXWindow" : "AXButton",
+        depth: index === 0 ? 0 : 1,
+        element_index: index,
+        element_token: "s1:" + index,
+        label: index === 0 ? "Document" : "Button " + index,
+        ...(index === 0 ? {} : { parent_index: 0 }),
+      }));
+      const tree = {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: "s1",
+        elements_complete: false,
+        elements,
+        tree_markdown: elements
+          .map(
+            (e) =>
+              (e.depth ? "  " : "") +
+              "- [" +
+              e.element_index +
+              "] " +
+              e.role +
+              ' "' +
+              e.label +
+              '"',
+          )
+          .join("\n"),
+      };
+      const observations = new CountingObservations();
+      const { host } = timedHost({ get_window_state: tree }, observations);
+      const ref = yield* bind(host);
+      const whole = (yield* host.observe(call("get_window_state", {}, ref), context))
+        .value as ScreenObservation;
+      const { ms: _ms, phases: _phases, ...wholePlain } = whole;
+      const wholeBytes = Buffer.byteLength(JSON.stringify(wholePlain));
+      let timed = 0;
+      let untimed = 0;
+      // From just below the whole render to past it plus timing, one byte at a time.
+      for (let treeBytes = wholeBytes - 40; treeBytes <= wholeBytes + 100; treeBytes++) {
+        const limits = { ...context.limits, treeBytes };
+        const read = call("get_window_state", {}, ref);
+        const value = (yield* host.observe(read, { ...context, limits }))
+          .value as ScreenObservation;
+        const rendered = observations.outputs.at(-1);
+        const budget = observationReplyBudget(read, limits);
+        expect(observations.inputs.at(-1)?.limits.treeBytes).toBe(budget);
+        const { ms, phases, ...plain } = value;
+        expect(plain).toEqual(rendered);
+        expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(budget);
+        if (ms === undefined) {
+          expect(phases).toBeUndefined();
+          untimed++;
+        } else timed++;
+      }
+      // The sweep crosses the boundary: some reads leave timing out, the others carry it.
+      expect(untimed).toBeGreaterThan(0);
+      expect(timed).toBeGreaterThan(0);
+    }),
+);
+
+it.effect("a screenshot leaves its timing out when it would not fit returnBytes", () =>
+  Effect.gen(function* () {
+    const { host, observations } = timedHost({ get_window_state: goat2WindowState });
+    const ref = yield* bind(host);
+    yield* host.observe(call("get_window_state", {}, ref), context);
+    const roomy = yield* host.observe(call("screenshot", {}, ref), context);
+    expect(roomy.value).toHaveProperty("ms");
+    const plainBytes = Buffer.byteLength(JSON.stringify(roomy.imageMetadata));
+    const timedBytes = Buffer.byteLength(JSON.stringify(roomy.value));
+    const renders = observations.renders;
+    for (const returnBytes of [plainBytes, timedBytes - 1, timedBytes]) {
+      const tight = { ...context, limits: { ...context.limits, returnBytes } };
+      const capture = yield* host.observe(call("screenshot", {}, ref), tight);
+      if (returnBytes < timedBytes) {
+        expect(capture.value).not.toHaveProperty("ms");
+        expect(capture.value).toEqual(capture.imageMetadata);
+      } else expect(capture.value).toMatchObject({ ...capture.imageMetadata, ms: 7 });
+    }
+    // Every capture kept the tree's snapshot, so none of them rendered the tree again.
+    expect(observations.renders).toBe(renders);
+  }),
 );
 
 it.effect("observe({after}) times a page of the held read with no driver or parse time", () =>
