@@ -28,18 +28,43 @@ export const MIN_CALL_MS = 250;
 const record = (args: unknown): Readonly<Record<string, unknown>> =>
   typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
 
+/** Parses a non-negative integer argument, including trimmed integer strings the driver coerces. */
+export const driverIntegerArg = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\+?\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed)) return parsed;
+    }
+  }
+  return undefined;
+};
+
+/** Parses a boolean argument, including trimmed "true"/"false" strings the driver coerces. */
+export const driverBoolArg = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const lower = value.trim().toLowerCase();
+    if (lower === "true") return true;
+    if (lower === "false") return false;
+  }
+  return undefined;
+};
+
 export const driverCallCapMs = (tool: string, args: unknown): number => {
   const given = record(args);
-  if (tool === "get_window_state") return given.include_screenshot === true ? 7_000 : 4_000;
+  if (tool === "get_window_state")
+    return driverBoolArg(given.include_screenshot) === true ? 7_000 : 4_000;
   if (tool === "run_script") {
-    const ms =
-      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
-        ? Math.min(120_000, Math.max(100, given.timeout_ms))
-        : 30_000;
+    const raw = driverIntegerArg(given.timeout_ms);
+    const ms = raw !== undefined && raw >= 100 && raw <= 120_000 ? raw : 30_000;
     return ms + 1_500;
   }
-  if (tool === "verify_state")
-    return (typeof given.timeout_ms === "number" ? Math.max(0, given.timeout_ms) : 0) + 2_000;
+  if (tool === "verify_state") {
+    const raw = driverIntegerArg(given.timeout_ms);
+    return (raw ?? 0) + 2_000;
+  }
   if (tool === "type_text")
     return 4_000 + 40 * (typeof given.text === "string" ? [...given.text].length : 0);
   return CAP_MS[tool] ?? DEFAULT_CAP_MS;

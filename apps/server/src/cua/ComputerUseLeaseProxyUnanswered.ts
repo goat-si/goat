@@ -1,4 +1,4 @@
-import { driverCallCapMs } from "./ComputerUseCallCaps.ts";
+import { driverBoolArg, driverCallCapMs, driverIntegerArg } from "./ComputerUseCallCaps.ts";
 /**
  * A server call its driver leaves unanswered past the call's deadline: the server already failed
  * it and later calls would queue behind the stuck child, so the child is replaced. The cut-off
@@ -26,27 +26,53 @@ const DRIVER_UNANSWERED: Interruption = {
 const record = (args: unknown): Readonly<Record<string, unknown>> =>
   typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
 
+const windowStateBoundMs = (given: Readonly<Record<string, unknown>>): number => {
+  const wantTree = driverBoolArg(given.include_accessibility_tree) !== false;
+  const shouldCapture =
+    driverBoolArg(given.include_screenshot) !== false ||
+    typeof given.screenshot_out_file === "string";
+  const raw = driverIntegerArg(given.timeout_ms);
+  const walk = raw !== undefined ? Math.min(120_000, Math.max(100, raw)) : 2_000;
+  return 2_000 + (wantTree ? walk * 2 + 5_000 : 0) + (shouldCapture ? 7_000 : 0);
+};
+
 /** Maximum legitimate execution bound of an earlier call on the driver before it is judged wedged. */
 const headExecutionBoundMs = (tool: string, args: unknown): number => {
   const given = record(args);
-  if (tool === "get_window_state") {
-    const wantTree = given.include_accessibility_tree !== false;
-    const shouldCapture =
-      given.include_screenshot !== false || typeof given.screenshot_out_file === "string";
-    const walk =
-      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
-        ? Math.min(120_000, Math.max(100, given.timeout_ms))
-        : 2_000;
-    return 2_000 + (wantTree ? walk * 2 + 5_000 : 0) + (shouldCapture ? 7_000 : 0);
-  }
+  if (tool === "get_window_state") return windowStateBoundMs(given);
   if (tool === "verify_state") {
-    const wait =
-      typeof given.timeout_ms === "number" && Number.isInteger(given.timeout_ms)
-        ? Math.min(10_000, Math.max(0, given.timeout_ms))
-        : 5_000;
-    return wait + 11_000 + (given.include_screenshot === true ? 9_000 : 0);
+    const raw = driverIntegerArg(given.timeout_ms);
+    const wait = raw !== undefined && raw <= 10_000 ? raw : 5_000;
+    return wait + 11_000 + (driverBoolArg(given.include_screenshot) === true ? 9_000 : 0);
   }
-  if (tool === "run_steps") return 75_000;
+  if (tool === "run_steps") {
+    const obs = record(given.observe);
+    const obsBound =
+      driverBoolArg(given.observe) === false ? 18_000 : Math.max(18_000, windowStateBoundMs(obs));
+    const steps = Array.isArray(given.steps) ? given.steps : [];
+    let lastStepMs = 15_000;
+    const last = record(steps[steps.length - 1]);
+    const stepTool =
+      typeof last.tool === "string"
+        ? last.tool
+        : [
+            "click",
+            "right_click",
+            "press_key",
+            "type_text",
+            "set_value",
+            "scroll",
+            "drag",
+            "invoke_menu",
+            "launch_app",
+            "bring_to_front",
+          ].find((k) => k in last);
+    const stepArgs =
+      typeof last.tool === "string" ? last.args : stepTool ? last[stepTool] : undefined;
+    if (stepTool !== undefined)
+      lastStepMs = Math.max(lastStepMs, driverCallCapMs(stepTool, stepArgs) + 60_000);
+    return 60_000 + lastStepMs + obsBound;
+  }
   return driverCallCapMs(tool, args);
 };
 
