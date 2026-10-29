@@ -14,17 +14,28 @@ the <code>app_mention</code> and <code>message.im</code> events. Turn on <strong
 Socket Mode delivers button presses, so the app needs no Request URL — then
 install the app to your workspace.</li>
 <li>In GOAT, open <strong>Settings → GOAT Bot → Slack</strong> for the machine that
-should do the work. Paste both tokens, list the channel IDs where mentions
-may start work, and turn on <strong>Use Slack</strong>. Tokens stay on that machine and
-are never shown again.</li>
-<li>Under <strong>Link your Slack account</strong>, create a one-time code and send it to
-the bot in a direct message as <code>link &lt;code&gt;</code>. Until you link, the bot only
-explains how to link.</li>
+should do the work. Paste both tokens and turn on <strong>Use Slack</strong>. Tokens
+stay on that machine and are never shown again. The bot answers mentions in
+every channel you invite it to; choose <strong>These channels only</strong> under
+<strong>Channels</strong> to limit it to a list of channel IDs.</li>
+<li>Invite the bot to each channel where people should mention it
+(<code>/invite @your-bot</code>). Slack does not send the bot mentions from channels
+it isn’t in, so a mention there gets no answer.</li>
+<li>Optionally, under <strong>Link your Slack account</strong>, create a one-time code and
+send it to the bot in a direct message as <code>link &lt;code&gt;</code>. Linked people work
+at the level chosen for their code; everyone else in the workspace works at
+<strong>Access without a link</strong> (by default, Ask before changes).</li>
 </ol>
 <h2 id="good-to-know">Good to know</h2>
 <ul>
-<li>In a channel, invite the bot and mention it in each message; it does not
-read other channel messages. Direct messages always work.</li>
+<li>In a channel, mention the bot in each message; it does not read other
+channel messages. Direct messages always work.</li>
+<li><strong>Who can use it</strong> decides who may start work. <strong>Everyone in the workspace</strong>
+(the default) answers anyone in the connected Slack workspace; people from
+another organization in a shared channel are ignored. <strong>Linked accounts
+only</strong> answers everyone else with how to link. Someone without a link sees
+only their own work and the conversation they write in, and cannot use GOAT
+memory or change GOAT Bot’s notes.</li>
 <li>Replies, questions, and results go to the thread where you asked, and
 questions tag the person who asked.</li>
 <li><strong>Default project</strong> decides where work from Slack runs when your message
@@ -115,9 +126,10 @@ such as “Codex (work) · 20% weekly used”.</li>
 <li>For memories used in coding conversations and shared between devices, see
 <a href="/goat/docs/user/memory/">Memory</a>.</li>
 <li>Work you start from Slack is capped at the access level chosen when you
-created the link code. Its coding agents can use GOAT memory only as far as
-the link allows, and a link you narrow later applies to work that has not
-started yet.</li>
+created the link code, or at <strong>Access without a link</strong> if you have not
+linked. Its coding agents can use GOAT memory only as far as the link
+allows. A link you narrow later, or switching to <strong>Linked accounts only</strong>,
+applies to work that has not started yet.</li>
 <li>When you connect to several machines, Slack runs only on the machine GOAT
 Bot lives on. Change it in <strong>Settings → Integrations → GOAT Bot</strong>; set up
 Slack on that machine.</li>
