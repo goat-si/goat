@@ -75,7 +75,7 @@ export function pendingSubagentRequestsByThread(
   let byId: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> | undefined;
   for (const child of threads) {
     const request = subagentRequest(child);
-    if (request === null) continue;
+    if (request === null || request === "user_input") continue;
     byId ??= new Map(threads.map((thread) => [thread.id, thread] as const));
     const seen = new Set<ThreadId>([child.id]);
     let current: OrchestrationV2ThreadShell | undefined = child;
