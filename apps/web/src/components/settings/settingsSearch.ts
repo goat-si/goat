@@ -382,6 +382,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["sort projects sidebar manual created recent"],
   },
   {
+    id: "show-goat-bot-threads",
+    title: "Show GOAT Bot threads",
+    to: "/settings/general",
+    searchTerms: ["sidebar thread list hidden reveal observation session goat bot threads"],
+  },
+  {
     id: "snooze-limited-threads",
     title: "Snooze until limits reset",
     to: "/settings/general",

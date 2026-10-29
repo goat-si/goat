@@ -381,6 +381,26 @@ describe("sidebar view search", () => {
   );
 });
 
+describe("GOAT Bot thread reveal search", () => {
+  it.each(["goat bot threads", "observation", "hidden threads"])(
+    "finds the General sidebar switch for %s with no environment connected",
+    (query) => {
+      const available = filterAvailableSettingsSearchItems({
+        hasCloudPublicConfig: false,
+        hasEnvironment: false,
+        hasProviderSettingsEnvironment: false,
+        hasMacProviderSettingsEnvironment: false,
+        canManageLocalBackend: false,
+        isWslSettingsRowVisible: false,
+        hasThreadAutoSettlement: false,
+      });
+      expect(searchSettings(query, available)).toContainEqual(
+        expect.objectContaining({ id: "show-goat-bot-threads", to: "/settings/general" }),
+      );
+    },
+  );
+});
+
 it.each(["memory", "sharing", "forget", "conflict", "revert", "source access"])(
   "keeps Memory reachable through settings search: %s",
   (query) => {
