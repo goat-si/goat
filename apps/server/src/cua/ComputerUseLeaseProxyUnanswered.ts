@@ -40,7 +40,12 @@ export const makeUnansweredWatch = <E>(
     readonly scope: Scope.Scope;
     readonly outstanding: ReadonlyMap<
       string,
-      { readonly connectionId: string; readonly tool?: string | undefined; readonly args?: unknown }
+      {
+        readonly connectionId: string;
+        readonly tool?: string | undefined;
+        readonly args?: unknown;
+        readonly sentAt?: number | undefined;
+      }
     >;
     readonly lifecycle: { readonly current: { readonly connectionId: string } | undefined };
   },
@@ -70,11 +75,11 @@ export const makeUnansweredWatch = <E>(
   const settle = (key: string) => {
     if (overdue.delete(key)) wake();
   };
-  const currentHead = (connectionId: string, now: number) => {
+  const currentHead = (connectionId: string, now: number, advanced = false) => {
     for (const [k, each] of proxy.outstanding) {
       if (each.connectionId !== connectionId || replied.has(k)) continue;
       const prev = headByConn.get(connectionId);
-      const since = prev?.key === k ? prev.since : now;
+      const since = prev?.key === k ? prev.since : advanced ? now : (each.sentAt ?? now);
       if (prev?.key !== k) headByConn.set(connectionId, { key: k, since });
       return { key: k, call: each, since };
     }
@@ -172,8 +177,9 @@ export const makeUnansweredWatch = <E>(
             for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
             const answered = proxy.outstanding.get(key);
             if (answered !== undefined) {
+              const wasHead = currentHead(answered.connectionId, now)?.key === key;
               replied.add(key);
-              currentHead(answered.connectionId, now);
+              currentHead(answered.connectionId, now, wasHead);
             }
             overdue.delete(key);
             wake();
@@ -186,9 +192,8 @@ export const makeUnansweredWatch = <E>(
       function* (key: string, deadlineMillis: number) {
         const started = yield* Clock.currentTimeMillis;
         const budgetMs = Math.max(0, deadlineMillis - started);
-        let headOverdue = false;
         // Wait only while the currently blocking call at the head of the pipe is within its own
-        // cap; if that head call wedges, stop immediately without spending later queued calls' caps.
+        // cap; if that head call remains unanswered through its grace window, replace immediately.
         for (;;) {
           const woken = Deferred.await(settled);
           const now = yield* Clock.currentTimeMillis;
@@ -202,20 +207,25 @@ export const makeUnansweredWatch = <E>(
           const head = currentHead(call.connectionId, now);
           if (!head || head.key === key) break;
           const headDeadline = head.since + driverCallCapMs(head.call.tool ?? "", head.call.args);
-          if (now >= headDeadline) {
-            headOverdue = true;
-            break;
+          if (now < headDeadline) {
+            const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
+            if (Option.isSome(step)) continue;
           }
-          const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
-          if (Option.isNone(step)) {
-            const after = yield* Clock.currentTimeMillis;
-            if (currentHead(call.connectionId, after)?.key === head.key) {
-              headOverdue = true;
-              break;
-            }
+          const afterCap = yield* Clock.currentTimeMillis;
+          if (currentHead(call.connectionId, afterCap)?.key !== head.key) continue;
+          overdue.set(key, call.connectionId);
+          const graceWoken = Deferred.await(settled);
+          if (currentHead(call.connectionId, afterCap)?.key === head.key) {
+            yield* graceWoken.pipe(Effect.timeoutOption(UNANSWERED_GRACE_MS));
           }
+          const afterGrace = yield* Clock.currentTimeMillis;
+          if (currentHead(call.connectionId, afterGrace)?.key === head.key) {
+            yield* replace(key);
+            return;
+          }
+          settle(key);
         }
-        if (!headOverdue) yield* Effect.sleep(budgetMs);
+        yield* Effect.sleep(budgetMs);
         const call = proxy.outstanding.get(key);
         if (call !== undefined && !replied.has(key)) overdue.set(key, call.connectionId);
         yield* Effect.sleep(UNANSWERED_GRACE_MS);

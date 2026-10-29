@@ -20,7 +20,7 @@ import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
-const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 50000 });
+const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 500000 });
 
 const win = (windowId: number, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   pid: 42,
@@ -823,8 +823,51 @@ it.effect(
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: aux1.id, result: { content: [] } }));
       assert.equal((yield* h.primitiveReply).status, "settled");
 
+      // (a2) A 90 s provider run_script (cap 120 s) followed by a 1.5 s auxiliary read is not cut off at 61 s;
+      // and when the head call answers during its grace window (130.9 s), the queued read still gets its own 1.5 s budget.
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "prov:script",
+          method: "tools/call",
+          params: { name: "run_script", arguments: { script: "1", timeout_ms: 120_000 } },
+        }),
+      );
+      const provScript = yield* h.nextToDriver;
+      yield* TestClock.adjust("50 seconds");
+      // Auxiliary read arrives 50 s into the script (t = 60 s): script has 70 s of its 120 s cap left, not a fresh 120 s.
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "req:auxScript",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: current.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 1,
+        deadlineMillis: 61_500,
+        tool: "list_windows",
+        args: { pid: 42 },
+      });
+      const auxScript = yield* h.nextToDriver;
+      // At +40 s (90 s into run_script), the child is still alive (not cut off at 61 s).
+      yield* TestClock.adjust("40 seconds");
+      assert.isFalse(yield* h.isKilled);
+      // At +30.9 s (120.9 s into run_script, inside the 1 s grace after the 120 s cap), prov:script answers.
+      yield* TestClock.adjust("30900 millis");
+      assert.isFalse(yield* h.isKilled);
+      yield* h.reply(
+        JSON.stringify({ jsonrpc: "2.0", id: provScript.id, result: { content: [] } }),
+      );
+      // auxScript is now at the head and gets its own 1.5 s budget instead of dying 0.1 s later at the end of provScript's grace.
+      yield* TestClock.adjust("1 second");
+      assert.isFalse(yield* h.isKilled);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: auxScript.id, result: { content: [] } }));
+      assert.equal((yield* h.primitiveReply).status, "settled");
+
       // (b) Three provider scroll calls (each 10 s cap) are queued and the first is wedged, followed by a 1.5 s auxiliary read.
-      // The watchdog replaces the child after the first wedged scroll's 10 s cap + 1 s grace (11 s), not after 30 s of combined caps.
+      // Even when the auxiliary read arrives 8 s after prov:s1 was sent, prov:s1's clock started at send time, so the child is
+      // replaced 3 s later (2 s remaining cap + 1 s grace), not after 10 s or 30 s.
       for (const id of ["prov:s1", "prov:s2", "prov:s3"]) {
         yield* h.send(
           JSON.stringify({
@@ -836,6 +879,7 @@ it.effect(
         );
         yield* h.nextToDriver;
       }
+      yield* TestClock.adjust("8 seconds");
       yield* h.sendPrimitive({
         state: "primitive-request",
         requestId: "req:aux2",
@@ -844,15 +888,15 @@ it.effect(
         connectionGeneration: current.connectionId,
         runId: "run:one",
         turnId: "cell:one",
-        callId: 1,
-        deadlineMillis: 11_500,
+        callId: 2,
+        deadlineMillis: 141_400,
         tool: "list_windows",
         args: { pid: 42 },
       });
       yield* h.nextToDriver;
-      yield* TestClock.adjust("5 seconds");
+      yield* TestClock.adjust("1500 millis");
       assert.isFalse(yield* h.isKilled);
-      yield* TestClock.adjust("6100 millis");
+      yield* TestClock.adjust("1600 millis");
       assert.isTrue(yield* h.isKilled);
       assert.equal(h.drivers.length, 2);
 
@@ -891,7 +935,7 @@ it.effect(
       const rBound = (yield* rebindHost.bindApp(
         {
           ...call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-          deadlineMillis: 50_000,
+          deadlineMillis: 500_000,
         },
         context,
       )).value as ScreenTargetRef;
@@ -900,7 +944,7 @@ it.effect(
         .invoke(
           {
             ...call("wait_for", { window: "hidden", timeoutMs: 50 }, rBound),
-            deadlineMillis: 50_000,
+            deadlineMillis: 500_000,
           },
           context,
         )

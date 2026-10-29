@@ -939,29 +939,29 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // The last checks, the call's registration and the write run as one step with no scheduler
     // yield (sendUnlessShared, #1496): a pause, narrowing or another thread's grant that lands
     // first keeps the call unsent and unregistered, so it is answered as not run.
-    const register = Effect.sync(() => {
-      if (isRequest)
+    const register = (sentAt: number) =>
+      Effect.sync(() => {
+        if (!isRequest) return;
         outstanding.set(JSON.stringify(id), {
           id,
           method: message!.method!,
           ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
           args: message?.params?.arguments,
           ...windowArgument(message?.params?.arguments),
-          unfiltered: Object.keys(message?.params?.arguments ?? {}).every(
-            (key) => key === "session",
-          ),
+          unfiltered: Object.keys(message?.params?.arguments ?? {}).every((k) => k === "session"),
           connectionId: current.connectionId,
+          sentAt,
           sink,
           ...(reservationId === undefined ? {} : { reservationId }),
         });
-    });
+      });
     const outcome = yield* sendUnlessShared(
       isRequest &&
         message?.method === "tools/call" &&
         takesScreen(message.params?.name, message.params?.arguments),
       sharedNow,
       stillCurrent,
-      register.pipe(Effect.andThen(current.driver.send(line))),
+      (now) => register(now).pipe(Effect.andThen(current.driver.send(line))),
       Math.min(permissionDeadline, primitiveDeadline),
     );
     if (outcome !== "sent" && id !== undefined && id !== null && isRequest) {
