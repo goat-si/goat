@@ -53,11 +53,7 @@ import {
   resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../lib/diffRendering";
-import {
-  DiffPanelAwaitingCheckpoint,
-  DiffPanelEditNotice,
-  useDiffPanelTurn,
-} from "./diffs/DiffPanelTurn";
+import { DiffPanelAwaitingCheckpoint, useDiffPanelTurn } from "./diffs/DiffPanelTurn";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
 import { LIVE_REFRESH_MIN_INTERVAL_MS, useLiveRefresh } from "../hooks/useLiveRefresh";
@@ -277,11 +273,20 @@ export default function DiffPanel({
   });
 
   const selectedRunId = diffSelection.kind === "turn" ? diffSelection.turnId : null;
-  const selectedGitScope = diffSelection.kind === "turn" ? "branch" : diffSelection.kind;
+  const isGitSelection = diffSelection.kind !== "turn" && diffSelection.kind !== "tool-call";
+  const selectedGitScope =
+    diffSelection.kind === "turn" || diffSelection.kind === "tool-call"
+      ? "branch"
+      : diffSelection.kind;
   const selectedBaseRef = diffSelection.kind === "branch" ? diffSelection.baseRef : null;
-  const selectedFilePath = diffSelection.kind === "turn" ? diffSelection.filePath : null;
+  const selectedFilePath =
+    diffSelection.kind === "turn" || diffSelection.kind === "tool-call"
+      ? diffSelection.filePath
+      : null;
   const selectedFileRevealRequestId =
-    diffSelection.kind === "turn" ? diffSelection.revealRequestId : 0;
+    diffSelection.kind === "turn" || diffSelection.kind === "tool-call"
+      ? diffSelection.revealRequestId
+      : 0;
   const {
     turn: selectedTurn,
     awaitingCheckpoint,
@@ -300,11 +305,13 @@ export default function DiffPanel({
   const selectedCheckpointTurnCount = selectedTurn?.checkpointTurnCount;
   const latestTurn = orderedTurnDiffSummaries[0];
   const selectedScopeLabel =
-    selectedRunId === null
-      ? GIT_REVIEW_SCOPES[selectedGitScope].title
-      : awaitingCheckpoint || selectedTurn?.runId === latestTurn?.runId
-        ? "Latest turn"
-        : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
+    diffSelection.kind === "tool-call"
+      ? "Edit"
+      : selectedRunId === null
+        ? GIT_REVIEW_SCOPES[selectedGitScope].title
+        : awaitingCheckpoint || selectedTurn?.runId === latestTurn?.runId
+          ? "Latest turn"
+          : `Turn ${selectedCheckpointTurnCount ?? "?"}`;
   const reviewSectionId = selectedTurn
     ? `turn:${selectedTurn.runId}`
     : (edit?.sectionId ?? selectedGitScope);
@@ -334,7 +341,7 @@ export default function DiffPanel({
     { enabled: isGitRepo && selectedTurn !== undefined },
   );
   const branchDiffPreviewInput =
-    canReadFiles && selectedRunId === null && activeThread && activeCwd
+    canReadFiles && isGitSelection && activeThread && activeCwd
       ? {
           cwd: activeCwd,
           scope: GIT_REVIEW_SCOPES[selectedGitScope].sourceKind,
@@ -343,7 +350,7 @@ export default function DiffPanel({
         }
       : undefined;
   const canRefreshGitDiff =
-    isGitRepo && selectedRunId === null && activeThread != null && activeCwd != null;
+    isGitRepo && isGitSelection && activeThread != null && activeCwd != null;
   const branchDiffPreview = useEnvironmentQuery(
     branchDiffPreviewInput && activeThread
       ? revisionedQuery(
@@ -370,24 +377,24 @@ export default function DiffPanel({
 
   const turnPatch = selectedTurn ? activeCheckpointDiff : edit;
   const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
-  const isSelectedPatchTruncated = !selectedTurn && selectedGitSource?.truncated === true;
+  const isSelectedPatchTruncated = isGitSelection && selectedGitSource?.truncated === true;
   const selectedPatchQuery = turnPatch ?? branchDiffPreview;
   const isLoadingSelectedPatch = selectedPatchQuery.isPending && selectedPatchQuery.data === null;
   const selectedPatchError = selectedPatchQuery.error;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const lazySource =
-    !selectedTurn && selectedGitSource?.truncated && selectedGitSource.files
+    isGitSelection && selectedGitSource?.truncated && selectedGitSource.files
       ? selectedGitSource
       : null;
   const renderablePatch = getRenderablePatch(
     lazySource ? undefined : selectedPatch,
     `diff-panel:${resolvedTheme}`,
-    { compactPartialHunkOffsets: selectedRunId === null, ignoreWhitespace: edit?.ignoreWhitespace },
+    { compactPartialHunkOffsets: isGitSelection, ignoreWhitespace: edit?.ignoreWhitespace },
   );
   const fileStats = new Map(lazySource?.files?.map((file) => [file.path, file]));
   const sourceLineStat =
-    !selectedTurn && selectedGitSource?.files
+    isGitSelection && selectedGitSource?.files
       ? selectedGitSource.files.reduce(
           (total, file) => ({
             additions: total.additions + file.additions,
@@ -397,7 +404,7 @@ export default function DiffPanel({
         )
       : null;
   const currentLoadDiffFiles =
-    selectedRunId === null && activeThread && preview && selectedGitSource && canReadFiles
+    isGitSelection && activeThread && preview && selectedGitSource && canReadFiles
       ? createGitDiffFileContentsLoader(getDiffFileContents, {
           environmentId: activeThread.environmentId,
           cwd: preview.cwd,
@@ -414,10 +421,7 @@ export default function DiffPanel({
     return currentLoadDiffFiles(fileDiff);
   });
   const localBranchRefs = useEnvironmentQuery(
-    selectedRunId === null &&
-      selectedGitScope === "branch" &&
-      activeThread &&
-      branchDiffPreview.data?.cwd
+    isGitSelection && selectedGitScope === "branch" && activeThread && branchDiffPreview.data?.cwd
       ? vcsEnvironment.listRefs({
           environmentId: activeThread.environmentId,
           input: {
@@ -431,10 +435,7 @@ export default function DiffPanel({
       : null,
   );
   const remoteBranchRefs = useEnvironmentQuery(
-    selectedRunId === null &&
-      selectedGitScope === "branch" &&
-      activeThread &&
-      branchDiffPreview.data?.cwd
+    isGitSelection && selectedGitScope === "branch" && activeThread && branchDiffPreview.data?.cwd
       ? vcsEnvironment.listRefs({
           environmentId: activeThread.environmentId,
           input: {
@@ -653,11 +654,13 @@ export default function DiffPanel({
   };
   const selectedTurnValue = selectedTurn ? `turn:${selectedTurn.runId}` : "";
   const selectedScopeValue =
-    selectedRunId === null
-      ? selectedGitScope
-      : selectedTurn?.runId === latestTurn?.runId
-        ? "latest"
-        : selectedTurnValue;
+    diffSelection.kind === "tool-call"
+      ? ""
+      : selectedRunId === null
+        ? selectedGitScope
+        : selectedTurn?.runId === latestTurn?.runId
+          ? "latest"
+          : selectedTurnValue;
   const selectScopeValue = (value: string) => {
     if (
       value === "uncommitted" ||
@@ -682,6 +685,7 @@ export default function DiffPanel({
             render={<Button size="xs" variant="secondary" />}
             className="max-w-full"
             aria-label={`Diff scope: ${selectedScopeLabel}`}
+            data-workspace-focus-default
           >
             <span className="truncate">{selectedScopeLabel}</span>
             <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
@@ -730,7 +734,7 @@ export default function DiffPanel({
             </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
-        {selectedRunId === null && selectedGitScope === "branch" && selectedGitSource?.baseRef && (
+        {isGitSelection && selectedGitScope === "branch" && selectedGitSource?.baseRef && (
           <div
             className="flex min-w-0 max-w-full items-center gap-2 overflow-hidden text-xs text-muted-foreground"
             aria-label={`Comparing ${selectedGitSource.headRef ?? "HEAD"} against ${selectedGitSource.baseRef}`}
@@ -865,7 +869,7 @@ export default function DiffPanel({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        {codeViewFiles.length > 0 || (!selectedTurn && selectedGitSource?.files?.length) ? (
+        {codeViewFiles.length > 0 || (isGitSelection && selectedGitSource?.files?.length) ? (
           <DiffStatLabel
             additions={diffLineStat.additions}
             deletions={diffLineStat.deletions}
@@ -1007,17 +1011,17 @@ export default function DiffPanel({
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Select a thread to inspect turn diffs.
         </div>
-      ) : !isGitRepo ? (
+      ) : !isGitRepo && diffSelection.kind !== "tool-call" ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           Turn diffs are unavailable because this project is not a git repository.
         </div>
-      ) : awaitingCheckpoint && !edit ? (
+      ) : awaitingCheckpoint ? (
         <DiffPanelAwaitingCheckpoint runActive={selectedRunActive} />
-      ) : selectedRunId !== null && !edit && orderedTurnDiffSummaries.length === 0 ? (
+      ) : selectedRunId !== null && orderedTurnDiffSummaries.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-5 text-center text-xs text-muted-foreground/70">
           No completed turns yet.
         </div>
-      ) : selectedRunId === null && !canReadFiles ? (
+      ) : isGitSelection && !canReadFiles ? (
         fileAccess.isPending ? (
           <DiffPanelLoadingState label="Checking file access..." />
         ) : (
@@ -1031,7 +1035,6 @@ export default function DiffPanel({
             data-glass-layer
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
           >
-            {edit && <DiffPanelEditNotice runActive={selectedRunActive} />}
             {isSelectedPatchTruncated && !lazySource && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 This preview exceeds the size limit. Changes shown are incomplete.

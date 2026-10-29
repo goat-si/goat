@@ -90,6 +90,7 @@ import {
 } from "@goat/provider-core/server/subagentProjection";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import { museItemStatus, museToolPresentation } from "./itemPresentation.ts";
+import { museNativeRef as nativeRef, registerMuseProviderThread } from "./threadRegistration.ts";
 
 const MUSE_PROVIDER = ProviderDriverKind.make("muse");
 const isOpenSessionError = Schema.is(ProviderAdapter.ProviderAdapterOpenSessionError);
@@ -242,11 +243,6 @@ interface ChildContext {
   result?: string;
 }
 
-const nativeRef = (nativeId: string) => ({
-  driver: MUSE_PROVIDER,
-  nativeId,
-  strength: "strong" as const,
-});
 const recordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const INFORMATIONAL_NOTIFICATIONS = new Set([
   "session/contextUsage",
@@ -1785,6 +1781,12 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
       ) {
         if (closed || (broken && !relaunchable))
           return yield* protocolError("Muse host is unavailable; reopen the session");
+        if (active)
+          return yield* protocolError("Cannot change Muse sessions during an active turn");
+        if (args.forceNewNativeThread && (observedChildren.size > 0 || wake || pending.size > 0))
+          return yield* protocolError("Cannot replace a Muse session with pending background work");
+        const existing =
+          args.existingProviderThread ?? (args.forceNewNativeThread ? thread : undefined);
         if (broken) {
           yield* Effect.logWarning("Relaunching the Muse host after a failure");
           yield* launchHost();
@@ -1794,24 +1796,25 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           nativeSessionId = undefined;
           yield* updateSession("ready", null);
         }
-        if (active)
-          return yield* protocolError("Cannot change Muse sessions during an active turn");
-        const existing = args.existingProviderThread;
         if (
           existing &&
           (existing.driver !== MUSE_PROVIDER || existing.providerInstanceId !== options.instanceId)
         )
           return yield* protocolError("Muse thread belongs to another provider instance");
-        const requestedId = existing
-          ? (existing.nativeThreadRef?.nativeId ?? undefined)
-          : input.initialNativeThreadId;
+        const requestedId = args.forceNewNativeThread
+          ? undefined
+          : existing
+            ? (existing.nativeThreadRef?.nativeId ?? undefined)
+            : input.initialNativeThreadId;
         if (
           thread &&
+          !args.forceNewNativeThread &&
           (!requestedId || requestedId === nativeSessionId) &&
           thread.appThreadId === args.threadId
         )
           return thread;
-        if (thread) return yield* protocolError("Open a new host to attach another Muse session");
+        if (thread && (!args.forceNewNativeThread || thread.appThreadId !== args.threadId))
+          return yield* protocolError("Open a new host to attach another Muse session");
         let missingNativeSession = false;
         return yield* Effect.gen(function* () {
           nativeSessionId = requestedId ?? host.connection.mintCommandId();
@@ -1864,36 +1867,22 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             yield* request("session/setApprovalMode", {
               mode: museApprovalMode(args.runtimePolicy.runtimeMode),
             });
-          const createdAt = yield* DateTime.now;
-          thread = existing
-            ? {
-                ...existing,
-                providerSessionId: input.providerSessionId,
-                nativeThreadRef: nativeRef(result.session.sessionId),
-                status: "idle",
-                updatedAt: createdAt,
-              }
-            : {
-                id: idAllocator.derive.providerThread({
-                  driver: MUSE_PROVIDER,
-                  providerInstanceId: options.instanceId,
-                  nativeThreadId: nativeSessionId,
-                }),
+          thread = registerMuseProviderThread({
+            existing,
+            id:
+              existing?.id ??
+              idAllocator.derive.providerThread({
                 driver: MUSE_PROVIDER,
                 providerInstanceId: options.instanceId,
-                providerSessionId: input.providerSessionId,
-                appThreadId: args.threadId,
-                ownerNodeId: null,
-                nativeThreadRef: nativeRef(nativeSessionId),
-                nativeConversationHeadRef: null,
-                status: "idle",
-                firstRunOrdinal: null,
-                lastRunOrdinal: null,
-                handoffIds: [],
-                forkedFrom: null,
-                createdAt,
-                updatedAt: createdAt,
-              };
+                nativeThreadId: nativeSessionId,
+              }),
+            providerInstanceId: options.instanceId,
+            providerSessionId: input.providerSessionId,
+            appThreadId: args.threadId,
+            nativeSessionId,
+            now: yield* DateTime.now,
+          });
+          if (args.forceNewNativeThread) lastProviderTurn = undefined;
           session = {
             ...session,
             model: result.session.modelId ?? args.modelSelection.model,

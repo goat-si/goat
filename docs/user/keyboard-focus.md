@@ -1,5 +1,9 @@
 # Keyboard focus
 
+Press F6 or Shift+F6 to move between workspace areas. If your browser reserves F6 for its own
+controls, use Ctrl+F6 or Ctrl+Shift+F6 (Command on macOS). In the thread sidebar, use the arrow
+keys to move among rows and Enter to open a thread; F2 renames an editable thread.
+
 The command palette keeps focus while open. Closing it returns focus to the composer.
 While the palette or model picker is open, number shortcuts select its entries instead of
 switching threads. Model shortcuts work in Settings as well as the composer.

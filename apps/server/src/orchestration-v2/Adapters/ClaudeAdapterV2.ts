@@ -1,3 +1,13 @@
+import {
+  readClaudeAppendSystemPromptFile,
+  readClaudeLaunchArgSettings,
+} from "./ClaudeLaunchArgs.ts";
+export {
+  ClaudeAppendSystemPromptFileError,
+  ClaudeAppendSystemPromptMissingValueError,
+  ClaudeSettingsLaunchArgError,
+} from "./ClaudeLaunchArgs.ts";
+import { claudeApprovalPresentation, permissionResultFromDecision } from "./ClaudeApproval.ts";
 import * as Scope from "effect/Scope";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
@@ -22,6 +32,13 @@ import {
   formatSearchToolLabel,
 } from "@goat/shared/toolActivity";
 import { field, text } from "../unknownField.ts";
+import { mergeWorkflowAgentMetadata, withWorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
+import type { WorkflowAgentMetadata } from "../workflowAgentAnswers.ts";
+import {
+  isClaudeConversationLine,
+  isClaudeTranscriptConversationLine,
+  isClaudeTranscriptTurnEnd,
+} from "./claudeTranscriptLines.ts";
 import {
   initialWorkflowAgentTranscriptCursor,
   readWorkflowAgentTranscript,
@@ -50,7 +67,6 @@ import {
   type Options as ClaudeQueryOptions,
   type PermissionMode,
   type PermissionResult,
-  type PermissionUpdate,
   type Query as ClaudeQuery,
   type Settings as ClaudeSdkSettings,
   type SpawnOptions as ClaudeSpawnOptions,
@@ -68,7 +84,6 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK takes a Node ChildProcess for the CLI.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeUtil from "node:util";
 import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -109,8 +124,6 @@ import {
   type OrchestrationV2TurnItem,
   type OrchestrationV2WebSearchResult,
   type ProviderApprovalDecision,
-  type ProviderApprovalFullAccessOverride,
-  type ProviderApprovalOption,
   ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderRequestKind,
@@ -219,6 +232,8 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
+
+export { claudeApprovalPresentation, permissionResultFromDecision };
 
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
@@ -578,27 +593,6 @@ export class ClaudeBackgroundWorkBlocksQueryReplacementError extends Schema.Tagg
   }
 }
 
-export class ClaudeAppendSystemPromptFileError extends Schema.TaggedError<ClaudeAppendSystemPromptFileError>()(
-  "ClaudeAppendSystemPromptFileError",
-  {
-    path: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Claude could not read the --append-system-prompt-file launch argument at ${this.path}. Fix the path in the Claude launch arguments, then send the message again.`;
-  }
-}
-
-export class ClaudeAppendSystemPromptMissingValueError extends Schema.TaggedError<ClaudeAppendSystemPromptMissingValueError>()(
-  "ClaudeAppendSystemPromptMissingValueError",
-  { flag: Schema.Literals(["--append-system-prompt", "--append-system-prompt-file"]) },
-) {
-  override get message(): string {
-    return `The ${this.flag} launch argument has no ${this.flag === "--append-system-prompt" ? "text" : "file path"}. Add it after the flag in the Claude launch arguments, then send the message again.`;
-  }
-}
-
 export interface ClaudeAgentSdkQueryRunnerShape {
   readonly allocateSessionId: Effect.Effect<string, ClaudeAgentSdkQueryRunnerError>;
   readonly open: (
@@ -674,7 +668,7 @@ export interface ClaudeAgentSdkLoggedQueryOptions {
   readonly cwd?: ClaudeAgentSdkQueryOptions["cwd"];
   readonly allowedTools?: ClaudeAgentSdkQueryOptions["allowedTools"];
   readonly disallowedTools?: ClaudeAgentSdkQueryOptions["disallowedTools"];
-  readonly settings?: ClaudeAgentSdkQueryOptions["settings"];
+  readonly settingKeys?: ReadonlyArray<string>;
   readonly effort?: ClaudeAgentSdkQueryOptions["effort"];
   readonly includePartialMessages?: true;
   readonly pathToClaudeCodeExecutable?: ClaudeAgentSdkQueryOptions["pathToClaudeCodeExecutable"];
@@ -813,7 +807,9 @@ export function loggedClaudeQueryOptions(
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.allowedTools === undefined ? {} : { allowedTools: options.allowedTools }),
     ...(options.disallowedTools === undefined ? {} : { disallowedTools: options.disallowedTools }),
-    ...(options.settings === undefined ? {} : { settings: options.settings }),
+    ...(typeof options.settings === "object" && options.settings !== null
+      ? { settingKeys: Object.keys(options.settings) }
+      : {}),
     ...(options.effort === undefined ? {} : { effort: options.effort }),
     ...(options.includePartialMessages === true ? { includePartialMessages: true } : {}),
     ...(options.pathToClaudeCodeExecutable === undefined
@@ -1459,6 +1455,7 @@ export function makeClaudeQueryOptions(input: {
     "dangerously-skip-permissions": launchArgSkipPermissions,
     "append-system-prompt": launchArgAppendSystemPrompt,
     "append-system-prompt-file": _launchArgAppendSystemPromptFile,
+    settings: _launchArgSettings,
     ...extraArgs
   } = input.settings === undefined ? {} : parseCliArgs(input.settings.launchArgs).flags;
   // Claude Code overwrites its CLI append text with the SDK's initialize
@@ -1573,43 +1570,6 @@ export function makeClaudeQueryOptions(input: {
     additionalDirectories.length === 0 ? options : { ...options, additionalDirectories };
   return input.cwd === null ? withDirectories : { ...withDirectories, cwd: input.cwd };
 }
-
-/**
- * Checks the append launch arguments the way the Claude CLI would and reads
- * the file relative to the process cwd. makeClaudeQueryOptions folds these
- * flags out of extraArgs, so a value the CLI would have rejected has to be
- * rejected here or it silently disappears.
- */
-const readClaudeAppendSystemPromptFile = Effect.fnUntraced(function* (input: {
-  readonly settings: ClaudeSettings | undefined;
-  readonly cwd: string | null;
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly path: Path.Path;
-}) {
-  if (input.settings === undefined) return undefined;
-  const flags = parseCliArgs(input.settings.launchArgs).flags;
-  // parseCliArgs gives null for a flag with no following value. An explicit
-  // `--append-system-prompt ""` is a value the CLI accepts, so it stays.
-  if (flags["append-system-prompt"] === null) {
-    return yield* new ClaudeAppendSystemPromptMissingValueError({
-      flag: "--append-system-prompt",
-    });
-  }
-  const file = flags["append-system-prompt-file"];
-  if (file === undefined) return undefined;
-  // `--append-system-prompt-file=` is "" and names no file either.
-  if (file === null || file === "") {
-    return yield* new ClaudeAppendSystemPromptMissingValueError({
-      flag: "--append-system-prompt-file",
-    });
-  }
-  const filePath = input.path.resolve(input.cwd ?? ".", file);
-  return yield* input.fileSystem
-    .readFileString(filePath)
-    .pipe(
-      Effect.mapError((cause) => new ClaudeAppendSystemPromptFileError({ path: filePath, cause })),
-    );
-});
 
 export const CLAUDE_GOAT_MCP_TOOL_WILDCARD = "mcp__goat__*";
 const CLAUDE_CUA_MCP_TOOL_PREFIX = `mcp__${McpProviderSession.CUA_MCP_SERVER_NAME}__`;
@@ -1910,16 +1870,6 @@ function makeProviderThread(input: {
     updatedAt: input.now,
   };
 }
-
-const decodeClaudeTranscriptLine = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ type: Schema.String })),
-);
-
-const isClaudeConversationLine = (line: string): boolean =>
-  Option.match(decodeClaudeTranscriptLine(line), {
-    onNone: () => false,
-    onSome: (entry) => entry.type === "user" || entry.type === "assistant",
-  });
 
 const getNativeThreadId = Effect.fnUntraced(function* (
   providerThread: OrchestrationV2ProviderThread,
@@ -2619,6 +2569,7 @@ const ClaudeBypassSettings = Schema.StructWithRest(
 const decodeClaudeBypassSettings = Schema.decodeUnknownEffect(
   fromLenientJson(ClaudeBypassSettings),
 );
+const decodeClaudeLaunchArgBypassSettings = Schema.decodeUnknownEffect(ClaudeBypassSettings);
 
 const ClaudePromptCacheTtl = Schema.Literals(["5m", "1h"]);
 const decodeClaudePromptCacheTtl = Schema.decodeUnknownOption(ClaudePromptCacheTtl);
@@ -3332,102 +3283,6 @@ function parentToolUseIdFromSdkMessage(message: SDKMessage): string | null {
     : null;
 }
 
-const CLAUDE_NO_STANDING_GRANT_OPTIONS = [
-  { decision: "decline", label: "Decline" },
-  { decision: "accept", label: "Approve" },
-] satisfies ReadonlyArray<ProviderApprovalOption>;
-
-export function claudeApprovalPresentation(input: {
-  readonly permissionMode: PermissionMode;
-  readonly prompt: string;
-  readonly callbackOptions: Pick<
-    Parameters<CanUseTool>[2],
-    "decisionReason" | "matchedAskRule" | "suppressAlwaysAllowRule"
-  >;
-}): {
-  readonly reason?: string;
-  readonly fullAccessOverride?: ProviderApprovalFullAccessOverride;
-  readonly options?: ReadonlyArray<ProviderApprovalOption>;
-} {
-  // The reason can carry terminal escapes from the CLI's own prompt renderer.
-  const reason = NodeUtil.stripVTControlCharacters(
-    input.callbackOptions.decisionReason ?? "",
-  ).trim();
-  // Bypass auto-allows everything it can, so any ask that still reaches the
-  // callback is one bypass refused. The SDK drops the CLI's decision_reason_type,
-  // leaving the matched ask rule as the only way to tell the two causes apart.
-  const fullAccessOverride: ProviderApprovalFullAccessOverride | undefined =
-    input.permissionMode !== "bypassPermissions"
-      ? undefined
-      : input.callbackOptions.matchedAskRule === undefined
-        ? "provider_check"
-        : "ask_rule";
-  return {
-    ...(reason === "" || reason === input.prompt ? {} : { reason }),
-    ...(fullAccessOverride === undefined ? {} : { fullAccessOverride }),
-    ...(input.callbackOptions.suppressAlwaysAllowRule === true
-      ? { options: CLAUDE_NO_STANDING_GRANT_OPTIONS }
-      : {}),
-  };
-}
-
-export function permissionResultFromDecision(input: {
-  readonly toolName: string;
-  readonly decision: ProviderApprovalDecision;
-  readonly toolInput: Record<string, unknown>;
-  readonly toolUseID: string;
-  readonly suggestions?: Parameters<CanUseTool>[2]["suggestions"];
-  readonly feedback?: string;
-}): PermissionResult {
-  if (input.decision === "accept" || input.decision === "acceptForSession") {
-    return {
-      behavior: "allow",
-      updatedInput: input.toolInput,
-      toolUseID: input.toolUseID,
-      decisionClassification:
-        input.decision === "acceptForSession" ? "user_permanent" : "user_temporary",
-      ...(input.decision === "acceptForSession"
-        ? {
-            updatedPermissions: toSessionPermissionUpdates(input.toolName, input.suggestions),
-          }
-        : {}),
-    };
-  }
-
-  return {
-    behavior: "deny",
-    message:
-      input.feedback?.trim() ||
-      (input.decision === "cancel"
-        ? "User cancelled tool execution."
-        : "User declined tool execution."),
-    toolUseID: input.toolUseID,
-    decisionClassification: "user_reject",
-    ...(input.decision === "cancel" ? { interrupt: true } : {}),
-  };
-}
-
-function toSessionPermissionUpdates(
-  toolName: string,
-  suggestions: ReadonlyArray<PermissionUpdate> | undefined,
-): Array<PermissionUpdate> {
-  const updates = (suggestions ?? []).map((suggestion): PermissionUpdate => ({
-    ...suggestion,
-    destination: "session",
-  }));
-  if (updates.length > 0) {
-    return updates;
-  }
-  return [
-    {
-      type: "addRules",
-      rules: [{ toolName }],
-      behavior: "allow",
-      destination: "session",
-    },
-  ];
-}
-
 export const awaitClaudeApprovalDecision = Effect.fn("awaitClaudeApprovalDecision")(function* (
   decision: Deferred.Deferred<ClaudeApprovalResponse>,
   signal: AbortSignal,
@@ -4012,26 +3867,6 @@ interface ClaudeSubagentProjectionTarget {
   readonly toolCalls: Map<string, ActiveClaudeToolCall>;
 }
 
-/** Claude writes blocks separately with stop_reason null until the last.
- * Missing stop_reason keeps the turn open; pre-tool text is not the reply. */
-function isClaudeTranscriptTurnEnd(entry: unknown): boolean {
-  if (field(entry, "type") !== "assistant") return false;
-  const stopReason = field(field(entry, "message"), "stop_reason");
-  return typeof stopReason === "string" && stopReason !== "tool_use";
-}
-
-function isClaudeTranscriptConversationLine(
-  entry: unknown,
-): entry is SDKAssistantMessage | SDKUserMessage {
-  const type = field(entry, "type");
-  const content = field(field(entry, "message"), "content");
-  return (
-    typeof field(entry, "uuid") === "string" &&
-    ((type === "assistant" && Array.isArray(content)) ||
-      (type === "user" && (Array.isArray(content) || typeof content === "string")))
-  );
-}
-
 interface PendingClaudeSubagentLaunch {
   readonly model?: string;
   readonly effort?: string;
@@ -4452,12 +4287,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           serverManagedSettings: remote,
         }),
       );
-      const cascade = claudeBypassAvailability(resolved.effective);
-      const user = claudeBypassAvailability(home);
-      const cached = claudeBypassAvailability(remote);
+      const launchSettings = yield* readClaudeLaunchArgSettings({
+        settings: adapterOptions.settings,
+        cwd,
+        fileSystem,
+        path,
+      });
+      const launch = yield* decodeClaudeLaunchArgBypassSettings(launchSettings ?? {});
+      const sources = [resolved.effective, home, remote, launch].map(claudeBypassAvailability);
       return {
-        bypassDisabled: cascade.bypassDisabled || user.bypassDisabled || cached.bypassDisabled,
-        autoDisabled: cascade.autoDisabled || user.autoDisabled || cached.autoDisabled,
+        bypassDisabled: sources.some((source) => source.bypassDisabled),
+        autoDisabled: sources.some((source) => source.autoDisabled),
       };
     },
   );
@@ -4533,7 +4373,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   // Settings env beats the process env, local over project over user, and a local file an older
   // Claude Code left in cwd applies under the root one. resolveSettings reads local from cwd only.
   const resolveToolSearchOverride = Effect.fn("ClaudeAdapterV2.resolveToolSearchOverride")(
-    function* (cwd: string | null) {
+    function* (cwd: string | null, launchArgSettings: ClaudeSdkSettings | undefined) {
+      const launchValue = launchArgSettings?.env?.ENABLE_TOOL_SEARCH;
+      if (typeof launchValue === "string") return claudeToolSearchOverride(launchValue);
       const localDirectory = cwd === null ? null : yield* localSettingsDirectory(cwd);
       const settingsFiles = [
         ...(cwd === null || localDirectory === null
@@ -4622,6 +4464,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               readonly transcriptReadAttempts: number;
               readonly agentId: string | undefined;
               readonly transcriptCursor: WorkflowAgentTranscriptCursor;
+              readonly transcriptMetadata: WorkflowAgentMetadata | undefined;
               readonly nextItemOrdinal: number;
               readonly toolCalls: Map<string, ActiveClaudeToolCall>;
               readonly textShown: boolean;
@@ -5866,8 +5709,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const now = yield* DateTime.now;
           const seen = yield* Ref.get(workflowMemberStates);
           const transcriptDir = input.workflow.runHandles?.transcriptDir;
+          const reportedMembers = input.workflow.agents.slice();
 
-          for (const member of input.workflow.agents) {
+          for (const [memberIndex, member] of input.workflow.agents.entries()) {
             if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
               return;
             const memberKey = `${input.coordinator.childThreadId}:agent:${member.index}`;
@@ -5907,6 +5751,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               previous?.prompt !== prompt ||
               previous?.model !== model;
             const agentId = member.agentId;
+            const newIdentity = previous === undefined || restarted || previous.agentId !== agentId;
+            let metadata = newIdentity ? undefined : previous.transcriptMetadata;
+            if (metadata)
+              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata);
             // While the workflow runs, a settled member is read a few times. After it
             // ends, every notification reads again: the member may still be flushing
             // its transcript. The cursor keeps already projected lines from repeating.
@@ -5915,7 +5763,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               transcriptDir !== undefined &&
               agentId !== undefined &&
               (input.coordinator.task.status !== "running" ||
-                (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) < 3);
+                (newIdentity ? 0 : previous.transcriptReadAttempts) < 3);
             const readLiveTranscript =
               status === "running" && transcriptDir !== undefined && agentId !== undefined;
             if (!changed && !readTranscript && !readLiveTranscript) continue;
@@ -6051,10 +5899,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             });
             if (restarted) yield* endOpenToolCalls();
             // Retries can rewrite transcripts past the cursor; rereading from zero repeats only already shown items.
-            let transcriptCursor =
-              previous === undefined || restarted || previous.agentId !== agentId
-                ? initialWorkflowAgentTranscriptCursor
-                : previous.transcriptCursor;
+            let transcriptCursor = newIdentity
+              ? initialWorkflowAgentTranscriptCursor
+              : previous.transcriptCursor;
             let textShown = !restarted && previous?.textShown === true;
             let resultShown = !restarted && previous?.resultShown === true;
             let turnEnded = !restarted && previous?.turnEnded === true;
@@ -6099,6 +5946,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   transcriptRead = true;
                   const advanced = read.value.cursor.offset !== transcriptCursor.offset;
                   transcriptCursor = read.value.cursor;
+                  metadata = mergeWorkflowAgentMetadata(read.value.lines, metadata);
                   for (const line of read.value.lines) {
                     if (yield* projectSubagentTranscriptLine(target, line)) textShown = true;
                     turnEnded = isClaudeTranscriptTurnEnd(line);
@@ -6121,6 +5969,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 if (!(yield* drain())) return;
               }
             }
+            if (transcriptRead)
+              reportedMembers[memberIndex] = withWorkflowAgentMetadata(member, metadata ?? {});
             if (settled) {
               // Open calls receive no results after their member settles.
               yield* endOpenToolCalls();
@@ -6153,9 +6003,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 prompt,
                 model,
                 transcriptReadAttempts:
-                  (restarted ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
+                  (newIdentity ? 0 : (previous?.transcriptReadAttempts ?? 0)) +
                   (readTranscript ? 1 : 0),
                 transcriptCursor,
+                transcriptMetadata: metadata,
                 nextItemOrdinal,
                 toolCalls,
                 textShown,
@@ -6166,6 +6017,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 completedAt,
               }),
             );
+          }
+          if (reportedMembers.some((member, index) => member !== input.workflow.agents[index])) {
+            if ((yield* Ref.get(sessionSubagentsByTaskId)).get(taskId) !== input.coordinator)
+              return;
+            input.coordinator.task = {
+              ...input.coordinator.task,
+              workflow: { ...input.workflow, agents: reportedMembers },
+            };
+            yield* emitProviderEvent({
+              type: "subagent.updated",
+              driver: CLAUDE_PROVIDER,
+              subagent: input.coordinator.task,
+            });
           }
         });
 
@@ -9987,10 +9851,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             return existing;
           }
 
-          // Selection changes kill CLI background work; refuse until it finishes or Stop closes the process.
+          // Replacing this thread's process kills its background work, even with a new native identity.
           if (
             existing !== null &&
-            existing.nativeThreadId === nativeThreadId &&
+            (existing.nativeThreadId === nativeThreadId ||
+              existing.lastTurn?.input.threadId === turnInput.threadId) &&
             !existing.stopping &&
             (yield* liveProcessRunsBackgroundWork(existing))
           ) {
@@ -9999,6 +9864,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           // Read before closing the live process so a bad path leaves it running.
           const appendSystemPromptFileText = yield* readClaudeAppendSystemPromptFile({
+            settings: adapterOptions.settings,
+            cwd: turnInput.runtimePolicy.cwd,
+            fileSystem,
+            path,
+          });
+          const launchArgSettings = yield* readClaudeLaunchArgSettings({
             settings: adapterOptions.settings,
             cwd: turnInput.runtimePolicy.cwd,
             fileSystem,
@@ -10021,7 +9892,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.nativeThreadHasTurns ?? turnInput.providerTurnOrdinal > 1;
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
-          const toolSearchOverride = yield* resolveToolSearchOverride(turnInput.runtimePolicy.cwd);
+          const toolSearchOverride = yield* resolveToolSearchOverride(
+            turnInput.runtimePolicy.cwd,
+            launchArgSettings,
+          );
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
@@ -10031,6 +9905,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
+            ...(launchArgSettings === undefined ? {} : { sdkSettings: launchArgSettings }),
             environment: claudeQueryEnvironment(
               McpProviderSession.withThreadAgentEnvironment(
                 { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
@@ -10924,10 +10799,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           }),
           hasPendingBackgroundWorkForThread: Effect.fn(
             "ClaudeAdapterV2.hasPendingBackgroundWorkForThread",
-          )(function* (providerThread) {
+          )(function* (providerThread, options) {
             const nativeThreadId = providerThread.nativeThreadRef?.nativeId;
             if (nativeThreadId === undefined || nativeThreadId === null) {
               return false;
+            }
+            if (options?.includeSubagents) {
+              const live = yield* Ref.get(queryContext);
+              if (
+                live?.nativeThreadId === nativeThreadId &&
+                !live.stopping &&
+                (yield* liveProcessRunsBackgroundWork(live))
+              )
+                return true;
             }
             return (
               rosterForNativeThread(

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { ComposerThreadHosts } from "@goat/client-runtime/composerThreadItems";
 import {
   COMPOSER_CONTEXT_MAX_RECORDS,
   ComposerContextId,
@@ -133,6 +134,90 @@ beforeEach(() => {
 });
 
 describe("mobile context clipboard imports", () => {
+  it("removes a stale host from a thread local to the destination", async () => {
+    const stale = { ...localThread, host: "old-route" };
+    const clipboard = {
+      text: formatComposerContextReference(stale),
+      html: "",
+      fragment: encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: foreignThread.environmentId },
+        records: [stale],
+      })!,
+    };
+    const result = await importComposerContextClipboard(
+      clipboard,
+      0,
+      new AbortController().signal,
+      0,
+      localThread.environmentId,
+      new Map(),
+    );
+    expect(result?.context.records[0]).not.toHaveProperty("host");
+  });
+  it("imports a linked thread only when its route identifies the source environment", async () => {
+    const result = await importComposerContextClipboard(
+      mixedClipboard,
+      0,
+      new AbortController().signal,
+      0,
+      EnvironmentId.make("destination"),
+      new Map([[foreignThread.environmentId, "linked-box"]]),
+    );
+    expect(result?.context.records).toContainEqual(
+      expect.objectContaining({
+        kind: "thread",
+        threadId: foreignThread.threadId,
+        host: "linked-box",
+      }),
+    );
+    const mismatch = { ...foreignThread, host: "different-host" };
+    const clipboard = {
+      text: formatComposerContextReference(mismatch),
+      html: "",
+      fragment: encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: mismatch.environmentId },
+        records: [mismatch],
+      })!,
+    };
+    const refused = await importComposerContextClipboard(
+      clipboard,
+      0,
+      new AbortController().signal,
+      0,
+      EnvironmentId.make("destination"),
+      new Map([[mismatch.environmentId, "linked-box"]]),
+    );
+    expect(refused?.context.records).toEqual([]);
+    expect(refused?.skippedThreads).toHaveLength(1);
+  });
+
+  it("retains an SSH chip when another verified route is preferred", async () => {
+    const record = { ...foreignThread, host: "ssh-alias" };
+    const clipboard = {
+      text: formatComposerContextReference(record),
+      html: "",
+      fragment: encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: record.environmentId },
+        records: [record],
+      })!,
+    };
+    const hosts = new ComposerThreadHosts([[record.environmentId, "linked-box"]]);
+    hosts.allow(record.environmentId, "ssh-alias");
+    const result = await importComposerContextClipboard(
+      clipboard,
+      0,
+      new AbortController().signal,
+      0,
+      localThread.environmentId,
+      hosts,
+    );
+    expect(result?.context.records).toContainEqual(
+      expect.objectContaining({ threadId: record.threadId, host: "ssh-alias" }),
+    );
+  });
   it("copies original bytes and rewrites file bindings using a signal without throwIfAborted", async () => {
     const signal = { aborted: false } as AbortSignal;
     const result = await importComposerContextClipboard(clipboard, 0, signal);

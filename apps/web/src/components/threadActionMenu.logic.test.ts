@@ -32,6 +32,19 @@ function allIds(state: ThreadActionMenuState): string[] {
 }
 
 describe("buildThreadActionMenuItems", () => {
+  it("offers separate thread chip and ID actions to read-only clients", () => {
+    const copy = buildThreadActionMenuItems({ ...baseState, canOperate: false }).find(
+      (item) => item.id === "copy",
+    );
+    expect(copy?.children?.map((item) => item.id)).toEqual(
+      expect.arrayContaining(["copy-thread", "copy-thread-id"]),
+    );
+    expect(
+      copy?.children
+        ?.filter((item) => ["copy-thread", "copy-thread-id"].includes(item.id))
+        .every((item) => !item.disabled),
+    ).toBe(true);
+  });
   it.each([false, true])(
     "disables both lifecycle directions without permission (reversed: %s)",
     (reversed) => {

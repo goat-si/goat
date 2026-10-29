@@ -40,7 +40,7 @@ import type {
 } from "@goat/client-runtime/state/thread-requests";
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "@goat/client-runtime/state/shell";
 import { threadRuntimeHasInterruptibleRun } from "@goat/client-runtime/state/thread-execution";
-import { turnItemIsWorkspacePreparation } from "@goat/client-runtime/state/turn-item-presentation";
+import { hideTimelineItem } from "./sessionTimelineVisibility";
 
 import {
   isImageAttachment,
@@ -670,8 +670,7 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
   );
   for (const row of input.visibleTurnItems) {
     const { item } = row;
-    if (turnItemIsWorkspacePreparation(item)) continue;
-    if (item.type === "todo_list" || item.type === "checkpoint") continue;
+    if (hideTimelineItem(item)) continue;
     if (item.type === "user_message" && foldedAnswerMessageIds.has(item.messageId)) continue;
     const createdAt = projectedItemCreatedAt(row);
     const attempt = resolveAttempt(item);

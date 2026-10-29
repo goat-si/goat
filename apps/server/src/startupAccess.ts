@@ -187,6 +187,7 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
     `Connection string: ${accessInfo.connectionString}`,
     `Token: ${accessInfo.token}`,
     `Pairing URL: ${accessInfo.pairingUrl}`,
+    `App link: ${buildMobilePairingLink(accessInfo.pairingUrl)}`,
     "",
     // The QR is for the phone app; browsers use the printed URL.
     renderTerminalQrCode(buildMobilePairingLink(accessInfo.pairingUrl)),

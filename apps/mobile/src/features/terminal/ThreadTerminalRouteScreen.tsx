@@ -1,3 +1,8 @@
+import {
+  firstRouteParam,
+  inferHostPlatform,
+  pickRunningTerminalSessionForBootstrap,
+} from "./terminalRouteHelpers";
 import * as Dialog from "../../components/ui/Dialog";
 import {
   AuthTerminalReadScope,
@@ -7,7 +12,6 @@ import {
   ThreadId,
   sessionGrantsScope,
 } from "@goat/contracts";
-import { type KnownTerminalSession } from "@goat/client-runtime/state/terminal";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppBar } from "../../components/ui/AppBar";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
@@ -86,7 +90,6 @@ import {
 import {
   hostPlatformFromOs,
   resolveModifiedTerminalInput,
-  type HostPlatform,
   type PendingModifier,
 } from "./terminalInput";
 import { createTerminalPasteSession } from "./terminalPaste";
@@ -201,48 +204,6 @@ type TerminalToolbarAction =
       readonly label: string;
       readonly modifier: PendingModifier;
     };
-
-function firstRouteParam(value: string | string[] | undefined): string | null {
-  const first = Array.isArray(value) ? value[0] : value;
-  return first === undefined || first.trim().length === 0 ? null : first;
-}
-
-function inferHostPlatform(environmentLabel: string | null): HostPlatform {
-  const value = environmentLabel?.toLowerCase() ?? "";
-  if (
-    value.includes("mac") ||
-    value.includes("macbook") ||
-    value.includes("mac mini") ||
-    value.includes("imac") ||
-    value.includes("darwin")
-  ) {
-    return "mac";
-  }
-  if (value.includes("windows") || value.includes("win")) {
-    return "windows";
-  }
-  if (value.includes("linux") || value.includes("ubuntu") || value.includes("debian")) {
-    return "linux";
-  }
-
-  return "unknown";
-}
-
-function pickRunningTerminalSessionForBootstrap(
-  sessions: ReadonlyArray<KnownTerminalSession>,
-): KnownTerminalSession | null {
-  const running = sessions.filter(
-    (session) => session.state.status === "running" || session.state.status === "starting",
-  );
-  if (running.length === 0) {
-    return null;
-  }
-  return (
-    running.find((session) => session.target.terminalId === DEFAULT_TERMINAL_ID) ??
-    running[0] ??
-    null
-  );
-}
 
 type ThreadTerminalRouteScreenProps = StaticScreenProps<{
   readonly environmentId: string;
@@ -961,6 +922,7 @@ function ThreadTerminal(props: {
                   buffer={terminal.version === 0 ? null : terminal.buffer}
                   output={terminal.version === 0 ? null : terminal.output}
                   fontSize={fontSize}
+                  grid={terminal.grid}
                   isRunning={isRunning}
                   keyboardFocusRequest={keyboardFocusRequest}
                   captureRequest={captureRequest}

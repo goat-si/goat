@@ -990,19 +990,10 @@ vi.mock("../../state/use-thread-outbox", () => ({ useQueuedThreadKeys: () => new
 vi.mock("../../state/use-pending-new-tasks", () => ({ usePendingNewTasks: () => [] }));
 vi.mock("../../state/server", async () => {
   const { Atom } = await import("effect/reactivity");
+  const { createThreadListEnvironmentsAtom } = await import("../../state/thread-list-environments");
   return {
     serverEnvironment: { answerDecision: "answerDecision" },
-    threadListEnvironmentsAtom: Atom.make({
-      providersByEnvironmentId: new Map(),
-      machineByEnvironmentId: new Map(),
-      settlementEnvironmentIds: new Set(),
-      snoozeEnvironmentIds: new Set(),
-      pinningEnvironmentIds: new Set(),
-      autoSettleOptOutEnvironmentIds: new Set(),
-      pinReorderEnvironmentIds: new Set(),
-      activeReorderEnvironmentIds: new Set(),
-      titleRegenerationEnvironmentIds: new Set(),
-    }),
+    threadListEnvironmentsAtom: createThreadListEnvironmentsAtom(Atom.make(new Map())),
   };
 });
 vi.mock("../threads/thread-provider-instance", () => ({

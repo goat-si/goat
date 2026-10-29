@@ -7,6 +7,15 @@ import {
   makeAcpReplayRuntime,
   makeTurnInput,
 } from "./AcpAdapterV2.testkit.ts";
+import {
+  makeMockRuntime,
+  rawProtocolMethod,
+  rawProtocolRequest,
+  rawProtocolRequestParam,
+  rawProtocolPromptTextBlocks,
+  pollProtocolMethods,
+  decodeUnknownJson,
+} from "./AcpMockRuntime.testkit.ts";
 import { type OrchestrationV2TurnItem, type ProviderUserInputAnswers } from "@goat/contracts";
 import { deriveBlockedOnThreadWait } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { appendUserInputAttachmentPaths } from "../../provider/userInputAttachments.ts";
@@ -91,7 +100,6 @@ import {
   acpToolCallDiffPatch,
   makeAcpAdapterV2,
   type AcpAdapterV2ExtensionContext,
-  type AcpAdapterV2Flavor,
   type AcpAdapterV2RuntimeInput,
   type AcpAdapterV2SubagentUpdate,
 } from "@goat/provider-acp/server/adapter";
@@ -114,9 +122,29 @@ const layerTest = Layer.mergeAll(
   layerHost,
 );
 const ACP_TEST_DRIVER = ProviderDriverKind.make("acp-test");
-const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 
 describe("acpToolCallDiffPatch", () => {
+  it("adds file headers to header-less ACP git_patch hunks for added and deleted files", () => {
+    for (const operation of ["add", "delete"]) {
+      const text = operation === "add" ? "@@ -0,0 +1 @@\n+content\n" : "@@ -1 +0,0 @@\n-content\n";
+      assert.equal(
+        acpToolCallDiffPatch([
+          {
+            type: "diff",
+            changes: [{ operation, path: "/repo/a.ts" }],
+            patch: { format: "git_patch", text },
+          },
+        ]),
+        [
+          'diff --git "a//repo/a.ts" "b//repo/a.ts"',
+          operation === "add" ? "--- /dev/null" : '--- "a//repo/a.ts"',
+          operation === "delete" ? "+++ /dev/null" : '+++ "b//repo/a.ts"',
+          text,
+        ].join("\n"),
+      );
+    }
+  });
+
   it("builds a patch per file from ACP v1 oldText/newText, with /dev/null for a new file", () => {
     assert.equal(
       acpToolCallDiffPatch([
@@ -142,175 +170,6 @@ describe("acpToolCallDiffPatch", () => {
     );
   });
 });
-
-function makeMockRuntime(input: {
-  readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-  readonly mockAgentPath: string;
-  readonly environment?:
-    | Readonly<Record<string, string>>
-    | ((runtimeOrdinal: number) => Readonly<Record<string, string>>);
-  readonly protocolEvents?: Queue.Queue<EffectAcpProtocol.AcpProtocolLogEvent>;
-  readonly cancelBehavior?: AcpSessionRuntime.AcpSessionRuntimeOptions["cancelBehavior"];
-  readonly ownDescendantProcessGroups?: boolean;
-  readonly ownDetachedProcessGroup?: boolean;
-  readonly processGroupPlatform?: NodeJS.Platform;
-  readonly processGroupTerminationGrace?: Duration.Input;
-  readonly linuxCgroupController?: AcpSessionRuntime.AcpSessionRuntimeOptions["linuxCgroupController"];
-  readonly posixProcessTreeController?: AcpSessionRuntime.AcpSessionRuntimeOptions["posixProcessTreeController"];
-  readonly windowsProcessTreeTerminator?: AcpSessionRuntime.AcpSessionRuntimeOptions["windowsProcessTreeTerminator"];
-  readonly wrapCancel?: (
-    cancel: AcpSessionRuntime.AcpSessionRuntime["Service"]["cancel"],
-  ) => AcpSessionRuntime.AcpSessionRuntime["Service"]["cancel"];
-  readonly wrapOutgoingResponse?: (
-    onOutgoingResponse: NonNullable<AcpAdapterV2RuntimeInput["onOutgoingResponse"]>,
-  ) => NonNullable<AcpAdapterV2RuntimeInput["onOutgoingResponse"]>;
-  readonly wrapRuntime?: (
-    runtime: AcpSessionRuntime.AcpSessionRuntime["Service"],
-    runtimeOrdinal: number,
-  ) => AcpSessionRuntime.AcpSessionRuntime["Service"];
-}): AcpAdapterV2Flavor["makeRuntime"] {
-  let runtimeOrdinal = 0;
-  return (runtimeInput) =>
-    Effect.gen(function* () {
-      runtimeOrdinal += 1;
-      const protocolEvents = input.protocolEvents;
-      const protocolLogging =
-        protocolEvents === undefined
-          ? runtimeInput.protocolLogging
-          : {
-              ...runtimeInput.protocolLogging,
-              logger: (event: EffectAcpProtocol.AcpProtocolLogEvent) =>
-                Queue.offer(protocolEvents, event).pipe(
-                  Effect.andThen(runtimeInput.protocolLogging.logger?.(event) ?? Effect.void),
-                  Effect.asVoid,
-                ),
-            };
-      const context = yield* Layer.build(
-        AcpSessionRuntime.layer({
-          ...runtimeInput,
-          ...(input.cancelBehavior === undefined ? {} : { cancelBehavior: input.cancelBehavior }),
-          ...(input.ownDetachedProcessGroup === undefined
-            ? {}
-            : { ownDetachedProcessGroup: input.ownDetachedProcessGroup }),
-          ...(input.ownDescendantProcessGroups === undefined
-            ? {}
-            : { ownDescendantProcessGroups: input.ownDescendantProcessGroups }),
-          ...(input.ownDetachedProcessGroup === true
-            ? { processGroupPlatform: input.processGroupPlatform ?? "linux" }
-            : {}),
-          ...(input.processGroupTerminationGrace === undefined
-            ? {}
-            : { processGroupTerminationGrace: input.processGroupTerminationGrace }),
-          ...(input.linuxCgroupController === undefined
-            ? {}
-            : { linuxCgroupController: input.linuxCgroupController }),
-          ...(input.posixProcessTreeController === undefined
-            ? {}
-            : { posixProcessTreeController: input.posixProcessTreeController }),
-          ...(input.windowsProcessTreeTerminator === undefined
-            ? {}
-            : { windowsProcessTreeTerminator: input.windowsProcessTreeTerminator }),
-          protocolLogging,
-          spawn: {
-            command: process.execPath,
-            args: [input.mockAgentPath],
-            cwd: runtimeInput.cwd,
-            env: {
-              GOAT_ACP_SESSION_LIFECYCLE: "1",
-              ...(typeof input.environment === "function"
-                ? input.environment(runtimeOrdinal)
-                : input.environment),
-            },
-          },
-          authMethodId: "test",
-          ...(input.wrapOutgoingResponse === undefined ||
-          runtimeInput.onOutgoingResponse === undefined
-            ? {}
-            : {
-                onOutgoingResponse: input.wrapOutgoingResponse(runtimeInput.onOutgoingResponse),
-              }),
-        }).pipe(
-          Layer.provide(
-            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, input.childProcessSpawner),
-          ),
-        ),
-      );
-      const runtime = yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(
-        Effect.provide(context),
-      );
-      const wrapped = {
-        ...runtime,
-        ...(input.wrapCancel === undefined ? {} : { cancel: input.wrapCancel(runtime.cancel) }),
-      };
-      return input.wrapRuntime?.(wrapped, runtimeOrdinal) ?? wrapped;
-    });
-}
-
-function rawProtocolMethod(event: EffectAcpProtocol.AcpProtocolLogEvent): string | undefined {
-  if (event.stage !== "raw" || typeof event.payload !== "string") return undefined;
-  for (const line of event.payload.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    const decoded = Option.getOrUndefined(decodeUnknownJson(trimmed));
-    if (typeof decoded === "object" && decoded !== null && "method" in decoded) {
-      const method = (decoded as { readonly method?: unknown }).method;
-      if (typeof method === "string") return method;
-    }
-  }
-  return undefined;
-}
-
-function rawProtocolRequest(
-  event: EffectAcpProtocol.AcpProtocolLogEvent,
-): { readonly method?: unknown; readonly params?: unknown } | undefined {
-  if (event.stage !== "raw" || typeof event.payload !== "string") return undefined;
-  for (const line of event.payload.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-    const decoded = Option.getOrUndefined(decodeUnknownJson(trimmed));
-    if (typeof decoded === "object" && decoded !== null && "method" in decoded) {
-      return decoded;
-    }
-  }
-  return undefined;
-}
-
-function rawProtocolRequestParam(
-  event: EffectAcpProtocol.AcpProtocolLogEvent,
-  key: string,
-): unknown {
-  const params = rawProtocolRequest(event)?.params;
-  return typeof params === "object" && params !== null ? Reflect.get(params, key) : undefined;
-}
-
-function rawProtocolPromptTextBlocks(
-  event: EffectAcpProtocol.AcpProtocolLogEvent,
-): Array<{ type: "text"; text: string }> {
-  const prompt = rawProtocolRequestParam(event, "prompt");
-  if (!Array.isArray(prompt)) return [];
-  return prompt.flatMap((block) =>
-    typeof block === "object" &&
-    block !== null &&
-    Reflect.get(block, "type") === "text" &&
-    typeof Reflect.get(block, "text") === "string"
-      ? [{ type: "text" as const, text: Reflect.get(block, "text") as string }]
-      : [],
-  );
-}
-
-const pollProtocolMethods = (events: Queue.Queue<EffectAcpProtocol.AcpProtocolLogEvent>) =>
-  Effect.gen(function* () {
-    const methods: string[] = [];
-    let polled = 0;
-    let event = yield* Queue.poll(events);
-    while (Option.isSome(event) && polled < 256) {
-      polled += 1;
-      const method = rawProtocolMethod(event.value);
-      if (method !== undefined) methods.push(method);
-      event = yield* Queue.poll(events);
-    }
-    return methods;
-  });
 
 describe("AcpAdapterV2", () => {
   it.live.each(["details", "none"] as const)(
@@ -2137,6 +1996,99 @@ describe("AcpAdapterV2", () => {
           }),
         );
       }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.live("creates a fresh ACP identity when recovering an exhausted target", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const selfInvocation = yield* resolveSelfInvocation();
+      const mockAgentPath = yield* path.fromFileUrl(
+        new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+      );
+      const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+      const instanceId = ProviderInstanceId.make("acp-test-exhausted-target");
+      const adapter = yield* makeAcpAdapterV2({
+        instanceId,
+        flavor: {
+          driver: ACP_TEST_DRIVER,
+          capabilities: AcpProviderCapabilitiesV2,
+          makeRuntime: makeMockRuntime({
+            childProcessSpawner,
+            mockAgentPath,
+            protocolEvents,
+            wrapRuntime: (runtime, ordinal) => ({
+              ...runtime,
+              start: () =>
+                runtime.start().pipe(
+                  Effect.map((started) => ({
+                    ...started,
+                    sessionId: `mock-recovery-session-${ordinal}`,
+                  })),
+                ),
+            }),
+          }),
+        },
+        selfInvocation,
+      });
+      const threadId = ThreadId.make("thread-acp-exhausted-target");
+      const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        cwd: process.cwd(),
+      });
+      const modelSelection = { instanceId, model: "default" } as const;
+      const runtime = yield* adapter.openSession({
+        threadId,
+        providerSessionId: ProviderSessionId.make("provider-session-acp-exhausted-target"),
+        modelSelection,
+        runtimePolicy,
+      });
+      const original = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread: original,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+          ordinal: 1,
+        }),
+      );
+      yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runDrain,
+      );
+      const replacement = yield* runtime.ensureThread({
+        threadId,
+        modelSelection,
+        runtimePolicy,
+        existingProviderThread: { ...original, nativeThreadRef: null },
+        forceNewNativeThread: true,
+      });
+      assert.notEqual(replacement.nativeThreadRef?.nativeId, original.nativeThreadRef?.nativeId);
+      assert.equal(replacement.id, original.id);
+      assert.equal(replacement.nativeMetadata?.itemIdentityVersion, 2);
+      yield* runtime.startTurn(
+        makeTurnInput({
+          threadId,
+          providerThread: replacement,
+          instanceId,
+          runtimePolicy,
+          now: yield* DateTime.now,
+          ordinal: 2,
+        }),
+      );
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+      );
+      assert.isTrue(
+        events.some((event) => event.type === "turn.terminal" && event.status === "completed"),
+      );
+      const methods = yield* pollProtocolMethods(protocolEvents);
+      assert.equal(methods.filter((method) => method === "session/new").length, 2);
+    }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   it.live("preserves new-session fallback when an eager ACP session load is stale", () =>
@@ -5236,6 +5188,19 @@ describe("AcpAdapterV2", () => {
           yield* hasPendingBackgroundWork,
           "carryover live subagent must pin hasPendingBackgroundWork after root settle",
         );
+        const refusedReplacement = yield* runtime
+          .ensureThread({
+            threadId,
+            modelSelection,
+            runtimePolicy,
+            existingProviderThread: { ...providerThread, nativeThreadRef: null },
+            forceNewNativeThread: true,
+          })
+          .pipe(Effect.flip);
+        assert.equal(refusedReplacement._tag, "ProviderAdapterEnsureThreadError");
+        const preserved = yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
+        assert.equal(preserved.nativeThreadRef?.nativeId, providerThread.nativeThreadRef?.nativeId);
+        assert.isTrue(yield* hasPendingBackgroundWork);
         assert.isDefined(sessionUpdateHandler, "session update handler must be wired");
 
         subagentPhase = "complete";

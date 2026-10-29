@@ -1,10 +1,68 @@
-import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@goat/contracts";
+import type { EnvironmentId, HubNode, ScopedThreadRef, ThreadId } from "@goat/contracts";
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@goat/shared/paletteSearch";
 
 import type { EnvironmentThreadShell } from "./state/models.ts";
 import { threadSearchSubject, type ThreadSearchShell } from "./state/threadSearch.ts";
 
 const COMPOSER_THREAD_RESULT_LIMIT = 5;
+
+export class ComposerThreadHosts extends Map<EnvironmentId, string> {
+  private readonly aliases = new Map<string, EnvironmentId>();
+  allow(id: EnvironmentId, host: string) {
+    this.aliases.set(host, id);
+  }
+  allows(id: EnvironmentId, host: string) {
+    return this.aliases.get(host) === id;
+  }
+}
+
+export function composerThreadHosts(input: {
+  readonly nodes: ReadonlyArray<HubNode>;
+  readonly mounted: ReadonlySet<EnvironmentId>;
+  readonly sshHosts: ReadonlyMap<EnvironmentId, string>;
+}): ComposerThreadHosts {
+  const names = new Map<string, Set<EnvironmentId | null>>();
+  const remember = (name: string, id: EnvironmentId | null) => {
+    const ids = names.get(name) ?? new Set<EnvironmentId | null>();
+    ids.add(id);
+    names.set(name, ids);
+  };
+  for (const [id, host] of input.sshHosts) remember(host, id);
+  for (const node of input.nodes)
+    for (const route of node.routes) {
+      if (route.target.kind === "linked") remember(route.target.name, node.environmentId);
+      if (route.target.kind === "ssh") remember(route.target.alias, node.environmentId);
+    }
+  const safe = (name: string, id: EnvironmentId) => {
+    const ids = names.get(name);
+    return ids?.size === 1 && ids.has(id);
+  };
+  const result = new ComposerThreadHosts();
+  for (const [id, host] of input.sshHosts) {
+    const node = input.nodes.find((candidate) => candidate.environmentId === id);
+    if (input.mounted.has(id) && node?.status !== "offline" && safe(host, id)) {
+      result.allow(id, host);
+      result.set(id, host);
+    }
+  }
+  for (const node of input.nodes) {
+    const id = node.environmentId;
+    if (id === null || !input.mounted.has(id) || node.status === "offline") continue;
+    for (const route of node.routes) {
+      if (route.status !== "online") continue;
+      const host =
+        route.target.kind === "linked"
+          ? route.target.name
+          : route.target.kind === "ssh"
+            ? route.target.alias
+            : null;
+      if (host === null || !safe(host, id)) continue;
+      result.allow(id, host);
+      if (route.target.kind === "linked" && !result.has(id)) result.set(id, host);
+    }
+  }
+  return result;
+}
 
 export type ComposerThreadCandidate = ThreadSearchShell &
   Pick<EnvironmentThreadShell, "archivedAt" | "lineage">;

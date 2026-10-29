@@ -1,3 +1,9 @@
+import {
+  ensureTerminalSymbolsFont,
+  terminalFontFamily,
+  loadTerminalFontFamily,
+  terminalFontSize,
+} from "./surfaceFont";
 import { isMacPlatform } from "../../lib/utils";
 import { SELECTION_MULTI_CLICK_INTERVAL_MS } from "../../lib/selectionActions";
 import { collectWrappedTerminalLinkLine, extractTerminalLinks } from "../../terminal-links";
@@ -14,107 +20,16 @@ import {
   type GhosttyCellRange,
   type GhosttyCellMetrics,
 } from "./renderer";
-import symbolsFontUrl from "./fonts/SymbolsNerdFontMono-Regular.woff2?url";
-import { isMonospaceFamily } from "../../appearanceFonts";
 import { observeResize } from "../../lib/observeResize";
 
-const DEFAULT_TERMINAL_FONT_SIZE = 12;
-const MIN_TERMINAL_FONT_SIZE = 6;
-const MAX_TERMINAL_FONT_SIZE = 32;
-const TERMINAL_GLYPH_FALLBACKS =
-  '"Symbols Nerd Font Mono", "Symbols Nerd Font", "JetBrainsMono Nerd Font", ' +
-  '"JetBrainsMono NF", "FiraCode Nerd Font", "Hack Nerd Font", "MesloLGS NF", ' +
-  '"CaskaydiaCove Nerd Font", "PowerlineSymbols", monospace';
-// The platform's own monospace faces; concrete names only, because an
-// unknown keyword (like ui-monospace) makes canvas font shorthand parsing
-// reject the whole string.
-const DEFAULT_TERMINAL_FONT_FAMILY =
-  '"SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", ' + TERMINAL_GLYPH_FALLBACKS;
 const CONTENT_PADDING = 4;
 const MIN_SCROLLBAR_THUMB_HEIGHT = 18;
 const CURSOR_BLINK_INTERVAL_MS = 500;
 /** End an unterminated synchronized update instead of freezing the last frame. */
 const SYNCHRONIZED_OUTPUT_RENDER_TIMEOUT_MS = 500;
-const TERMINAL_FONT_LOAD_TEXT = "iMW0@# .";
-const TERMINAL_FONT_LOAD_VARIANTS = [
-  "normal 400",
-  "normal 700",
-  "italic 400",
-  "italic 700",
-] as const;
-
 export interface GhosttyTerminalFont {
   readonly family?: string;
   readonly size?: number;
-}
-
-let symbolsFontLoad: Promise<void> | null = null;
-
-function ensureTerminalSymbolsFont(): Promise<void> {
-  if (symbolsFontLoad !== null) return symbolsFontLoad;
-  symbolsFontLoad = (async () => {
-    try {
-      const face = new FontFace("Symbols Nerd Font Mono", `url(${symbolsFontUrl})`);
-      document.fonts.add(await face.load());
-    } catch {}
-  })();
-  return symbolsFontLoad;
-}
-
-function quoteTerminalFontFamilies(list: string): string {
-  return list
-    .split(",")
-    .map((name) => {
-      const bare = name.trim();
-      if (bare.length === 0) return "";
-      if (/^(['"]).*\1$/.test(bare)) return bare;
-      if (/^[a-zA-Z][a-zA-Z0-9-]*$/.test(bare)) return bare;
-      return `"${bare.replaceAll('"', "")}"`;
-    })
-    .filter((name) => name.length > 0)
-    .join(", ");
-}
-
-function uncheckedTerminalFontFamily(family?: string): string {
-  const custom = family === undefined ? "" : quoteTerminalFontFamilies(family);
-  return custom.length === 0
-    ? DEFAULT_TERMINAL_FONT_FAMILY
-    : `${custom}, ${TERMINAL_GLYPH_FALLBACKS}`;
-}
-
-function terminalFontFamily(family?: string): string {
-  // Quote non-ident names ("3270 Nerd Font", "M+ 1m"): an unquoted one makes
-  // the whole canvas font string invalid and the assignment silently no-ops.
-  const custom = family === undefined ? "" : quoteTerminalFontFamilies(family);
-  if (custom.length === 0) return DEFAULT_TERMINAL_FONT_FAMILY;
-  if (!isMonospaceFamily(custom)) return DEFAULT_TERMINAL_FONT_FAMILY;
-  return uncheckedTerminalFontFamily(custom);
-}
-
-async function loadTerminalFontFamily(
-  family: string | undefined,
-  size: number,
-  environment?: {
-    readonly load: (font: string, text: string) => Promise<unknown>;
-    readonly resolve: (family: string | undefined) => string;
-  },
-): Promise<string> {
-  const candidate = uncheckedTerminalFontFamily(family);
-  const load =
-    environment?.load ?? ((font: string, text: string) => document.fonts.load(font, text));
-  try {
-    await Promise.all(
-      TERMINAL_FONT_LOAD_VARIANTS.map((variant) =>
-        load(`${variant} ${size}px ${candidate}`, TERMINAL_FONT_LOAD_TEXT),
-      ),
-    );
-  } catch {}
-  return (environment?.resolve ?? terminalFontFamily)(family);
-}
-
-function terminalFontSize(size?: number): number {
-  if (size === undefined || !Number.isFinite(size)) return DEFAULT_TERMINAL_FONT_SIZE;
-  return Math.max(MIN_TERMINAL_FONT_SIZE, Math.min(MAX_TERMINAL_FONT_SIZE, Math.round(size)));
 }
 
 function shouldBlinkTerminalCursor(state: {
@@ -519,10 +434,14 @@ export class GhosttyTerminalSurface {
   readonly canvas: HTMLCanvasElement;
   readonly input: HTMLTextAreaElement;
   readonly scrollbar: HTMLDivElement;
+  /** The drawn grid: the shared PTY grid, clamped per axis to the measured one. */
   cols = 1;
   rows = 1;
 
   private readonly mount: HTMLElement;
+  private measuredCols = 1;
+  private measuredRows = 1;
+  private sharedGrid: { readonly cols: number; readonly rows: number } | null = null;
   private readonly context: CanvasRenderingContext2D;
   private readonly core: GhosttyTerminalCore;
   private readonly options: GhosttyTerminalSurfaceOptions;
@@ -860,28 +779,59 @@ export class GhosttyTerminalSurface {
     }
     const grid = terminalGridSize(width, height, this.metrics, CONTENT_PADDING);
     this.mountHeight = height;
-    // onResize is the only PTY channel; notify on first fit even when the grid matches its 1x1 sentinel.
-    if (grid.cols !== this.cols || grid.rows !== this.rows || !this.resizeNotified) {
-      this.cols = grid.cols;
-      this.rows = grid.rows;
-      this.core.resize(grid.cols, grid.rows, this.metrics.width, this.metrics.height);
+    // onResize is the only PTY resize channel, so the first successful fit must
+    // notify even when the measured grid equals the 1x1 construction sentinel.
+    if (
+      grid.cols !== this.measuredCols ||
+      grid.rows !== this.measuredRows ||
+      !this.resizeNotified
+    ) {
+      this.measuredCols = grid.cols;
+      this.measuredRows = grid.rows;
       this.notifyResize();
-      this.forceFullRender = true;
-      this.scrollbarDirty = true;
-      shouldRender = true;
     }
+    if (this.applyGrid()) shouldRender = true;
     // Repaint synchronously before paint so resize never stretches the old backing store.
     if (shouldRender || this.forceFullRender) this.renderFrame();
     return true;
   }
 
-  // Reflow locally during drags; debounce PTY resizes so the shell does not reprint its prompt each step.
+  /**
+   * Other clients can share this PTY, so the server owns its grid. Drawing that grid
+   * keeps wrapping and cursor positions in step with the PTY. Each axis is clamped to
+   * this surface's own fit: the server's grid lags a local resize, and read-only
+   * observers never constrain it.
+   */
+  setSharedGrid(grid: { readonly cols: number; readonly rows: number } | null): void {
+    if (this.disposed) return;
+    if (this.sharedGrid?.cols === grid?.cols && this.sharedGrid?.rows === grid?.rows) return;
+    this.sharedGrid = grid;
+    if (this.hasSize && this.applyGrid()) this.requestRender();
+  }
+
+  private applyGrid(): boolean {
+    const cols = Math.min(this.sharedGrid?.cols ?? this.measuredCols, this.measuredCols);
+    const rows = Math.min(this.sharedGrid?.rows ?? this.measuredRows, this.measuredRows);
+    if (cols === this.cols && rows === this.rows) return false;
+    this.cols = cols;
+    this.rows = rows;
+    this.core.resize(cols, rows, this.metrics.width, this.metrics.height);
+    this.forceFullRender = true;
+    this.scrollbarDirty = true;
+    return true;
+  }
+
+  /**
+   * The local grid reflows immediately, but the PTY only hears about settled
+   * dimensions: notifying on every drag step makes the shell reprint its
+   * prompt mid-drag, which reads as jitter.
+   */
   private notifyResize(): void {
     this.resizeNotified = true;
     if (this.resizeNotifyTimer !== null) window.clearTimeout(this.resizeNotifyTimer);
     this.resizeNotifyTimer = window.setTimeout(() => {
       this.resizeNotifyTimer = null;
-      if (!this.disposed) this.options.onResize(this.cols, this.rows);
+      if (!this.disposed) this.options.onResize(this.measuredCols, this.measuredRows);
     }, 150);
   }
 
@@ -892,7 +842,7 @@ export class GhosttyTerminalSurface {
     if (this.resizeNotifyTimer === null) return;
     window.clearTimeout(this.resizeNotifyTimer);
     this.resizeNotifyTimer = null;
-    this.options.onResize(this.cols, this.rows);
+    this.options.onResize(this.measuredCols, this.measuredRows);
   };
 
   focus(): void {
@@ -1013,7 +963,7 @@ export class GhosttyTerminalSurface {
     if (this.resizeNotifyTimer !== null) {
       window.clearTimeout(this.resizeNotifyTimer);
       this.resizeNotifyTimer = null;
-      this.options.onResize(this.cols, this.rows);
+      this.options.onResize(this.measuredCols, this.measuredRows);
     }
     this.cancelRender();
     if (this.compositionSuppressionTimer !== null) {

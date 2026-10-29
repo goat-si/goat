@@ -25,6 +25,7 @@ vi.mock(import("../ChatMarkdown"), () => ({
 }));
 
 const boundary = vi.hoisted(() => ({ respond: vi.fn() }));
+const routeState = vi.hoisted(() => ({ available: true }));
 vi.mock(import("../../state/session"), { spy: true });
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: () => boundary.respond,
@@ -33,6 +34,19 @@ vi.mock("../../connection/catalog", async () => {
   const { Atom } = await import("effect/reactivity");
   return {
     environmentCatalog: { catalogValueAtom: Atom.make({ isReady: true, entries: new Map() }) },
+  };
+});
+
+vi.mock("../../lib/useThreadContextHosts", async () => {
+  const { ComposerThreadHosts } = await import("@goat/client-runtime/composerThreadItems");
+  return {
+    useThreadContextHosts: () => {
+      if (!routeState.available) return new ComposerThreadHosts();
+      const hosts = new ComposerThreadHosts();
+      hosts.allow(EnvironmentId.make("question-remote"), "build-box");
+      hosts.set(EnvironmentId.make("question-remote"), "build-box");
+      return hosts;
+    },
   };
 });
 
@@ -281,7 +295,8 @@ it("refuses a question answer after its attached thread loses its SSH route and 
     ),
     enabled: true,
   };
-  const writeRoutes = (includeRemote: boolean) =>
+  const writeRoutes = (includeRemote: boolean) => {
+    routeState.available = includeRemote;
     appAtomRegistry.set(
       environmentCatalog.catalogValueAtom as Atom.Writable<EnvironmentCatalogState>,
       {
@@ -292,6 +307,7 @@ it("refuses a question answer after its attached thread loses its SSH route and 
         ]),
       },
     );
+  };
   writeRoutes(true);
   const projection = questionProjection(ThreadId.make("question-route-removal"), ["answer"]);
   const record = {
@@ -299,7 +315,7 @@ it("refuses a question answer after its attached thread loses its SSH route and 
       { environmentId: remoteId, threadId: ThreadId.make("remote-work") },
       "Remote work",
     ),
-    host: "previous-alias",
+    host: "build-box",
   };
   const text = `Read ${formatComposerContextReference(record)}`;
   const target = questionAttachmentDraftId(
@@ -329,6 +345,17 @@ it("refuses a question answer after its attached thread loses its SSH route and 
   await act(() => requests.onAdvanceActivePendingUserInput());
   await act(() => requests.onAdvanceActivePendingUserInput());
   writeRoutes(false);
+  await act(() =>
+    _screen.rerender(
+      <PendingRequestsProbe
+        environmentId={environmentId}
+        projection={projection}
+        onState={(next) => {
+          requests = next;
+        }}
+      />,
+    ),
+  );
   await act(() => requests.onAdvanceActivePendingUserInput());
 
   expect(boundary.respond).not.toHaveBeenCalled();
@@ -347,6 +374,17 @@ it("refuses a question answer after its attached thread loses its SSH route and 
 
   // Restoring the route permits retry and projects the freshly settled alias.
   writeRoutes(true);
+  await act(() =>
+    _screen.rerender(
+      <PendingRequestsProbe
+        environmentId={environmentId}
+        projection={projection}
+        onState={(next) => {
+          requests = next;
+        }}
+      />,
+    ),
+  );
   await act(() => requests.onAdvanceActivePendingUserInput());
   expect(boundary.respond).toHaveBeenCalledTimes(1);
   expect(boundary.respond).toHaveBeenCalledWith(

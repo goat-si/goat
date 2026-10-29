@@ -1,3 +1,4 @@
+import { workspaceAreaProps } from "../../lib/workspaceFocus";
 import { useLayoutEffect, useState, type ReactNode, type RefObject } from "react";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { ScrollArea } from "../ui/scroll-area";
@@ -12,6 +13,7 @@ import {
   resolveThreadDetailsCardLayout,
 } from "./threadDetailsCardLayout";
 import { observeResize } from "../../lib/observeResize";
+import { requestWorkspaceFocus } from "../../lib/workspaceFocus";
 
 export function ThreadDetailsCard({
   threadRef,
@@ -26,6 +28,7 @@ export function ThreadDetailsCard({
   onPresentationChange: (presentation: ThreadPanelPresentation) => void;
   children: (density: "full" | "compact" | "essential") => ReactNode;
 }) {
+  const detailsArea = workspaceAreaProps("details", 3, "Thread details");
   const canvas = useChatCanvas();
   const preferredPlacement = canvas
     ? resolveThreadDetailsCardLayout({
@@ -165,7 +168,8 @@ export function ThreadDetailsCard({
     >
       {placement && inlineOpen ? (
         <aside
-          aria-label="Thread details"
+          {...detailsArea}
+          data-workspace-focus-key={`details:${threadRef.environmentId}:${threadRef.threadId}`}
           // Skip the return transition to avoid overlapping the rising preview.
           className={cn(
             "absolute z-20",
@@ -185,6 +189,13 @@ export function ThreadDetailsCard({
       ) : null}
       {/* Base UI needs the popup to stay mounted to complete closing when the card moves inline. */}
       <PopoverPopup
+        {...(mode === "popover" ? detailsArea : {})}
+        role="dialog"
+        data-workspace-focus-key={`details:${threadRef.environmentId}:${threadRef.threadId}`}
+        initialFocus={() => {
+          requestWorkspaceFocus({ area: "details" });
+          return false;
+        }}
         anchor={anchor}
         align="end"
         // Account for the find panel's 8px card padding.

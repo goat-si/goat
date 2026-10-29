@@ -9,6 +9,7 @@ const PROMPT_REFUSAL_TAGS = [
   "ClaudeBackgroundWorkBlocksQueryReplacementError",
   "ClaudeAppendSystemPromptFileError",
   "ClaudeAppendSystemPromptMissingValueError",
+  "ClaudeSettingsLaunchArgError",
   "ClaudeMcpRegistrationTimeoutError",
 ] as const;
 

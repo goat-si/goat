@@ -177,6 +177,10 @@ function serverDetail(server: ServerUpdateTarget): string {
  */
 export function buildAppTab(input: {
   readonly local: LocalAppUpdate | null;
+  readonly localMachines?: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly label: string;
+  }>;
   readonly servers: ReadonlyArray<ServerUpdateTarget & { readonly fromVersion: string }>;
   readonly sshRuntimes: ReadonlyArray<SshRuntimeUpdateTarget>;
   readonly skipped: ReadonlyArray<SkippedMachine>;
@@ -207,25 +211,39 @@ export function buildAppTab(input: {
     })),
   ];
   const local = input.local;
+  const localMachines = input.localMachines ?? [];
+  const localMachine = localMachines.find(
+    (machine) => machine.environmentId === local?.environmentId,
+  );
+  const localRows =
+    local === null
+      ? []
+      : [
+          localMachine ?? { environmentId: local.environmentId, label: "GOAT on this Mac" },
+          ...localMachines.filter((machine) => machine.environmentId !== local?.environmentId),
+        ];
   return {
     rows: [
       ...remote,
       ...(local === null
         ? []
-        : [
-            {
-              id: "local",
-              kind: "local" as const,
-              environmentId: local.environmentId,
-              label: `GOAT on this Mac`,
-              detail: `${desktopChannelLabel(local.channel)} channel · restarts last`,
-              fromVersion: local.currentVersion,
-              toVersion: local.version,
-              runningThreads:
-                local.environmentId === null ? 0 : input.runningThreads(local.environmentId),
-              selectable: true,
-            },
-          ]),
+        : localRows.map((machine, index) => ({
+            id: index === 0 ? "local" : `local-host:${machine.environmentId}`,
+            kind: "local" as const,
+            environmentId: machine.environmentId,
+            label: machine.label,
+            detail:
+              index === 0
+                ? `${desktopChannelLabel(local.channel)} channel · restarts last`
+                : "Updates with this app",
+            fromVersion: local.currentVersion,
+            toVersion: local.version,
+            runningThreads:
+              index !== 0 || local.environmentId === null
+                ? 0
+                : input.runningThreads(local.environmentId),
+            selectable: index === 0,
+          }))),
     ],
     skipped: input.skipped,
   };
@@ -314,6 +332,10 @@ export function selectedRows(
   unchecked: ReadonlySet<string>,
 ): ReadonlyArray<UpdateDialogRow> {
   return tab.rows.filter((row) => row.selectable && !unchecked.has(row.id));
+}
+
+export function countUpdateTab(tab: UpdateDialogTab): number {
+  return tab.rows.filter((row) => row.selectable).length;
 }
 
 export function updateButtonLabel(count: number): string {

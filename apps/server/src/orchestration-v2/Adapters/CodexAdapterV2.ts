@@ -4851,7 +4851,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         yield* client.handleServerNotification("account/rateLimits/updated", (payload) =>
           Effect.gen(function* () {
-            yield* Ref.update(rateLimitSnapshot, (previous) =>
+            const previous = yield* Ref.getAndUpdate(rateLimitSnapshot, (previous) =>
               mergeCodexRateLimits(previous, payload.rateLimits),
             );
             const resetAt = codexUsageLimitResetAt(yield* Ref.get(rateLimitSnapshot));
@@ -4871,7 +4871,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 turnItem: updated,
               });
             }
-            const update = codexRateLimitsToUpdate(payload.rateLimits);
+            const update = codexRateLimitsToUpdate(payload.rateLimits, previous);
             if (update && adapterOptions.onUsageLimits) {
               const checkedAt = DateTime.formatIso(yield* DateTime.now);
               yield* adapterOptions.onUsageLimits({ ...update, checkedAt });
@@ -5457,6 +5457,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       threadId: context.projectionThreadId,
                       providerThreadId: context.providerThread.id,
                       driver: CODEX_PROVIDER,
+                      // Codex starts a new turn from this text, so nothing is buffered.
+                      delivery: "message_text",
                       detail: codexBackgroundCommandDetail(payload.item),
                       notification: {
                         ...backgroundWorkNotification([
@@ -6470,11 +6472,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const terminal = yield* makeRootTerminalEvent(input);
                 if (
                   input.context.subagent === null &&
-                  !input.context.hasOutput &&
-                  !(goalRuns.get(input.context.providerTurnId) ?? []).some(
-                    (turn) => turn.hasOutput,
-                  ) &&
                   terminal.status === "failed" &&
+                  (terminal.failure.code === "serverOverloaded" ||
+                    (!input.context.hasOutput &&
+                      !(goalRuns.get(input.context.providerTurnId) ?? []).some(
+                        (turn) => turn.hasOutput,
+                      ))) &&
+                  !(
+                    input.context.input.message.attachments.length === 0 &&
+                    input.context.input.message.text.trim().toLowerCase() === "/compact"
+                  ) &&
                   terminal.failure.retryable === true &&
                   terminal.failure.class !== "usage_limit" &&
                   retryDelayMs !== undefined

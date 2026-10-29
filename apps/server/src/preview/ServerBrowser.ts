@@ -612,6 +612,14 @@ const make = Effect.gen(function* () {
         ? await connectDesktop(snapshot)
         : null;
     if (adopted === undefined) assertStoreUsed(snapshot, desktop, profiles);
+    // Otherwise a desktop that attaches late shows its own page, and the agent drives another.
+    if (adopted === undefined && desktop === null && desktopChannel.available) {
+      await runPromise(
+        manager
+          .markServerRendered({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId })
+          .pipe(Effect.ignore),
+      );
+    }
     const isolatedContext =
       adopted === undefined &&
       desktop === null &&

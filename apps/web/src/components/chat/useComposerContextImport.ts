@@ -37,7 +37,6 @@ import { assetEnvironment } from "~/state/assets";
 import { copiedComposerAttachmentFile } from "~/lib/copiedComposerAttachments";
 import { countQuestionAttachments, questionAttachmentDraftId } from "../../questionAttachments";
 import { elementContextToPreviewAnnotation } from "../../lib/elementContext";
-import { orchestrationEnvironment } from "~/state/orchestration";
 import { pendingDraftWork } from "./pendingDraftWork";
 import { randomUUID } from "~/lib/utils";
 import { readPreparedConnection } from "~/state/session";
@@ -49,13 +48,13 @@ import {
   type ComposerDraftContextRecords,
   uploadedContextRecordFromDraft,
 } from "../composerContextPresentation";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import type { ThreadContextRecord } from "@goat/contracts";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { environmentCatalog } from "~/connection/catalog";
 import { routeThreadContextRecords } from "~/lib/threadContextRoute";
+import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
 import { countPreparingComposerImages } from "./preparingComposerImages";
 
 const isUnreachable = Schema.is(
@@ -107,6 +106,7 @@ export function useComposerContextImport(input: {
     pendingThreadImportsRef,
     addComposerFilesToDraft,
   } = input;
+  const verifiedHosts = useThreadContextHosts(environmentId);
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const addComposerDraftTerminalContexts = useComposerDraftStore(
@@ -119,9 +119,6 @@ export function useComposerContextImport(input: {
   const addComposerDraftThreadContexts = useComposerDraftStore((store) => store.addThreadContexts);
   const addComposerDraftPreviewTabs = useComposerDraftStore((store) => store.addPreviewTabs);
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
-  const loadThreadTranscript = useAtomCommand(orchestrationEnvironment.threadTranscript, {
-    reportFailure: false,
-  });
   const countReservedAttachments = () => {
     const questionRequest = pendingUserInputs[0];
     const otherQuestionKeys =
@@ -146,7 +143,6 @@ export function useComposerContextImport(input: {
       countQuestionAttachments(otherQuestionKeys)
     );
   };
-  const countReservedAttachmentsStable = useStableCallback(countReservedAttachments);
   const runAttachmentImport = async (
     record: Extract<ComposerContextRecord, { kind: "image" | "file" }>,
     localId: string,
@@ -278,6 +274,7 @@ export function useComposerContextImport(input: {
       agentEnvironmentId: environmentId,
       entries: appAtomRegistry.get(environmentCatalog.catalogValueAtom).entries,
       isDesktopRenderer: window.desktopBridge !== undefined,
+      verifiedHosts,
     });
     if (refusal) toastManager.add({ type: "error", ...refusal });
     return routed;
@@ -439,9 +436,7 @@ export function useComposerContextImport(input: {
 
   return {
     routeThreadContexts,
-    loadThreadTranscript,
     countReservedAttachments,
-    countReservedAttachmentsStable,
     importContextRecords,
     importContextFragment,
     importContextFragmentStable,

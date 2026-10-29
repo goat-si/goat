@@ -1,4 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
+import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { supportsMemoryProtocol } from "@goat/contracts";
 import { uuidv4 } from "../../lib/uuid";
@@ -400,11 +401,18 @@ export function CommandPalette(props: {
       });
     }
     if (activeThreadRef) {
+      actions.push({
+        key: "copy-thread-id",
+        kind: "action",
+        title: "Copy thread ID",
+        searchTerms: ["thread", "id", "clipboard"],
+        run: () => copyTextWithHaptic(activeThreadRef.threadId, { target: "thread-id" }),
+      });
       const threadActions = [
         ["files", "Go to file", ["open", "files", "browse", "search"]],
         ["terminal", "Open terminal", ["shell", "console"]],
         ["review", "Review changes", ["diff", "git", "pull request"]],
-        ["copyThreadReference", "Copy PR link or thread ID", ["reference", "clipboard"]],
+        ["copyThreadReference", "Copy PR link or thread", ["reference", "clipboard"]],
       ] as const;
       actions.push(
         ...threadActions.map(([command, title, searchTerms]) => ({

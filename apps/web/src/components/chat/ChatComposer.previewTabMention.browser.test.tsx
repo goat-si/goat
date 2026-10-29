@@ -1,5 +1,5 @@
 // The fixture registers its module mocks, so it loads before anything those modules feed.
-import { id, local, setupSshComposer, state, store } from "~/test/sshComposerFixture";
+import { id, local, remote, setupSshComposer, state, store } from "~/test/sshComposerFixture";
 import { SERVER_BROWSER_AUTOMATION_CLIENT_ID, ThreadId } from "@goat/contracts";
 import type { OrchestrationMessageContext } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
@@ -11,6 +11,8 @@ import { act } from "../../../test/render";
 
 vi.mock("./MessagesTimeline", () => ({ MessagesTimeline: () => null }));
 import { ChatComposer } from "./ChatComposer";
+import { THREAD_CONTEXT_DROP_EVENT } from "./threadContextDrag";
+import * as entities from "~/state/entities";
 const renderComposer = ChatComposer.type;
 // Records the real composer's props; the fixture restores this spy after each test.
 async function setupComposer() {
@@ -27,6 +29,27 @@ const sentMessage = () =>
   state.normal.mock.calls
     .map(([request]) => (request as { input?: { message?: SentMessage } }).input?.message)
     .find((message) => message !== undefined);
+
+it("refuses an unverified dropped thread without attaching a transcript", async () => {
+  await using fixture = await setupComposer();
+  vi.mocked(entities.readThreadShell).mockReturnValue({ title: "Remote" } as never);
+  await fixture.mount();
+  const form = fixture.container.querySelector<HTMLFormElement>('[data-chat-composer-form="true"]');
+  expect(form).not.toBeNull();
+  await act(() =>
+    form!.dispatchEvent(
+      new CustomEvent(THREAD_CONTEXT_DROP_EVENT, {
+        detail: [{ environmentId: remote, threadId: ThreadId.make("remote") }],
+      }),
+    ),
+  );
+  expect(state.toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Can't verify the route to Build" }),
+  );
+  const draft = store().getComposerDraft(id);
+  expect(draft?.threadContexts ?? []).toEqual([]);
+  expect(draft?.files ?? []).toEqual([]);
+});
 
 it("sends a server browser tab picked from the @ list as one exact preview-tab record", async () => {
   await using fixture = await setupComposer();
