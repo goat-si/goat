@@ -24,18 +24,19 @@ export const windowClosure = (value: unknown, pid: number, target: number): Wind
   const ids = reply?.authoritative_window_ids;
   if (reply?.enumeration_complete !== true || !Array.isArray(ids) || !ids.every(windowId))
     return "unproven";
-  if (ids.includes(target)) return "present";
   // The listing and the id snapshot are read separately; an entry the listing cannot be read
   // from could be the window, and a listed window the ids omit is a contradiction.
   const listed = reply.windows;
   if (!Array.isArray(listed)) return "unproven";
+  let shown = false;
   for (const item of listed) {
     const entry = record(item);
     if (!entry || !windowId(entry.window_id)) return "unproven";
     if (entry.pid !== undefined && !Number.isSafeInteger(entry.pid)) return "unproven";
-    if (entry.window_id === target && (entry.pid ?? pid) === pid) return "unproven";
+    if (entry.window_id === target && (entry.pid ?? pid) === pid) shown = true;
   }
-  return "closed";
+  if (ids.includes(target)) return "present";
+  return shown ? "unproven" : "closed";
 };
 
 /**

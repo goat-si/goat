@@ -83,6 +83,43 @@ it.live(
     }),
 );
 
+// A cell runs in a child process, so this test runs on the wall clock.
+it.live(
+  "a guest waitFor({window:'gone'}) is met, and its receipt confirmed, only when the driver's authoritative ids omit the window",
+  () =>
+    Effect.gen(function* () {
+      const document = { pid: 42, window_id: 7, title: "Document" };
+      const waitGone = (afterVerify: Record<string, unknown>) =>
+        Effect.gen(function* () {
+          let verified = false;
+          const { host } = fixture({
+            list_windows: () => (verified ? afterVerify : { windows: [document] }),
+            verify_state: () => {
+              verified = true;
+              return { status: "satisfied" };
+            },
+          });
+          const res = yield* runCell(
+            host,
+            "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+              "return await app.waitFor({ window: 'gone' }, 0);",
+          );
+          const receipt = res.journal.find((entry) => entry.receipt.method === "wait_for");
+          return { value: res.value, category: receipt?.receipt.category };
+        });
+      expect(
+        yield* waitGone({ windows: [], enumeration_complete: true, authoritative_window_ids: [] }),
+      ).toEqual({
+        value: { met: true, status: "satisfied", closure: "closed" },
+        category: "confirmed",
+      });
+      expect(yield* waitGone({ windows: [] })).toEqual({
+        value: { met: false, status: "satisfied", closure: "unproven" },
+        category: "unverifiable",
+      });
+    }),
+);
+
 describe("annotatePointerResult", () => {
   const done = (value: unknown) => ({ category: "confirmed" as const, value });
   const at = { x: 80, y: 75 };
