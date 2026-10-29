@@ -1,5 +1,4 @@
-// @effect-diagnostics preferSchemaOverJson:off nodeBuiltinImport:off - Driver replies are bounded by the primitive channel; target IDs are opaque UUIDs.
-import * as NodeCrypto from "node:crypto";
+// @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -31,6 +30,7 @@ import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
+import { createDesktopMenuBarExtras } from "./DesktopMenuBarExtras.ts";
 import {
   admitDesktopInput,
   BATCH_FAILED_CATEGORIES,
@@ -156,7 +156,6 @@ export const createDesktopTargetHost = (deps: {
   readonly primitiveChannel: ComputerUsePrimitiveChannel["Service"];
   readonly leases: ComputerUseLeases["Service"];
   readonly observations?: ScreenObservations;
-  readonly platform?: NodeJS.Platform;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
   /** The platform the driver runs on, which picks launch_app's arguments; this host's by default. */
@@ -398,6 +397,11 @@ export const createDesktopTargetHost = (deps: {
     request,
     leases: deps.leases,
     bind: bindWindow,
+  });
+  const menuBarExtras = createDesktopMenuBarExtras({
+    request,
+    leases: deps.leases,
+    nextEpoch: () => ++epoch,
   });
   /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
   const page = Effect.fn("DesktopTargetHost.page")(function* (
@@ -866,15 +870,26 @@ export const createDesktopTargetHost = (deps: {
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
     call.method === "tab_status" || call.method === "read_page"
       ? Effect.fail(fail("unsupported"))
-      : call.method === "bind_app"
-        ? bindApp(call, context)
-        : call.method === "list_apps" || call.method === "list_windows"
-          ? discover(call, context)
-          : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                call.method,
-              )
-            ? observe(call, context)
-            : invoke(call, context);
+      : call.method === "list_menu_bar_extras"
+        ? menuBarExtras.list(call, context)
+        : call.method === "open_menu_bar_extra"
+          ? menuBarExtras.open(call, context)
+          : call.method === "press_menu_item"
+            ? menuBarExtras.pressItem(call, context)
+            : call.method === "close_menu"
+              ? menuBarExtras.close(call, context)
+              : call.method === "bind_app"
+                ? bindApp(call, context)
+                : call.method === "list_apps" || call.method === "list_windows"
+                  ? discover(call, context)
+                  : [
+                        "get_window_state",
+                        "get_accessibility_tree",
+                        "verify_state",
+                        "screenshot",
+                      ].includes(call.method)
+                    ? observe(call, context)
+                    : invoke(call, context);
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
@@ -907,17 +922,21 @@ export const createDesktopTargetHost = (deps: {
     observe,
     invoke,
     dispatchBatch,
+    cleanupCell: menuBarExtras.cleanupCell,
     invalidateTarget: (targetId) => {
       observations.evictTarget(targetId);
       targets.delete(targetId);
+      menuBarExtras.invalidateTarget(targetId);
     },
     matchesControl: (targetId, controlId, windowId) => {
+      if (windowId === undefined && menuBarExtras.matchesControl(targetId, controlId)) return true;
       const target = targets.get(targetId);
       return (
         target?.controlId === controlId && (windowId === undefined || target.windowId === windowId)
       );
     },
-    controlIdForTarget: (targetId) => targets.get(targetId)?.controlId,
+    controlIdForTarget: (targetId) =>
+      targets.get(targetId)?.controlId ?? menuBarExtras.controlIdForTarget(targetId),
     windowForTarget: (targetId) => {
       const target = targets.get(targetId);
       return target && { pid: target.pid, windowId: target.windowId };
@@ -929,6 +948,7 @@ export const createDesktopTargetHost = (deps: {
           observations.evictTarget(targetId);
           targets.delete(targetId);
         }
+      menuBarExtras.finishTurn(runId, turnId);
     },
     availability: Effect.fn("DesktopTargetHost.availability")(function* (context) {
       const current = Option.getOrUndefined(

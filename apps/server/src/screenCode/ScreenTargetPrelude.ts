@@ -527,6 +527,45 @@ const __launch = async (query = {}) => {
   __remember({ call: 'launch', verdict: __verdict(reply) });
   return reply.v;
 };
+const __extra = (row) => {
+  const ref = row.targetRef;
+  const open = async () => {
+    const reply = await __checked('open_menu_bar_extra', { targetRef: ref });
+    const value = reply.v ?? {};
+    const menuId = value.menuId;
+    const elements = Object.freeze((value.elements ?? []).map((item) => Object.freeze({ ...item })));
+    __remember({ call: 'open', verdict: __verdict(reply), items: elements.length });
+    return Object.freeze({
+      elements,
+      click: async (item) => {
+        const pressed = await __checked('press_menu_item', { targetRef: ref, menuId, item });
+        const verdict = __verdict(pressed);
+        const v = pressed.v && typeof pressed.v === 'object' ? pressed.v : undefined;
+        const out = { verdict, ...(v ? { result: v } : {}) };
+        __remember({ call: 'click', ...out });
+        return out;
+      },
+      close: async () => {
+        const closed = await __checked('close_menu', { targetRef: ref, menuId });
+        const verdict = __verdict(closed);
+        const v = closed.v && typeof closed.v === 'object' ? closed.v : undefined;
+        const out = { verdict, ...(v ? { result: v } : {}) };
+        __remember({ call: 'close', ...out });
+        return out;
+      },
+    });
+  };
+  return Object.freeze({
+    kind: 'menubar_extra',
+    identity: row.identity,
+    app: row.app,
+    ...(row.bundleId === undefined ? {} : { bundleId: row.bundleId }),
+    pid: row.pid,
+    ...(row.title === undefined ? {} : { title: row.title }),
+    index: row.index,
+    open,
+  });
+};
 globalThis.ScreenError = ScreenError;
 globalThis.screen = Object.freeze({ values: __values, state: {},
   discover: async () => {
@@ -539,6 +578,10 @@ globalThis.screen = Object.freeze({ values: __values, state: {},
   },
   app: async (query = {}) => __app(query),
   launch: __launch,
+  menuBarExtras: async () => {
+    const listed = await __call('list_menu_bar_extras', {});
+    return ((listed && listed.extras) ?? []).map(__extra);
+  },
   tab: async (query = {}) => __tab(await __call('select_tab', __tabQuery(query))),
   openTab: async (arg = {}) => __tab(await __call('open_tab', arg)),
   listTabs: () => __call('list_tabs', {}),

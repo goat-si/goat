@@ -709,10 +709,46 @@ it.effect(
         call("scroll", { elementRef: macApply, x: "10", y: "10", direction: "down" }, macRef),
         call("scroll", { scrollCenter: true, x: "20", y: "16", direction: "down" }, macRef),
         call("scroll", { scrollCenter: true, x: 20, y: 16, direction: "down" }, macRef),
+        call(
+          "drag",
+          {
+            fromEnd: { elementRef: macApply },
+            toEnd: { x: 300, y: 120, coordinate_space: "window_points" },
+            x: 10,
+            y: 10,
+          },
+          macRef,
+        ),
+        call(
+          "drag",
+          {
+            fromEnd: { elementRef: macApply },
+            toEnd: { x: 300, y: 120, coordinate_space: "window_points" },
+            from_x: 1,
+            from_y: 2,
+            to_x: 3,
+            to_y: 4,
+          },
+          macRef,
+        ),
       ]) {
         const refused = yield* macFix.host.invoke(badMacCall, context).pipe(Effect.flip);
         expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
       }
       expect(macFix.sent.slice(macBefore)).toEqual([]);
+
+      // Valid mixed-endpoint drag without conflicting top-level coordinate fields succeeds as a control.
+      const validMixedDrag = yield* macFix.host.invoke(
+        call(
+          "drag",
+          {
+            fromEnd: { elementRef: macApply },
+            toEnd: { x: 300, y: 120, coordinate_space: "window_points" },
+          },
+          macRef,
+        ),
+        context,
+      );
+      expect(validMixedDrag.category).toBe("confirmed");
     }),
 );

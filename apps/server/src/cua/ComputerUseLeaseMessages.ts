@@ -154,6 +154,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_guide",
   "list_apps",
   "list_windows",
+  "list_menu_bar_extras",
   "get_accessibility_tree",
   "get_window_state",
   "wait_for_window_settle",

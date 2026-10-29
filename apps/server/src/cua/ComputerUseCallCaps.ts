@@ -7,6 +7,10 @@
 const CAP_MS: Readonly<Record<string, number>> = {
   list_apps: 2_000,
   list_windows: 2_000,
+  list_menu_bar_extras: 2_000,
+  open_menu_bar_extra: 3_000,
+  press_menu_item: 3_000,
+  close_menu: 3_000,
   click: 3_000,
   right_click: 3_000,
   press_key: 3_000,

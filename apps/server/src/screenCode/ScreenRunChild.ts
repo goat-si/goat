@@ -39,6 +39,10 @@ const FRAME_MAX = 96 * 1024;
 const methods = [
   "list_apps",
   "list_windows",
+  "list_menu_bar_extras",
+  "open_menu_bar_extra",
+  "press_menu_item",
+  "close_menu",
   "bind_app",
   "get_window_state",
   "get_accessibility_tree",

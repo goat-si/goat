@@ -71,6 +71,9 @@ export interface ScreenHostDispatcher {
     context: ScreenHostContext,
     markDispatched: (index: number) => void,
   ) => Effect.Effect<ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>>>;
+  readonly cleanupCell?: (
+    context: ScreenHostContext,
+  ) => Effect.Effect<ReadonlyArray<ScreenJournalEntry>>;
 }
 
 interface CellState {
@@ -339,6 +342,7 @@ export class ScreenHostBridge {
       ![
         "list_apps",
         "list_windows",
+        "list_menu_bar_extras",
         "bind_app",
         "launch_app",
         "list_tabs",
