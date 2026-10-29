@@ -143,18 +143,26 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const act = async (name, method, arg) => {
     if (tab) seen.image = undefined;
-    const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && arg.elementRef !== undefined);
+    const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
     if (reply.v === undefined) return { verdict };
+    const isObj = reply.v !== null && typeof reply.v === 'object' && !Array.isArray(reply.v);
+    const observed = isObj && Array.isArray(reply.v._observed) ? reply.v._observed : undefined;
+    let cleanResult = reply.v;
+    if (isObj && '_observed' in reply.v) {
+      const { _observed: _omitted, ...rest } = reply.v;
+      cleanResult = rest;
+    }
     const extra =
-      reply.v && typeof reply.v === 'object'
+      isObj
         ? {
+            ...(observed && observed.length > 0 ? { observed } : {}),
             ...('point' in reply.v ? { point: reply.v.point } : {}),
             ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
           }
         : {};
-    return { verdict, ...extra, result: reply.v };
+    return { verdict, ...extra, result: cleanResult };
   };
   const element = (target) => {
     const observation = seen.observation;
@@ -250,7 +258,10 @@ const __target = (binding, note, owner, extraProps = {}) => {
     return observation;
   };
   const observe = async (arg = {}) => {
-    if (__legacy(arg)) return remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg));
+    if (__legacy(arg)) {
+      try { return remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); }
+      catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
+    }
     const diff = arg.diff !== false && seen.observation !== undefined;
     const page = !tab && arg.after !== undefined;
     const base = diff ? { mode: 'diff', baseObservationId: seen.observation.observationId } : {};
@@ -267,10 +278,15 @@ const __target = (binding, note, owner, extraProps = {}) => {
       if (page && seen.observation && value && Array.isArray(value.elements))
         seen.observation = { ...seen.observation, elements: [...seen.observation.elements, ...value.elements] };
     }
-    catch (raw) { throw __error(raw); }
+    catch (raw) { if (!page) seen.observation = undefined; throw __error(raw); }
     if (!tab && arg.screenshot) {
-      try { seen.image = (await __reply('screenshot', [{ targetRef: ref }])).v; seen.replaced = false; }
-      catch (raw) { throw __error(raw); }
+      try {
+        const image = (await __reply('screenshot', [{ targetRef: ref }])).v;
+        if (seen.observation && image && image.observationId !== seen.observation.observationId) seen.observation = undefined;
+        seen.image = image;
+        seen.replaced = false;
+      }
+      catch (raw) { seen.observation = undefined; throw __error(raw); }
     }
     const { indexedText, ...rest } = observation;
     const shown = { text: indexedText, ...rest, ...(seen.image && arg.screenshot ? { image: seen.image } : {}) };
@@ -431,9 +447,23 @@ const __target = (binding, note, owner, extraProps = {}) => {
     ...extraProps,
     menu: (path, options = {}) => act('menu', 'invoke_menu', { path, ...(options && options.send === true ? { send: true } : {}) }),
     launch: () => act('launch', 'launch_app', {}),
-    getWindowState: () => call('get_window_state'),
+    getWindowState: async (arg = {}) => {
+      try { return remember(await call('get_window_state', arg)); }
+      catch (raw) { seen.observation = undefined; throw __error(raw); }
+    },
     verifyState: (arg = {}) => call('verify_state', arg),
-    screenshot: async (arg = {}) => { const image = await call('screenshot', arg); seen.image = image; seen.replaced = false; return image; },
+    screenshot: async (arg = {}) => {
+      try {
+        const image = await call('screenshot', arg);
+        if (seen.observation && image && image.observationId !== seen.observation.observationId) seen.observation = undefined;
+        seen.image = image;
+        seen.replaced = false;
+        return image;
+      } catch (raw) {
+        seen.observation = undefined;
+        throw __error(raw);
+      }
+    },
     bringToFront: () => call('bring_to_front'),
     endForeground: () => call('end_foreground'),
   };
@@ -457,7 +487,12 @@ const __own = (listed, pid) => (listed && listed.windows ? listed.windows : []).
 // several windows or processes are ambiguous, and windows all off screen are named, not guessed.
 // An app with no window, closed or running, is launched (reopened when running) and its first
 // window bound in that one launch_app call.
-const __app = async (query) => {
+const __app = async (rawQuery) => {
+  if (typeof rawQuery === 'string' && rawQuery.trim().length === 0)
+    throw new ScreenError('invalid_argument', 'Name the app to bind.', true);
+  if (typeof rawQuery !== 'string' && (rawQuery === null || typeof rawQuery !== 'object' || Array.isArray(rawQuery)))
+    throw new ScreenError('invalid_argument', 'Pass an app name or {bundle_id, name, path, window_id}.', true);
+  const query = typeof rawQuery === 'string' ? { name: rawQuery.trim() } : rawQuery;
   const windowId = query.window_id ?? query.windowId;
   const bundle = query.bundle_id ?? query.bundleId;
   const { name, path } = query;

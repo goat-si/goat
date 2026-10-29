@@ -140,16 +140,55 @@ export const diffInputWindows = (
   };
 };
 
+const guestDoneBytes = (
+  resultValue: unknown,
+  observed: ReadonlyArray<string> | undefined,
+): number => {
+  const obj = object(resultValue);
+  const doneShape = {
+    verdict: "unverifiable",
+    ...(observed && observed.length > 0 ? { observed } : {}),
+    ...(obj && "point" in obj ? { point: obj.point } : {}),
+    ...(obj && "hit" in obj ? { hit: obj.hit } : {}),
+    ...(resultValue === undefined ? {} : { result: resultValue }),
+  };
+  return Buffer.byteLength(JSON.stringify(doneShape) ?? "");
+};
+
+const fitsInputBudget = (
+  candidateResult: Record<string, unknown>,
+  observed: ReadonlyArray<string> | undefined,
+  returnBytes: number,
+): unknown | undefined => {
+  const payload =
+    observed && observed.length > 0 ? { ...candidateResult, _observed: observed } : candidateResult;
+  if (
+    Buffer.byteLength(JSON.stringify(payload) ?? "") <= returnBytes &&
+    guestDoneBytes(candidateResult, observed) <= returnBytes
+  )
+    return payload;
+  return undefined;
+};
+
 export const fitInputWindows = (
   driverVal: unknown,
   report: InputWindowsReport,
   returnBytes: number,
+  observed?: ReadonlyArray<string>,
 ): unknown => {
   const base = object(driverVal) ?? {};
   const withWindows = { ...base, windows: report };
-  if (Buffer.byteLength(JSON.stringify(withWindows)) <= returnBytes) return withWindows;
+  const full = fitsInputBudget(withWindows, observed, returnBytes);
+  if (full !== undefined) return full;
+  const winOnly = fitsInputBudget(withWindows, undefined, returnBytes);
+  if (winOnly !== undefined) return winOnly;
   const withFlag = { ...base, windowsTruncated: true };
-  if (Buffer.byteLength(JSON.stringify(withFlag)) <= returnBytes) return withFlag;
+  const flagAndObs = fitsInputBudget(withFlag, observed, returnBytes);
+  if (flagAndObs !== undefined) return flagAndObs;
+  const flagOnly = fitsInputBudget(withFlag, undefined, returnBytes);
+  if (flagOnly !== undefined) return flagOnly;
+  const obsOnly = fitsInputBudget(base, observed, returnBytes);
+  if (obsOnly !== undefined) return obsOnly;
   return driverVal;
 };
 

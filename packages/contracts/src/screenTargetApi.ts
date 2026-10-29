@@ -14,7 +14,7 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] end on input or a new page; Linux and Windows app actions use element numbers from observe().
-type Done = { verdict: "confirmed" | "unverifiable"; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
+type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: unknown; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
 // deciding whether to act again, and never resend it. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
@@ -74,7 +74,7 @@ const SCREEN_APP = `  // app() without window_id: a running app with one window 
   // last check started then may take 2 s more; no window then throws, with the app still running. Several
   // installed copies: a running one wins, else /Applications. A name shared by apps with different ids is ambiguous.
   // path: a launch_path list_apps lists (macOS) picks the copy to launch.
-  app(q: { bundle_id?: string; name?: string; path?: string; window_id?: number }): Promise<App>;
+  app(q: string | { bundle_id?: string; name?: string; path?: string; window_id?: number }): Promise<App>;
   launch(q: { bundle_id?: string; name?: string; path?: string }): Promise<{ pid: number; windows: object[] }>; // starts it, binds nothing`;
 
 const FOOTER = `// Batch decided steps in one cell and observe once at the end. A failed cell still returns its

@@ -20,6 +20,20 @@ import {
   type WindowEntry,
 } from "./DesktopWindows.ts";
 import type { DesktopRow } from "./DesktopObserveRead.ts";
+import type { BoundWindow } from "./DesktopTargetHost.ts";
+
+export const settleCaptureIfNeeded = Effect.fn("DesktopEvidence.settleCaptureIfNeeded")(function* (
+  capture: boolean,
+  bound: BoundWindow,
+  callDeadlineMillis: number,
+) {
+  if (!capture || bound.needsSettleBeforeCapture !== true) return;
+  const now = yield* Clock.currentTimeMillis;
+  if (callDeadlineMillis - now - CELL_RESERVE_MS >= 7_060) {
+    yield* Effect.sleep("60 millis");
+    delete bound.needsSettleBeforeCapture;
+  }
+});
 
 export interface WatchedElement {
   readonly kind: "acted" | "window";
@@ -171,6 +185,25 @@ const diffWatchedEvidence = (
   return out;
 };
 
+const hasUsableWatchSample = (
+  watched: ReadonlyArray<WatchedElement>,
+  sample: ReadonlyArray<ObservedProj | undefined>,
+  baseline?: ReadonlyArray<ObservedProj | undefined>,
+): boolean =>
+  watched.length > 0 &&
+  watched.every((w, idx) => {
+    const item = sample[idx];
+    if (!item || item.label !== w.label) return false;
+    const baseItem = baseline?.[idx];
+    if (
+      baseItem?.elementIndex !== undefined &&
+      item.elementIndex !== undefined &&
+      baseItem.elementIndex !== item.elementIndex
+    )
+      return false;
+    return item.value !== undefined || item.selected !== undefined;
+  });
+
 type SendFn = (
   tool: string,
   args: Record<string, unknown>,
@@ -220,6 +253,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     readonly acted: DesktopRow | undefined;
     readonly rows: ReadonlyArray<DesktopRow>;
     readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
+    readonly onSettled?: () => void;
   }) {
     const {
       send,
@@ -234,6 +268,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       acted,
       rows,
       runInput,
+      onSettled,
     } = deps;
     const inputCapMs = driverCallCapMs(tool, forwarded);
     const watched = buildWatchedElements(acted, rows);
@@ -286,18 +321,52 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
           )
         : undefined;
     const winDiff = diffInputWindows(preWins, postWins, windowId);
-    const elDiff =
-      watched.length > 0 && preVerifyRaw !== undefined && postVerifyRaw !== undefined
-        ? diffWatchedEvidence(
-            watched,
-            parseVerifyObservations(preVerifyRaw, watched.length),
-            parseVerifyObservations(postVerifyRaw, watched.length),
-          )
+    const preObs =
+      watched.length > 0 && preVerifyRaw !== undefined
+        ? parseVerifyObservations(preVerifyRaw, watched.length)
         : [];
+    let postObs =
+      watched.length > 0 && postVerifyRaw !== undefined
+        ? parseVerifyObservations(postVerifyRaw, watched.length)
+        : [];
+    const preUsable = hasUsableWatchSample(watched, preObs);
+    const postUsable = hasUsableWatchSample(watched, postObs, preObs);
+    let elDiff =
+      watched.length > 0 && preVerifyRaw !== undefined && postVerifyRaw !== undefined
+        ? diffWatchedEvidence(watched, preObs, postObs)
+        : [];
+    let retryUsable = false;
+    if (preUsable && postUsable && elDiff.length === 0) {
+      const nowAfter = yield* Clock.currentTimeMillis;
+      if (call.deadlineMillis - nowAfter - CELL_RESERVE_MS >= 1_560) {
+        yield* Effect.sleep("60 millis");
+        const retryRaw = yield* quietRead(
+          send,
+          call,
+          context,
+          connectionGeneration,
+          "verify_state",
+          { pid, window_id: windowId, expect: toVerifyExpectations(watched), timeout_ms: 0 },
+          0,
+        );
+        if (retryRaw !== undefined) {
+          const retryObs = parseVerifyObservations(retryRaw, watched.length);
+          retryUsable = hasUsableWatchSample(watched, retryObs, preObs);
+          if (retryUsable) {
+            postObs = retryObs;
+            elDiff = diffWatchedEvidence(watched, preObs, postObs);
+          }
+        }
+      }
+    }
+    if (elDiff.length > 0 || (preUsable && postUsable && retryUsable)) {
+      onSettled?.();
+    }
+    const allObserved = [...elDiff, ...winDiff.evidence].slice(0, 16);
     return {
       ...base,
-      value: fitInputWindows(base.value, winDiff.report, context.limits.returnBytes),
-      evidence: [...(base.evidence ?? []), ...elDiff, ...winDiff.evidence].slice(0, 16),
+      value: fitInputWindows(base.value, winDiff.report, context.limits.returnBytes, allObserved),
+      evidence: [...(base.evidence ?? []), ...allObserved].slice(0, 16),
     };
   },
 );

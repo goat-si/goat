@@ -1,6 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
 import type { ScreenObservation, ScreenRunResult, ScreenTargetRef } from "@goat/contracts";
@@ -591,4 +593,166 @@ it.live(
       });
     }).pipe(Effect.provide(cellService(host)));
   },
+);
+
+it.live(
+  "T63a: 60 ms post-input settle sleep observes delayed main-runloop updates onto Done.observed within guestDoneBytes budget",
+  () =>
+    Effect.gen(function* () {
+      let inPostReads = false;
+      let postReadsForClick = 0;
+      let bigHit: unknown;
+      const { host } = fixture({
+        list_windows: { windows: [win(7, { bounds: { x: 0, y: 0, width: 674, height: 408 } })] },
+        get_window_state: (args: Record<string, unknown>) => {
+          if (args.include_accessibility_tree === false) {
+            return goat2WindowState(args, {
+              snapshot_id: "s1",
+              window_bounds: { x: 0, y: 0, width: 674, height: 408 },
+            });
+          }
+          return {
+            pid: 42,
+            window_id: 7,
+            snapshot_id: "s1",
+            elements_complete: false,
+            tree_markdown: [
+              '- [0] AXWindow "Calculator"',
+              '  - AXStaticText = "5,335" (Edit field)',
+              '  - [11] AXCheckBox "Secondary Functions" = "0" [id=Shift actions=[press]]',
+            ].join("\n"),
+            elements: [
+              {
+                role: "AXWindow",
+                element_index: 0,
+                element_token: "s1:0",
+                label: "Calculator",
+                frame: { x: 0, y: 0, w: 674, h: 408 },
+              },
+              {
+                role: "AXCheckBox",
+                element_index: 11,
+                element_token: "s1:11",
+                label: "Secondary Functions",
+                value: "0",
+                selected: false,
+                actions: ["AXPress"],
+              },
+            ],
+            window_bounds: { x: 0, y: 0, width: 674, height: 408 },
+          };
+        },
+        click: () => {
+          inPostReads = true;
+          postReadsForClick = 0;
+          return {
+            effect: "unverifiable",
+            ...(bigHit === undefined ? {} : { hit: bigHit }),
+          };
+        },
+        verify_state: () => {
+          const settledAfterRetry = inPostReads && ++postReadsForClick >= 2;
+          if (settledAfterRetry) inPostReads = false;
+          return {
+            status: "satisfied",
+            predicates: [
+              verifyOutcome(
+                0,
+                settledAfterRetry
+                  ? {
+                      role: "AXCheckBox",
+                      label: "Secondary Functions",
+                      value: "1",
+                      selected: true,
+                      element_index: 18,
+                    }
+                  : {
+                      role: "AXCheckBox",
+                      label: "Secondary Functions",
+                      value: "0",
+                      selected: false,
+                      element_index: 18,
+                    },
+              ),
+            ],
+          };
+        },
+      });
+
+      // T63a (1) & (2): pixel click and element click observe the 40 ms delayed transition via the 60 ms post-input settle sleep,
+      // even when dense-row index (11) differs from verify_state exhaustive-walk element_index (18).
+      const res = yield* runCell(
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "globalThis.calcApp = app; await app.observe(); await app.screenshot(); " +
+          "const pxDone = await app.click([20, 20]); " +
+          "const elDone = await app.click(11); " +
+          "return { pxObs: pxDone.observed, pxRawObs: pxDone.result?._observed, elObs: elDone.observed };",
+      ).pipe(Effect.provide(cellService(host)));
+      expect(res.value).toEqual({
+        pxObs: ['observed:window_change:Secondary Functions "0"→"1"'],
+        pxRawObs: undefined,
+        elObs: ['observed:element_state:value "0"→"1"'],
+      });
+
+      // T63a (3): a >200-byte hit object near returnBytes is measured via guestDoneBytes so returning Done directly never exceeds returnBytes.
+      bigHit = { role: "AXButton", label: "x".repeat(180), element_token: "s1:11" };
+      const tightDone = yield* Effect.gen(function* () {
+        yield* runCell(
+          "globalThis.calcApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await calcApp.observe(); return 1;",
+        );
+        return yield* runCell("return await calcApp.click({ window: [50, 50] });", {
+          returnBytes: 620,
+        });
+      }).pipe(Effect.provide(cellService(host)));
+      expect(tightDone.status).toBe("completed");
+    }),
+);
+
+it.effect(
+  "T63b: tight-budget screenshot preserves needsSettleBeforeCapture until a screenshot with sufficient budget completes the 60 ms settle sleep",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({
+        list_windows: { windows: [win(7, { bounds: { x: 0, y: 0, width: 674, height: 408 } })] },
+        get_window_state: (args: Record<string, unknown>) =>
+          goat2WindowState(args, {
+            snapshot_id: "s1",
+            window_bounds: { x: 0, y: 0, width: 674, height: 408 },
+          }),
+        click: { effect: "unverifiable" },
+      });
+      const bound = (yield* host.bindApp(
+        evCall("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      )).value as ScreenTargetRef;
+      yield* host.invoke(
+        {
+          ...call("click", { x: 10, y: 10, coordinate_space: "window_points" }, bound),
+          deadlineMillis: 2_600,
+        },
+        context,
+      );
+      yield* host.observe(
+        {
+          ...call("screenshot", {}, bound),
+          deadlineMillis: 8_510,
+        },
+        context,
+      );
+      const shotsBefore = sent.filter((s) => s.tool === "get_window_state").length;
+      const settledFiber = yield* host
+        .observe(
+          {
+            ...call("screenshot", {}, bound),
+            deadlineMillis: 20_000,
+          },
+          context,
+        )
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      expect(sent.filter((s) => s.tool === "get_window_state")).toHaveLength(shotsBefore);
+      yield* TestClock.adjust("60 millis");
+      yield* Fiber.join(settledFiber);
+      expect(sent.filter((s) => s.tool === "get_window_state")).toHaveLength(shotsBefore + 1);
+    }),
 );
