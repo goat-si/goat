@@ -354,6 +354,29 @@ describe("a watch on a pull request that merged or closed", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("never wakes for news read just before the pull request closed", () =>
+    Effect.gen(function* () {
+      const { host, duringRead, reactor, records, snapshot } =
+        yield* watchedThread("closed-mid-read");
+      yield* reactor.sweep;
+      yield* snapshot("open");
+      yield* Ref.set(host, openAt("aaaa111", [failed("lint")]));
+      yield* Ref.set(duringRead, Effect.orDie(snapshot("closed")));
+      yield* TestClock.adjust("2 minutes");
+      yield* reactor.sweep;
+      assert.deepEqual(yield* records, { summaries: [], runs: [] });
+      // The refused news did not advance the watch: the next read reports the close once.
+      yield* Ref.set(host, {
+        ...openAt("aaaa111", [failed("lint")]),
+        state: "closed",
+        closedAt: AT,
+      });
+      yield* TestClock.adjust("2 minutes");
+      yield* reactor.sweep;
+      assert.deepEqual((yield* records).summaries, ["#41: closed, stopped watching"]);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("never wakes for news read just before the pull request merged", () =>
     Effect.gen(function* () {
       const { host, duringRead, reactor, link, records, snapshot } =

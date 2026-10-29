@@ -50,7 +50,9 @@ export const pullRequestWakeChecksHead = (id: string, prefix: string) => {
 
 /**
  * Whether news a watch read may no longer wake its thread: the thread was put away, or the pull
- * request merged while the host was read. A merge is final, so news read before it is moot.
+ * request merged or closed while the host was read. A watch that continues is refused without
+ * advancing, so if a close was undone the next read reports the news again; the notice a watch
+ * ends with on a close still goes out.
  */
 export const pullRequestWakeMuted = (
   thread: Pick<
@@ -58,12 +60,14 @@ export const pullRequestWakeMuted = (
     "archivedAt" | "settledOverride" | "settledAt" | "lineage" | "creationSource"
   >,
   link: Pick<ThreadPullRequestLink, "snapshot"> | undefined,
+  continuing: boolean,
 ) =>
   thread.archivedAt !== null ||
   thread.settledOverride === "settled" ||
   thread.settledAt !== null ||
   isProviderNativeSubagentThread(thread) ||
-  link?.snapshot?.state === "merged";
+  link?.snapshot?.state === "merged" ||
+  (continuing && link?.snapshot?.state === "closed");
 
 /**
  * Whether a command leaves a pull request's queued wakes with nothing to report: its watch

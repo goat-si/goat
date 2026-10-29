@@ -2856,7 +2856,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       );
       if (
         link?.watch?.startedAt !== command.startedAt ||
-        (command.wake && pullRequestWakeMuted(thread, link))
+        (command.wake && pullRequestWakeMuted(thread, link, command.watch !== null))
       ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
