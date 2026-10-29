@@ -218,7 +218,6 @@ import {
   type SnoozePreset,
 } from "./Sidebar.snooze";
 import { SidebarProjectScope } from "./sidebar/SidebarProjectScope";
-import { ProjectFavicon } from "./ProjectFavicon";
 import { deriveProviderEntriesByEnvironment } from "../providerInstances";
 import { useStableCallback } from "../hooks/useStableCallback";
 import {

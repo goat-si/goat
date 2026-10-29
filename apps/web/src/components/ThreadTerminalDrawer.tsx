@@ -4,7 +4,6 @@ import {
   clampDrawerHeight,
   chatColumnOf,
   readDrawerLayout,
-  type DrawerLayout,
 } from "./terminalDrawerLayout";
 import { workspaceAreaProps } from "../lib/workspaceFocus";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
