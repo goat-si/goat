@@ -615,6 +615,7 @@ it.effect(
           call("right_click", { x: 10, y: 10, regionId }, ref),
           call("scroll", { x: 10, y: 10, regionId, direction: "down", amount: 3 }, ref),
           call("scroll", { scrollCenter: true, direction: "down", amount: 3 }, ref),
+          call("scroll", { direction: "down", amount: 3 }, ref),
           call(
             "drag",
             {
@@ -628,6 +629,8 @@ it.effect(
         ]) {
           const refused = yield* host.invoke(unsupportedCall, context).pipe(Effect.flip);
           expect(refused).toMatchObject({ code: "unsupported", effectStarted: false });
+          expect(refused.nextStep).not.toContain("capture_id");
+          expect(refused.nextStep).toContain("observe()");
         }
         expect(platFix.sent.slice(before)).toEqual([]);
       }

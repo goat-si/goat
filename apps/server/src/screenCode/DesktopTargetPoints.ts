@@ -1,9 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Screenshot and region IDs are opaque UUIDs.
 /**
- * Desktop pointer coordinate resolution: converts [x, y] screenshot pixels (using the screenshot's
- * actual region-to-pixel ratio, even when downscaled), { window: [x, y] } window points, and
- * element drag endpoints into window points with a validated window_basis on macOS, while binding
- * single-use Linux and Windows clicks to the driver's capture_id checked at dispatch.
+ * Desktop pointer coordinate resolution: converts macOS points and drag endpoints to window_points
+ * with window_basis, and refuses point or unaddressed-scroll actions on Linux and Windows.
  */
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -39,7 +37,7 @@ const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
 const UNSUPPORTED_NON_MAC_POINTS =
-  "On Linux and Windows, point coordinates are supported only on click with a current screenshot capture_id; use element numbers for other actions.";
+  "On Linux and Windows, point coordinates and unaddressed scrolls are unavailable because the driver lacks actuator-boundary window-basis validation; pass an element number from observe().";
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -177,8 +175,10 @@ export const applyDesktopPointerArgs = (
     };
   }
 
+  if (method === "scroll" && !isMac && forwarded.element_token === undefined)
+    return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
+
   if (method === "scroll" && args.scrollCenter === true) {
-    if (!isMac) return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
     const basis = state.framesBasis ?? state.windowBounds;
     if (!basis || basis.w <= 0 || basis.h <= 0)
       return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
