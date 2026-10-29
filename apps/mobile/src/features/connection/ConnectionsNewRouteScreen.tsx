@@ -159,8 +159,8 @@ export function ConnectionsNewRouteScreen({
       attemptRef.current += 1;
       submittingRef.current = false;
     },
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must invalidate pending pairing attempts.
-    [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId],
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route changes invalidate pending pairing attempts.
+    [routeIdentity],
   );
 
   useEffect(() => {
@@ -185,7 +185,7 @@ export function ConnectionsNewRouteScreen({
     setHostInput(host);
     setCodeInput(code);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Route identity changes must reset the submission even when the pairing URL is unchanged.
-  }, [routePairingUrl, params.routeFor, params.intent, params.replaceEnvironmentId]);
+  }, [routeIdentity, routePairingUrl]);
 
   const clearAttempt = () => {
     attemptRef.current += 1;
@@ -337,17 +337,13 @@ export function ConnectionsNewRouteScreen({
   };
 
   useEffect(() => {
-    if (
-      !pairingReady ||
-      !shouldAutoConnect ||
-      attemptedAutoConnectRef.current === routePairingUrl
-    ) {
+    if (!pairingReady || !shouldAutoConnect || attemptedAutoConnectRef.current === routeIdentity) {
       return;
     }
 
-    attemptedAutoConnectRef.current = routePairingUrl;
+    attemptedAutoConnectRef.current = routeIdentity;
     void connectAndClose(routePairingUrl);
-  }, [connectAndClose, routePairingUrl, shouldAutoConnect, pairingReady]);
+  }, [connectAndClose, routeIdentity, routePairingUrl, shouldAutoConnect, pairingReady]);
 
   return (
     <SettingsScreen
