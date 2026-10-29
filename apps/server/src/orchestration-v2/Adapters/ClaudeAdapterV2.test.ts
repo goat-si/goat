@@ -1,3 +1,10 @@
+import {
+  CLAUDE_TEST_MODEL_SELECTION,
+  CLAUDE_TEST_RUNTIME_POLICY,
+  makeClaudeTestTurnInput,
+} from "./ClaudeTestInput.testkit.ts";
+import { CaptureEventQueue, makeWakeObservations } from "./ClaudeAdapterV2.observations.testkit.ts";
+import { verifyClaudeReceipt } from "./ClaudeReceipt.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off - workflow fixtures use files and the fake Claude CLI uses Node streams
 import * as ClaudeSdk from "@anthropic-ai/claude-agent-sdk";
 import { beforeEach } from "vite-plus/test";
@@ -40,7 +47,6 @@ import {
   MessageId,
   type ModelSelection,
   NodeId,
-  type OrchestrationV2AppThread,
   type OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
   ProjectId,
@@ -69,7 +75,6 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 
@@ -121,9 +126,6 @@ import {
 
 // Only collectors opt into queue capture. A FIFO marker then acknowledges all
 // provider events offered before it, after their collector callbacks finish.
-const CaptureEventQueue = Context.Reference<
-  ((offer: (marker: object) => Effect.Effect<boolean>) => Effect.Effect<void>) | undefined
->("ClaudeAdapterV2.test/CaptureEventQueue", { defaultValue: () => undefined });
 
 vi.mock("effect/Queue", async (importOriginal) => {
   const actual = await importOriginal<typeof Queue>();
@@ -184,93 +186,11 @@ const CUSTOM_MODEL_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
     },
   ],
 });
-const CLAUDE_TEST_MODEL_SELECTION = {
-  instanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-  model: "claude-sonnet-4-6",
-  options: [{ id: "effort", value: "ultrathink" }],
-} satisfies ModelSelection;
 const CLAUDE_TEST_RESTART_MODEL_SELECTION = {
   ...CLAUDE_TEST_MODEL_SELECTION,
   model: "claude-haiku-4-5-20251001",
   options: [{ id: "thinking", value: false }],
 } satisfies ModelSelection;
-const CLAUDE_TEST_RUNTIME_POLICY = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  cwd: "/workspace",
-});
-
-function makeClaudeTestAppThread(input: {
-  readonly threadId: ThreadId;
-  readonly providerThread: OrchestrationV2ProviderThread;
-  readonly now: DateTime.Utc;
-}): OrchestrationV2AppThread {
-  return {
-    createdBy: "user",
-    creationSource: "web",
-    id: input.threadId,
-    projectId: ProjectId.make(`project-${input.threadId}`),
-    title: "Claude attachment test",
-    providerInstanceId: ProviderInstanceId.make(ClaudeAdapterV2.CLAUDE_PROVIDER),
-    modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    activeProviderThreadId: input.providerThread.id,
-    lineage: {
-      parentThreadId: null,
-      relationshipToParent: null,
-      rootThreadId: input.threadId,
-    },
-    forkedFrom: null,
-    createdAt: input.now,
-    updatedAt: input.now,
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    lastVisitedAt: null,
-    deletedAt: null,
-  };
-}
-
-function makeClaudeTestTurnInput(input: {
-  readonly threadId: ThreadId;
-  readonly providerThread: OrchestrationV2ProviderThread;
-  readonly now: DateTime.Utc;
-  readonly attemptId: RunAttemptId;
-  readonly text: string;
-  readonly attachments: ProviderAdapter.ProviderAdapterV2TurnInput["message"]["attachments"];
-  readonly providerTurnOrdinal?: number;
-  readonly nativeThreadHasTurns?: boolean;
-  readonly messageCreatedBy?: ProviderAdapter.ProviderAdapterV2TurnInput["message"]["createdBy"];
-  readonly messageCreationSource?: ProviderAdapter.ProviderAdapterV2TurnInput["message"]["creationSource"];
-  readonly modelSelection?: ModelSelection;
-  readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-}): ProviderAdapter.ProviderAdapterV2TurnInput {
-  return {
-    appThread: makeClaudeTestAppThread(input),
-    threadId: input.threadId,
-    runId: RunId.make(`run-${input.attemptId}`),
-    runOrdinal: 1,
-    providerTurnOrdinal: input.providerTurnOrdinal ?? 1,
-    ...(input.nativeThreadHasTurns === undefined
-      ? {}
-      : { nativeThreadHasTurns: input.nativeThreadHasTurns }),
-    attemptId: input.attemptId,
-    rootNodeId: NodeId.make(`node-${input.attemptId}`),
-    providerThread: input.providerThread,
-    message: {
-      createdBy: input.messageCreatedBy ?? "user",
-      creationSource: input.messageCreationSource ?? "web",
-      messageId: MessageId.make(`message-${input.attemptId}`),
-      text: input.text,
-      attachments: input.attachments,
-    },
-    modelSelection: input.modelSelection ?? CLAUDE_TEST_MODEL_SELECTION,
-    runtimePolicy: input.runtimePolicy ?? CLAUDE_TEST_RUNTIME_POLICY,
-  };
-}
 
 describe("ClaudeAdapterV2 runtime query policy", () => {
   it("appends the development discipline without GOAT MCP and leaves out orchestration", () => {
@@ -2823,107 +2743,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     terminalReason: null,
   });
 
-  const makeWakeObservations = Effect.gen(function* () {
-    const changes = yield* PubSub.unbounded<void>();
-    const eventQueue = yield* Deferred.make<(marker: object) => Effect.Effect<boolean>>();
-    const markers = new WeakMap<object, Deferred.Deferred<void>>();
-    const collectEvents = <E, R>(
-      stream: Stream.Stream<ProviderAdapter.ProviderAdapterV2Event, E, R>,
-      record: (event: ProviderAdapter.ProviderAdapterV2Event) => Effect.Effect<void>,
-    ) =>
-      stream.pipe(
-        Stream.runForEach((event) => {
-          const marker = markers.get(event);
-          return marker === undefined ? record(event) : Deferred.succeed(marker, undefined);
-        }),
-        Effect.provideService(CaptureEventQueue, (offer) =>
-          Deferred.succeed(eventQueue, offer).pipe(Effect.asVoid),
-        ),
-      );
-    const awaitEventsRecorded = Effect.gen(function* () {
-      const offer = yield* Deferred.await(eventQueue);
-      const marker = {};
-      const recorded = yield* Deferred.make<void>();
-      markers.set(marker, recorded);
-      if (!(yield* offer(marker))) return yield* Effect.die("Event queue rejected barrier.");
-      yield* Deferred.await(recorded);
-    });
-    const processedMessages = new WeakMap<SDKMessage, Deferred.Deferred<void>>();
-    const consumers = new WeakMap<
-      Queue.Queue<SDKMessage>,
-      Deferred.Deferred<Fiber.Fiber<unknown, unknown>>
-    >();
-    const observe = (update: () => void) =>
-      Effect.sync(update).pipe(Effect.andThen(PubSub.publish(changes, undefined)), Effect.asVoid);
-    const awaitUntil = (predicate: () => boolean, label: string) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          // Subscribe before checking: an update cannot be lost between the
-          // predicate and suspension, including while transcript I/O is pending.
-          const subscription = yield* PubSub.subscribe(changes);
-          while (!predicate()) yield* PubSub.take(subscription);
-          yield* awaitEventsRecorded;
-        }),
-      ).pipe(Effect.onInterrupt(() => Effect.logError(`Interrupted waiting for ${label}.`)));
-    const messages = (queue: Queue.Queue<SDKMessage>) => {
-      const consumer = Deferred.makeUnsafe<Fiber.Fiber<unknown, unknown>>();
-      consumers.set(queue, consumer);
-      return Stream.unwrap(
-        Effect.withFiber((fiber) =>
-          Deferred.succeed(consumer, fiber).pipe(
-            Effect.as(
-              Stream.fromQueue(queue).pipe(
-                Stream.flatMap((message) =>
-                  Stream.make(message).pipe(
-                    // The next pull follows the adapter's handling of this frame.
-                    Stream.concat(
-                      Stream.fromEffect(
-                        Effect.suspend(() => {
-                          const processed = processedMessages.get(message);
-                          return processed === undefined
-                            ? Effect.void
-                            : Deferred.succeed(processed, undefined);
-                        }),
-                      ).pipe(Stream.drain),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      );
-    };
-    const offerAndWait = Effect.fnUntraced(function* (
-      queue: Queue.Queue<SDKMessage>,
-      message: SDKMessage,
-      offered?: Deferred.Deferred<void>,
-    ) {
-      const processed = yield* Deferred.make<void>();
-      processedMessages.set(message, processed);
-      yield* Queue.offer(queue, message);
-      if (offered !== undefined) yield* Deferred.succeed(offered, undefined);
-      yield* Deferred.await(processed);
-      yield* awaitEventsRecorded;
-    });
-    const awaitQueryExit = Effect.fnUntraced(function* (queue: Queue.Queue<SDKMessage>) {
-      const consumer = consumers.get(queue);
-      if (consumer === undefined) return yield* Effect.die("No query consumer for this queue.");
-      // Join the adapter's consuming fiber, including its query-exit cleanup.
-      yield* Fiber.await(yield* Deferred.await(consumer));
-      yield* awaitEventsRecorded;
-    });
-    return {
-      observe,
-      collectEvents,
-      awaitEventsRecorded,
-      awaitUntil,
-      messages,
-      offerAndWait,
-      awaitQueryExit,
-    };
-  });
-
   const makeWakeHarnessWithOptions = (options?: {
     readonly offer?: (message: SDKUserMessage) => Effect.Effect<void>;
     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
@@ -3154,6 +2973,14 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       };
     });
   const makeWakeHarness = makeWakeHarnessWithOptions();
+
+  it.effect.each(["open", "mixed", "reconcile", "nested"] as const)(
+    "projects Claude receipt: %s",
+    (scenario) =>
+      Effect.gen(function* () {
+        yield* verifyClaudeReceipt(yield* makeWakeHarness, scenario);
+      }).pipe(Effect.provide(layerAdapterTest)),
+  );
 
   it.effect.each(["release-after", "cancel-after", "release-before", "resume-pending"] as const)(
     "keeps attachment reservations across compaction: %s boundary",
