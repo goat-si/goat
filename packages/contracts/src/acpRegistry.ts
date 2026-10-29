@@ -161,7 +161,6 @@ export type AcpRegistryListSessionsInput = typeof AcpRegistryListSessionsInput.T
 
 export const AcpRegistryListSessionsResult = Schema.Struct({
   sessions: Schema.Array(AcpRegistrySession).check(Schema.isMaxLength(256)),
-  truncated: Schema.optionalKey(Schema.Boolean),
   nextCursor: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2_048))),
   canLoad: Schema.Boolean,
   canResume: Schema.Boolean,
