@@ -133,7 +133,7 @@ import {
   pullRequestWatchNote,
   takeHeldPullRequestContext,
 } from "./goat/PullRequestDigest.ts";
-import { pullRequestWakeMuted } from "./goat/PullRequestWatchWakes.ts";
+import { pullRequestWakeMuted, pullRequestWakesEnd } from "./goat/PullRequestWatchWakes.ts";
 import {
   cancelledBeforeStart,
   isRestartContinuationSource,
@@ -12583,7 +12583,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.mark-unread":
       case "thread.metadata.update":
       case "thread.pull-request.link":
-      case "thread.pull-request-link.sync":
       case "thread.pull-request.sync":
       case "thread.title.regeneration.complete":
       case "thread.runtime-mode.set":
@@ -12594,9 +12593,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.pull-request.watch":
       case "thread.pull-request.unlink":
+      case "thread.pull-request-link.sync":
         yield* dispatchThreadMutation(command, events, effects);
-        if (command.type === "thread.pull-request.unlink" || !command.watching)
-          yield* dropQueuedPullRequestWakes(command, events);
+        if (pullRequestWakesEnd(command)) yield* dropQueuedPullRequestWakes(command, events);
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);

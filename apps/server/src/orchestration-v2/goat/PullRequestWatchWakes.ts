@@ -11,6 +11,7 @@ import {
   isProviderNativeSubagentThread,
   MessageId,
   type OrchestrationV2AppThread,
+  type OrchestrationV2ServerCommand,
   type ThreadPullRequestLink,
 } from "@goat/contracts";
 import { threadPullRequestKeyOf } from "../../sourceControl/threadPullRequests.ts";
@@ -63,3 +64,24 @@ export const pullRequestWakeMuted = (
   thread.settledAt !== null ||
   isProviderNativeSubagentThread(thread) ||
   link?.snapshot?.state === "merged";
+
+/**
+ * Whether a command leaves a pull request's queued wakes with nothing to report: its watch
+ * stopped, it was unlinked, or its link recorded the merge. A recorded merge drops them at once,
+ * so a turn that ends before the next watch sweep cannot start one.
+ */
+export const pullRequestWakesEnd = (
+  command: Extract<
+    OrchestrationV2ServerCommand,
+    {
+      readonly type:
+        | "thread.pull-request.watch"
+        | "thread.pull-request.unlink"
+        | "thread.pull-request-link.sync";
+    }
+  >,
+) =>
+  command.type === "thread.pull-request.unlink" ||
+  (command.type === "thread.pull-request.watch"
+    ? !command.watching
+    : command.snapshot.state === "merged");

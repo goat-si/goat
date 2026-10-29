@@ -318,6 +318,29 @@ describe("pull request watch wakes", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
+  it.effect("a merge the link records drops queued wakes before the watch sweeps again", () =>
+    Effect.gen(function* () {
+      const { orchestrator, threadId, statusOf } = yield* watchWithQueuedWake("link-merged");
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request-link.sync",
+        commandId: CommandId.make("pr-wakes-link-merged-sync"),
+        threadId,
+        ...key,
+        snapshot: {
+          state: "merged",
+          title: "Watched",
+          headBranch: "feature",
+          baseBranch: "dev",
+          isDraft: false,
+          updatedAt: "2026-10-23T00:00:00.000Z",
+          syncedAt: "2026-10-23T00:00:00.000Z",
+        },
+        stack: null,
+      });
+      expect(yield* statusOf("second")).toBe("cancelled");
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("a closed pull request drops its queued wakes and still says it closed", () =>
     Effect.gen(function* () {
       const { orchestrator, threadId, link, watch, statusOf } =
