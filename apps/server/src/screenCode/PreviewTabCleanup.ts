@@ -107,7 +107,8 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
     readonly route: { readonly browserInstanceId: string; readonly connectionId: string };
     /** The live tabs, or none when they could not be listed. */
     readonly list: Effect.Effect<Option.Option<ReadonlyArray<BoundPreviewTab>>>;
-    readonly claim: (tab: BoundPreviewTab) => Effect.Effect<void>;
+    /** Claims the tab for the turn; false when no claim could be recorded. */
+    readonly claim: (tab: BoundPreviewTab) => Effect.Effect<boolean>;
     readonly release: (tabId: string) => Effect.Effect<void>;
   }) {
     const listed = yield* input.list;
@@ -117,8 +118,8 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
     const route = tab
       ? { browserInstanceId: tab.browserInstanceId, connectionId: tab.connectionId }
       : input.route;
-    if (tab) yield* input.claim(tab);
-    yield* input.broker
+    const claimed = tab ? yield* input.claim(tab) : false;
+    const closed = yield* input.broker
       .invoke({
         scope: input.invocation,
         operation: "close",
@@ -129,9 +130,10 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
           ...(tab ? { controlGeneration: tab.controlGeneration, origin: originOf(tab.url) } : {}),
         },
       })
-      .pipe(Effect.ignore);
-    // The list leaves out a tab whose status it could not read, so only that same browser saying
-    // it has no such tab counts as closed.
+      .pipe(Effect.isSuccess);
+    // The list leaves out a tab whose status it could not read, so the tab counts as closed only
+    // when that same browser says it has no such tab, or accepted the close and no longer routes
+    // to the tab (a closed tab leaves the host's live tabs, which answers NoAvailableHost).
     const gone = yield* input.broker
       .invoke<PreviewAutomationStatus>({
         scope: input.invocation,
@@ -142,7 +144,9 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
       })
       .pipe(
         Effect.match({
-          onFailure: (error) => error._tag === "PreviewAutomationTabNotFoundError",
+          onFailure: (error) =>
+            error._tag === "PreviewAutomationTabNotFoundError" ||
+            (closed && error._tag === "PreviewAutomationNoAvailableHostError"),
           onSuccess: (status) => status.tabId !== input.tabId,
         }),
       );
@@ -152,7 +156,7 @@ export const settleUnloadedOpen = Effect.fn("PreviewTabCleanup.settleUnloadedOpe
         code: "downstream_failure" as const,
         effectStarted: true,
         message: `${reason}; its tab ${input.tabId} is still open.`,
-        nextStep: `screen.tab({tabId: "${input.tabId}"}) shows it; close it there${tab ? " or leave it to turn cleanup" : ""}.`,
+        nextStep: `screen.tab({tabId: "${input.tabId}"}) shows it; close it there${claimed ? " or leave it to turn cleanup" : ""}.`,
       } satisfies ScreenRunError;
     yield* input.release(input.tabId);
     return {

@@ -3,7 +3,7 @@ import {
   PreviewAutomationExecutionError,
   PreviewAutomationInvalidSelectorError,
   PreviewAutomationControlInterruptedError,
-  PreviewAutomationTabNotFoundError,
+  PreviewAutomationNoAvailableHostError,
   PreviewTabId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -35,7 +35,7 @@ const refused = () =>
 const refusingBrowser = (
   close: "accept" | "refuse" | "ignore",
   failure = refused(),
-  options: { readonly unlisted?: boolean } = {},
+  options: { readonly unlisted?: boolean; readonly hostGone?: boolean } = {},
 ) => {
   const state = {
     tabs: [errorPage],
@@ -47,11 +47,19 @@ const refusingBrowser = (
     listBoundTabs: () => Effect.succeed(options.unlisted ? [] : state.tabs),
     invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
       if (request.operation !== "open") state.routes.push(request.exact?.browserInstanceId);
+      // An exact request reaches the browser only while it lists the tab: a closed tab, or a
+      // browser that went away, answers no available host.
       if (request.operation === "status")
-        return state.tabs.length > 0
+        return state.tabs.length > 0 && !options.hostGone
           ? Effect.succeed({ tabId: errorPage.tabId } as A)
           : Effect.fail(
-              new PreviewAutomationTabNotFoundError({ ...actionErrorContext, operation: "status" }),
+              new PreviewAutomationNoAvailableHostError({
+                operation: "status",
+                environmentId: actionErrorContext.environmentId,
+                threadId: actionErrorContext.threadId,
+                providerSessionId: actionErrorContext.providerSessionId,
+                providerInstanceId: actionErrorContext.providerInstanceId,
+              }),
             );
       state.operations.push(request.operation);
       if (request.operation === "open") return Effect.fail(failure);
@@ -135,6 +143,20 @@ it.effect("an open failure that names no tab stays an unknown outcome", () =>
       .pipe(Effect.flip);
     expect(result).toMatchObject({ code: "unknown_outcome", effectStarted: true });
     expect(state.operations).toEqual(["open"]);
+  }),
+);
+
+it.effect("a refused close on a browser that then went away is not reported closed", () =>
+  Effect.gen(function* () {
+    const { broker } = refusingBrowser("refuse", refused(), { hostGone: true });
+    const host = yield* makePreviewTargetHost(broker);
+    const result = yield* host
+      .dispatch(call("open_tab", 1, { url: "http://127.0.0.1:4719/" }), context)
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({ code: "downstream_failure", effectStarted: true });
+    expect(result.message).toContain("refused is still open");
+    // The open recorded its claim, so turn cleanup owns the tab.
+    expect(result.nextStep).toContain("turn cleanup");
   }),
 );
 

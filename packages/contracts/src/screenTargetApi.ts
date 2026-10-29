@@ -43,7 +43,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3; waits up to timeoutMs (5 s) for the target
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action is apps only
   type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;

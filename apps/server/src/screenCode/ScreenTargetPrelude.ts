@@ -371,7 +371,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
           throw new ScreenError('invalid_argument', 'click({selector, ...}) takes its options inside that object; nothing was sent.', true);
         return call('click', target);
       }
-      options = __only('click options', options, ['button', 'count', 'send', 'timeoutMs', 'action']);
+      // timeoutMs is a tab's wait for its target; action names an app's accessibility action.
+      options = __only('click options', options, ['button', 'count', 'send', tab ? 'timeoutMs' : 'action']);
       if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
         throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);
       if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))

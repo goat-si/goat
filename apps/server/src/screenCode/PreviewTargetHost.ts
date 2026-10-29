@@ -314,8 +314,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                         claim: (tab) => {
                           const claimed = targets.get(bind(tab, context).id);
                           return claimed
-                            ? claims.recordOpened(identity(claimed, context)).pipe(Effect.ignore)
-                            : Effect.void;
+                            ? claims.recordOpened(identity(claimed, context)).pipe(Effect.isSuccess)
+                            : Effect.succeed(false);
                         },
                         release: (tabId) => forgetTab(tabId, context),
                       }).pipe(Effect.flatMap(Effect.fail))
