@@ -103,7 +103,7 @@ const make = Effect.gen(function* () {
       nativeThreadId: input.sessionId,
     });
 
-  const listAcpRegistrySessions = Effect.fn("AcpSessionService.list")(function* (
+  const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
     input: AcpRegistryListSessionsInput,
   ) {
     const project = yield* acpRegistryProject(input.projectId);
@@ -140,7 +140,7 @@ const make = Effect.gen(function* () {
     return { ...listed, sessions };
   });
 
-  const importAcpRegistrySession = Effect.fn("AcpSessionService.import")(function* (
+  const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
     input: AcpRegistryImportSessionInput,
   ) {
     return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
@@ -233,7 +233,7 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const deleteAcpRegistrySession = Effect.fn("AcpSessionService.delete")(function* (
+  const deleteAcpRegistrySession = Effect.fn("ws.acpRegistry.deleteSession")(function* (
     input: AcpRegistryDeleteSessionInput,
   ) {
     return yield* acpRegistryRuntimeCoordinator.withSessionMutation(

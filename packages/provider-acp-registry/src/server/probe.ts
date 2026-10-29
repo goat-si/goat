@@ -617,6 +617,7 @@ export const listAcpRegistrySessions = Effect.fn("AcpRegistryProbe.listSessions"
     });
     return AcpRegistryListSessionsResult.make({
       sessions,
+      ...(listed.sessions.length > 256 ? { truncated: true } : {}),
       nextCursor:
         listed.nextCursor === undefined || listed.nextCursor === null
           ? null

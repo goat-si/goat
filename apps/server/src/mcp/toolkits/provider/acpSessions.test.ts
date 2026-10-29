@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
+  ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -39,6 +40,7 @@ it.effect("lists a page through the served MCP path only while read access is li
         Ref.update(calls, (n) => n + 1).pipe(
           Effect.as({
             sessions: [],
+            truncated: true,
             nextCursor: received.cursor ?? null,
             canLoad: true,
             canResume: false,
@@ -65,7 +67,11 @@ it.effect("lists a page through the served MCP path only while read access is li
         reauthorize: (scopes) => Ref.update(required, (all) => [...all, scopes]),
       });
       expect(allowed.isError).toBe(false);
-      expect(allowed.structuredContent).toMatchObject({ nextCursor: "next", sessions: [] });
+      expect(allowed.structuredContent).toMatchObject({
+        nextCursor: "next",
+        sessions: [],
+        truncated: true,
+      });
       expect(yield* Ref.get(required)).toEqual([["orchestration:read"]]);
       const denied = yield* call({
         ...scope,
@@ -78,7 +84,26 @@ it.effect("lists a page through the served MCP path only while read access is li
           ),
       });
       expect(denied.isError).toBe(true);
-      expect(yield* Ref.get(calls)).toBe(1);
+      const thread: McpInvocationScope = {
+        ...scope,
+        client: undefined,
+        thread: {
+          threadId: ThreadId.make("thread-test"),
+          providerSessionId: "session-test",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+      };
+      const threadResult = yield* call(thread);
+      expect(threadResult.isError).toBe(false);
+      expect(threadResult.structuredContent).toMatchObject({ nextCursor: "next", truncated: true });
+      const withoutCapability = yield* call({ ...thread, capabilities: new Set() });
+      expect(withoutCapability.isError).toBe(true);
+      expect(withoutCapability.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ text: expect.stringContaining("orchestration access") }),
+        ]),
+      );
+      expect(yield* Ref.get(calls)).toBe(2);
     }).pipe(Effect.provide(registered));
   }),
 );

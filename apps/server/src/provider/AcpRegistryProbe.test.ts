@@ -26,6 +26,35 @@ const __dirname = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const mockAgentPath = NodePath.join(__dirname, "../../scripts/acp-mock-agent.ts");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
 
+const sessionListCatalog = (count: number) =>
+  AcpRegistrySupport.AcpRegistryCatalog.of({
+    search: () => Effect.die("unused search"),
+    prepare: () => Effect.die("unused prepare"),
+    inspect: () => Effect.die("unused inspect"),
+    uninstallManagedBinary: () => Effect.die("unused uninstall"),
+    resolve: () =>
+      Effect.succeed({
+        agent: {
+          id: "mock-agent",
+          name: "Mock Agent",
+          version: "1.0.0",
+          description: "ACP session management test agent",
+          distribution: { npx: { package: "mock-agent@1.0.0" } },
+        },
+        distribution: "npx" as const,
+        spawn: {
+          command: "node",
+          args: [mockAgentPath],
+          env: {
+            ...process.env,
+            GOAT_ACP_SESSION_LIFECYCLE: "1",
+            GOAT_ACP_SESSION_LIST_COUNT: String(count),
+            GOAT_ACP_AUTH_METHOD_ID: "mock-login",
+          },
+        },
+      }),
+  });
+
 describe("ACP Registry probe", () => {
   it("returns advertised auth methods and de-duplicated models", () => {
     const result = acpRegistryProbeResult(instanceId, {
@@ -319,32 +348,7 @@ describe("ACP Registry probe", () => {
   });
 
   it.effect("lists native sessions and logs out through generic ACP lifecycle methods", () => {
-    const catalog = AcpRegistrySupport.AcpRegistryCatalog.of({
-      search: () => Effect.die("unused search"),
-      prepare: () => Effect.die("unused prepare"),
-      inspect: () => Effect.die("unused inspect"),
-      uninstallManagedBinary: () => Effect.die("unused uninstall"),
-      resolve: () =>
-        Effect.succeed({
-          agent: {
-            id: "mock-agent",
-            name: "Mock Agent",
-            version: "1.0.0",
-            description: "ACP session management test agent",
-            distribution: { npx: { package: "mock-agent@1.0.0" } },
-          },
-          distribution: "npx" as const,
-          spawn: {
-            command: "node",
-            args: [mockAgentPath],
-            env: {
-              ...process.env,
-              GOAT_ACP_SESSION_LIFECYCLE: "1",
-              GOAT_ACP_AUTH_METHOD_ID: "mock-login",
-            },
-          },
-        }),
-    });
+    const catalog = sessionListCatalog(1);
     const input = {
       instanceId,
       settings: decodeSettings({ agentId: "mock-agent" }),
@@ -369,6 +373,24 @@ describe("ACP Registry probe", () => {
       yield* logoutAcpRegistry(input);
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
+      Effect.provide(NodeServices.layer),
+      Effect.scoped,
+    );
+  });
+
+  it.effect("reports an oversized provider page instead of silently losing sessions", () => {
+    const input = {
+      instanceId,
+      settings: decodeSettings({ agentId: "mock-agent" }),
+      cwd: process.cwd(),
+      environment: process.env,
+    };
+    return Effect.gen(function* () {
+      const listed = yield* listAcpRegistrySessions(input);
+      expect(listed.sessions).toHaveLength(256);
+      expect(listed).toMatchObject({ truncated: true, nextCursor: "after-page" });
+    }).pipe(
+      Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, sessionListCatalog(257)),
       Effect.provide(NodeServices.layer),
       Effect.scoped,
     );
