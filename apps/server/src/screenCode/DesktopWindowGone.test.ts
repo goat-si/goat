@@ -76,7 +76,7 @@ it.effect("an unsatisfied gone check, or one with no time left in the cell, list
 );
 
 it.effect(
-  "a key press after which complete ids omit the bound window reports it closed and keeps the driver's verdict",
+  "cmd+w after which complete ids omit the bound window reports it closed and is confirmed",
   () =>
     Effect.gen(function* () {
       let pressed = false;
@@ -100,7 +100,7 @@ it.effect(
         { ...call("press_key", { key: "w", modifiers: ["cmd"] }, ref), deadlineMillis: 10_000 },
         context,
       );
-      expect(out.category).toBe("unverifiable");
+      expect(out.category).toBe("confirmed");
       expect(out.evidence).toContain("observed:window_closed");
       expect((out.value as { windows?: { bound?: string } }).windows?.bound).toBe("closed");
     }),

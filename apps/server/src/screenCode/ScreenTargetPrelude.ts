@@ -575,8 +575,16 @@ const __app = async (rawQuery) => {
       throw new ScreenError('target_ambiguous', label + ' may be running as ' + unproven.map((item) => item.name + ' (pid ' + item.pid + ')').join(', ') + ', listed without its id; nothing was launched. If it is, pick its window in screen.discover() and call screen.app({name: ' + JSON.stringify(String(unproven[0].name)) + ', window_id}).', true);
   }
   const pids = [...new Set(running.map((item) => item.pid))];
-  if (pids.length > 1)
-    throw new ScreenError('target_ambiguous', label + ' runs as ' + pids.length + ' processes (pid ' + pids.join(', ') + '); pass window_id from screen.discover().', true);
+  if (pids.length > 1) {
+    // Several processes already run, so nothing launches; each is named with its windows on screen.
+    let every;
+    try { every = await __call('list_windows', {}); } catch (_) { every = undefined; }
+    const each = pids.map((pid) => {
+      const ids = __own(every, pid).filter((item) => item.is_on_screen !== false).map((item) => item.window_id);
+      return 'pid ' + pid + (ids.length ? ' window_id ' + ids.join(', ') : '');
+    });
+    throw new ScreenError('target_ambiguous', label + ' runs as ' + pids.length + ' processes (' + each.join('; ') + '); nothing was launched. Pass one window_id to screen.app.', true);
+  }
   const by = (row) => (row.bundle_id ? { bundle_id: row.bundle_id } : { name: row.name });
   let wanted;
   if (pids.length === 1) {

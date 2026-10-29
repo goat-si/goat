@@ -587,3 +587,48 @@ it.live(
     });
   },
 );
+
+it.live(
+  "an app already running as two processes names each pid and window, and launches nothing",
+  () => {
+    const { host, sent } = fixture({
+      list_apps: { apps: [running, { ...running, pid: 43 }] },
+      list_windows: { windows: [document, { ...document, pid: 43, window_id: 8 }] },
+    });
+    return Effect.gen(function* () {
+      const result = yield* cell(
+        host,
+        caught("await screen.app({bundle_id: 'org.example.Editor'});"),
+      );
+      expect(result.value).toMatchObject({ code: "target_ambiguous", nothingSent: true });
+      const message = (result.value as { message: string }).message;
+      expect(message).toContain("pid 42 window_id 7");
+      expect(message).toContain("pid 43 window_id 8");
+      expect(tools(sent)).not.toContain("launch_app");
+    });
+  },
+);
+
+it.live(
+  "once an app runs, the next screen.app binds its process and never launches it again",
+  () => {
+    let started = false;
+    const { host, sent } = fixture({
+      list_apps: () => ({ apps: [started ? running : installed] }),
+      list_windows: () => ({ windows: started ? [document] : [] }),
+      launch_app: () => {
+        started = true;
+        return launched([document]);
+      },
+    });
+    const source =
+      "const app = await screen.app({bundle_id: 'org.example.Editor'}); return {launched: app.launched, windowId: app.windowId};";
+    return Effect.gen(function* () {
+      const first = yield* cell(host, source);
+      const second = yield* cell(host, source);
+      expect(first.value).toEqual({ launched: true, windowId: 7 });
+      expect(second.value).toEqual({ launched: false, windowId: 7 });
+      expect(tools(sent).filter((tool) => tool === "launch_app")).toHaveLength(1);
+    });
+  },
+);
