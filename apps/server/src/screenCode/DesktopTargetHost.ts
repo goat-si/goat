@@ -357,6 +357,7 @@ export const createDesktopTargetHost = (deps: {
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
       if (!current) return yield* Effect.fail(fail("unavailable"));
+      let lastClickedTableCell: number | string | undefined;
       for (const [id, previous] of targets)
         if (
           previous.pid === pid &&
@@ -364,6 +365,7 @@ export const createDesktopTargetHost = (deps: {
           previous.ref.runId === context.runId &&
           previous.ref.turnId === context.turnId
         ) {
+          lastClickedTableCell ??= previous.lastClickedTableCell;
           observations.evictTarget(id);
           targets.delete(id);
         }
@@ -386,6 +388,7 @@ export const createDesktopTargetHost = (deps: {
         connectionGeneration: windowsReply.connectionGeneration,
         controlId: current.controlId,
         ...(listedBounds === undefined ? {} : { windowBounds: listedBounds }),
+        ...(lastClickedTableCell === undefined ? {} : { lastClickedTableCell }),
       };
       targets.set(ref.id, bound);
       // Only what the driver reported names the app on its row. The call's bundle id found the

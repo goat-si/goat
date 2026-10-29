@@ -685,21 +685,26 @@ it.effect("Space and Enter on a Send or unnamed button in KakaoTalk require { se
 );
 
 it.effect(
-  "clicking a table cell keeps unaddressed typing refused across reads, driver restarts, confirmed setValue and AX clicks without focus evidence, until focus is explicitly confirmed on a safe input",
+  "clicking a table cell keeps unaddressed typing refused across reads, actual driver-generation rebind, explicit bindApp rebinding, and goat.8 replies without focus_confirmed, while addressed typing works and post-pin focus_confirmed clears the guard",
   () =>
     Effect.gen(function* () {
       const connection = { id: "driver:1" };
       let focusConfirmed = false;
-      const { host, sent } = fixture(
+      const { host } = fixture(
         {
           get_window_state: (args: Record<string, unknown>) =>
             args.include_accessibility_tree === false
               ? goat2WindowState(args, { snapshot_id: "s0000000f" })
               : finderState,
+          // Pinned goat.8 serialized result shape omits focus_confirmed; post-pin shape adds it.
           click: () => ({
             effect: "confirmed",
             evidence: ["driver:acted"],
             ...(focusConfirmed ? { focus_confirmed: true } : {}),
+          }),
+          press_key: () => ({
+            effect: "unverifiable",
+            path: "cgevent",
           }),
         },
         connection,
@@ -711,46 +716,61 @@ it.effect(
       const ref = bound.value as ScreenTargetRef;
       const observed = yield* host.observe(call("get_window_state", {}, ref), context);
       const cellRef = byIndex(observed.value, 41);
-      const searchRef = byIndex(observed.value, 50);
       yield* host.invoke(call("click", { elementRef: cellRef }, ref), context);
-      yield* host.observe(call("get_window_state", {}, ref), context);
-      yield* host.observe(call("screenshot", {}, ref), context);
 
-      // 1. Confirmed setValue on another element does not move keyboard focus away from the cell.
-      const reobs1 = yield* host.observe(call("get_window_state", {}, ref), context);
+      // 1. Pinned goat.8 shapes: confirmed setValue, confirmed click, and press_key on row/search
+      // without focus_confirmed keep unaddressed typing refused, while addressed typing works.
       yield* host.invoke(
-        call("set_value", { value: "q", elementRef: byIndex(reobs1.value, 50) }, ref),
+        call("set_value", { value: "q", elementRef: byIndex(observed.value, 50) }, ref),
         context,
       );
-      const afterSetValue = yield* host
+      yield* host.invoke(call("click", { elementRef: byIndex(observed.value, 50) }, ref), context);
+      yield* host.invoke(
+        call("press_key", { key: "Enter", elementRef: byIndex(observed.value, 3) }, ref),
+        context,
+      );
+      const onGoat8 = yield* host
         .invoke(call("type_text", { text: "blocked" }, ref), context)
         .pipe(Effect.flip);
-      expect(afterSetValue.code).toBe("invalid_argument");
+      expect(onGoat8.code).toBe("invalid_argument");
+      const addressedOnGoat8 = yield* host.invoke(
+        call("type_text", { text: "addressed ok", elementRef: byIndex(observed.value, 50) }, ref),
+        context,
+      );
+      expect(addressedOnGoat8.category).toBe("confirmed");
 
-      // 2. Confirmed AX click without focus_confirmed does not clear the guard.
-      yield* host.invoke(call("click", { elementRef: byIndex(reobs1.value, 50) }, ref), context);
-      const afterUnfocusedClick = yield* host
-        .invoke(call("type_text", { text: "blocked" }, ref), context)
-        .pipe(Effect.flip);
-      expect(afterUnfocusedClick.code).toBe("invalid_argument");
-
-      // 3. Driver replacement does not change the app's native focus, so unaddressed typing stays refused.
+      // 2. Actual driver-generation rebind (observe under driver:2) preserves lastClickedTableCell.
       connection.id = "driver:2";
-      const beforeRestartType = sent.length;
-      const afterRestart = yield* host
-        .invoke(call("type_text", { text: "blocked" }, ref), context)
+      const reobsAfterRestart = yield* host.observe(call("get_window_state", {}, ref), context);
+      const afterActualRebind = yield* host
+        .invoke(call("type_text", { text: "still blocked after driver rebind" }, ref), context)
         .pipe(Effect.flip);
-      expect(afterRestart.code).toBe("invalid_argument");
-      expect(sent.slice(beforeRestartType)).toEqual([]);
+      expect(afterActualRebind.code).toBe("invalid_argument");
 
-      // 4. Addressed typing into the search field always works, and once an action reports explicit
-      // focus confirmation on a safe input, unaddressed typing is allowed.
-      const reobs2 = yield* host.observe(call("get_window_state", {}, ref), context);
+      // 3. Explicit screen.app (bindApp) rebinding for the same window preserves lastClickedTableCell.
+      const rebound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const reboundRef = rebound.value as ScreenTargetRef;
+      const afterExplicitBindApp = yield* host
+        .invoke(call("type_text", { text: "still blocked after bindApp" }, reboundRef), context)
+        .pipe(Effect.flip);
+      expect(afterExplicitBindApp.code).toBe("invalid_argument");
+
+      // 4. Post-pin driver reply with explicit focus_confirmed: true on a safe element clears the guard.
+      const reobsRebound = yield* host.observe(call("get_window_state", {}, reboundRef), context);
       focusConfirmed = true;
-      yield* host.invoke(call("click", { elementRef: byIndex(reobs2.value, 50) }, ref), context);
-      const typed = yield* host.invoke(call("type_text", { text: "ok" }, ref), context);
-      expect(typed.category).toBe("confirmed");
-      expect(searchRef).toBeDefined();
+      yield* host.invoke(
+        call("click", { elementRef: byIndex(reobsRebound.value, 50) }, reboundRef),
+        context,
+      );
+      const typedAfterFocusConfirmed = yield* host.invoke(
+        call("type_text", { text: "ok" }, reboundRef),
+        context,
+      );
+      expect(typedAfterFocusConfirmed.category).toBe("confirmed");
+      expect(reobsAfterRestart.value).toBeDefined();
     }),
 );
 
