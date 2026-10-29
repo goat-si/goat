@@ -457,10 +457,10 @@ it.live(
 );
 
 it.live(
-  "waitFor narrows unlabelled static-text rows by value on the pinned driver, preserves empty-string value_equals, and rejects an empty predicate",
+  "waitFor supports {value}, {role, value}, and {role, name, value: ''} on the pinned goat.10 driver without label substring collisions",
   () => {
     const elements = [
-      { role: "AXStaticText", label: "78 × 9", value: "78 × 9", display_only: true },
+      { role: "AXStaticText", label: "1702", value: "1702", display_only: true },
       { role: "AXStaticText", label: "702", value: "702", display_only: true },
       { role: "AXTextField", label: "Search", value: "hello", element_index: 1 },
     ];
@@ -471,14 +471,20 @@ it.live(
         }>;
       }) => {
         const el = args.expect[0]?.element;
-        if (!el || (!el.selector.role && !el.selector.label_contains))
+        const hasValue = Boolean(el?.value_equals && el.value_equals.trim().length > 0);
+        if (!el || (!el.selector.role && !el.selector.label_contains && !hasValue))
           return { status: "unknown", stable: false };
         const matched = elements.filter(
           (item) =>
             (!el.selector.role || item.role === el.selector.role) &&
             (!el.selector.label_contains ||
-              item.label.toLowerCase().includes(el.selector.label_contains.toLowerCase())),
+              item.label.toLowerCase().includes(el.selector.label_contains.toLowerCase()) ||
+              item.value.toLowerCase().includes(el.selector.label_contains.toLowerCase())),
         );
+        if (el.value_equals !== undefined) {
+          const fieldMatches = matched.filter((item) => item.value === el.value_equals);
+          if (fieldMatches.length > 0) return { status: "satisfied", stable: true };
+        }
         if (matched.length !== 1) return { status: "unknown", stable: false };
         if (el.value_equals !== undefined && matched[0]?.value !== el.value_equals)
           return { status: "unsatisfied", stable: false };
@@ -490,37 +496,36 @@ it.live(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
           "const v1 = await app.waitFor({value: '702'}); " +
           "const v2 = await app.waitFor({role: 'AXStaticText', value: '702'}); " +
+          "const vField = await app.waitFor({role: 'AXTextField', value: 'hello'}); " +
           "const vEmpty = await app.waitFor({role: 'AXTextField', name: 'Search', value: ''}); " +
           "let bareEmptyErr = ''; try { await app.waitFor({value: ''}); } catch (e) { bareEmptyErr = e.code; } " +
           "let emptyErr = ''; try { await app.waitFor({}); } catch (e) { emptyErr = e.code; } " +
-          "return { m1: v1.met, m2: v2.met, mEmpty: vEmpty.met, bareEmptyErr, emptyErr };",
+          "return { m1: v1.met, m2: v2.met, mField: vField.met, mEmpty: vEmpty.met, bareEmptyErr, emptyErr };",
       )) as ScreenRunResult;
       expect(ok.value).toEqual({
         m1: true,
         m2: true,
+        mField: true,
         mEmpty: false,
         bareEmptyErr: "invalid_argument",
         emptyErr: "invalid_argument",
       });
       const verifies = sent.filter((s) => s.tool === "verify_state");
-      expect(verifies).toHaveLength(3);
+      expect(verifies).toHaveLength(4);
       expect(verifies[0]?.args).toMatchObject({
-        expect: [
-          { element: { selector: { label_contains: "702" }, exists: true, value_equals: "702" } },
-        ],
+        expect: [{ element: { selector: {}, exists: true, value_equals: "702" } }],
       });
       expect(verifies[1]?.args).toMatchObject({
         expect: [
-          {
-            element: {
-              selector: { role: "AXStaticText", label_contains: "702" },
-              exists: true,
-              value_equals: "702",
-            },
-          },
+          { element: { selector: { role: "AXStaticText" }, exists: true, value_equals: "702" } },
         ],
       });
       expect(verifies[2]?.args).toMatchObject({
+        expect: [
+          { element: { selector: { role: "AXTextField" }, exists: true, value_equals: "hello" } },
+        ],
+      });
+      expect(verifies[3]?.args).toMatchObject({
         expect: [
           {
             element: {
