@@ -2150,17 +2150,6 @@ const make = Effect.gen(function* () {
       const { parent, limits } = yield* loadCaller(scope);
       const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
       yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
-      // Leaving a webhook trigger drops its token and coming back issues a new one: a rotation.
-      if (
-        existing.schedule.type === "webhook" &&
-        input.schedule !== undefined &&
-        input.schedule.type !== "webhook"
-      ) {
-        return yield* failure(
-          "capability_denied",
-          "Moving a webhook schedule to another trigger ends its URL; retiring or rotating a webhook URL is a person's step in Settings → Scheduled Tasks.",
-        );
-      }
       if (
         input.bindToCurrentThread === true &&
         (parent === undefined || parent.thread.projectId !== existing.projectId)

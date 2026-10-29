@@ -15,7 +15,7 @@ Run `node scripts/agent-surface/inventory.ts` for the full JSON inventory, inclu
 | Mutating tools, by enforced handler access             | 168               |
 | Mutating tools that accept clientRequestId             | 71                |
 | Mutating tools whose clientRequestId GOAT deduplicates | 68                |
-| Input parameters with a description                    | 502 of 1079 (47%) |
+| Input parameters with a description                    | 498 of 1075 (46%) |
 | Tools with a worked example                            | 71 of 274         |
 | CLI commands, listed / unlisted                        | 62 / 19           |
 | CLI commands with usage examples                       | 0 of 81           |
@@ -178,7 +178,7 @@ One intent is spelled several ways (tool counts in parentheses):
 
 ## Descriptions and examples
 
-Only 47% of input parameters carry a description. 94 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `device_list`, `goat_attachment_discard`, and 84 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
+Only 46% of input parameters carry a description. 94 tools describe none of their parameters, for example `channel_ingest`, `channel_input_get`, `channel_task_export`, `channel_task_get`, `channel_task_list`, `channel_task_move`, `channel_task_report`, `delete_scheduled_task`, `device_list`, `goat_attachment_discard`, and 84 more. Optional fields encode as `anyOf [T, null]` with no stated default, so an agent learns defaults only from prose.
 
 71 of 274 tools show a worked call, in their description or as examples `goat_describe` serves (63 tools). 155 tools have no `Tool.Title`. Description length is uneven; the longest are:
 
@@ -243,7 +243,7 @@ Names that look like tools but are not in the registry:
 
 Every `goat ...` invocation in the docs names a real command and flags it accepts; flag values are not checked.
 
-138 of 274 tools are never named in any Markdown doc, and 134 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_escalate`, `goat_decision_list`, `goat_environment_read`, `goat_environment_usage`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_host_process_history`, `goat_host_resource_history`, `goat_html_list`, and 110 more. Agents can discover these with `goat_describe`.
+137 of 274 tools are never named in any Markdown doc, and 133 are named in neither docs nor agent prompts: `channel_bot_home`, `channel_ingest`, `channel_task_export`, `channel_task_list`, `channel_task_move`, `delete_scheduled_task`, `goat_attachment_discard`, `goat_attachment_pending_list`, `goat_attachment_prepare_upload`, `goat_cloud_machine_create`, `goat_cloud_machine_resume`, `goat_cloud_run_list`, `goat_connection_list`, `goat_connection_remove`, `goat_decision_escalate`, `goat_decision_list`, `goat_environment_read`, `goat_environment_usage`, `goat_host_link_create`, `goat_host_link_list`, `goat_host_link_remove`, `goat_host_process_history`, `goat_host_resource_history`, `goat_html_list`, and 109 more. Agents can discover these with `goat_describe`.
 
 Listed CLI commands no doc invokes: `goat auth pairing list`, `goat auth pairing revoke`, `goat project add`, `goat project remove`, `goat project rename`, `goat thread start`, `goat triage`.
 
@@ -253,8 +253,8 @@ The server's `/llms.txt` lists every registry path with its summary. `goat_descr
 
 1. **One error envelope with a machine code and a next action.** 7 error families and two failure modes (233 `return`, 41 `error`) all arrive as JSON inside text. Return `structuredContent` shaped like `{code, message, retryable, field?, next?}` from every tool so an agent branches on data.
 2. **A single human handoff primitive.** Secrets, approvals, mode escalation, capability grants, and sign-in each surface differently (see "Where a human is required"). One handoff result with an id, what the user must do and where, plus one wait call, lets any agent pause and resume instead of failing.
-3. **Complete the on-demand tool reference.** 134 tools appear in no doc or prompt. `/llms.txt` lists every path for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 63 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
-4. **Describe every parameter.** 577 of 1079 parameters have no description, and 94 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
+3. **Complete the on-demand tool reference.** 133 tools appear in no doc or prompt. `/llms.txt` lists every path for the calling credential, and `goat_describe` already serves schemas from the registered tools and examples for 63 of them. Add examples to the rest, and related paths, there without committed reference pages (decision D14 in agent-surface.md).
+4. **Describe every parameter.** 577 of 1075 parameters have no description, and 94 tools describe none. Extend the catalog test at apps/server/src/mcp/toolkits/agentSurface/discovery.test.ts `describes every argument of the paths goat_call lists`, which fails on an undescribed argument of a path with examples, to every tool.
 5. **Retry keys on every mutating tool.** 97 mutating tools take no `clientRequestId`, so a dropped response leaves an agent unable to retry safely. Start with destructive tools and thread launch.
 6. **Derive hints from enforcement.** Compute `readOnlyHint` from the handler's `McpToolAccess` declaration instead of annotating it separately. 1 tools disagree or under-declare today, which misleads clients that auto-approve reads.
 7. **Ship `goat` on PATH with the app.** Agents outside GOAT need a stable entry point. Put the launcher on PATH by default with a clear opt-out, and make `goat --version` the first-run check.

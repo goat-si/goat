@@ -344,12 +344,29 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   goat_queue_edit: McpToolAccess.destructive(
     writesThread((input) =>
-      dispatch(input.threadId, (common) => ({
-        ...common,
-        type: "queued-run.edit",
-        runId: input.queuedRunId,
-        text: input.text,
-      })),
+      Effect.gen(function* () {
+        // An edit keeps the message's author, so a person's message must not become a command
+        // (such as /logout) that turn start would run as theirs.
+        if (input.text.trimStart().startsWith("/")) {
+          const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
+          const run = projection.runs.find((candidate) => candidate.id === input.queuedRunId);
+          const message = projection.messages.find(
+            (candidate) => candidate.id === run?.userMessageId,
+          );
+          if (message?.createdBy !== "agent")
+            return yield* new OrchestratorMcpFailure({
+              code: "capability_denied",
+              message:
+                "An agent cannot turn a person's queued message into a slash command; send your own message instead.",
+            });
+        }
+        return yield* dispatch(input.threadId, (common) => ({
+          ...common,
+          type: "queued-run.edit",
+          runId: input.queuedRunId,
+          text: input.text,
+        }));
+      }),
     ),
   ),
   goat_queue_cancel: McpToolAccess.destructive(

@@ -182,3 +182,59 @@ it.effect.each(["run_mismatch", "storage"] as const)(
       ),
     ),
 );
+
+it.effect.each(["user", "agent"] as const)(
+  "goat_queue_edit puts a slash command only into an agent's own queued message (%s)",
+  (author) => {
+    const own = ThreadId.make("own");
+    const queuedRunId = RunId.make("run:queued");
+    const dispatched: Array<unknown> = [];
+    const projection = {
+      ...McpToolAccessTestkit.idleThreadProjection(McpToolAccessTestkit.liveThreadShell(own)),
+      runs: [{ id: queuedRunId, status: "queued", userMessageId: "message:queued" }],
+      messages: [{ id: "message:queued", createdBy: author, text: "run the tests" }],
+    } as never;
+    return Effect.gen(function* () {
+      const toolkit = yield* ThreadToolkit.pipe(
+        Effect.provide(Access.HandlersLayer.layer(Handlers.layer)),
+      );
+      const response = yield* toolkit
+        .handle("goat_queue_edit", { queuedRunId, text: "/logout" })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      if (author === "user") {
+        expect(response.at(-1)?.result).toMatchObject({ code: "capability_denied" });
+        expect(dispatched).toHaveLength(0);
+      } else {
+        expect(dispatched).toMatchObject([{ type: "queued-run.edit", text: "/logout" }]);
+      }
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          McpToolAccessTestkit.layerPermissionProfilesOff,
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (threadId) =>
+              Effect.succeed(McpToolAccessTestkit.liveThreadShell(threadId)),
+            getThreadRecords: () => Effect.succeed(projection),
+            getProjectThreadRecords: () => Effect.succeed(projection),
+            dispatch: (command) =>
+              Effect.sync(() => {
+                dispatched.push(command);
+                return { sequence: 1 } as never;
+              }),
+          }),
+          Layer.succeed(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            client: undefined,
+            thread: {
+              threadId: own,
+              providerSessionId: "session",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+            },
+          }),
+          Layer.mock(ThreadResultService.ThreadResultService)({}),
+          NodeCrypto.layer,
+        ),
+      ),
+    );
+  },
+);
