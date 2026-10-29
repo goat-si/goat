@@ -293,6 +293,37 @@ describe("Linux computer use helper conformance", () => {
     await helper.close();
   });
 
+  it("an AT-SPI toggle reads checked and expanded from the driver, and a check box never its selected", async () => {
+    const helper = await connect();
+    helper.driver.state.extraElements = [
+      { role: "check box", label: "Notify", selected: true, toggle_state: "on" },
+      { role: "check box", label: "Partly", selected: false, toggle_state: "mixed" },
+      { role: "toggle button", label: "Details", toggle_state: "off", expanded: false },
+      // A highlighted radio menu item is selected while unchecked: both are its own state.
+      { role: "radio menu item", label: "Large", selected: true, toggle_state: "off" },
+      // A driver without toggle_state: its row is passed on as it reads, nothing is guessed.
+      { role: "check box", label: "Older", selected: true },
+    ];
+    const { observation } = await helper.observe();
+    if (observation.kind !== "full") throw new Error("expected full");
+    const state = (label: string) =>
+      observation.elements.find((element) => element.label === label)?.state;
+    expect([
+      state("Notify"),
+      state("Partly"),
+      state("Details"),
+      state("Large"),
+      state("Older"),
+    ]).toEqual([
+      { checked: true },
+      { checked: "mixed" },
+      { checked: false, expanded: false },
+      { selected: true, checked: false },
+      { selected: true },
+    ]);
+    await helper.close();
+  });
+
   it("a ref from an older observation is staleElement and sends nothing", async () => {
     const helper = await connect();
     const first = await helper.observe();

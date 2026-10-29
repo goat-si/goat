@@ -103,6 +103,14 @@ export function fixtureDriver() {
     }>,
     /** Readiness captures by pid, for windows that capture differently from the fixture's. */
     readinessImages: new Map<number, string>(),
+    /** Rows the window reads after the fixture's own, as the driver sends them. */
+    extraElements: [] as Array<{
+      role: string;
+      label: string;
+      selected?: boolean;
+      toggle_state?: "on" | "off" | "mixed";
+      expanded?: boolean;
+    }>,
     calls: [] as Array<{ tool: string; args: Readonly<Record<string, unknown>> }>,
     /** Answers the next input call instead of the fixture's own behavior. */
     nextAnswer: undefined as DriverToolResult | undefined,
@@ -194,6 +202,12 @@ export function fixtureDriver() {
           value: "hunter2",
           actions: ["activate"],
         },
+        ...state.extraElements.map((element, index) => ({
+          element_index: 4 + index,
+          element_token: token(4 + index),
+          actions: ["click"],
+          ...element,
+        })),
       ].filter((element) => typeof args.query !== "string" || element.label.includes(args.query));
       return ok(
         {

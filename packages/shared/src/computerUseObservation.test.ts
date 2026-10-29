@@ -344,4 +344,34 @@ describe("computer use element state", () => {
       ["Save", { enabled: true }],
     ]);
   });
+
+  it("a driver's toggle_state is the element's checked state, mixed included, and a platform layer's checked wins", () => {
+    const { observe } = setup();
+    const base = read(1, [
+      { role: "check box", label: "On" },
+      { role: "check box", label: "Off" },
+      { role: "check box", label: "Partly" },
+      { role: "tree item", label: "Folder" },
+      { role: "check box", label: "Layered" },
+    ]);
+    const states = [
+      { toggle_state: "on" },
+      { toggle_state: "off" },
+      { toggle_state: "mixed" },
+      { expanded: false },
+      { toggle_state: "off", checked: "mixed" },
+    ] as const;
+    const first = observe({
+      ...base,
+      elements: (base.elements ?? []).map((element, index) => ({ ...element, ...states[index] })),
+    });
+    if (first.kind !== "full") throw new Error("expected full");
+    expect(first.elements.map((element) => element.state)).toEqual([
+      { checked: true },
+      { checked: false },
+      { checked: "mixed" },
+      { expanded: false },
+      { checked: "mixed" },
+    ]);
+  });
 });
