@@ -451,6 +451,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Request", "Requesting", "Requested", "computer use approval"],
     "environment-update",
   ),
+  goat_acp_session_list: tool(["List", "Listing", "Listed", "ACP sessions"], "provider-diagnose"),
   goat_provider_diagnose: tool(
     ["Diagnose", "Diagnosing", "Diagnosed", "a provider"],
     "provider-diagnose",

@@ -1,3 +1,4 @@
+import * as AcpSessionService from "../provider/AcpSessionService.ts";
 import { assert, it } from "@effect/vitest";
 import { OrchestratorMcpFailure, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -594,6 +595,7 @@ it.effect("MCP writes need a full-access caller; reads and dry runs answer witho
       ProviderToolkit,
       ProviderHandlers.layer,
     ).pipe(
+      Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
       Layer.provide(layerPermissionProfilesOff),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),

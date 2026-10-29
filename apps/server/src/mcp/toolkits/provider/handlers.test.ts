@@ -1,3 +1,4 @@
+import * as AcpSessionService from "../../../provider/AcpSessionService.ts";
 import * as Onboarding from "../../../provider/ProviderOnboarding.ts";
 import * as ProviderSettingsService from "../../../provider/ProviderSettings.ts";
 import * as DateTime from "effect/DateTime";
@@ -41,6 +42,7 @@ it.effect.each([undefined, "box"])("uses one routing entry point for host=%s", (
   Effect.gen(function* () {
     const calls: unknown[] = [];
     const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+      Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
       Layer.provide(layerPermissionProfilesOff),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),
@@ -87,6 +89,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+        Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
         Layer.provide(layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(liveThreadsLayer),
@@ -148,6 +151,7 @@ it.effect(
       };
       let requests = 0;
       const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+        Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
         Layer.provide(layerPermissionProfilesOff),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(liveThreadsLayer),
@@ -205,6 +209,7 @@ it.effect(
 
 const settingsServer = (manage: ProviderSettingsService.ProviderSettings["Service"]["manage"]) =>
   McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+    Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
     Layer.provide(layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(liveThreadsLayer),
@@ -301,6 +306,7 @@ const failureOf = (
 ) =>
   Effect.gen(function* () {
     const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+      Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
       Layer.provide(layerPermissionProfilesOff),
       Layer.provideMerge(McpServer.McpServer.layer),
       Layer.provide(liveThreadsLayer),

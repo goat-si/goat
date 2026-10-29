@@ -1,10 +1,13 @@
 import * as HomeRequests from "../../../provider/CodexHomeRequests.ts";
 import {
+  AuthOrchestrationReadScope,
   type EnvironmentAuthorizationError,
   OrchestratorMcpFailure,
   type ProviderHostSyncError,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as AcpSessionService from "../../../provider/AcpSessionService.ts";
+import { reauthorizationFailure } from "../../threadAccess.ts";
 import * as CloudAgents from "../../../cloudAgents/CloudAgentService.ts";
 import * as Routing from "../../../provider/ProviderDiagnosisRouting.ts";
 import * as HostSync from "../../../provider/ProviderHostSync.ts";
@@ -90,6 +93,41 @@ const modesAfter = <R>(
   );
 
 export const layer = McpToolAccess.toLayer(ProviderToolkit, {
+  goat_acp_session_list: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocation.McpInvocationContext;
+      if (!scope.capabilities.has("orchestration")) {
+        return yield* new OrchestratorMcpFailure({
+          code: "capability_denied",
+          message: "ACP session listing requires orchestration access.",
+        });
+      }
+      if (scope.thread === undefined) {
+        if (
+          scope.client === undefined ||
+          !scope.grantedScopes?.includes(AuthOrchestrationReadScope) ||
+          scope.reauthorize === undefined
+        ) {
+          return yield* new OrchestratorMcpFailure({
+            code: "capability_denied",
+            message: "ACP session listing requires orchestration:read and live reauthorization.",
+          });
+        }
+        yield* scope
+          .reauthorize([AuthOrchestrationReadScope])
+          .pipe(Effect.mapError(reauthorizationFailure));
+      }
+      return yield* (yield* AcpSessionService.AcpSessionService).list(input).pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({
+              code: "orchestration_error",
+              message: error.message,
+            }),
+        ),
+      );
+    }),
+  ),
   goat_provider_host_matrix: McpToolAccess.readsOrReachesHost(
     (input) => input.localOnly !== true,
     (input) => withHostSync((service, caller) => service.matrix(input, caller)),

@@ -1,3 +1,4 @@
+import * as AcpSessionService from "./AcpSessionService.ts";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentAuthorizationError,
@@ -218,6 +219,7 @@ const harness = Effect.gen(function* () {
     }),
   );
   const registered = McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+    Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
     Layer.provide(layerPermissionProfilesOff),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provide(Layer.mock(HomeRequests.CodexHomeRequests)({})),

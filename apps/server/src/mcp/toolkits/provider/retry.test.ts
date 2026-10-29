@@ -1,3 +1,4 @@
+import * as AcpSessionService from "../../../provider/AcpSessionService.ts";
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId, TurnItemId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -170,6 +171,7 @@ it.effect.each([
   }).pipe(
     Effect.provide(
       McpHttpServer.toolkitRegistration(ProviderToolkit, Handlers.layer).pipe(
+        Layer.provide(Layer.mock(AcpSessionService.AcpSessionService)({})),
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provideMerge(Profiles.layer),
         Layer.provide(dependencies),
