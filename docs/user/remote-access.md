@@ -95,6 +95,10 @@ On a computer with the GOAT desktop app, you can open the `App link` that
 app asks you to confirm the server address, then adds it. `t3code://pair` links
 from older T3 Code versions work the same way.
 
+If your HTTPS endpoint uses a certificate from your own certificate authority,
+install that CA on Android as a **CA certificate** in its security settings; the
+Android app then trusts it.
+
 Pairing authorizes that device for future connections. Use a fresh one-time link
 for each new device; you do not need the original token to reconnect. Links
 created in Settings can only be copied from the client that created them while
