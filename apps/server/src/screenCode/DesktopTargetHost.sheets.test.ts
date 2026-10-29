@@ -806,20 +806,13 @@ it.effect(
         args: { pid: 42 },
       });
       const aux = yield* h.nextToDriver;
+      // A driver-origin request (carrying method) with prov1's id must not be mistaken for prov1's reply.
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: prov1.id, method: "ping" }));
       yield* TestClock.adjust("5 seconds");
       assert.isFalse(yield* h.isKilled);
       assert.equal(h.drivers.length, 1);
-      // prov:1 finishes at t = 5 s; aux is now at the head of the pipe and wedges the child, while prov:2 queues behind it.
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: prov1.id, result: { content: [] } }));
-      yield* h.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: "prov:2",
-          method: "tools/call",
-          params: { name: "list_apps", arguments: {} },
-        }),
-      );
-      yield* TestClock.adjust("2600 millis");
+      // If prov:1 is also stuck (never replies past its 10 s scroll cap), aux's watchdog still starts after the 10 s cap and replaces the stuck child.
+      yield* TestClock.adjust("8 seconds");
       assert.isTrue(yield* h.isKilled);
       assert.equal(h.drivers.length, 2);
       void aux;

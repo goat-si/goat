@@ -1,3 +1,4 @@
+import { driverCallCapMs } from "./ComputerUseCallCaps.ts";
 /**
  * A server call its driver leaves unanswered past the call's deadline: the server already failed
  * it and later calls would queue behind the stuck child, so the child is replaced. The cut-off
@@ -24,8 +25,10 @@ const DRIVER_UNANSWERED: Interruption = {
 
 const replyKey = (line: string): string | undefined => {
   try {
-    const id: unknown = (JSON.parse(line) as { id?: unknown }).id;
-    return id === undefined || id === null ? undefined : JSON.stringify(id);
+    const parsed = JSON.parse(line) as { id?: unknown; method?: unknown };
+    return parsed.method !== undefined || parsed.id === undefined || parsed.id === null
+      ? undefined
+      : JSON.stringify(parsed.id);
   } catch {
     return undefined;
   }
@@ -35,7 +38,10 @@ export const makeUnansweredWatch = <E>(
   proxy: {
     readonly lock: Semaphore.Semaphore;
     readonly scope: Scope.Scope;
-    readonly outstanding: ReadonlyMap<string, { readonly connectionId: string }>;
+    readonly outstanding: ReadonlyMap<
+      string,
+      { readonly connectionId: string; readonly tool?: string | undefined; readonly args?: unknown }
+    >;
     readonly lifecycle: { readonly current: { readonly connectionId: string } | undefined };
   },
   act: {
@@ -157,25 +163,36 @@ export const makeUnansweredWatch = <E>(
       function* (key: string, deadlineMillis: number) {
         const started = yield* Clock.currentTimeMillis;
         const budgetMs = Math.max(0, deadlineMillis - started);
-        // A call queued behind an earlier unanswered call on the same child waits for its turn
-        // at the head of the pipe before its own response budget counts down.
-        for (;;) {
-          const woken = Deferred.await(settled);
-          const call = proxy.outstanding.get(key);
-          if (
-            !call ||
-            replied.has(key) ||
-            proxy.lifecycle.current?.connectionId !== call.connectionId
-          )
-            return;
-          let head = false;
-          for (const [k, each] of proxy.outstanding) {
-            if (each.connectionId !== call.connectionId || replied.has(k)) continue;
-            head = k === key;
-            break;
-          }
-          if (head) break;
-          yield* woken;
+        const initial = proxy.outstanding.get(key);
+        if (!initial) return;
+        let aheadCapMs = 0;
+        for (const [k, each] of proxy.outstanding) {
+          if (k === key) break;
+          if (each.connectionId === initial.connectionId && !replied.has(k))
+            aheadCapMs += driverCallCapMs(each.tool ?? "", each.args);
+        }
+        // Wait for earlier calls on the same child up to their combined tool caps.
+        if (aheadCapMs > 0) {
+          yield* Effect.gen(function* () {
+            for (;;) {
+              const woken = Deferred.await(settled);
+              const call = proxy.outstanding.get(key);
+              if (
+                !call ||
+                replied.has(key) ||
+                proxy.lifecycle.current?.connectionId !== call.connectionId
+              )
+                return;
+              let head = false;
+              for (const [k, each] of proxy.outstanding) {
+                if (each.connectionId !== call.connectionId || replied.has(k)) continue;
+                head = k === key;
+                break;
+              }
+              if (head) return;
+              yield* woken;
+            }
+          }).pipe(Effect.timeoutOption(aheadCapMs));
         }
         yield* Effect.sleep(budgetMs);
         const call = proxy.outstanding.get(key);
@@ -187,7 +204,7 @@ export const makeUnansweredWatch = <E>(
         effect.pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              replied.delete(key);
+              for (const k of replied) if (!proxy.outstanding.has(k)) replied.delete(k);
               settle(key);
             }),
           ),
