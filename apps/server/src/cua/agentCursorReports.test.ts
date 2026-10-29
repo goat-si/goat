@@ -104,6 +104,36 @@ describe("agent cursor reports", () => {
         point: { fx: 0.5, fy: 0.45 },
         phase: "resting",
       });
+      // Same-window rebind in the same turn with matching pid/windowId retains the point.
+      const rebound = { ...owner, targetId: "target-2", generation: 2 };
+      yield* drawer.draw({
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...rebound, sequence: 1 },
+          phase: "thinking",
+          pid: 4,
+          windowId: 9,
+        },
+      });
+      yield* TestClock.adjust("250 millis");
+      assert.deepEqual(reports.at(-1)?.cursor, {
+        windowId: 9,
+        point: { fx: 0.5, fy: 0.45 },
+        phase: "thinking",
+      });
+      // Different turn authority clears the point on a positionless phase.
+      const otherTurn = { ...owner, turnId: "turn-2", targetId: "target-3", generation: 3 };
+      yield* drawer.draw({
+        type: "cursor",
+        event: {
+          op: "show",
+          identity: { ...otherTurn, sequence: 1 },
+          phase: "thinking",
+        },
+      });
+      yield* TestClock.adjust("250 millis");
+      assert.isNull(reports.at(-1)?.cursor);
     }),
   );
   it.effect(

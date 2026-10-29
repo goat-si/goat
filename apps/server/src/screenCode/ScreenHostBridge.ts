@@ -296,7 +296,7 @@ export class ScreenHostBridge {
       call.cellId !== context.cellId
     )
       return deny({
-        ...failure(state.cutoffReason ?? "stopped", call.callId),
+        ...failure("stopped", call.callId),
         ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
       });
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
@@ -441,12 +441,41 @@ export class ScreenHostBridge {
         return yield* Effect.fail(notRun(call.callId, state.haltedBy));
       if (call.targetRef?.kind === "tab") {
         if (!context.invocation.reauthorize) {
+          for (const targetId of bridge.turnTargets.get(turn) ?? [])
+            bridge.invalidateTargetNow(
+              context.runId,
+              context.turnId,
+              targetId,
+              "permission_denied",
+            );
           bridge.cutCellNow(context.runId, context.turnId, context.cellId, "permission_denied");
           return yield* Effect.fail(failure("permission_denied", call.callId));
         }
         const check = yield* context.invocation.reauthorize([]).pipe(Effect.result);
-        if (check._tag === "Failure" || !context.invocation.capabilities.has("preview")) {
+        if (check._tag === "Failure") {
+          for (const targetId of bridge.turnTargets.get(turn) ?? [])
+            bridge.invalidateTargetNow(
+              context.runId,
+              context.turnId,
+              targetId,
+              "permission_denied",
+            );
           bridge.cutCellNow(context.runId, context.turnId, context.cellId, "permission_denied");
+          return yield* Effect.fail(failure("permission_denied", call.callId));
+        }
+        if (!context.invocation.capabilities.has("preview")) {
+          bridge.invalidateTargetNow(
+            context.runId,
+            context.turnId,
+            call.targetRef.id,
+            "permission_denied",
+          );
+          bridge.cutCellNow(
+            context.runId,
+            context.turnId,
+            context.cellId,
+            "target_permission_denied",
+          );
           return yield* Effect.fail(failure("permission_denied", call.callId));
         }
       }
@@ -549,9 +578,17 @@ export class ScreenHostBridge {
         gate = Semaphore.makeUnsafe(1);
         this.targetGates.set(call.targetRef.id, gate);
       }
-      // A group's first call holds the gate for all of it; its other members wait on that call.
-      if (slot === undefined || slot.index === 0) effect = gate.withPermits(1)(guardedDispatch);
-      if (this.cursorPhases) effect = this.cursorPhases.track(call.targetRef, call.callId, effect);
+      // A group's first call holds the gate and the cursor phase for all of it; its other members
+      // wait on that call so no queued member starts a phase before the group enters the gate.
+      if (slot === undefined || slot.index === 0) {
+        if (this.cursorPhases)
+          effect = this.cursorPhases.track(
+            call.targetRef,
+            `${call.cellId}\u0000${call.callId}`,
+            effect,
+          );
+        effect = gate.withPermits(1)(effect);
+      }
     }
     // A batch group holds one pending place, its first call's, until that call settles.
     const holdsPlace = slot === undefined || slot.index === 0;
@@ -786,10 +823,10 @@ export class ScreenHostBridge {
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
-      if (reason === "permission_denied") state.cutoffReason = reason;
+      if (reason === "permission_denied" || reason === "target_permission_denied")
+        state.cutoffReason = "permission_denied";
       if (reason === "pause" || reason === "takeover" || reason === "waiting_for_human")
         state.paused = true;
-      state.cutoff.abort();
     }
     const turn = `${runId}\u0000${turnId}`;
     let closed = this.closedCells.get(turn);
@@ -800,6 +837,7 @@ export class ScreenHostBridge {
     if (closed.size >= 4096) this.fencedTurns.add(turn);
     else closed.add(cellId);
     this.endCellTargets(runId, turnId, cellId, reason);
+    state?.cutoff.abort();
   }
 
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
@@ -815,11 +853,9 @@ export class ScreenHostBridge {
   discardCellNow(runId: string, turnId: string, cellId: string): void {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
-    if (state) {
-      state.closed = true;
-      state.cutoff.abort();
-    }
+    if (state) state.closed = true;
     this.endCellTargets(runId, turnId, cellId);
+    state?.cutoff.abort();
     this.cells.delete(id);
     const turn = `${runId}\u0000${turnId}`;
     let closed = this.closedCells.get(turn);
@@ -911,9 +947,13 @@ export class ScreenHostBridge {
 
   private endCellTargets(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
+    const nonterminal =
+      reason === undefined || reason === "unawaited" || reason === "target_permission_denied";
     for (const targetId of this.cellTargets.get(id) ?? []) {
       const ref = this.targetRefs.get(targetId);
-      if (ref)
+      if (!ref) continue;
+      if (nonterminal) this.cursorPhases?.endCell(ref, cellId);
+      else
         this.cursorPhases?.ended(
           ref,
           reason === "takeover" ? "takeover" : reason === "private" ? "private" : "ended",

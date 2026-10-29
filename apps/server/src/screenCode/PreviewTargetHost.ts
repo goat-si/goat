@@ -74,6 +74,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
   const observations = new ScreenObservations();
   const callApps = yield* ComputerUseCallApps;
   const targets = new Map<string, BoundTarget>();
+  let epoch = 0;
   const bindingHints = new Map<string, ScreenBindingHints>();
   const turnKey = (identity: Pick<ScreenHostContext, "runId" | "turnId">) =>
     `${identity.runId}\u0000${identity.turnId}`;
@@ -183,7 +184,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       environmentId: context.environmentId,
       runId: context.runId,
       turnId: context.turnId,
-      generation: 0,
+      generation: ++epoch,
     };
     targets.set(ref.id, { ref, tab, origin: originOf(tab.url) });
     callApps.screenTarget(ref.id, { kind: "tab", pageUrl: tab.url }, context);

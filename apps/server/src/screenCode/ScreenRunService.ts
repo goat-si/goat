@@ -201,6 +201,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     ScreenCursorRoute & { readonly runId: string; readonly turnId: string; readonly cellId: string }
   >();
   const deliveries = new Map<string, Promise<void>>();
+  const routeDeliveries = new Map<string, Promise<void>>();
   const record = (value: unknown): Record<string, unknown> | undefined =>
     typeof value === "object" && value !== null && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -209,12 +210,21 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     const targetId = event.identity.targetId;
     const route = routes.get(targetId);
     if (route === undefined || publisher === undefined) return;
-    const previous = deliveries.get(targetId) ?? Promise.resolve();
+    const window =
+      event.op === "show" && route.kind === "app"
+        ? options.desktopHost?.windowForTarget?.(targetId)
+        : undefined;
+    const enriched = window === undefined || event.op !== "show" ? event : { ...event, ...window };
+    const key =
+      route.kind === "tab" && route.tabId !== undefined
+        ? `tab:${route.threadId}\u0000${route.tabId}`
+        : `app:${route.threadId}`;
+    const previous = routeDeliveries.get(key) ?? Promise.resolve();
     const next = previous
       .then(() =>
         Effect.runPromiseWith(callbackContext)(
           publisher
-            .publish(event, route)
+            .publish(enriched, route)
             .pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("screen cursor publish failed", { cause }),
@@ -222,11 +232,19 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             ),
         ),
       )
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (routeDeliveries.get(key) === next) routeDeliveries.delete(key);
+      });
+    routeDeliveries.set(key, next);
     deliveries.set(targetId, next);
   };
   const cursorPhases =
     options.cursorPhases ?? (publisher !== undefined ? new CursorPhases(publish) : undefined);
+  if (cursorPhases)
+    options.desktopHost?.setCursorGeneration?.((ref, callKey) =>
+      cursorPhases.generationOf(ref, callKey),
+    );
   const runCallback = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) =>
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
@@ -451,7 +469,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        bridge.cutCellNow(runId, turnId, cellId, change.kind);
+        bridge.cutCellNow(runId, turnId, cellId, change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
       for (const [targetId, route] of routes) {
