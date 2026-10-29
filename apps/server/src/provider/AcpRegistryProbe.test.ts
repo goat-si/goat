@@ -430,6 +430,34 @@ describe("ACP Registry probe", () => {
   );
 
   it.effect.each([
+    ["dirs-over-32", true],
+    ["dir-whitespace", true],
+    ["dirs-kept", undefined],
+  ] as const)(
+    "marks a page incomplete only when %s cuts a session's directories",
+    ([scenario, cut]) => {
+      const input = {
+        instanceId,
+        settings: decodeSettings({ agentId: "mock-agent" }),
+        cwd: process.cwd(),
+        environment: process.env,
+      };
+      return Effect.gen(function* () {
+        const listed = yield* listAcpRegistrySessions(input);
+        expect(listed.sessions).toHaveLength(1);
+        expect(listed.truncated).toBe(cut);
+      }).pipe(
+        Effect.provideService(
+          AcpRegistrySupport.AcpRegistryCatalog,
+          sessionListCatalog(1, scenario),
+        ),
+        Effect.provide(NodeServices.layer),
+        Effect.scoped,
+      );
+    },
+  );
+
+  it.effect.each([
     ["cursor-whitespace", "next-page"],
     ["cursor-oversized", "x".repeat(2_048)],
     ["cursor-blank", null],

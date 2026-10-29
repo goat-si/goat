@@ -23,6 +23,15 @@ export const mockSessionPage = (
             : cwd,
     title: "Mock session",
     updatedAt: "1970-01-01T00:00:00.000Z",
+    ...(index !== 0
+      ? {}
+      : scenario === "dirs-over-32"
+        ? { additionalDirectories: Array.from({ length: 33 }, (_, dir) => `${cwd}/extra-${dir}`) }
+        : scenario === "dir-whitespace"
+          ? { additionalDirectories: [`${cwd}/extra`, ` ${cwd}/padded `] }
+          : scenario === "dirs-kept"
+            ? { additionalDirectories: [`${cwd}/extra`] }
+            : {}),
   })),
   ...(scenario === "cursor-unchanged"
     ? { nextCursor: "next-page" }
