@@ -163,6 +163,7 @@ import {
   reconcilePreviewServerSessions,
   resetPreviewStateForTests,
 } from "../../../previewStateStore";
+import { AppAtomRegistryProvider } from "../../../rpc/atomRegistry";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
@@ -475,7 +476,11 @@ it("streams an isolated server-rendered tab on the desktop once its background t
   state.nativeDesktop = true;
   await page.viewport(1400, 900);
   using _pane = paneOf(1400);
-  await using screen = await render(<Cards />);
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <Cards />
+    </AppAtomRegistryProvider>,
+  );
   const card = screen.getByRole("article");
   await expect.element(card).toBeVisible();
   // Before the thread's preview list has loaded, the card asks to sync the thread and opens no stream yet.
