@@ -14,7 +14,8 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
-import { spansLines } from "./DesktopTreeText.ts";
+import { actionName, spansLines } from "./DesktopTreeText.ts";
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import type { Rect } from "./DesktopFrames.ts";
 import {
   checkWindowReplyState,
@@ -26,6 +27,8 @@ import {
 } from "./DesktopWindows.ts";
 import type { DesktopRow } from "./DesktopObserveRead.ts";
 import { applyDesktopPointerArgs, pointerStateFor } from "./DesktopTargetPoints.ts";
+
+const KEY_HOLD_DRIVER_VERSION: string | null = null;
 
 const ACTION_TO_AX: Readonly<Record<string, string>> = {
   press: "AXPress",
@@ -86,22 +89,22 @@ const validateNamedAction = (
   row: DesktopRow | undefined,
 ): { readonly action?: string; readonly error?: ScreenRunError } => {
   if (requested === undefined) return {};
-  const name = typeof requested === "string" ? requested.trim() : "";
-  const ax = ACTION_TO_AX[name];
-  const offered = (row?.rawActions ?? row?.actions ?? []).flatMap((a) => {
-    const mapped = AX_TO_ACTION[a.toLowerCase()] ?? (ACTION_TO_AX[a] ? a : undefined);
-    return mapped === undefined ? [] : [mapped];
-  });
-  if (!ax || !offered.includes(name)) {
-    const list = offered.length > 0 ? offered.join(", ") : "none";
+  const name = typeof requested === "string" ? requested : "";
+  const offered = row?.rawActions ?? row?.actions ?? [];
+  const matches = offered.filter(
+    (raw) => raw === name || actionName(raw) === name || AX_TO_ACTION[raw.toLowerCase()] === name,
+  );
+  if (matches.length !== 1) {
+    const list = offered.map(actionName).join(", ") || "none";
     return {
       error: fail(
         "invalid_argument",
-        `Action ${JSON.stringify(requested)} is not offered by this element (mapped actions: ${list}).`,
+        `Action ${JSON.stringify(requested)} is not uniquely offered by this element (available actions: ${list}).`,
       ),
     };
   }
-  return { action: name };
+  const raw = matches[0] ?? "";
+  return { action: AX_TO_ACTION[raw.toLowerCase()] ?? raw };
 };
 
 export const INPUT_METHODS: ReadonlySet<string> = new Set([
@@ -155,6 +158,22 @@ const buildForwardedInput = (
   delete forwarded.element_token;
   delete forwarded.pid;
   delete forwarded.window_id;
+  if ((method === "click" || method === "right_click") && Array.isArray(args.modifiers)) {
+    const names: Readonly<Record<string, string>> = {
+      cmd: "command",
+      shift: "shift",
+      alt: "option",
+      ctrl: "control",
+    };
+    forwarded.modifier = args.modifiers.map((modifier: unknown) =>
+      typeof modifier === "string" ? names[modifier] : undefined,
+    );
+    delete forwarded.modifiers;
+  }
+  if (method === "press_key" && args.holdMs !== undefined) {
+    forwarded.duration_ms = args.holdMs;
+    delete forwarded.holdMs;
+  }
   if (action !== undefined) forwarded.action = action;
   if (elementToken) forwarded.element_token = elementToken;
   if (method === "bring_to_front") {
@@ -258,6 +277,31 @@ export const prepareDesktopInput = (
   readonly error?: ScreenRunError;
 } => {
   if (!INPUT_METHODS.has(method)) return { error: fail("unsupported") };
+  if (
+    (method === "click" || method === "right_click") &&
+    args.modifiers !== undefined &&
+    (!Array.isArray(args.modifiers) ||
+      !args.modifiers.every((m) => ["cmd", "shift", "alt", "ctrl"].includes(m)))
+  )
+    return {
+      error: fail("invalid_argument", "modifiers must contain only cmd, shift, alt or ctrl."),
+    };
+  if (method === "press_key" && args.holdMs !== undefined) {
+    if (
+      typeof args.holdMs !== "number" ||
+      !Number.isInteger(args.holdMs) ||
+      args.holdMs < 0 ||
+      args.holdMs > 30000
+    )
+      return { error: fail("invalid_argument", "holdMs must be an integer from 0 to 30000.") };
+    if (KEY_HOLD_DRIVER_VERSION === null || CUA_DRIVER_VERSION !== KEY_HOLD_DRIVER_VERSION)
+      return {
+        error: fail(
+          "unsupported",
+          `Held keys require a driver with duration_ms support; the pinned driver is ${CUA_DRIVER_VERSION}.`,
+        ),
+      };
+  }
   const element =
     typeof args.elementRef === "object" &&
     args.elementRef !== null &&
