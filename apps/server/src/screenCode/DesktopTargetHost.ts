@@ -343,39 +343,65 @@ export const createDesktopTargetHost = (deps: {
       const name = string(args.name);
       const appId = bundleId ?? name;
       const requestedWindow = integer(args.window_id) ?? integer(args.windowId);
-      if (!appId || !requestedWindow) return yield* Effect.fail(fail("invalid_argument"));
+      if (!requestedWindow)
+        return yield* Effect.fail(
+          fail(
+            "invalid_argument",
+            "Pass window_id from screen.discover(), with or without a name.",
+          ),
+        );
       const appsReply = yield* request("list_apps", {}, call, context);
       const listed = object(driverValue(appsReply))?.apps;
-      const matches = array(listed)
-        .map(object)
-        .filter((app) => app !== undefined)
-        .filter((app) => (bundleId ? app.bundle_id === bundleId : app.name === name));
-      const pids = new Set(matches.map((app) => integer(app.pid)));
+      const pids = new Set(
+        array(listed)
+          .map(object)
+          .filter((app) => app !== undefined)
+          .filter(
+            (app) =>
+              appId !== undefined && (bundleId ? app.bundle_id === bundleId : app.name === name),
+          )
+          .map((app) => integer(app.pid)),
+      );
       pids.delete(undefined);
-      if (Array.isArray(listed) && pids.size === 0)
+      // A name list_apps does not know may still be the app_name discover lists for the window.
+      if (bundleId && Array.isArray(listed) && pids.size === 0)
         return yield* Effect.fail(fail("target_missing"));
       const [onlyPid] = pids.size === 1 ? pids : [];
       // Linux lists every process and launcher, which can pass the lease proxy's reply cap; the
-      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows. It
-      // also finds the window among several processes of one app.
+      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows. With
+      // the list in hand the window is found by its id among all of them: that filter reads only a
+      // window's app_name, never the process (python3) a script's window runs in.
       const windowsReply = yield* request(
         "list_windows",
-        onlyPid ? { pid: onlyPid } : { app: appId },
+        onlyPid ? { pid: onlyPid } : appId && !Array.isArray(listed) ? { app: appId } : {},
         call,
         context,
         appsReply.connectionGeneration,
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const matched = matchBindWindow(
-        listed,
-        object(driverValue(windowsReply))?.windows,
-        bundleId,
-        name,
-        requestedWindow,
-        matches,
-        pids,
-      );
+      const match = (reply: typeof windowsReply) =>
+        matchBindWindow({
+          listedApps: listed,
+          listedWindows: object(driverValue(reply))?.windows,
+          bundleId,
+          name,
+          requestedWindow,
+        });
+      let matched = match(windowsReply);
+      // Not among the one app's windows: whose it is, if anyone's, says what to bind instead.
+      if (onlyPid && matched.error?.detail === "window_gone") {
+        const everyWindow = yield* request(
+          "list_windows",
+          {},
+          call,
+          context,
+          appsReply.connectionGeneration,
+        );
+        if (everyWindow.connectionGeneration !== appsReply.connectionGeneration)
+          return yield* Effect.fail(fail("stale_reference"));
+        matched = match(everyWindow);
+      }
       if (matched.error || !matched.pid || !matched.window)
         return yield* Effect.fail(matched.error ?? fail("target_missing"));
       const { pid, app, window: foundWin } = matched;
@@ -389,8 +415,13 @@ export const createDesktopTargetHost = (deps: {
           windowId: requestedWindow,
           bundleId: string(app?.bundle_id),
           name: string(app?.name) ?? string(foundWin.app_name),
-          appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
-          iconBundleId: bundleId,
+          appId:
+            string(app?.bundle_id) ??
+            string(app?.name) ??
+            appId ??
+            string(foundWin.app_name) ??
+            String(pid),
+          iconBundleId: bundleId ?? string(app?.bundle_id),
           bounds: foundWin.bounds,
           connectionGeneration: windowsReply.connectionGeneration,
           controlId: current.controlId,

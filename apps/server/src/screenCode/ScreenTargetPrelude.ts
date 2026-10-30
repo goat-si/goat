@@ -571,6 +571,7 @@ const __appTarget = (bound, key, launched, windowId) =>
 const __own = (listed, pid) => (listed && listed.windows ? listed.windows : []).filter((item) =>
   item.pid === pid && (item.layer === undefined || item.layer === 0) &&
   !(item.bounds && (item.bounds.width <= 1 || item.bounds.height <= 1)));
+const __windowNames = (items) => items.map((item) => item.window_id + (item.title ? ' ' + JSON.stringify(String(item.title)) : '')).join(', ');
 // Without window_id: an app running with one window on screen binds it and nothing launches;
 // several windows or processes are ambiguous, and windows all off screen are named, not guessed.
 // A running app is never launched again, even with no window yet; a closed one is launched and
@@ -617,6 +618,21 @@ const __app = async (rawQuery) => {
   const mine = rows.filter((item) => (id !== undefined ? item.bundle_id === id : item.name === name));
   const live = (item) => item.pid > 0 && item.running !== false;
   const running = mine.filter(live);
+  // No app row carries the name: on Linux it can be a window's WM_CLASS, which screen.discover()
+  // lists as app_name while the row is its interpreter (python3). One window on screen binds.
+  if (mine.length === 0 && id === undefined && path === undefined) {
+    const listedWindows = await __call('list_windows', {});
+    const all = (listedWindows && Array.isArray(listedWindows.windows) ? listedWindows.windows : []).filter((item) =>
+      item.app_name === name && item.pid > 0 && (item.layer === undefined || item.layer === 0) &&
+      !(item.bounds && (item.bounds.width <= 1 || item.bounds.height <= 1)));
+    const shown = all.filter((item) => item.is_on_screen !== false);
+    if (shown.length > 1)
+      throw new ScreenError('target_ambiguous', name + ' has ' + shown.length + ' windows (' + __windowNames(shown) + '); pass window_id.', true);
+    if (shown.length === 1)
+      return __appTarget(await __call('bind_app', { name, window_id: shown[0].window_id }), name, false, shown[0].window_id);
+    if (all.length > 0)
+      throw new ScreenError('target_missing', name + ' has no window on screen; ' + __windowNames(all) + ' may be minimized or on another workspace. Pass window_id to bind one, or ask the person to show it.', true);
+  }
   // Linux and Windows can list a running process without the id its installed row carries. A
   // shared display name does not prove it is this app, so it is named, never bound or relaunched.
   if (running.length === 0 && id !== undefined) {
@@ -645,7 +661,7 @@ const __app = async (rawQuery) => {
       throw new ScreenError('target_missing', 'The window list of ' + label + ' came back incomplete; nothing was launched. Pass window_id from screen.discover().', true);
     const all = __own(listedWindows, pids[0]);
     const own = all.filter((item) => item.is_on_screen !== false);
-    const named = (items) => items.map((item) => item.window_id + (item.title ? ' ' + JSON.stringify(String(item.title)) : '')).join(', ');
+    const named = __windowNames;
     if (own.length > 1)
       throw new ScreenError('target_ambiguous', label + ' has ' + own.length + ' windows (' + named(own) + '); pass window_id.', true);
     if (own.length === 1)

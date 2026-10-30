@@ -151,16 +151,15 @@ it.effect("two processes of one app bind the window the agent named", () =>
     const second = { ...apps.apps[0], pid: 43 };
     const { host, sent } = fixture({
       list_apps: { apps: [apps.apps[0], second] },
-      list_windows: (args: { app?: string }) =>
-        args.app === "org.example.Editor"
-          ? { windows: [windows.windows[0], { pid: 43, window_id: 8, title: "Other" }] }
-          : { windows: [] },
+      list_windows: { windows: [windows.windows[0], { pid: 43, window_id: 8, title: "Other" }] },
       get_window_state: { ...state, pid: 43, window_id: 8 },
     });
     const bound = yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 8 }),
       context,
     );
+    // Both processes are listed, so the window is found by its id among every window.
+    expect(sent.find((entry) => entry.tool === "list_windows")?.args).toEqual({});
     yield* host.observe(call("get_window_state", {}, bound.value as ScreenTargetRef), context);
     expect(sent.at(-1)?.args).toMatchObject({ pid: 43, window_id: 8 });
   }),
