@@ -279,7 +279,9 @@ const make = Effect.gen(function* () {
         const bytes = yield* io(name, () => handle.readFile());
         yield* directory.verify;
         const contents = yield* Effect.try({
-          try: () => parseNote(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
+          // Keep the byte order mark so parseNote can record it and saves write it back.
+          try: () =>
+            parseNote(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)),
           catch: () => storage,
         });
         const document: NoteDocument = {
@@ -680,6 +682,7 @@ const make = Effect.gen(function* () {
             input.path,
             {
               metadata: existing?.contents.metadata ?? null,
+              bom: existing?.contents.bom ?? false,
               body: input.body,
               status: input.status ?? existing?.contents.status ?? "idea",
               threads: existing?.contents.threads ?? [],
