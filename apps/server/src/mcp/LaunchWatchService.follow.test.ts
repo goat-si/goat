@@ -290,7 +290,8 @@ describe("LaunchWatchService runs the thread starts itself", () => {
             yield* service.watchExternal(external({ host: "box" }));
             yield* Queue.take(reported);
             expect(yield* Queue.take(world.idleWaits)).toBe(120_000);
-            yield* TestClock.adjust("5 days");
+            // Off the hourly sweep's ticks, so only the follower meets the deadline below.
+            yield* TestClock.adjust(5 * 24 * 60 * 60_000 + 10 * 60_000);
             runs = [...runs, { runId: run2, ordinal: 2 }];
             yield* look(world);
             yield* Queue.take(reported);
