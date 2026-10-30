@@ -76,6 +76,14 @@ it.effect("a newly blocked host cuts a drag with only its accepted start-point r
       expect(events).not.toContainEqual(expect.arrayContaining(["pointermove"]));
       expect(events).not.toContainEqual(expect.arrayContaining(["keydown"]));
       expect(events).not.toContainEqual(expect.arrayContaining(["drop"]));
+      yield* Effect.promise(() => cdp.send("Runtime.evaluate", { expression: "void 0" }));
+      yield* Effect.promise(() =>
+        page.evaluate(
+          "window.buttons=[];addEventListener('pointermove',e=>buttons.push(e.buttons),{once:true})",
+        ),
+      );
+      yield* Effect.promise(() => page.mouse.move(300, 300));
+      expect(yield* Effect.promise(() => page.evaluate("buttons"))).toEqual([0]);
       yield* end;
     }),
   ).pipe(
