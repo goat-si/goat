@@ -459,6 +459,29 @@ it.effect(
 );
 
 it.effect.each(["paused", "idle"] as const)(
+  "a later expiry that arrives while the control is %s keeps it past its first deadline",
+  (state) =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A", "1970-01-01T01:00:00.000Z"));
+      yield* h.started;
+      yield* h.applied;
+      yield* TestClock.adjust("50 minutes");
+      const later = snapshot("A", "1970-01-01T01:50:00.000Z");
+      yield* h.push(
+        state === "paused" ? { ...later, state, reason: "human_input" } : { ...later, state },
+      );
+      yield* h.applied;
+      yield* TestClock.adjust("20 minutes");
+      yield* h.push(later);
+      const resumed = yield* h.started;
+      yield* h.applied;
+      yield* h.send(call(1, "get_guide"));
+      assert.equal((JSON.parse(yield* Queue.take(resumed.sent)) as { id: number }).id, 1);
+    }),
+);
+
+it.effect.each(["paused", "idle"] as const)(
   "a first %s snapshot refuses work and a later activation uses the same control",
   (state) =>
     Effect.gen(function* () {

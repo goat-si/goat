@@ -103,6 +103,8 @@ export type {
 
 /** How long a control without a grant lasts after the turn that last used it. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
+/** How far a reuse must move a control's expiry before proxies hear of it. */
+const EXPIRY_NOTICE_MS = 60_000;
 /** Separates a control id from a call id in an input log key; a control id never contains it. */
 const CALL_KEY = "\u0000";
 /** How far a proxy's input report time may be from this server's clock. */
@@ -417,7 +419,13 @@ const make = Effect.gen(function* () {
             ...(runId === undefined ? {} : { runId }),
           };
           controls.set(threadId, reused);
-          const notice = implyFocus(reused) || existing.idle === true ? changed : Effect.void;
+          // Every call of a turn reuses the control; a minute's move of its expiry is news to the
+          // proxies following it, while calls in quick succession stay quiet.
+          const moved =
+            DateTime.toEpochMillis(reused.expiresAt) - DateTime.toEpochMillis(existing.expiresAt) >=
+            EXPIRY_NOTICE_MS;
+          const notice =
+            implyFocus(reused) || existing.idle === true || moved ? changed : Effect.void;
           return Effect.as(notice, reused as ComputerUseControl);
         }
         const next: ControlRecord = {
@@ -482,11 +490,12 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     controlId: string,
   ): Effect.fn.Return<ComputerUseControlState, ComputerUseLeaseError> {
+    // Time before the record: a record read after it can only be as new as that time.
+    const now = yield* DateTime.now;
     const record = controls.get(threadId);
     if (record === undefined) return { _tag: "ended", reason: "revoked" };
     if (record.controlId !== controlId) return { _tag: "ended", reason: "replaced" };
     if (record.ended !== undefined) return { _tag: "ended", reason: record.ended };
-    const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
     if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {

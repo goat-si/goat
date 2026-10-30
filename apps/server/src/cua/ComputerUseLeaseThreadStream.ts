@@ -98,7 +98,13 @@ export const threadLeaseUpdates = (input: {
           return yield* Queue.end(queue);
         }
         const latest = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
-        if (current?.controlId !== latest?.controlId || current?.ended !== latest?.ended) continue;
+        // A reuse meanwhile moved the expiry: read it again rather than send the old one.
+        if (
+          current?.controlId !== latest?.controlId ||
+          current?.ended !== latest?.ended ||
+          current?.expiresAt !== latest?.expiresAt
+        )
+          continue;
         // A disable during that read must win too.
         if (enabled && !(yield* readEnabled)) continue;
         if (previous !== undefined && previous !== current?.controlId) {

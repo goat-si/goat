@@ -438,9 +438,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
-    const expiresAt = DateTime.make(update.expiresAt);
-    // The server's latest word: a reused control's expiry moves later with its last use.
-    if (Option.isSome(expiresAt)) deadline = DateTime.toEpochMillis(expiresAt.value);
     const next = approvedApps(update.apps);
     const nextForeground = update.foreground ?? [];
     const foregroundRemoved = foreground.some(
@@ -562,6 +559,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // Another thread's grant only denies, so it counts as soon as it is taken.
     if (update?.state === "active" && update.controlId === options.controlId)
       sharedTaken = update.shared === true;
+    // The server's latest word, paused or idle too: a reused control lasts longer.
+    const expiry = update !== undefined && "expiresAt" in update ? update.expiresAt : undefined;
+    const at = expiry === undefined ? undefined : DateTime.make(expiry);
+    if (at !== undefined && Option.isSome(at)) deadline = DateTime.toEpochMillis(at.value);
     const fence = update === undefined ? fences.lost() : fences.take(update, apps, foreground);
     Queue.offerUnsafe(applying, { update, fence });
   };

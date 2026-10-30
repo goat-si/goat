@@ -105,6 +105,21 @@ it.effect.each([
     }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect("reusing a full access control tells the proxies following it its new expiry", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-control-hour-notice");
+    yield* threadIn(owner, "full-access");
+    Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    const proxies = yield* leases.subscribe;
+    yield* TestClock.adjust("50 minutes");
+    const before = yield* PubSub.remaining(proxies);
+    Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    assert.isAbove(yield* PubSub.remaining(proxies), before);
+  }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
 it.effect("gives a full access thread every app until it leaves full access", () =>
   Effect.gen(function* () {
     yield* runMigrations();
