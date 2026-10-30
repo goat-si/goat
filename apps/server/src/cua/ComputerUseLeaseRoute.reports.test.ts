@@ -25,16 +25,21 @@ const outcomes = {
 describe("ComputerUseLeaseRoute reports", () => {
   it.effect("bearer-only primitive GET and ready, cutoff, and reply POSTs are refused", () =>
     Effect.gen(function* () {
+      let lockedControl = "";
       const services = Context.make(McpSessionRegistry.McpSessionRegistry, {
         resolve: (token: string) =>
           Effect.succeed(token === "good" ? { thread: { threadId } } : undefined),
       } as unknown as McpSessionRegistry.McpSessionRegistry["Service"]).pipe(
-        Context.add(
-          ComputerUseLeases.ComputerUseLeases,
-          {} as unknown as ComputerUseLeases.ComputerUseLeases["Service"],
-        ),
+        Context.add(ComputerUseLeases.ComputerUseLeases, {
+          screenLocked: (_thread: ThreadId, controlId: string) =>
+            Effect.sync(() => {
+              lockedControl = controlId;
+              return true;
+            }),
+        } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]),
         Context.add(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel, {
-          authenticate: () => Effect.void,
+          authenticate: (input: { proxyChannelToken: string }) =>
+            Effect.succeed(input.proxyChannelToken === "fixture-secret" ? "generation" : undefined),
         } as unknown as ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel["Service"]),
         Context.add(
           ServerSettings.ServerSettingsService,
@@ -71,6 +76,16 @@ describe("ComputerUseLeaseRoute reports", () => {
           services,
         );
         assert.equal(forgedLock.status, 401);
+        const validLock = await handler(
+          new Request(`http://goat.test${COMPUTER_USE_LEASE_ROUTE}`, {
+            method: "POST",
+            headers: { authorization: "Bearer good", "x-goat-proxy-channel": "fixture-secret" },
+            body: JSON.stringify({ controlId: "one", screenLocked: true }),
+          }),
+          services,
+        );
+        assert.equal(validLock.status, 204);
+        assert.equal(lockedControl, "one");
         for (const [path, body] of [
           [
             "primitive-control-ready",
