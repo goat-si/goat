@@ -117,7 +117,7 @@ it.live(
         sent.filter((entry) => entry.tool === "click").map((entry) => entry.args),
       ).toMatchObject([
         { action: "name:move next\ntarget:0x0\nselector:(null)" },
-        { action: "press" },
+        { action: "AXPress" },
       ]);
     });
   },
@@ -158,5 +158,60 @@ it("held keys forward duration only at or above the minimum driver version", () 
   }
   expect(plan("not-a-version")).toMatchObject({
     error: { code: "unsupported", effectStarted: false },
+  });
+});
+
+it.live(
+  "advertised actions resolve exact names, builtin aliases and ambiguous displayed names",
+  () => {
+    const first = "Name:Move Next\nTarget:one\nSelector:first";
+    const second = "Name:Move Next\nTarget:two\nSelector:second";
+    const alias = "Name:press\nTarget:one\nSelector:custom";
+    const specialState = {
+      ...state,
+      tree_markdown: '- [1] AXButton "Apply" [actions=[press,move next]]',
+      elements: [{ ...state.elements[0], actions: ["AXPress", first, second, alias] }],
+    };
+    const { host, sent } = fixture({ get_window_state: specialState });
+    return Effect.gen(function* () {
+      const result = yield* run(
+        `const raw = ${JSON.stringify(first)};
+      await app.click(1, {action:raw});
+      await app.click(1, {action:'press'});
+      try { await app.click(1, {action:'move next'}); } catch(e) { return [e.code, e.nothingSent, e.nextStep]; }`,
+        host,
+      );
+      expect(result.value).toEqual([
+        "invalid_argument",
+        true,
+        expect.stringContaining("Move Next"),
+      ]);
+      expect(result.value).toEqual([
+        "invalid_argument",
+        true,
+        expect.stringContaining("Target:one"),
+      ]);
+      expect(result.value).toEqual([
+        "invalid_argument",
+        true,
+        expect.stringContaining("Target:two"),
+      ]);
+      expect(
+        sent.filter((entry) => entry.tool === "click").map((entry) => entry.args),
+      ).toMatchObject([{ action: first }, { action: "AXPress" }]);
+    });
+  },
+);
+
+it.live("a displayed lowercase custom name resolves to the full mixed-case raw action", () => {
+  const raw = "Name:Move Next\nTarget:one\nSelector:first";
+  const specialState = { ...state, elements: [{ ...state.elements[0], actions: [raw] }] };
+  const { host, sent } = fixture({ get_window_state: specialState });
+  return Effect.gen(function* () {
+    const result = yield* run("return (await app.click(1, {action:'move next'})).verdict;", host);
+    expect(result.value).toBe("confirmed");
+    expect(sent.filter((entry) => entry.tool === "click").map((entry) => entry.args)).toMatchObject(
+      [{ action: raw }],
+    );
   });
 });

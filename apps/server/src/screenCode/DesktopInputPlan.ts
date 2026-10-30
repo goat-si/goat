@@ -41,9 +41,8 @@ const ACTION_TO_AX: Readonly<Record<string, string>> = {
   show_alternate_ui: "AXShowAlternateUI",
   show_default_ui: "AXShowDefaultUI",
 };
-const AX_TO_ACTION: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.entries(ACTION_TO_AX).map(([k, v]) => [v.toLowerCase(), k]),
-);
+const actionKey = (action: string) => action.replace(/[_-]/g, "").toLowerCase().replace(/^ax/, "");
+const displayedAction = (action: string) => actionName(action).replace(/^AX/, "").toLowerCase();
 
 const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
@@ -92,20 +91,26 @@ const validateNamedAction = (
   if (requested === undefined) return {};
   const name = typeof requested === "string" ? requested : "";
   const offered = row?.rawActions ?? row?.actions ?? [];
-  const matches = offered.filter(
-    (raw) => raw === name || actionName(raw) === name || AX_TO_ACTION[raw.toLowerCase()] === name,
-  );
-  if (matches.length !== 1) {
-    const list = offered.map(actionName).join(", ") || "none";
-    return {
-      error: fail(
-        "invalid_argument",
-        `Action ${JSON.stringify(requested)} is not uniquely offered by this element (available actions: ${list}).`,
-      ),
-    };
-  }
-  const raw = matches[0] ?? "";
-  return { action: AX_TO_ACTION[raw.toLowerCase()] ?? raw };
+  const alias = Object.entries(ACTION_TO_AX).find(
+    ([key]) => actionKey(key) === actionKey(name),
+  )?.[1];
+  const levels = [
+    offered.filter((raw) => raw === name),
+    alias === undefined ? [] : offered.filter((raw) => raw.toLowerCase() === alias.toLowerCase()),
+    offered.filter((raw) => displayedAction(raw) === name.toLowerCase()),
+    offered.filter((raw) => actionKey(actionName(raw)) === actionKey(name)),
+  ];
+  const matches = levels.find((level) => level.length > 0) ?? [];
+  const match = matches[0];
+  if (matches.length === 1 && match !== undefined) return { action: match };
+  const candidates = matches.length > 1 ? matches : offered;
+  const list = candidates.map((action) => JSON.stringify(action)).join(", ") || "none";
+  return {
+    error: fail(
+      "invalid_argument",
+      `Action ${JSON.stringify(requested)} ${matches.length > 1 ? "is ambiguous" : "is not offered"} (available actions: ${list}).`,
+    ),
+  };
 };
 
 export const INPUT_METHODS: ReadonlySet<string> = new Set([
