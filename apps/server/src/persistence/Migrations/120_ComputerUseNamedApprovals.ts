@@ -22,4 +22,7 @@ export default Effect.gen(function* () {
     thread_id TEXT NOT NULL, app_key TEXT NOT NULL, message_id TEXT NOT NULL,
     PRIMARY KEY (thread_id, app_key, message_id)
   )`;
+  yield* sql`CREATE TABLE computer_use_revocation_watermarks (
+    scope TEXT PRIMARY KEY, sequence INTEGER NOT NULL
+  )`;
 });

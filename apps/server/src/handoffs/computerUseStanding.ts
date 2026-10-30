@@ -96,10 +96,18 @@ export const makeComputerUseStanding = (deps: {
     return Effect.void;
   });
   const clear = Effect.fn("Handoffs.clearComputerUseSessions")((threadId?: ThreadId) =>
-    (threadId === undefined
-      ? sql`DELETE FROM computer_use_session_approvals`
-      : sql`DELETE FROM computer_use_session_approvals WHERE thread_id = ${threadId}`
-    ).pipe(Effect.asVoid, Effect.mapError(unavailable)),
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* sql`INSERT INTO computer_use_revocation_watermarks (scope, sequence)
+        VALUES (${threadId ?? ""}, (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events))
+        ON CONFLICT(scope) DO UPDATE SET sequence = excluded.sequence`;
+          yield* threadId === undefined
+            ? sql`DELETE FROM computer_use_session_approvals`
+            : sql`DELETE FROM computer_use_session_approvals WHERE thread_id = ${threadId}`;
+        }),
+      )
+      .pipe(Effect.mapError(unavailable)),
   );
   const record = Effect.fn("Handoffs.recordComputerUseScope")(function* (
     input: HandoffRespondInput,
@@ -153,6 +161,17 @@ export const makeComputerUseStanding = (deps: {
             Effect.mapError(unavailable),
           );
           if (approved.length > 0) {
+            const eligible = yield* sql<{
+              message_id: string;
+            }>`SELECT json_extract(payload_json, '$.id') AS message_id
+              FROM orchestration_events
+              WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+                AND stream_id = ${input.requestedBy.threadId} AND event_type = 'message.updated'
+              GROUP BY json_extract(payload_json, '$.id')
+              HAVING MIN(sequence) > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks
+                WHERE scope IN ('', ${input.requestedBy.threadId})), 0)`.pipe(
+              Effect.mapError(unavailable),
+            );
             for (const app of apps) {
               const already = yield* allowed(input.requestedBy.threadId, [app], list);
               if (already) continue;
@@ -165,11 +184,16 @@ export const makeComputerUseStanding = (deps: {
               const candidate = input.namedMessages.find(
                 (entry) =>
                   cuaAppKey(entry.app) === cuaAppKey(app) &&
+                  eligible.some((row) => row.message_id === entry.messageId) &&
                   !used.some((row) => row.message_id === entry.messageId),
               );
               if (candidate === undefined) return Option.none();
               named.push(
-                ...input.namedMessages.filter((entry) => cuaAppKey(entry.app) === cuaAppKey(app)),
+                ...input.namedMessages.filter(
+                  (entry) =>
+                    cuaAppKey(entry.app) === cuaAppKey(app) &&
+                    eligible.some((row) => row.message_id === entry.messageId),
+                ),
               );
             }
           }
