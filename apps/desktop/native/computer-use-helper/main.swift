@@ -179,20 +179,34 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
 
 /// SIGKILL to every other process in this launcher's group, so a driver that handles or ignores
 /// SIGTERM cannot outlive its service; killpg would end this launcher too, before it reports
-/// the service's exit status. A pid is signalled only while it is still in this group.
+/// the service's exit status. A pid is signalled only while it is still in this group. Passes
+/// repeat until one finds no member it has not signalled, so a child started during a pass is
+/// signalled in the next; if the group cannot be listed, the whole group, this launcher with
+/// it, is killed instead, since cleanup matters more than the exit status.
 func killGroupMembers() {
   let group = getpgrp()
-  let size = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
-  guard size > 0 else { return }
-  // Room for members started while the list is read.
-  var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.size + 32)
-  let filled = proc_listpids(
-    UInt32(PROC_PGRP_ONLY), UInt32(group), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
-  guard filled > 0 else { return }
-  for pid in pids.prefix(Int(filled) / MemoryLayout<pid_t>.size)
-  where pid > 0 && pid != getpid() && getpgid(pid) == group {
-    kill(pid, SIGKILL)
+  var signalled = Set<pid_t>()
+  for _ in 0..<64 {
+    let size = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
+    // Room for members started while the list is read.
+    var pids = [pid_t](repeating: 0, count: max(0, Int(size)) / MemoryLayout<pid_t>.size + 32)
+    let filled =
+      size > 0
+      ? proc_listpids(
+        UInt32(PROC_PGRP_ONLY), UInt32(group), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+      : -1
+    guard filled > 0 else { break }
+    let members = pids.prefix(Int(filled) / MemoryLayout<pid_t>.size)
+      .filter { $0 > 0 && $0 != getpid() && !signalled.contains($0) }
+    if members.isEmpty { return }
+    for pid in members where getpgid(pid) == group {
+      kill(pid, SIGKILL)
+      signalled.insert(pid)
+    }
+    // A member that left the group in between is not signalled and is not listed again.
+    signalled.formUnion(members)
   }
+  killpg(group, SIGKILL)
 }
 
 /// An agent connection's helper ends with the proxy that started it, however that proxy ends:
@@ -624,7 +638,7 @@ final class DriverService {
     switch request["channel"] as? String {
     case "mcp":
       let attached = sessions.attachMcp(request, sequence: sequence, connection: fd) {
-        [sessions] attachment, driver in
+        [sessions] attachment, driver, manifest in
         let end = { (_: Int32, _: String) in sessions.end(attachment) }
         // The provider writer owns a duplicate, closed with it, so a late native write can never
         // reach a descriptor number the relay already closed and the kernel reused.
@@ -632,7 +646,7 @@ final class DriverService {
         return McpNativeSession(
           driver: McpWire(driver.input, failure: end),
           provider: McpWire(provider, failure: end),
-          manifest: readNativeManifest(attachment.session.spec.manifestPath), fail: end)
+          manifest: manifest, fail: end)
       }
       switch attached {
       case .failure(let refusal): refuse(refusal)

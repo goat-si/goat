@@ -157,10 +157,13 @@ final class AgentSessions {
 
   /// Starts a driver for an authenticated MCP connection. The attachment is reserved under the
   /// lock and the driver started outside it, so a slow start never holds up another session's
-  /// Stop; a Stop that lands meanwhile ends the start. The caller owns the connection only when
-  /// this fails.
+  /// Stop; a Stop that lands meanwhile ends the start. The driver is published the moment it
+  /// exists, so from then on every Stop reaches it; the manifest is read before it starts, so
+  /// nothing that can block sits in between. The caller owns the connection only when this fails.
   func attachMcp(_ request: [String: Any], sequence: UInt64, connection: Int32,
-                 native: (Attachment, SessionDriver) -> McpNativeSession) -> Result<Attachment, Refusal> {
+                 native: (Attachment, SessionDriver, NativeManifest?) -> McpNativeSession)
+    -> Result<Attachment, Refusal>
+  {
     lock.lock()
     let session: Session
     switch authorize(request, sequence: sequence) {
@@ -172,6 +175,11 @@ final class AgentSessions {
     let attachment = Attachment(session: session, generation: session.generation, connection: connection)
     session.live = attachment
     lock.unlock()
+    let manifest = readNativeManifest(session.spec.manifestPath)
+    lock.lock()
+    let stoppedEarly = attachment.ended
+    lock.unlock()
+    if stoppedEarly { return .failure(.stopped) }
     let driver: SessionDriver
     do { driver = try launch(session.spec) } catch {
       lock.lock()
@@ -180,22 +188,31 @@ final class AgentSessions {
       lock.unlock()
       return .failure(.noDriver)
     }
-    let made = native(attachment, driver)
-    lock.lock()
-    let overtaken = attachment.ended
-    if !overtaken { attachment.driver = driver; attachment.native = made }
-    lock.unlock()
     driver.onExit { [weak self] code in
       self?.report([
         "type": "sessionDriverExited", "sessionId": session.id,
         "generation": Int(attachment.generation), "driverPid": Int(driver.pid), "code": Int(code),
       ])
     }
+    lock.lock()
+    let overtaken = attachment.ended
+    if !overtaken { attachment.driver = driver }
+    lock.unlock()
     if overtaken {
       driver.signal(SIGKILL)
-      made.endInput()
       try? driver.input.close()
       try? driver.output.close()
+      return .failure(.stopped)
+    }
+    // Construction only: it reads nothing and waits on nothing.
+    let made = native(attachment, driver, manifest)
+    lock.lock()
+    let ended = attachment.ended
+    if !ended { attachment.native = made }
+    lock.unlock()
+    if ended {
+      // The Stop that ended it already killed the published driver.
+      made.endInput()
       return .failure(.stopped)
     }
     return .success(attachment)

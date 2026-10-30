@@ -139,7 +139,8 @@ final class SessionListener {
   private func handshake(_ client: Int32, deadline: UInt64) -> [String: Any]? {
     // The peer check cannot be interrupted, so the deadline is checked as soon as it returns.
     let refusal = peerRefusal(client)
-    let remaining = deadline > monotonicNanoseconds() ? deadline - monotonicNanoseconds() : 0
+    let now = monotonicNanoseconds()
+    let remaining = deadline > now ? deadline - now : 0
     guard remaining > 0 else { return nil }
     var limit = timeval(
       tv_sec: Int(remaining / 1_000_000_000), tv_usec: Int32(remaining % 1_000_000_000 / 1000))
