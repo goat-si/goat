@@ -160,6 +160,13 @@ describe("preview sessions", () => {
       { _tag: "ended", reason: "stopped_all" },
       detected,
     )!;
+    const locked = desktopSession(
+      base,
+      control,
+      { _tag: "paused", reason: "screen_locked" },
+      detected,
+    )!;
+    expect([locked.reason, previewSessionChip(locked)]).toEqual(["screenLocked", "Screen locked"]);
     const secret = desktopSession(base, control, { _tag: "paused", reason: "private" }, detected)!;
     expect([previewSessionChip(secret), secret.status]).toEqual(["Private (paused)", "paused"]);
     // A host whose helper cannot detect these says so instead of implying protection.

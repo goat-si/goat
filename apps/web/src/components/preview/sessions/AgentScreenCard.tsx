@@ -61,6 +61,7 @@ const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
   "You're controlling": { dot: "bg-success", ring: "ring-success/60" },
   "Waiting for you": { dot: "bg-warning", ring: "ring-warning/70" },
   "Private (paused)": { dot: "bg-muted-foreground", ring: "ring-border" },
+  "Screen locked": { dot: "bg-muted-foreground", ring: "ring-border" },
   "Permission needed": { dot: "bg-destructive", ring: "ring-destructive/60" },
   Stopped: { dot: "bg-muted-foreground/40", ring: "ring-border" },
 };

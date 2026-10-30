@@ -165,7 +165,9 @@ export const desktopSession = (
     state._tag === "ended"
       ? "userStoppedSession"
       : state._tag === "paused"
-        ? "userIntervened"
+        ? state.reason === "screen_locked"
+          ? "screenLocked"
+          : "userIntervened"
         : undefined;
   // A paused or stopped control keeps the apps it last held; unknown when it never ran.
   const scope = state._tag === "active" ? { apps: state.apps } : control.scope;
