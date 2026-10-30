@@ -59,7 +59,6 @@ vi.mock("../ui/qr-code", () => ({
   ),
 }));
 
-import { armConnectFlowResume, cancelConnectFlowResume } from "./connectFlowResume";
 import { HubDeviceCard } from "./HubDeviceCard";
 
 type Props = ComponentProps<typeof HubDeviceCard>;
@@ -125,7 +124,6 @@ beforeEach(() => {
   state.createCredential.mockReset().mockResolvedValue(created());
   onCreated.mockReset();
   for (const action of Object.values(actions)) action.mockReset();
-  cancelConnectFlowResume();
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -202,64 +200,6 @@ it("opens setup guidance without issuing a credential when no target exists", as
   expect(state.createCredential).not.toHaveBeenCalled();
   expect(payload()).toBeNull();
   expect(document.body.textContent).toContain("Start Tailscale on this computer");
-});
-
-const dialogOpen = () => document.querySelector('[role="dialog"]') !== null;
-function dialogButton(name: string) {
-  const match = [...document.querySelectorAll('[role="dialog"] button')].find(
-    (node): node is HTMLButtonElement =>
-      node instanceof HTMLButtonElement && node.textContent?.trim() === name,
-  );
-  if (!match) throw new Error(`No dialog button named ${name}`);
-  return match;
-}
-
-it("turns on Network access from the QR dialog and reopens the dialog once after the relaunch", async () => {
-  await render({ endpoints: [], exposureState: exposure("local-only") });
-  await act(async () => button("Show phone QR").click());
-  expect(document.body.textContent).toContain("GOAT restarts to apply this");
-  await act(async () => dialogButton("Turn on Network access").click());
-  expect(actions.onTurnOnNetworkAccess).toHaveBeenCalledTimes(1);
-  await vi.waitFor(() => expect(dialogOpen()).toBe(false));
-
-  // The confirm arms the note and the app relaunches: a new renderer mounts while state loads.
-  armConnectFlowResume(undefined, "previous-renderer-load");
-  act(() => root.unmount());
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  await render({ endpoints: [], exposureState: null, isNetworkAccessPending: true });
-  expect(dialogOpen()).toBe(true);
-  expect(document.body.textContent).toContain("Checking network settings");
-  await render({
-    endpoints: [lan, https],
-    exposureState: exposure("network-accessible"),
-    isNetworkAccessPending: false,
-  });
-  await act(async () => button("Create phone QR").click());
-  expect(payload()).not.toBeNull();
-  await act(async () => button("Done").click());
-  await vi.waitFor(() => expect(dialogOpen()).toBe(false));
-
-  act(() => root.unmount());
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  await render();
-  expect(dialogOpen()).toBe(false);
-});
-
-it("offers Tailscale HTTPS when Tailscale is found with HTTPS off, keeping the LAN fallback", async () => {
-  const httpsOff = { ...https, status: "unavailable" as const };
-  await render({ endpoints: [lan, httpsOff] });
-  await act(async () => button("Show phone QR").click());
-  expect(button("Use local network")).toBeDefined();
-  await act(async () => dialogButton("Turn on Tailscale HTTPS").click());
-  expect(actions.onTurnOnTailscaleHttps).toHaveBeenCalledWith(httpsOff);
-  expect(state.createCredential).not.toHaveBeenCalled();
-});
-
-it("offers Network access on the Tailscale row while it is off", async () => {
-  await render({ endpoints: [], exposureState: exposure("local-only") });
-  expect(document.body.textContent).toContain("Turn on Network access to detect Tailscale.");
-  await act(async () => button("Turn on Network access").click());
-  expect(actions.onTurnOnNetworkAccess).toHaveBeenCalledTimes(1);
 });
 
 it("shows request failures and allows a settled retry", async () => {

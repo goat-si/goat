@@ -805,8 +805,7 @@ export function ConnectionsSettings() {
   };
 
   const connectProps = {
-    mode:
-      canManageLocalBackend && desktopBridge ? (desktopServerExposureState?.mode ?? null) : null,
+    state: canManageLocalBackend && desktopBridge ? desktopServerExposureState : null,
     tailscaleHttpsEndpoint,
     disabled: isUpdatingDesktopServerExposure || isUpdatingTailscaleServe,
     actions: {
@@ -1389,7 +1388,7 @@ export function ConnectionsSettings() {
         canManageLocalBackend={canManageLocalBackend}
         delegatableScopes={currentSessionScopes ?? []}
         endpoints={visibleDesktopAdvertisedEndpoints}
-        exposureState={connectProps.mode === null ? null : desktopServerExposureState}
+        exposureState={connectProps.state}
         connectActions={connectProps.actions}
         isNetworkAccessPending={
           (primarySessionState.isPending && primarySessionState.data === null) ||

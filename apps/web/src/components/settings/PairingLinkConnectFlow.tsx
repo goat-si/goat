@@ -18,7 +18,7 @@ export type ConnectFlowSlot = {
 export const pairingLinkConnectFlow = {
   finish: () => finishConnectFlowResume("pairing-link"),
   slot: (input: {
-    readonly mode: DesktopServerExposureState["mode"] | null;
+    readonly state: DesktopServerExposureState | null;
     readonly tailscaleHttpsEndpoint: AdvertisedEndpoint | null;
     readonly disabled: boolean;
     readonly actions: ConnectReachabilityActions;
@@ -27,7 +27,7 @@ export const pairingLinkConnectFlow = {
     notice: (closeDialog) => (
       <ConnectReachabilityNotice
         flow="pairing-link"
-        mode={input.mode}
+        state={input.state}
         tailscaleHttpsEndpoint={input.tailscaleHttpsEndpoint}
         disabled={input.disabled}
         onBeforeAction={closeDialog}

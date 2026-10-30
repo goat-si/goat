@@ -4,18 +4,24 @@ import type { ReactNode } from "react";
 import { Button } from "../ui/button";
 import { type ConnectFlow, requestConnectFlowResume } from "./connectFlowResume";
 
-export type ConnectReachabilityStep = "network-access" | "tailscale-https";
+export type ConnectReachabilityStep =
+  | "network-access"
+  | "tailscale-https"
+  | "tailscale-unreachable";
+type ExposureState = Pick<DesktopServerExposureState, "mode" | "tailscaleServeEnabled">;
 
 /**
  * Which switch stands between this desktop and another device. With network access off the
  * desktop does not probe Tailscale, so only Tailscale HTTPS that is already on counts as reachable.
  */
 export function connectReachabilityStep(
-  mode: DesktopServerExposureState["mode"] | null,
+  state: ExposureState | null,
   tailscaleHttpsEndpoint: AdvertisedEndpoint | null,
 ): ConnectReachabilityStep | null {
-  if (mode === null || tailscaleHttpsEndpoint?.status === "available") return null;
-  if (mode === "local-only") return "network-access";
+  if (state === null || tailscaleHttpsEndpoint?.status === "available") return null;
+  // Serve already on but unreachable: enabling it again would not restart or fix anything.
+  if (state.tailscaleServeEnabled) return "tailscale-unreachable";
+  if (state.mode === "local-only") return "network-access";
   return tailscaleHttpsEndpoint ? "tailscale-https" : null;
 }
 
@@ -27,22 +33,30 @@ export type ConnectReachabilityActions = {
 /** Offers the missing switch where the user is connecting; the confirm it opens restarts GOAT. */
 export function ConnectReachabilityNotice({
   flow,
-  mode,
+  state,
   tailscaleHttpsEndpoint,
   disabled,
   onBeforeAction,
   actions,
 }: {
   readonly flow: ConnectFlow;
-  readonly mode: DesktopServerExposureState["mode"] | null;
+  readonly state: ExposureState | null;
   readonly tailscaleHttpsEndpoint: AdvertisedEndpoint | null;
   readonly disabled?: boolean;
   /** Closes the dialog hosting the notice so the restart confirm is the only one open. */
   readonly onBeforeAction?: () => void;
   readonly actions: ConnectReachabilityActions;
 }): ReactNode {
-  const step = connectReachabilityStep(mode, tailscaleHttpsEndpoint);
+  const step = connectReachabilityStep(state, tailscaleHttpsEndpoint);
   if (step === null) return null;
+  if (step === "tailscale-unreachable") {
+    return (
+      <p className="text-sm text-muted-foreground" role="status">
+        Tailscale HTTPS is on, but Tailscale is not answering. Check that Tailscale is running and
+        signed in on this computer.
+      </p>
+    );
+  }
   const start = () => {
     onBeforeAction?.();
     requestConnectFlowResume(flow);

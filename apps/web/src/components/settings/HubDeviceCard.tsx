@@ -129,7 +129,7 @@ export function HubDeviceCard({
   const target = selectHubPhoneQrTarget(endpoints);
   const tailscaleHttpsEndpoint = endpoints.find(isTailscaleHttpsEndpoint) ?? null;
   const showTailscaleRow = isDesktop && canManageLocalBackend;
-  const exposureMode = showTailscaleRow ? (exposureState?.mode ?? null) : null;
+  const exposure = showTailscaleRow ? exposureState : null;
   const open = dialogOpen || resuming;
   const scopes = AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope));
   const allowed =
@@ -212,7 +212,7 @@ export function HubDeviceCard({
             }
             aria-label="Enable Tailscale HTTPS"
           />
-        ) : connectReachabilityStep(exposureMode, null) === "network-access" ? (
+        ) : connectReachabilityStep(exposure, null) === "network-access" ? (
           <Button
             size="sm"
             variant="outline"
@@ -290,10 +290,10 @@ export function HubDeviceCard({
                   ) : (
                     <div className="space-y-3">
                       {target?.kind !== "tailscale-https" ? (
-                        connectReachabilityStep(exposureMode, tailscaleHttpsEndpoint) !== null ? (
+                        connectReachabilityStep(exposure, tailscaleHttpsEndpoint) !== null ? (
                           <ConnectReachabilityNotice
                             flow="phone-qr"
-                            mode={exposureMode}
+                            state={exposure}
                             tailscaleHttpsEndpoint={tailscaleHttpsEndpoint}
                             onBeforeAction={() => changeOpen(false)}
                             actions={connectActions}
@@ -325,7 +325,7 @@ export function HubDeviceCard({
                         <Button onClick={() => void issueCredential(target)}>
                           Create phone QR
                         </Button>
-                      ) : exposureMode === "local-only" ? null : (
+                      ) : exposure?.mode === "local-only" ? null : (
                         <p className="text-xs text-muted-foreground">
                           No reachable address is available yet.
                         </p>
