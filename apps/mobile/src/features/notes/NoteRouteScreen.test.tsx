@@ -216,6 +216,19 @@ function button(label: string) {
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 }
+function plainStyle() {
+  return {
+    bold: { isActive: false },
+    italic: { isActive: false },
+    underline: { isActive: false },
+    strikethrough: { isActive: false },
+    spoiler: { isActive: false },
+    link: { isActive: false, destination: "" },
+    heading: { isActive: false, level: 1 },
+    unorderedList: { isActive: false, depth: 0 },
+    orderedList: { isActive: false, depth: 0 },
+  };
+}
 /** Opens the editor and waits for the lazy visual editor to load and check the note. */
 async function edit() {
   await act(async () => button("Edit").click());
@@ -709,6 +722,48 @@ describe("visual note editor", () => {
     expect(container.textContent).toContain("The editor did not answer. Try again.");
     expect(mocks.alert).toHaveBeenCalledWith("Unsaved note", expect.any(String), expect.any(Array));
     expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("a style change during a save read forces another read, so menu formatting is saved", async () => {
+    await act(async () => render());
+    await edit();
+    const first = Promise.withResolvers<string>();
+    mocks.serialize = () => first.promise;
+    await act(async () => button("Save on phone").click());
+    act(() => mocks.inputProps?.onChangeState(plainStyle()));
+    mocks.serialize = () => "**mine**";
+    await act(async () => first.resolve("mine"));
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "**mine**" }));
+  });
+
+  it("a failed background undo snapshot is shown and the edit stays", async () => {
+    await act(async () => render());
+    await edit();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      act(() => type("typed"));
+      mocks.serialize = () => Promise.reject(new Error("native read failed"));
+      await act(async () => vi.advanceTimersByTime(600));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(container.textContent).toContain("native read failed");
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.value).toBe(
+      "typed",
+    );
+  });
+
+  it("a failed undo is shown and unlocks the editor", async () => {
+    await act(async () => render());
+    await edit();
+    act(() => type("typed"));
+    mocks.serialize = () => Promise.reject(new Error("native read failed"));
+    await act(async () => button("↶").click());
+    expect(container.textContent).toContain("native read failed");
+    expect(
+      container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.disabled,
+    ).toBe(false);
   });
 
   it("offers undo right after typing and restores the opened text", async () => {

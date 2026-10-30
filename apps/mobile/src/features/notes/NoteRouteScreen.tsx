@@ -420,6 +420,10 @@ function NoteContent(props: NoteParams) {
                         editVersion.current++;
                         setDirty(true);
                       }}
+                      onActivity={() => {
+                        editVersion.current++;
+                      }}
+                      onError={setError}
                       onFallback={(reason) => {
                         setFallback(reason);
                         setVisual(false);

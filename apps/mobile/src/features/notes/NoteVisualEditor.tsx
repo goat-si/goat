@@ -36,6 +36,9 @@ export default function NoteVisualEditor(props: {
   readonly editable: boolean;
   readonly handleRef: Ref<NoteVisualEditorHandle>;
   readonly onChange: () => void;
+  /** A style change, which may be menu formatting: not proof of an edit, but reads must retry. */
+  readonly onActivity: () => void;
+  readonly onError: (message: string) => void;
   readonly onFallback: (reason: string) => void;
 }) {
   const { nativeTextStyle } = useMarkdownPreviewStyles();
@@ -105,8 +108,13 @@ export default function NoteVisualEditor(props: {
     version.current++;
     props.onChange();
     setCanUndo(true);
+    scheduleSnapshot();
+  };
+  const fail = (error: unknown) =>
+    props.onError(error instanceof Error ? error.message : "The editor could not read the note.");
+  const scheduleSnapshot = () => {
     if (pending.current) clearTimeout(pending.current);
-    pending.current = setTimeout(() => void snapshot(), pauseMs.current);
+    pending.current = setTimeout(() => void snapshot().catch(fail), pauseMs.current);
   };
   // Synchronous, so a save read that starts after the tap always sees the command's edit.
   const command = (run: (target: EnrichedMarkdownTextInputInstance) => void) => {
@@ -121,7 +129,7 @@ export default function NoteVisualEditor(props: {
       undoRun.current = null;
       setUndoing(false);
     };
-    undoRun.current = restorePrevious().then(release, release);
+    undoRun.current = restorePrevious().catch(fail).then(release);
   };
   const restorePrevious = async () => {
     const started = version.current;
@@ -227,6 +235,12 @@ export default function NoteVisualEditor(props: {
           onChangeState={(state) => {
             const next = styleStateKey(state);
             if (next !== styleKey) setStyleKey(next);
+            // Native menu and keyboard formatting report only a style change, so it gets an undo
+            // snapshot after the usual pause; a duplicate of the last one is skipped.
+            if (!ready) return;
+            version.current++;
+            props.onActivity();
+            scheduleSnapshot();
           }}
           style={{
             height: Math.min(Math.max(height * 0.5, 280), 720),
