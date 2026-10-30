@@ -381,13 +381,16 @@ export class SessionControl {
         this.activeAgentCut = cut;
         // Reset first: run() can pass its gate before it returns.
         this.activeAgentDispatching = false;
-        const work = run(action.signal);
-        this.activeAgentWork = work;
-        // Later actions still wait for it, even after its caller has been answered.
-        this.track(work);
         const aborted = new Promise<never>((_, reject) =>
           cut.signal.addEventListener("abort", () => reject(cut.signal.reason), { once: true }),
         );
+        const work = Promise.resolve().then(() => {
+          action.signal.throwIfAborted();
+          return run(action.signal);
+        });
+        this.activeAgentWork = work;
+        // Later actions still wait for it, even after its caller has been answered.
+        this.track(work);
         try {
           // Work that ignores the signal still never hands its result to the agent.
           return await Promise.race([work, aborted]);
