@@ -28,6 +28,16 @@ const shortForeground = () => {
 };
 
 describe("proxy lifecycle ownership across foreground expiry", () => {
+  it.effect("reports helper Escape from the active control", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ personStop: true });
+      yield* h.push(active());
+      yield* h.driverStarted;
+      yield* h.escape;
+      yield* h.escapeReported;
+    }),
+  );
+
   it.effect("Stop cuts off server-origin input and quarantines the late driver reply", () =>
     Effect.gen(function* () {
       const h = yield* harness({ humanInput: true });

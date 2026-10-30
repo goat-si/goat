@@ -99,6 +99,7 @@ export const harness = Effect.fn(function* (
      * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
      */
     readonly humanInput?: boolean;
+    readonly personStop?: boolean;
     readonly onHumanInput?: (
       events: ReadonlyArray<{
         readonly source: ComputerUseHumanInputSource;
@@ -159,6 +160,8 @@ export const harness = Effect.fn(function* (
   const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
   const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const escapeEvents = yield* Queue.unbounded<void>();
+  const escapeReports = yield* Queue.unbounded<void>();
   const humanBatches: Array<{ readonly at: number; readonly sources: ReadonlyArray<string> }> = [];
   const taken = yield* Queue.unbounded<string>();
   const applied = yield* Queue.unbounded<string>();
@@ -222,6 +225,7 @@ export const harness = Effect.fn(function* (
         ),
         Effect.asVoid,
       ),
+    ...(options.personStop ? { onPersonStop: () => Queue.offer(escapeReports, undefined) } : {}),
     output: (line, reply) =>
       Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
     ...(options.cursors
@@ -309,6 +313,7 @@ export const harness = Effect.fn(function* (
       yield* options.acquire?.(index) ?? Effect.void;
       return {
         ...(options.humanInput ? { humanInput: hid.events } : {}),
+        ...(options.personStop ? { personStop: Stream.fromQueue(escapeEvents) } : {}),
         send: (line: string) =>
           Effect.sync(() => {
             const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
@@ -447,6 +452,8 @@ export const harness = Effect.fn(function* (
       }),
     /** The next person's input the proxy reported to the server. */
     person: Queue.take(people),
+    escape: Queue.offer(escapeEvents, undefined),
+    escapeReported: Queue.take(escapeReports),
     /** How many events each report of a person's input carried, in order. */
     humanBatches: Effect.sync(() => [...humanBatches]),
     /** The next input call start or end the proxy told the server about, as "start 1". */
