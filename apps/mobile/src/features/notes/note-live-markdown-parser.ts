@@ -39,6 +39,10 @@ function isSpace(code: number) {
   return code === 32 || code === 9 || code === 10 || code === 13 || Number.isNaN(code);
 }
 
+function isBlank(code: number) {
+  return code === 32 || code === 9;
+}
+
 function isAsciiPunctuation(code: number) {
   return (
     (code >= 33 && code <= 47) ||
@@ -317,7 +321,8 @@ function parseInline(
 function isTableDelimiterRow(line: string) {
   return (
     line.includes("-") &&
-    /^[ \t]*\|?(?:[ \t]*:?-+:?[ \t]*\|)+(?:[ \t]*:?-+:?[ \t]*)?[ \t]*$/.test(line)
+    // No two whitespace runs touch, so a long line cannot backtrack.
+    /^[ \t]*(?:\|[ \t]*)?(?::?-+:?[ \t]*\|[ \t]*)+(?::?-+:?[ \t]*)?$/.test(line)
   );
 }
 
@@ -329,6 +334,7 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
   let position = 0;
   let fenceCode = 0;
   let fenceLength = 0;
+  let fenceDepth = 0;
   let inTable = false;
   // Next "|" in the note, kept across lines like the inline trigger search.
   let nextPipe = -1;
@@ -355,9 +361,10 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
     while (first < end && (text.charCodeAt(first) === 32 || text.charCodeAt(first) === 9)) first++;
 
     // Blockquote markers, possibly nested ("> > text" or ">>text"): count, then emit in order.
+    // Inside a fence only its own quote levels are markers; a deeper ">" is code.
     let restStart = position;
     let depth = 0;
-    for (;;) {
+    while (fenceCode === 0 || depth < fenceDepth) {
       let marker = restStart;
       while (marker < end && marker - restStart < 3 && text.charCodeAt(marker) === 32) marker++;
       if (text.charCodeAt(marker) !== 62 || marker >= end) break;
@@ -378,10 +385,12 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
         first++;
     }
 
+    // A fence ends with the quote it opened in.
+    if (fenceCode !== 0 && depth < fenceDepth) fenceCode = 0;
     // Code lines are styled one by one, so quote markers inside a fence keep their order.
     if (fenceCode !== 0) {
       if (text.charCodeAt(first) === fenceCode) {
-        const close = /^(`{3,}|~{3,})[ 	]*$/.exec(text.slice(first, end));
+        const close = /^(`{3,}|~{3,})[ \t]*$/.exec(text.slice(first, end));
         const marker = close?.[1] ?? "";
         if (marker.charCodeAt(0) === fenceCode && marker.length >= fenceLength) {
           push(ranges, "syntax", restStart, end);
@@ -409,6 +418,7 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
         push(ranges, "syntax", restStart, end);
         fenceCode = lead;
         fenceLength = (fence[1] ?? "").length;
+        fenceDepth = depth;
         inTable = false;
         position = next;
         continue;
@@ -428,9 +438,20 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
           (text.charCodeAt(contentStart) === 32 || text.charCodeAt(contentStart) === 9)
         )
           contentStart++;
+        // A closing "#" run needs a space before it; scan back from the end so it stays linear.
         let contentEnd = end;
-        const closing = /[ \t]+#+[ \t]*$/.exec(text.slice(contentStart, end));
-        if (closing) contentEnd = contentStart + closing.index;
+        let back = end;
+        while (back > contentStart && isBlank(text.charCodeAt(back - 1))) back--;
+        let hashStart = back;
+        while (hashStart > contentStart && text.charCodeAt(hashStart - 1) === 35) hashStart--;
+        if (
+          hashStart < back &&
+          (hashStart === contentStart || isBlank(text.charCodeAt(hashStart - 1)))
+        ) {
+          contentEnd = hashStart;
+          while (contentEnd > contentStart && isBlank(text.charCodeAt(contentEnd - 1)))
+            contentEnd--;
+        }
         push(ranges, "syntax", restStart, contentStart);
         push(ranges, "h1", contentStart, contentEnd);
         parseInline(text, contentStart, contentEnd, ranges, false, scan);

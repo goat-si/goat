@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   LIVE_MARKDOWN_MAX_LENGTH,
   applyNoteEditorChange,
+  noteEditorChangeIsAmbiguous,
   noteEditorFallback,
   noteEditorView,
 } from "./note-source-text";
@@ -120,6 +121,21 @@ describe("note source text", () => {
     expect(applyNoteEditorChange("x\r\nx\r\nx", "x\nx\nx", "x\ny\nx", { start: 2, end: 3 })).toBe(
       "x\r\ny\r\nx",
     );
+  });
+
+  it("settles a backspace-or-forward-delete with the selection reported after it", () => {
+    const source = "a\r\n\nb";
+    const before = { start: 2, end: 2 };
+    expect(noteEditorChangeIsAmbiguous(source, "a\n\nb", "a\nb", before)).toBe(true);
+    // Forward delete leaves the cursor in place; backspace moves it back.
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 2, end: 2 }, true)).toBe(
+      "a\r\nb",
+    );
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 1, end: 1 }, true)).toBe(
+      "a\nb",
+    );
+    // Uniform endings give the same bytes either way, so nothing waits.
+    expect(noteEditorChangeIsAmbiguous("a\n\nb", "a\n\nb", "a\nb", before)).toBe(false);
   });
 
   it("joins lines by removing the whole CRLF", () => {

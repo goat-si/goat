@@ -47,27 +47,41 @@ export interface NoteEditorSelection {
   readonly end: number;
 }
 
+function explains(previous: string, next: string, from: number, to: number) {
+  const nextEnd = to + next.length - previous.length;
+  return (
+    from >= 0 &&
+    to <= previous.length &&
+    nextEnd >= from &&
+    previous.slice(0, from) === next.slice(0, from) &&
+    previous.slice(to) === next.slice(nextEnd)
+  );
+}
+
 /** Where the edit is, as [from, to) in the previous view and its end in the next view. */
-function editSpan(previous: string, next: string, selection: NoteEditorSelection | null) {
+function editSpan(
+  previous: string,
+  next: string,
+  selection: NoteEditorSelection | null,
+  selectionAfterChange: boolean,
+) {
   const delta = next.length - previous.length;
   if (selection) {
     const { start, end } = selection;
-    // The selection may be reported before or after the change, so try the edit at both sides of
-    // the cursor; only a placement that explains the change is used. Equal neighbors, such as two
-    // line breaks with different source endings, then resolve to the one at the cursor.
+    // Only a placement that explains the change is used, so equal neighbors, such as two line
+    // breaks with different source endings, resolve to the one at the cursor. After a change the
+    // cursor sits where text was deleted, or just past what was typed.
     const candidates: Array<readonly [number, number]> = [];
-    if (end > start) candidates.push([start, end]);
-    if (delta < 0) candidates.push([start + delta, start], [start, start - delta]);
-    else candidates.push([start, start], [start - delta, start - delta]);
-    for (const [from, to] of candidates) {
-      const nextEnd = to + delta;
-      if (from < 0 || to > previous.length || nextEnd < from) continue;
-      if (
-        previous.slice(0, from) === next.slice(0, from) &&
-        previous.slice(to) === next.slice(nextEnd)
-      )
-        return { from, to, nextEnd };
+    if (selectionAfterChange) {
+      if (start === end)
+        candidates.push(delta < 0 ? [start, start - delta] : [start - delta, start - delta]);
+    } else {
+      if (end > start) candidates.push([start, end]);
+      if (delta < 0) candidates.push([start + delta, start], [start, start - delta]);
+      else candidates.push([start, start], [start - delta, start - delta]);
     }
+    for (const [from, to] of candidates)
+      if (explains(previous, next, from, to)) return { from, to, nextEnd: to + delta };
   }
   const shortest = Math.min(previous.length, next.length);
   // Skip the text far from the cursor with native comparisons; a character loop is slow on Hermes.
@@ -91,9 +105,10 @@ export function applyNoteEditorChange(
   previousView: string,
   nextView: string,
   selection: NoteEditorSelection | null = null,
+  selectionAfterChange = false,
 ): string {
   if (previousView === nextView) return source;
-  const span = editSpan(previousView, nextView, selection);
+  const span = editSpan(previousView, nextView, selection, selectionAfterChange);
   let inserted = nextView.slice(span.from, span.nextEnd).replaceAll("\r\n", "\n");
   if (source.includes("\r\n") && inserted.includes("\n")) {
     const crlf = source.split("\r\n").length - 1;
@@ -104,4 +119,28 @@ export function applyNoteEditorChange(
   const from = sourceOffset(source, span.from);
   const to = sourceOffset(source, span.to);
   return source.slice(0, from) + inserted + source.slice(to);
+}
+
+/**
+ * Whether a deletion at a cursor reads as both backspace and forward delete, with different
+ * source results. The selection the input reports after the change settles which it was.
+ */
+export function noteEditorChangeIsAmbiguous(
+  source: string,
+  previousView: string,
+  nextView: string,
+  selection: NoteEditorSelection | null,
+): boolean {
+  if (!selection || selection.start !== selection.end || nextView.length >= previousView.length)
+    return false;
+  const cursor = selection.start;
+  const deleted = previousView.length - nextView.length;
+  if (
+    !explains(previousView, nextView, cursor - deleted, cursor) ||
+    !explains(previousView, nextView, cursor, cursor + deleted)
+  )
+    return false;
+  const remove = (from: number, to: number) =>
+    source.slice(0, sourceOffset(source, from)) + source.slice(sourceOffset(source, to));
+  return remove(cursor - deleted, cursor) !== remove(cursor, cursor + deleted);
 }

@@ -21,6 +21,7 @@ import {
   noteEditorFallback,
   noteEditorFallbackMessage,
   noteEditorView,
+  noteEditorChangeIsAmbiguous,
   type NoteEditorFallback,
   type NoteEditorSelection,
 } from "./note-source-text";
@@ -43,6 +44,12 @@ const NoteLiveMarkdownEditor = lazy(() => import("./NoteLiveMarkdownEditor"));
 
 type NoteParams = { environmentId: string; path: string; create?: boolean };
 type EditorView = { readonly source: string; readonly text: string };
+type AmbiguousEdit = {
+  readonly source: string;
+  readonly previous: string;
+  readonly text: string;
+  readonly applied: string;
+};
 
 function editorViewText(view: EditorView | null, source: string) {
   return view?.source === source ? view.text : noteEditorView(source);
@@ -81,6 +88,8 @@ function NoteContent(props: NoteParams) {
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const editorSelection = useRef<NoteEditorSelection | null>(null);
+  // A deletion that reads as backspace or forward delete waits for the selection after it.
+  const ambiguousEdit = useRef<AmbiguousEdit | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -411,6 +420,14 @@ function NoteContent(props: NoteParams) {
                           text,
                           editorSelection.current,
                         );
+                        ambiguousEdit.current = noteEditorChangeIsAmbiguous(
+                          source,
+                          previous,
+                          text,
+                          editorSelection.current,
+                        )
+                          ? { source, previous, text, applied: next }
+                          : null;
                         // Pasted CRLF stays out of the view so its offsets keep matching the source.
                         const view = {
                           source: next,
@@ -422,6 +439,21 @@ function NoteContent(props: NoteParams) {
                       }}
                       onSelectionChange={(selection) => {
                         editorSelection.current = selection;
+                        const pending = ambiguousEdit.current;
+                        ambiguousEdit.current = null;
+                        if (!pending || localBody.current !== pending.applied) return;
+                        const settled = applyNoteEditorChange(
+                          pending.source,
+                          pending.previous,
+                          pending.text,
+                          selection,
+                          true,
+                        );
+                        if (settled === pending.applied) return;
+                        const view = { source: settled, text: pending.text };
+                        editorViewRef.current = view;
+                        setEditorView(view);
+                        editBody(settled);
                       }}
                     />
                   </Suspense>

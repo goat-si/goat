@@ -17,6 +17,7 @@ const { mocks, Children } = vi.hoisted(() => ({
     connected: false,
     taskIndex: 0,
     taskText: "task",
+    selection: { start: 0, end: 0 },
     read: vi.fn(),
     remove: vi.fn(),
     alert: vi.fn(),
@@ -101,13 +102,21 @@ vi.mock("../../components/ui/Button", () => ({
 }));
 vi.mock("./NoteLinkedThread", () => ({ NoteLinkedThread: () => null }));
 vi.mock("./NoteLiveMarkdownEditor", () => ({
-  default: (props: { value: string; onChangeText: (value: string) => void; editable: boolean }) => (
-    <textarea
-      data-testid="live-markdown"
-      value={props.value}
-      disabled={!props.editable}
-      onChange={(event) => props.onChangeText(event.target.value)}
-    />
+  default: (props: {
+    value: string;
+    onChangeText: (value: string) => void;
+    onSelectionChange: (selection: { start: number; end: number }) => void;
+    editable: boolean;
+  }) => (
+    <>
+      <textarea
+        data-testid="live-markdown"
+        value={props.value}
+        disabled={!props.editable}
+        onChange={(event) => props.onChangeText(event.target.value)}
+      />
+      <button onClick={() => props.onSelectionChange(mocks.selection)}>Report selection</button>
+    </>
   ),
 }));
 vi.mock("./rpc/notes", () => ({
@@ -175,6 +184,7 @@ beforeEach(() => {
   mocks.connected = false;
   mocks.taskIndex = 0;
   mocks.taskText = "task";
+  mocks.selection = { start: 0, end: 0 };
   mocks.read.mockReset().mockResolvedValue(AsyncResult.success(noteDocument()));
   mocks.remove.mockReset().mockResolvedValue(AsyncResult.success({ path: "note.md" }));
   mocks.alert.mockReset();
@@ -509,6 +519,16 @@ describe("formatted note editor", () => {
     });
     expect(container.querySelector('[data-testid="live-markdown"]')).toBeNull();
     expect(container.textContent).toContain("old Mac line endings");
+  });
+
+  it("corrects a forward delete between mixed line endings once the selection arrives", async () => {
+    await editorFor("a\r\n\nb");
+    mocks.selection = { start: 2, end: 2 };
+    act(() => button("Report selection").click());
+    act(() => type("a\nb"));
+    act(() => button("Report selection").click());
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("a\r\nb");
   });
 
   it("opens a note it cannot round-trip in the plain editor and says why", async () => {

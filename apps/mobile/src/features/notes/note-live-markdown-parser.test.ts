@@ -86,6 +86,20 @@ describe("note live markdown parser", () => {
     expect(styled(text, "bold")).toEqual(["bold"]);
   });
 
+  it("ends a quoted fence with its quote and keeps quote markers inside a top-level fence as code", () => {
+    const quoted = "> ```\n> code\nafter **bold**\n";
+    expect(styled(quoted, "pre")).toEqual(["code"]);
+    expect(styled(quoted, "bold")).toEqual(["bold"]);
+    const fenced = "```\n> not a quote\n```\n";
+    expect(styled(fenced, "pre")).toEqual(["> not a quote"]);
+    expect(styled(fenced, "blockquote")).toEqual([]);
+  });
+
+  it("finds a closing heading run only after a space, past long blank runs", () => {
+    expect(styled("# a" + " ".repeat(5000) + "x\n", "h1")).toEqual(["a" + " ".repeat(5000) + "x"]);
+    expect(styled("## Title ##  \n# C#\n### ###\n", "h1")).toEqual(["Title", "C#"]);
+  });
+
   it("dims table pipes outside code and the delimiter row", () => {
     const text = noteSourceFixtures.table!;
     const pipes = styled(text, "syntax").filter((part) => part === "|");
