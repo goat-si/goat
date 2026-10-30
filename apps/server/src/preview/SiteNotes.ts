@@ -65,12 +65,60 @@ const originOf = (value: string): string | undefined => {
   }
 };
 
+const proseAfterCredential = new Set([
+  "under",
+  "in",
+  "on",
+  "at",
+  "from",
+  "via",
+  "behind",
+  "below",
+  "above",
+  "inside",
+  "shown",
+  "found",
+  "located",
+  "stored",
+  "saved",
+  "kept",
+  "managed",
+  "set",
+  "sent",
+  "required",
+  "optional",
+  "needed",
+  "not",
+  "never",
+  "only",
+  "always",
+  "usually",
+  "available",
+  "hidden",
+  "visible",
+  "case",
+  "the",
+  "a",
+  "an",
+  "your",
+  "my",
+  "this",
+  "that",
+  "each",
+  "per",
+  "valid",
+  "expired",
+  "rotated",
+  "reset",
+  "changed",
+]);
+
 const hasCredentialValue = (text: string) =>
   Array.from(
     text.matchAll(
       /\b(?:password|passwd|passcode|pin|token|secret|api[_ -]?key|access[ -]key|private[ -]key)\b\s*(?:[:=]|\s+is\b)\s*(\S+)/gi,
     ),
-  ).some(([, value]) => value !== undefined && (value.length >= 16 || /[^a-z]/i.test(value)));
+  ).some(([, value]) => value !== undefined && !proseAfterCredential.has(value.toLowerCase()));
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -115,7 +163,6 @@ const make = Effect.gen(function* () {
       scanMemoryValue(input.text).kind === "blocked" ||
       redactGoatCredentials(input.text) !== input.text ||
       containsJoseToken(input.text) ||
-      /^\s*(?:password|passwd|token|secret|api[_ -]?key)\s*[:=]\s*\S/im.test(input.text) ||
       hasCredentialValue(input.text)
     )
       return yield* new SiteNoteError({ reason: "secret" });

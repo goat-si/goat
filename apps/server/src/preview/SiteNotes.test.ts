@@ -60,6 +60,13 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     }),
   );
   it.effect.each([
+    "password is hunter",
+    "password is under123",
+    "password is shown but token is hunter",
+    "my password is hunter",
+    "PIN: abcd",
+    "token is supersecret",
+    "the passcode is letmein",
     "my password is hunter2",
     "API key is sk-abc123def456",
     "token=abc123",
@@ -91,6 +98,10 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     }),
   );
   it.effect.each([
+    "password: under Settings",
+    "The token is shown once after you create it",
+    "Your PIN is required at checkout",
+    "The password is not stored by the site",
     "The API key is under Settings > Developer",
     "Password reset lives at /account/reset",
     "Tokens expire after an hour",
