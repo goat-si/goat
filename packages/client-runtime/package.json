@@ -423,6 +423,10 @@
       "types": "./src/state/fleetCloudAgents.ts",
       "default": "./src/state/fleetCloudAgents.ts"
     },
+    "./state/fleet-connection": {
+      "types": "./src/state/fleetConnection.ts",
+      "default": "./src/state/fleetConnection.ts"
+    },
     "./state/fleet-heat": {
       "types": "./src/state/fleetHeat.ts",
       "default": "./src/state/fleetHeat.ts"
@@ -430,6 +434,10 @@
     "./state/fleet-host-health": {
       "types": "./src/state/fleetHostHealth.ts",
       "default": "./src/state/fleetHostHealth.ts"
+    },
+    "./state/fleet-page": {
+      "types": "./src/state/fleetPage.ts",
+      "default": "./src/state/fleetPage.ts"
     },
     "./state/hub-fleet": {
       "types": "./src/state/hubFleet.ts",
