@@ -118,10 +118,12 @@ export class DriverError {
 }
 /** A successful driver result with structured data and its text content. */
 export class DriverSuccess {
-  constructor(
-    readonly structuredContent: Record<string, unknown>,
-    readonly text: string,
-  ) {}
+  readonly structuredContent: Record<string, unknown>;
+  readonly text: string;
+  constructor(structuredContent: Record<string, unknown>, text: string) {
+    this.structuredContent = structuredContent;
+    this.text = text;
+  }
 }
 /** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
 export class NotStarted extends DriverError {}
