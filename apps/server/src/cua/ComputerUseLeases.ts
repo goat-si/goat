@@ -507,27 +507,26 @@ const make = Effect.gen(function* () {
     const focusState = focus.length === 0 ? {} : { foreground: focus };
     // While a run holds implied foreground, re-check soon so a missed run end still ends it.
     const recheck = foreground.impliedRuns(threadId).length > 0 ? IMPLIED_RECHECK_MS : Infinity;
-    const focusWake = Math.min(
-      DateTime.toEpochMillis(now) + recheck,
-      ...focus.map((grant) => grant.expiresAtMillis),
-    );
     // Other threads' grants hold apps on this screen until they end, which this state outlasts.
-    const active = (apps: ReadonlyArray<string> | undefined, wakeAt: number) =>
-      ({
+    const active = (apps: ReadonlyArray<string> | undefined, until: number) => {
+      const validUntil = Math.min(
+        until,
+        ...focus.map((grant) => grant.expiresAtMillis),
+        ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt)),
+      );
+      return {
         _tag: "active",
         expiresAt: record.expiresAt,
         interruptions,
         apps: rememberScope(controls, record, apps),
-        wakeAt: Math.min(
-          wakeAt,
-          focusWake,
-          ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt)),
-        ),
+        wakeAt: Math.min(validUntil, DateTime.toEpochMillis(now) + recheck),
+        validUntil,
         ...focusState,
         ...(others.length === 0 ? {} : ({ shared: true } as const)),
         ...(record.idle === true ? ({ idle: true } as const) : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
-      }) as const;
+      } as const;
+    };
     if (record.everyApp !== undefined)
       return active(undefined, DateTime.toEpochMillis(record.expiresAt));
     if (record.handoffId !== undefined) {

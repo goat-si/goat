@@ -31,14 +31,18 @@ export const allowsForegroundCall = (
 
 export const withCallPermissions = (
   decision: ComputerUseCallAdmission,
-  state: { readonly apps: ReadonlyArray<string> | undefined; readonly wakeAt: number },
+  state: {
+    readonly apps: ReadonlyArray<string> | undefined;
+    readonly wakeAt: number;
+    readonly validUntil?: number;
+  },
 ): ComputerUseCallAdmission =>
   decision.status === "admitted"
     ? {
         ...decision,
         permissions: {
           ...(state.apps === undefined ? {} : { apps: state.apps }),
-          validUntilMillis: state.wakeAt,
+          validUntilMillis: state.validUntil ?? state.wakeAt,
         },
       }
     : decision;
