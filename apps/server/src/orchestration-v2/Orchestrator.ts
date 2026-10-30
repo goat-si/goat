@@ -36,7 +36,6 @@ import {
   CommandId,
   isCompactionCommandMessage,
   describeUserInputResponder,
-  type GuestMessageId,
   isOrchestrationV2WorkActive,
   isProviderNativeSubagentThread,
   MessageId,
@@ -99,7 +98,6 @@ import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -148,14 +146,12 @@ import {
 import { foldIntoQueuedNotice } from "./TurnDigest.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import {
-  decideGuestMessageSend,
   guestShareAfterCancelledSend,
-  releasedGuestAttachmentIds,
   editedQueuedPayload,
   withServerAttribution,
-  decideGuestShareCommand,
-  type GuestShareCommand,
 } from "./GuestShareDecider.ts";
+import { makeGuestShare } from "./goat/GuestShare.ts";
+import { makeReviewContinuation } from "./goat/ReviewContinuation.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -583,6 +579,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.promote":
     case "thread.delete":
     case "thread.guest-share.open":
+    case "delegated_task.review-continue":
     case "thread.guest-share.redeem":
     case "thread.guest-share.close":
     case "thread.guest-message.submit":
@@ -2943,98 +2940,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     mapDispatchError,
   });
 
-  // Deleted after the share change commits: the files of waiting messages it dismissed or dropped.
-  const releaseGuestAttachments = (
-    command: { readonly commandId: CommandId; readonly threadId: ThreadId },
-    before: OrchestrationV2AppThread["guestShare"],
-    after: OrchestrationV2AppThread["guestShare"],
-    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-  ) => {
-    const attachmentIds = releasedGuestAttachmentIds(before ?? null, after ?? null);
-    return attachmentIds.length === 0
-      ? Effect.void
-      : Ref.update(effects, (existing) => [
-          ...existing,
-          {
-            id: `effect:${command.commandId}:guest-attachment.cleanup`,
-            commandId: command.commandId,
-            threadId: command.threadId,
-            request: { type: "attachment.cleanup", attachmentIds: [...attachmentIds] },
-          } satisfies PendingOrchestrationEffectV2,
-        ]);
-  };
-
-  const dispatchGuestShare = Effect.fn("orchestrationV2.dispatch.guestShare")(function* (
-    command: GuestShareCommand,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
-  ) {
-    const projection = yield* projectionStore
-      .getThreadRecords(command.threadId, [])
-      .pipe(
-        Effect.mapError(
-          (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
-        ),
-      );
-    const thread = projection.thread;
-    const now = yield* DateTime.now;
-    const decided =
-      thread.deletedAt !== null
-        ? Result.fail(`Thread ${command.threadId} is deleted.`)
-        : decideGuestShareCommand({
-            thread,
-            command,
-            now,
-          });
-    if (Result.isFailure(decided)) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: decided.failure,
-      });
-    }
-    if (decided.success === thread) return;
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "thread.guest-share-updated",
-      threadId: command.threadId,
-      providerInstanceId: thread.providerInstanceId,
-      occurredAt: now,
-      payload: decided.success,
-    });
-    yield* releaseGuestAttachments(command, thread.guestShare, decided.success.guestShare, effects);
+  const { releaseGuestAttachments, dispatchGuestShare, emitGuestMessageSent } = makeGuestShare({
+    projectionStore,
+    emit,
+    OrchestratorDispatchError,
+    OrchestratorProjectionError,
   });
-
-  // Emitted before the message so the send and the status change commit together, and so
-  // `dispatchMessage`, which reads pending events, keeps the updated share.
-  const emitGuestMessageSent = Effect.fn("orchestrationV2.dispatch.guestMessageSent")(function* (
-    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-    guestMessageId: GuestMessageId,
-    thread: OrchestrationV2AppThread,
-    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
-  ) {
-    const now = yield* DateTime.now;
-    const decided = decideGuestMessageSend({ thread, guestMessageId, now });
-    if (Result.isFailure(decided)) {
-      return yield* new OrchestratorDispatchError({
-        commandId: command.commandId,
-        commandType: command.type,
-        cause: decided.failure,
-      });
-    }
-    yield* emit(
-      events,
-      command,
-    )({
-      type: "thread.guest-share-updated",
-      threadId: command.threadId,
-      providerInstanceId: thread.providerInstanceId,
-      occurredAt: now,
-      payload: decided.success.thread,
-    });
-    return decided.success;
+  const { withReviewChildLock, dispatchReviewContinue } = makeReviewContinuation({
+    projectionStore,
+    idAllocator,
+    getAdapter: (command, instanceId) =>
+      providerAdapters.get(instanceId).pipe(mapDispatchError(command)),
+    emit,
+    dispatchMessage: (command, events, effects) => dispatchMessage(command, events, effects),
+    nextTurnItemOrdinal,
+    stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
+    refuseAboveDispatchModeLimit: (command, threadId, modes) =>
+      refuseAboveDispatchModeLimit(command, threadId, modes),
+    withThreadLock: (threadId, effect) => threadDispatch.withLock(threadId, effect),
+    isBlockingRun,
+    providerTurnForRun,
+    OrchestratorDispatchError,
+    OrchestratorProjectionError,
   });
 
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
@@ -12823,6 +12750,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "delegated_task.review-ledger.append":
         yield* dispatchReviewLedgerAppend(command, events);
         break;
+      case "delegated_task.review-continue":
+        yield* dispatchReviewContinue(command, events, effects);
+        break;
       case "delegated_task.completion-delivery.acknowledge":
       case "delegated_task.completion-delivery.dispose":
         updateDelegatedCompletionOnlyRunId =
@@ -13103,7 +13033,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
-      Effect.suspend(() => admitDispatch(command, dispatchWithReceiptEffect(command))),
+      Effect.suspend(() =>
+        admitDispatch(command, withReviewChildLock(command, dispatchWithReceiptEffect(command))),
+      ),
     );
     const serializesOnParent =
       command.type === "thread.promote" ||

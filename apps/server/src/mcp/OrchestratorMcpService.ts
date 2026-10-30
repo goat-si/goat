@@ -146,6 +146,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
+import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { statusFromShell } from "./threadStatus.ts";
 import * as View from "./threadListView.ts";
@@ -1531,6 +1532,9 @@ const make = Effect.gen(function* () {
         model: task.model,
         ...(task.role === undefined ? {} : { role: task.role }),
         ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
+        ...(task.role === "review"
+          ? { reviewRound: yield* reviewRoundFor(parentProjection, task) }
+          : {}),
         ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
         ...(task.parentModelSelection === undefined
           ? {}
@@ -1720,6 +1724,9 @@ const make = Effect.gen(function* () {
 
       ...(task.role === undefined ? {} : { role: task.role }),
       ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
+      ...(task.role === "review"
+        ? { reviewRound: yield* reviewRoundFor(parentProjection, task) }
+        : {}),
       ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
       ...(task.parentModelSelection === undefined
         ? {}
@@ -1950,6 +1957,25 @@ const make = Effect.gen(function* () {
         waitTimedOut: !endsTaskWait(final),
       };
     });
+  const { continueReviewTask, reviewRoundFor } = makeContinueReviewTask({
+    threadManagement,
+    permissions,
+    sessionCapabilities: (instanceId) =>
+      providerAdapters.get(instanceId).pipe(
+        Effect.flatMap((adapter) => adapter.getCapabilities()),
+        Effect.map((capabilities) => capabilities.sessions),
+        Effect.mapError((error) => failure("provider_unavailable", errorMessage(error))),
+      ),
+    resolveTarget: (parent, target) =>
+      Effect.flatMap(loadProviders, (providers) =>
+        resolveTargetRechecking({ parent, target, providers }),
+      ),
+    resolveRuntimeMode: (parentMode, requested) => resolveRuntimeMode(parentMode, requested),
+    resolveInteractionMode,
+    requestKey,
+    finishTaskWait,
+    threadManagementFailure,
+  });
   const scheduledTaskRunModes = Effect.fn("OrchestratorMcpService.scheduledTaskRunModes")(
     function* (task: ScheduledTask) {
       const modes = [{ runtimeMode: task.runtimeMode, interactionMode: task.interactionMode }];
@@ -2350,6 +2376,16 @@ const make = Effect.gen(function* () {
           "Delegated tasks require an active run owned by this MCP provider session.",
         );
       }
+      if (input.continueFrom !== undefined)
+        return yield* continueReviewTask({
+          scope,
+          parent,
+          parentRun: { id: parentRun.id, rootNodeId: parentRun.rootNodeId },
+          input: { ...input, continueFrom: input.continueFrom },
+          memoryGrantCeiling,
+          channelChildWork,
+          commandReceipts,
+        });
       if ((input.target?.host === undefined) !== (input.remote === undefined))
         return yield* failure("invalid_request", "Pass target.host and remote.cwd together.");
       if (input.target?.host !== undefined && input.remote !== undefined) {
@@ -2912,6 +2948,7 @@ const make = Effect.gen(function* () {
             role: task.role,
             reviewerModel: task.modelSelection ?? null,
             authorModel: task.parentModelSelection ?? null,
+            continuedFrom: task.continuedFrom ?? null,
           };
           return ReviewExport.encodeReviewExportEntry(
             entry.kind === "decision"

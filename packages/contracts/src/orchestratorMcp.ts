@@ -48,6 +48,7 @@ import { OrchestrationV2RunTerminationCause } from "./orchestrationV2RunTerminat
 import { RemoteSenderAttribution, TurnCapability } from "./composerContext.ts";
 import { ThreadReplicaStatus } from "./threadReplica.ts";
 import { ThreadTitleRegeneration } from "./threadTitle.ts";
+import { OrchestratorMcpContinueFrom, OrchestratorMcpReviewRound } from "./reviewLedger.ts";
 import { OrchestrationSearchThreadsInput } from "./threadSearch.ts";
 import {
   OrchestrationV2Actor,
@@ -213,6 +214,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   ),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
+  continueFrom: Schema.optional(OrchestratorMcpContinueFrom),
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
@@ -265,6 +267,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   parentModelSelection: Schema.optional(ModelSelection),
   reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
+  reviewRound: Schema.optional(OrchestratorMcpReviewRound),
   options: Schema.optional(Schema.Array(ProviderOptionSelection)),
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),

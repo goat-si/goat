@@ -300,7 +300,7 @@ export class ThreadManagementReviewTaskFinishedError extends Schema.TaggedError<
   { threadId: ThreadId },
 ) {
   override get message(): string {
-    return `Review task on thread ${this.threadId} has finished. Use goat_task_create to start a new review round with a fresh child.`;
+    return `Review task on thread ${this.threadId} has finished. Start the next round with goat_task_create role='review': continueFrom=<its taskId> keeps this reviewer; omit it for a fresh one.`;
   }
 }
 
