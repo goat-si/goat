@@ -31,12 +31,14 @@ A hub is the one GOAT server your phone pairs with, ideally a machine that stays
 on. The phone and the hub must be on the same tailnet, so install Tailscale on
 both and sign in to the same account.
 
-On the hub's desktop app, open **Settings → Connections**. The **Connect your
-phone** card at the top has the **Tailscale HTTPS** switch and **Show phone
-QR**. Turn on Tailscale HTTPS first: without it, the QR dialog explains how to
-turn it on, and only offers a tailnet or local network address after you choose
-one. On a hub without the desktop app, run `goat serve --tailscale-serve`, then
-`goat pair --tailscale` to print a QR code.
+On the hub's desktop app, open **Settings → Connections** and choose **Show
+phone QR** in the **Connect your phone** card. If other devices cannot reach the
+computer yet, the dialog offers **Turn on Network access**; once Tailscale is
+running but Tailscale HTTPS is off, it offers **Turn on Tailscale HTTPS**. Each
+asks you to confirm because GOAT restarts to apply it, then GOAT reopens the QR
+dialog. Without Tailscale HTTPS the dialog offers a tailnet or local network
+address only after you choose one. On a hub without the desktop app, run
+`goat serve --tailscale-serve`, then `goat pair --tailscale` to print a QR code.
 
 On the phone, open GOAT and tap **Scan QR code**, allow camera access the first
 time, and point the camera at the hub's QR code. The app connects as soon as it
@@ -68,9 +70,11 @@ after the new one connects. To keep several servers on the phone, use
 
 Use direct pairing when the other device can reach the host's network address.
 
-On a desktop host, open **Settings → Connections**, enable **Network access**,
-then create a pairing link using an address the other device can reach. Changing
-network access restarts the desktop app. You can turn it off in the same place.
+On a desktop host, open **Settings → Connections → Authorized clients** and
+choose **Create link**. If other devices cannot reach the computer yet, the dialog offers to
+turn on Network access or Tailscale HTTPS; GOAT restarts and reopens the dialog. Create the link with an address the
+other device can reach. Turn network access off with the **Network access**
+switch in the same place, which also restarts the desktop app.
 
 For a command-line host, replace `<private-ip>` with the host's LAN or tailnet
 address:
