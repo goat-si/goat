@@ -31,6 +31,7 @@ import {
   type RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type ThreadId,
+  type TurnTokenUsage,
 } from "@goat/contracts";
 import { AgentScope, AgentScopeThreadId } from "@goat/shared/AgentScope";
 import { HTML_RENDER_TOOL_NAME } from "@goat/shared/htmlRender";
@@ -231,6 +232,43 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
   }
 }
 
+/**
+ * Maps one per-turn usage sample (flavors with reportsPerTurnPromptUsage)
+ * directly onto TurnTokenUsage: the response's counters already cover exactly
+ * this prompt.
+ */
+export function acpPerTurnPromptUsage(
+  usage: EffectAcpSchema.Usage | null | undefined,
+  hasSubagents: boolean,
+  terminalStatus: OrchestrationV2ProviderTurn["status"],
+): TurnTokenUsage {
+  if (usage == null) {
+    return { usageScope: "main_agent", usageStatus: "unavailable", hasSubagents };
+  }
+  // TurnTokenUsage contract: input includes cache read + write and reasoning
+  // is a subset of output, so clamp counters that exceed their parent and
+  // drop the ones the agent left unset. Cache writes are capped at whatever
+  // cache reads leave of input, so the pair cannot exceed it.
+  const clampSubset = (value: number | null | undefined, parent: number) =>
+    value == null ? undefined : Math.min(value, parent);
+  const cachedInputTokens = clampSubset(usage.cachedReadTokens, usage.inputTokens);
+  const cacheCreationTokens = clampSubset(
+    usage.cachedWriteTokens,
+    usage.inputTokens - (cachedInputTokens ?? 0),
+  );
+  const reasoningTokens = clampSubset(usage.thoughtTokens, usage.outputTokens);
+  return {
+    usageScope: "main_agent",
+    usageStatus: terminalStatus === "completed" ? "complete" : "partial",
+    hasSubagents,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(cacheCreationTokens === undefined ? {} : { cacheCreationTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+  };
+}
+
 export interface AcpAdapterV2Flavor {
   readonly buildPrompt?: (input: {
     readonly text: string;
@@ -371,6 +409,11 @@ export interface AcpAdapterV2Flavor {
   readonly assertComplete?: Effect.Effect<void, EffectAcpErrors.AcpError>;
   /** Interrupt the local prompt fiber before `session/cancel` (Grok wedged prompts). */
   readonly interruptPromptOnCancel?: boolean;
+  /**
+   * The agent's PromptResponse.usage counters read per-turn. The ACP spec
+   * leaves usage semantics open, so this stays unset until proven live.
+   */
+  readonly reportsPerTurnPromptUsage?: boolean;
   /** Grok can retain task_already_running until process exit. */
   readonly restartRuntimeAfterInterrupt?: boolean;
   readonly restartRuntimeOnEveryInterrupt?: boolean;
@@ -996,6 +1039,7 @@ interface ActiveAcpTurn {
   promptSettledStatus: "completed" | "interrupted" | "failed" | "cancelled" | null;
   workAccepted: boolean;
   readonly promptWireSettled: Deferred.Deferred<void, never>;
+  promptUsage: EffectAcpSchema.Usage | undefined;
   backgroundFinalizeGeneration: number;
 }
 
@@ -6887,6 +6931,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           status,
           startedAt: context.startedAt,
           completedAt,
+          ...(status === "running" || status === "pending"
+            ? {}
+            : {
+                // The prompt tap only captures usage for flavors that declared
+                // per-turn counters, so undeclared agents stay unavailable here.
+                turnTokenUsage: acpPerTurnPromptUsage(
+                  context.promptUsage,
+                  context.subagents.size > 0,
+                  status,
+                ),
+              }),
         });
 
         const terminalizeOpenRunOwnedItems = Effect.fnUntraced(function* (
@@ -7458,6 +7513,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               promptSettledStatus: null,
               workAccepted: false,
               promptWireSettled,
+              promptUsage: undefined,
               backgroundFinalizeGeneration: 0,
             };
             const carryover = yield* Ref.getAndSet(carryoverSubagents, null);
@@ -7666,15 +7722,21 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   return updated;
                 }),
               ),
-              // Wire settlement precedes the completion callback's permit request so
-              // settled-soft classification can observe the native return even when
-              // the completion fiber has not yet set promptSettled under the permit.
-              Effect.tap(() =>
-                Deferred.succeed(context.promptWireSettled, undefined).pipe(
-                  Effect.andThen(options.testHooks?.afterPromptWireSettled?.() ?? Effect.void),
-                  Effect.asVoid,
+              // Settle the wire before the completion callback's permit so a settled-soft
+              // Stop sees the native return. Capture usage only before finalize: a late
+              // response must not flip a settled turn.
+              Effect.tap((result) =>
+                Effect.sync(() => {
+                  if (flavor.reportsPerTurnPromptUsage === true && !context.finalized) {
+                    context.promptUsage = result.usage ?? undefined;
+                  }
+                }).pipe(
+                  Effect.andThen(
+                    Deferred.succeed(context.promptWireSettled, undefined).pipe(Effect.asVoid),
+                  ),
                 ),
               ),
+              Effect.tap(() => options.testHooks?.afterPromptWireSettled?.() ?? Effect.void),
               Effect.flatMap((result) =>
                 runRuntimeCallbackAtGeneration(
                   promptGeneration,
