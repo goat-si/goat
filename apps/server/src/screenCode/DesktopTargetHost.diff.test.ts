@@ -48,7 +48,10 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
         return {
           ...diff,
           since_status: status,
-          tree_diff: status === "diff" ? '~ [1] AXButton "Apply"' : `no change since ${args.since}`,
+          tree_diff:
+            status === "diff"
+              ? '~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nRows and indices are as before; use snapshot_id in element_tokens (s2:N).'
+              : `no change since ${args.since}. Rows and indices are as before; use snapshot_id in element_tokens (s2:N).`,
         };
       },
     });
@@ -66,25 +69,116 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     expect(full.snapshot).toBe("s1");
     const diff = yield* observe({ mode: "diff", baseObservationId: full.observationId });
     expect(sent.at(-1)?.args).toMatchObject({ since: "s1", tree_format: "both" });
-    expect(diff).toMatchObject({ mode: "diff", indexedText: '~ [1] AXButton "Apply"' });
+    expect(diff).toMatchObject({
+      mode: "diff",
+      indexedText: `~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged; latest full observation is ${full.observationId}`,
+    });
     yield* host.invoke(call("click", { elementRef: refAt(diff, 1) }, ref), context);
     expect(sent.at(-1)).toMatchObject({ tool: "click", args: { element_token: "s2:1" } });
     status = "no_change";
     const unchanged = yield* observe({ mode: "diff", baseObservationId: diff.observationId });
-    expect(unchanged).toMatchObject({ mode: "diff", indexedText: "no change since s2" });
+    expect(unchanged).toMatchObject({
+      mode: "diff",
+      indexedText: `no change; numbers unchanged; latest full observation is ${full.observationId}`,
+    });
     status = "unknown_snapshot";
     const before = reads;
     const fallback = yield* observe({ mode: "diff", baseObservationId: unchanged.observationId });
     expect(reads).toBe(before + 1);
     expect(fallback).toMatchObject({ mode: "full", resetReason: "full read: snapshot expired" });
+    status = "no_change";
+    const afterFallback = yield* observe({
+      mode: "diff",
+      baseObservationId: fallback.observationId,
+    });
+    expect(afterFallback.indexedText).toBe(
+      `no change; numbers unchanged; latest full observation is ${fallback.observationId}`,
+    );
     const nextCell = { ...context, cellId: "next" };
-    yield* host.observe({ ...call("get_accessibility_tree", {}, ref), cellId: "next" }, nextCell);
+    const nextFull = (yield* host.observe(
+      { ...call("get_accessibility_tree", {}, ref), cellId: "next" },
+      nextCell,
+    )).value as Observed;
+    expect(nextFull.mode).toBe("full");
     expect(sent.at(-1)?.args).not.toHaveProperty("since");
+    const nextDiff = (yield* host.observe(
+      {
+        ...call(
+          "get_accessibility_tree",
+          { mode: "diff", baseObservationId: nextFull.observationId },
+          ref,
+        ),
+        cellId: "next",
+      },
+      nextCell,
+    )).value as Observed;
+    expect(nextDiff.indexedText).toBe(
+      `no change; numbers unchanged; latest full observation is ${nextFull.observationId}`,
+    );
+    for (const observation of [diff, unchanged, afterFallback, nextDiff])
+      expect(observation.indexedText).not.toContain("element_tokens");
     const retired = yield* host
       .invoke(call("click", { elementRef: refAt(full, 1) }, ref), context)
       .pipe(Effect.result);
     expect(retired._tag === "Failure" && retired.failure.code).toBe("stale_reference");
   }),
+);
+
+it.effect(
+  "a desktop diff keeps unnumbered and multi-line rows and drops the driver's token header",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const { host } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          reads++;
+          const snapshot = `s${reads}`;
+          const old = goat2WindowState(args);
+          const full = {
+            ...old,
+            snapshot_id: snapshot,
+            elements:
+              "elements" in old
+                ? old.elements?.map((item) => ({
+                    ...item,
+                    element_token: `${snapshot}:${item.element_index}`,
+                  }))
+                : undefined,
+          };
+          if (args.since === undefined) return full;
+          const { tree_markdown: _tree, ...diff } = full;
+          return {
+            ...diff,
+            since_status: "diff",
+            tree_diff: [
+              "since s1: 0 added, 2 changed, 0 removed. Use element_tokens s2:N for + and ~ rows and unchanged rows; - ids are from s1.",
+              '~ AXStaticText = "8"',
+              '~ [1] AXButton "Apply" [actions=[press,name:move',
+              "target:0x0]]",
+            ].join("\n"),
+          };
+        },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observe = (args: Record<string, string>) =>
+        host
+          .observe(call("get_accessibility_tree", args, ref), context)
+          .pipe(Effect.map((result) => result.value as Observed));
+      const full = yield* observe({});
+      const diff = yield* observe({ mode: "diff", baseObservationId: full.observationId });
+      expect(diff.indexedText).toBe(
+        [
+          '~ AXStaticText = "8"',
+          '~ [1] AXButton "Apply" [actions=[press,name:move',
+          "target:0x0]]",
+          `other numbers unchanged; latest full observation is ${full.observationId}`,
+        ].join("\n"),
+      );
+    }),
 );
 
 it.effect("a diff after a filtered observation reads the whole window", () =>
@@ -332,13 +426,24 @@ it.live.each([
       environmentId: "env",
       invocation: context.invocation,
       source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
-        await app.observe(); await app.observe(); const stale = [];
+        const first = await app.observe(); const second = await app.observe(); const stale = [];
         for (const n of ${JSON.stringify(scenario.clicks)}) {
           try { await app.click(n); } catch (e) { stale.push({number:n, code:e.code, nothingSent:e.nothingSent}); }
         }
-        return stale;`,
+        return {first, second, stale};`,
     });
-    expect(result.value).toEqual(
+    const value = result.value as {
+      first: { observationId: string; mode: string };
+      second: { text: string; mode: string };
+      stale: unknown;
+    };
+    expect(value.first.mode).toBe("full");
+    expect(value.second).toMatchObject({
+      mode: "diff",
+      text: `${scenario.diff}\nother numbers unchanged; latest full observation is ${value.first.observationId}`,
+    });
+    expect(value.second.text).not.toContain("element_tokens");
+    expect(value.stale).toEqual(
       scenario.stale.map((number) => ({ number, code: "stale_reference", nothingSent: true })),
     );
     expect(sent.filter((entry) => entry.tool === "click").map((entry) => entry.args)).toEqual(
