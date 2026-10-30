@@ -13,7 +13,15 @@ management: `terminal:operate` is a shell as the server's user and
 session with every scope through `goat auth session issue`, so withholding
 management from the default would not be a boundary. A narrower client gets
 explicit scopes. Creating another pairing link requires both `access:write` and
-every scope being delegated. The
+every scope being delegated, with one exception: `hub:proxy` is never passed on
+by holding it. Only the owner's own bootstrap sessions (`desktop-bootstrap`, and
+`administrative-bootstrap` from a headless server's startup URL) may put it on a
+pairing, and only while the hub is on
+([hubProxyDelegation.ts](../../apps/server/src/auth/hubProxyDelegation.ts)). HTTP
+pairing always mints `one-time-token` sessions, so a paired device cannot grant
+itself or anyone else hub access. The reusable dev token does not count as the
+owner. A local `goat auth session issue --subject` can name any subject, which is
+no wider than the `goat pair --hub-proxy` its caller can already run. The
 [auth handlers](../../apps/server/src/auth/http.ts) enforce this at issuance;
 client labels and device metadata have no authorization role.
 

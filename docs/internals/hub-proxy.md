@@ -28,7 +28,13 @@ forwards `/hub`, including WebSocket upgrades, because dev is single origin.
 
 The client authenticates to the hub with its normal hub session: cookie, bearer, DPoP or the
 hub's own `wsTicket`. Proxying needs the `hub:proxy` scope. It is granted only on request
-(`goat pair --hub-proxy`), never by default and never implied by another scope. Signed sessions
+(`goat pair --hub-proxy`, the owner's **Also open hub devices** choice when pairing while the hub
+is on, or Connect standing consent), never by default and never implied by another scope. The
+owner grants it without holding it, so the desktop app and the owner's browser never proxy
+through their own hub, and a paired device cannot hand it on
+([Environment authentication](./environment-auth.md)). Turning the hub off stops new grants but
+leaves existing pairings as they are; the proxy route does not read `hub.enabled`, and Authorized
+clients marks each client with hub access so it can be revoked. Signed sessions
 decode their scopes strictly, so a server rolled back to a build without `hub:proxy` rejects
 every session carrying it. Keeping it opt-in limits that to hub pairings; after a rollback,
 pair those devices again. Node sessions never carry `hub:proxy`: they hold only the forwarded

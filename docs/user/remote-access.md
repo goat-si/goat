@@ -40,6 +40,11 @@ dialog. Without Tailscale HTTPS the dialog offers a tailnet or local network
 address only after you choose one. On a hub without the desktop app, run
 `goat serve --tailscale-serve`, then `goat pair --tailscale` to print a QR code.
 
+When **This machine is the hub** is on, the dialog first offers **Also open hub
+devices**, on by default, and creates the QR when you choose **Create phone QR**.
+With it on, the phone also opens the machines in the hub's
+[device list](#hub-devices); with it off, the phone reaches only the hub itself.
+
 On the phone, open GOAT and tap **Scan QR code**, allow camera access the first
 time, and point the camera at the hub's QR code. The app connects as soon as it
 reads the code and opens the hub's sessions. To type an address and pairing code
@@ -604,13 +609,22 @@ mini or a small VPS. That server is the hub. Every machine the hub lists as a no
 up on the phone with its own threads, and the phone reaches it through the hub. The phone never
 needs SSH, Tailscale access to the node, or a pairing of its own with that machine.
 
-1. On the hub, pair the phone with hub access: `goat pair --tailscale --hub-proxy`. A pairing
-   made without `--hub-proxy` reaches only the hub itself; pair again to add it.
+1. On the hub, pair the phone with hub access. In the desktop app, choose **Show phone QR** and
+   keep **Also open hub devices** on. In a browser opened with the startup link the hub prints,
+   create a link under **Authorized clients** and tick **Open hub devices**. On the command line,
+   run `goat pair --tailscale --hub-proxy`. In the app, only the hub's own desktop or startup
+   browser can grant this, and only while the hub is on; paired phones and browsers cannot. A
+   phone paired without it reaches only the hub, and its **Settings → Hub devices** says so;
+   choose **Scan new QR** there and scan a QR made with hub access.
 2. Add the machines to the hub's [device list](#hub-devices). An SSH host needs nothing
    more. If GOAT never ran on it, choose **Set up** once, so the hub installs GOAT there and
    learns which machine it is.
 3. For a machine linked over HTTPS, choose **Allow phone access** and paste a pairing link
    created on that machine with `goat pair`. Links made for agents cannot open your threads.
+
+**Settings → Connections → Authorized clients** marks each device and unused link that has
+**Hub access**. Turning the hub off stops new grants but leaves devices already paired with hub
+access as they are; revoke a device there to end its access.
 
 Through the hub you can open a node's threads, watch them live, send follow-ups with images or
 files, stop a running turn, answer approval requests, and start a new thread on any node in a
