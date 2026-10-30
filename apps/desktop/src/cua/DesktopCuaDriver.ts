@@ -39,7 +39,7 @@ import {
 } from "./helperReadiness.ts";
 import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
-import { makeStopFirstRequests, serve } from "./desktopCuaRequests.ts";
+import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -92,9 +92,6 @@ interface OwnedHost {
   ) => ReturnType<typeof refreshDesktopManifest>;
   /** It exited before GOAT stopped it; retire aborts before stopping, so its own stop never is. */
   crashed?: boolean;
-  /** The start it serves now, and the ones it served before, whose late Stop leaves it running. */
-  serving?: string;
-  superseded?: Set<string>;
   monitor?: Promise<void>;
   cleanup?: Promise<void>;
 }
@@ -765,8 +762,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     request: DesktopCuaDriverRequest,
   ) {
     if (closed) return;
-    // A late Stop of an earlier start leaves the start the host serves now running.
-    if (!request.enabled && owned?.superseded?.has(request.requestId))
+    // A late Stop of an earlier start leaves the newer start's host running.
+    if (!request.enabled && requests.late(request.requestId))
       return yield* report(request.requestId, "stopped");
     currentRequest = request;
     if (!request.enabled) {
@@ -836,8 +833,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         }
         if (!requests.stopped(request.requestId) && !(yield* spawn(selected, "agents"))) return;
       }
-      // Recorded even for a start its Stop cuts short, so a newer start's host outlives that Stop.
-      if (owned) serve(owned, request.requestId);
       if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
       const entry = owned!;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(

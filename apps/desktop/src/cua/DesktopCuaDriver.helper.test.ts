@@ -567,6 +567,33 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
     ),
   );
 
+  it.effect(
+    "a Stop of a start that never got a host leaves the newer start's own host running",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "checkStart",
+          });
+          yield* test.request("a");
+          yield* test.helperStarting;
+          // The server let b start before a's Stop got here; that Stop ends a's readiness check.
+          yield* test.request("b");
+          yield* test.request("a", false);
+          const cut = yield* test.next;
+          assert.deepEqual([cut.requestId, cut.status], ["a", "unavailable"]);
+          const newer = yield* test.next;
+          assert.deepEqual([newer.requestId, newer.status], ["b", "ready"]);
+          const before = test.counts();
+          const late = yield* test.next;
+          assert.deepEqual([late.requestId, late.status], ["a", "stopped"]);
+          assert.deepEqual(test.counts(), before);
+        }),
+      ),
+  );
+
   it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
     Effect.scoped(
       Effect.gen(function* () {
