@@ -408,6 +408,19 @@ export const createDesktopTargetHost = (deps: {
         listedPid = undefined;
         bundleFiltered = false;
       }
+      // Every window passed the reply cap while the app runs as several processes: each one's
+      // own list holds all of its windows, so they are read until one shows the window.
+      if (!Array.isArray(listedWindows) && filter === undefined && pids.size > 1)
+        for (const each of pids) {
+          if (each === undefined) continue;
+          const part = yield* listWindows({ pid: each });
+          if (!Array.isArray(part.windows)) break;
+          if (part.windows.some((window) => object(window)?.window_id === requestedWindow)) {
+            ({ reply: windowsReply, windows: listedWindows } = part);
+            listedPid = each;
+            break;
+          }
+        }
       // A list cut at the reply cap cannot show the window, its owner, or a duplicate of its id.
       if (!Array.isArray(listedWindows))
         return yield* Effect.fail(

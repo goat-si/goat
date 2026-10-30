@@ -235,7 +235,7 @@ it.effect("a window id listed for two processes is ambiguous even when one match
 );
 
 it.effect(
-  "a window list cut at the cap refuses every bind but one through the app's only process",
+  "a window list cut at the cap refuses a bind by window_id alone, which has no process to ask",
   () =>
     Effect.gen(function* () {
       const { host, sent } = fixture(
@@ -254,11 +254,8 @@ it.effect(
       expect(
         sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
       ).toEqual([{ pid: 900 }]);
-      // Neither can show whose window it is or that no other window has its id.
-      for (const args of [{ window_id: 4194307 }, { name: "python3", window_id: 4194307 }]) {
-        const refused = yield* bindResult(host, args);
-        expect(refused._tag === "Failure" && refused.failure.code).toBe("downstream_failure");
-      }
+      const refused = yield* bindResult(host, { window_id: 4194307 });
+      expect(refused._tag === "Failure" && refused.failure.code).toBe("downstream_failure");
     }),
 );
 
@@ -492,5 +489,32 @@ it.effect(
       const result = yield* bindResult(host, { bundle_id: "org.example.Editor", window_id: 77 });
       expect(result._tag === "Failure" && result.failure.code).toBe("downstream_failure");
       expect(result._tag === "Failure" && result.failure.detail).toBeUndefined();
+    }),
+);
+
+it.effect(
+  "an app of several processes binds through their own lists when every window passes the cap",
+  () =>
+    Effect.gen(function* () {
+      const second = { ...script, window_id: 4194400, title: "Second", pid: 700 };
+      const { host, sent } = fixture(
+        {
+          list_apps: { apps: appRows },
+          list_windows: (args: { pid?: number }) =>
+            args.pid === undefined ? cut : listWindows([script, second, thunarWindow])(args),
+        },
+        undefined,
+        undefined,
+        undefined,
+        "linux",
+      );
+      const bound = yield* bindResult(host, { name: "python3", window_id: 4194307 });
+      expect(bound._tag).toBe("Success");
+      expect(
+        sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
+      ).toEqual([{}, { pid: 700 }, { pid: 1555 }]);
+      // No process of the app shows it: unchecked, since the full list could not be read.
+      const elsewhere = yield* bindResult(host, { name: "python3", window_id: 4194311 });
+      expect(elsewhere._tag === "Failure" && elsewhere.failure.code).toBe("downstream_failure");
     }),
 );
