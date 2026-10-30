@@ -1,5 +1,6 @@
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
+import { urlNeedsEnvironmentRoute } from "~/browser/openEnvironmentUrl";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "~/components/solar";
 import { Input } from "~/components/ui/input";
@@ -333,6 +334,9 @@ function PdfDocument(props: {
                 selected={selected?.page === page.index ? selected : undefined}
                 navigate={navigate}
                 openLink={openLink}
+                needsEnvironmentRoute={(url) =>
+                  urlNeedsEnvironmentRoute(props.threadRef?.environmentId ?? null, url)
+                }
               />
             </div>
           ))}

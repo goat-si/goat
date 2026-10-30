@@ -15,6 +15,7 @@ import {
   resolveLinkTarget,
 } from "./browserLinkTarget";
 import { BrowserSettingsReadError, openUrlInPreview } from "./openFileInPreview";
+import { openEnvironmentUrlExternally } from "./openEnvironmentUrl";
 
 const NO_MODIFIER = { metaKey: false, ctrlKey: false } as const;
 
@@ -52,6 +53,10 @@ export function useOpenLink(threadRef: ScopedThreadRef | null | undefined): (
       const failure = squashAtomCommandFailure(result);
       if (failure instanceof BrowserSettingsReadError) throw failure;
       console.error(result.cause);
+    }
+    if (targetThreadRef) {
+      await openEnvironmentUrlExternally(targetThreadRef.environmentId, url);
+      return;
     }
     const api = readLocalApi();
     if (!api) throw new Error("Link opening is unavailable.");

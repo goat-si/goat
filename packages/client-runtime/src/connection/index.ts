@@ -32,6 +32,7 @@ export { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
 export { OutdatedHostUpdateError } from "./outdatedHostUpdate.ts";
 
 export * from "./desktopLocal.ts";
+export * from "./environmentLoopbackUrl.ts";
 export { handleConnectionCatalogOperation } from "./catalogHost.ts";
 
 export * as HubProxyAuth from "./hubProxyAuthSource.ts";

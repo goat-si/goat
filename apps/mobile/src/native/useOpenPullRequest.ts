@@ -6,6 +6,7 @@ import { useSelectWorkspaceDetail } from "../features/workspace/useSelectWorkspa
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useProjects, useThreadShell } from "../state/entities";
 import { tryOpenExternalUrl } from "../lib/openExternalUrl";
+import { tryOpenEnvironmentUrl } from "../lib/openEnvironmentUrl";
 import { appAtomRegistry } from "../state/atom-registry";
 import { environmentServerConfigsAtom } from "../state/server";
 
@@ -18,7 +19,7 @@ export function useNavigateToPullRequest(options?: { readonly replace?: boolean 
   const projects = useProjects();
   const replace = options?.replace;
   return useCallback(
-    async (url: string, context: PullRequestContext | null) => {
+    async (url: string, context: PullRequestContext | null, sourceEnvironmentId?: string) => {
       // Read at press time so a capability push does not hand every link a new handler.
       const serverConfigs = appAtomRegistry.get(environmentServerConfigsAtom);
       const params = nativePullRequestDestination(
@@ -27,7 +28,12 @@ export function useNavigateToPullRequest(options?: { readonly replace?: boolean 
         projects,
         (environmentId) => serverConfigs.get(environmentId)?.environment.capabilities,
       );
-      if (!params) return tryOpenExternalUrl(url, "pull-request");
+      if (!params) {
+        const environmentId = sourceEnvironmentId ?? context?.environmentId;
+        return environmentId
+          ? tryOpenEnvironmentUrl(EnvironmentId.make(environmentId), url, "pull-request")
+          : tryOpenExternalUrl(url, "pull-request");
+      }
       // Android shows one page at a time; iOS opens it over the current page, so Back returns.
       if (Platform.OS === "android") selectDetail({ name: "PullRequest", params });
       else if (replace) navigation.dispatch(StackActions.replace("PullRequest", params));
@@ -71,6 +77,7 @@ export function useOpenPullRequest(options?: {
         environmentId && projectId
           ? { environmentId: String(environmentId), projectId: String(projectId) }
           : null,
+        environmentId,
       ),
     [environmentId, projectId, navigateToPullRequest],
   );

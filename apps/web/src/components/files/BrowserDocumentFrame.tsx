@@ -36,6 +36,11 @@ import { FileSurfaceLoading } from "./fileSurfaceChrome";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "~/components/chat/ExpandedImagePreview";
+import { toastManager } from "~/components/ui/toast";
+import {
+  isEnvironmentUrlUnreachableError,
+  openEnvironmentUrlExternally,
+} from "~/browser/openEnvironmentUrl";
 import { useHtmlRenderTheme } from "~/hooks/useHtmlRenderTheme";
 import { shortcutConflictKey } from "~/keybindings";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
@@ -197,11 +202,18 @@ export function HtmlRenderDocument(props: {
   );
   const openChangeRequestLink = useOpenChangeRequestLink(props.threadRef);
   const openLink = useOpenLink(props.threadRef);
+  const reportOpenFailure = (cause: unknown) => {
+    if (isEnvironmentUrlUnreachableError(cause)) {
+      toastManager.add({ type: "error", title: "Unable to open link", description: cause.message });
+    } else console.error(cause);
+  };
   const open = useEffectEvent((url: string, modifiers: { metaKey: boolean; ctrlKey: boolean }) => {
     if (modifiers.metaKey || modifiers.ctrlKey) {
-      void readLocalApi()
-        ?.shell.openExternal(url)
-        .catch((cause: unknown) => console.error(cause));
+      void (
+        props.threadRef
+          ? openEnvironmentUrlExternally(props.threadRef.environmentId, url)
+          : readLocalApi()?.shell.openExternal(url)
+      )?.catch(reportOpenFailure);
       return;
     }
     if (
@@ -215,7 +227,7 @@ export function HtmlRenderDocument(props: {
     ) {
       return;
     }
-    void openLink(url, { event: modifiers }).catch((cause: unknown) => console.error(cause));
+    void openLink(url, { event: modifiers }).catch(reportOpenFailure);
   });
   const { onFullscreenChange } = props;
   useEffect(() => {

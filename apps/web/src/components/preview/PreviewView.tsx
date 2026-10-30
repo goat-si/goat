@@ -41,6 +41,7 @@ import {
   useThreadPreviewState,
 } from "~/previewStateStore";
 import { resolveDiscoveredServerUrl } from "~/browser/browserTargetResolver";
+import { openEnvironmentUrlExternally } from "~/browser/openEnvironmentUrl";
 import { useEnvironmentSupportsServerBrowser } from "~/state/entities";
 import {
   useEnvironment,
@@ -116,6 +117,24 @@ function previewProfileName(
 
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
 
+// A server tab's URL is the environment's address; a desktop tab's URL is what this device loaded.
+function openPreviewUrlExternally(
+  environmentId: ScopedThreadRef["environmentId"],
+  url: string,
+  serverRendered: boolean,
+) {
+  const opened = serverRendered
+    ? openEnvironmentUrlExternally(environmentId, url)
+    : (localApi?.shell.openExternal(url) ?? Promise.resolve());
+  void opened.catch((error: unknown) => {
+    toastManager.add({
+      type: "error",
+      title: "Unable to open in browser",
+      description: error instanceof Error ? error.message : "An error occurred.",
+    });
+  });
+}
+
 function ServerTabFileNotShown(props: {
   readonly threadRef: ScopedThreadRef;
   readonly tabId: string;
@@ -135,7 +154,7 @@ function ServerTabFileNotShown(props: {
             )
           : null
       }
-      onOpen={() => void localApi?.shell.openExternal(props.url).catch(() => undefined)}
+      onOpen={() => openPreviewUrlExternally(props.threadRef.environmentId, props.url, true)}
     />
   );
 }
@@ -367,8 +386,8 @@ export function PreviewView({
   };
 
   const handleOpenInBrowser = () => {
-    if (!localApi || !url) return;
-    void localApi.shell.openExternal(url).catch(() => undefined);
+    if (!url) return;
+    openPreviewUrlExternally(threadRef.environmentId, url, serverOwnsRendering);
   };
 
   const moveTarget = alternatePreviewRuntime(

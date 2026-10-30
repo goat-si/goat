@@ -14,7 +14,12 @@ export function PdfPage(props: {
   matches: readonly PdfMatch[];
   selected: PdfMatch | undefined;
   navigate: (page: number) => void;
-  openLink: (url: string) => Promise<void>;
+  openLink: (
+    url: string,
+    options?: { readonly event?: { metaKey: boolean; ctrlKey: boolean; button?: number } },
+  ) => Promise<void>;
+  /** Middle clicks are left to the browser unless the link needs the environment's address. */
+  needsEnvironmentRoute: (url: string) => boolean;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const layer = useRef<{ text: TextLayer; starts: number[] } | null>(null);
@@ -127,6 +132,15 @@ export function PdfPage(props: {
           style={{ left: link.left, top: link.top, width: link.width, height: link.height }}
           href={link.url ?? `#page=${link.targetPageNumber}`}
           aria-label={link.url ?? `Go to page ${link.targetPageNumber}`}
+          onAuxClick={(event) => {
+            if (event.button !== 1 || !link.url || !props.needsEnvironmentRoute(link.url)) return;
+            event.preventDefault();
+            void props
+              .openLink(link.url, { event: { metaKey: false, ctrlKey: false, button: 1 } })
+              .catch((cause: unknown) =>
+                setError(cause instanceof Error ? cause.message : "Could not open link."),
+              );
+          }}
           onClick={(event) => {
             event.preventDefault();
             if (link.targetPageNumber) props.navigate(link.targetPageNumber);
