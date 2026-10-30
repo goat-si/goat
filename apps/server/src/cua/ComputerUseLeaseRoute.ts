@@ -212,17 +212,19 @@ export const reportLayer = HttpRouter.add(
       return HttpServerResponse.empty({ status: 204 });
     }
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    if ("type" in value && value.type === "callOutcome") {
+    if ("type" in value) {
       const control = yield* leases.currentControl(threadId);
       if (Option.isNone(control) || control.value.controlId !== value.controlId)
         return HttpServerResponse.empty({ status: 409 });
       const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
       if (Option.isNone(sql)) return HttpServerResponse.empty({ status: 503 });
-      const keep = yield* ServerSettings.ServerSettingsService.pipe(
-        Effect.flatMap((settings) => settings.getSettings),
-        Effect.map((settings) => settings.computerUseKeepTypedText),
-        Effect.orElseSucceed(() => false),
-      );
+      const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+      const keep = Option.isSome(settings)
+        ? yield* settings.value.getSettings.pipe(
+            Effect.map((value) => value.computerUseKeepTypedText),
+            Effect.orElseSucceed(() => false),
+          )
+        : false;
       const history = yield* makeComputerUseHistory.pipe(
         Effect.provideService(SqlClient.SqlClient, sql.value),
       );
