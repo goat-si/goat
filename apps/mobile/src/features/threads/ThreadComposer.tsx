@@ -32,7 +32,14 @@ import {
 } from "@goat/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
@@ -157,6 +164,7 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   );
   // A line that fits the expanded editor may still overflow its compact slot.
   // Compare its measured width too so widening cannot trigger a collapse loop.
+  // iOS reports a ceiled width, so this can expand up to a point early; it never loops.
   const isExpanded =
     value.length > 0 &&
     (contentHeight > text.lineHeight * 1.5 ||
@@ -167,6 +175,12 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   const [hasRisen, setHasRisen] = useState(false);
   if (!isExpanded && hasRisen) setHasRisen(false);
   const isWide = isExpanded && (Platform.OS === "android" || hasRisen);
+  // Only the latest animation may finish the rise: a collapse and re-expand can leave an older
+  // completion queued.
+  const riseGeneration = useRef(0);
+  const finishRise = useEffectEvent((generation: number) => {
+    if (generation === riseGeneration.current) setHasRisen(true);
+  });
   const compactRowHeight = Math.max(44, minimum);
   const animatedHeight = useSharedValue(height);
   const surfaceHeight = useSharedValue(compactRowHeight);
@@ -182,6 +196,8 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
     }
     // Resolve wrapping at the destination width before animating vertically.
     // Intermediate widths otherwise produce taller measurements mid-transition.
+    riseGeneration.current += 1;
+    const generation = riseGeneration.current;
     let nextFrame: number | undefined;
     const frame = requestAnimationFrame(() => {
       nextFrame = requestAnimationFrame(() => {
@@ -189,7 +205,7 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
         surfaceHeight.set(withTiming(targetSurfaceHeight, config));
         expansion.set(
           withTiming(Number(isExpanded), config, (finished) => {
-            if (finished && isExpanded) runOnJS(setHasRisen)(true);
+            if (finished && isExpanded) runOnJS(finishRise)(generation);
           }),
         );
       });
