@@ -374,7 +374,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (screenLocked) {
         if (options.onScreenLocked !== undefined)
           yield* options.onScreenLocked().pipe(Effect.forkIn(scope));
-        yield* pause("screen_locked").pipe(Effect.forkIn(scope));
+        yield* lifecycleLock.withPermits(1)(pause("screen_locked")).pipe(Effect.forkIn(scope));
       }
     });
     return current.driver.lines.pipe(
