@@ -281,6 +281,11 @@ export function createMemoryEnvironmentAtoms<R, E>(
           supportsMemoryProtocol(config.environment.capabilities) &&
           ((tag !== WS_METHODS.memoryHubDiagnostics && tag !== WS_METHODS.memoryHubReconcile) ||
             config.environment.capabilities.memory?.hubDiagnostics === true) &&
+          ((tag !== WS_METHODS.siteNotesList &&
+            tag !== WS_METHODS.siteNotesWrite &&
+            tag !== WS_METHODS.siteNotesDelete &&
+            tag !== WS_METHODS.siteNotesRestoreSeed) ||
+            config.environment.capabilities.memory?.siteNotes === true) &&
           (tag !== WS_METHODS.memoryImportProvider ||
             config.environment.capabilities.memory?.importProvider === true)
         );

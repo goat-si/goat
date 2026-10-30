@@ -1,3 +1,4 @@
+import { render as renderScreen } from "../../../test/render";
 import { memoryImportTestLocks } from "../../test/memoryImportLocks";
 import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryRunAccessLabel } from "./MemoryRunAccessLabel";
@@ -68,11 +69,13 @@ function notifyFixture() {
   for (const listener of state.listeners) listener();
 }
 function fixtureAtomValue(atom: { label: string }) {
-  return atom.label === "syncChanges"
-    ? state.exposure
-    : ["forget", "upsert", "projectBindingGet"].includes(atom.label)
-      ? state.write
-      : state.allowed;
+  return atom.label.startsWith("siteNotes")
+    ? false
+    : atom.label === "syncChanges"
+      ? state.exposure
+      : ["forget", "upsert", "projectBindingGet"].includes(atom.label)
+        ? state.write
+        : state.allowed;
 }
 vi.mock("@effect/atom-react", async (original) => {
   const { useEffect } = await import("react");
@@ -152,6 +155,10 @@ vi.mock("../../state/memory", async () => {
           "hubSettingsUpdate",
           "ownerSourceReadPolicyGet",
           "ownerSourceReadPolicyUpdate",
+          "siteNotesList",
+          "siteNotesWrite",
+          "siteNotesDelete",
+          "siteNotesRestoreSeed",
         ].map((label) => [label, { label, permissionAtom: () => ({ label }) }]),
       ),
       ...Object.fromEntries(
@@ -185,7 +192,6 @@ vi.mock("../../state/entities", () => ({
 }));
 // Covered by its own controls; this page test exercises the memory browser and sharing flows.
 vi.mock("./MemoryGenerationSettings", () => ({ MemoryGenerationSettings: () => null }));
-vi.mock("./MemorySitesSettings", () => ({ MemorySitesSettings: () => null }));
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentSettings: (_id: string, selector: (settings: unknown) => unknown) => {
     useFixtureVersion();
@@ -366,11 +372,25 @@ vi.mock("./settingsLayout", () => ({
     </div>
   ),
   SettingsPageContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  SettingsSection: ({ children, id }: { children: ReactNode; id?: string }) => (
-    <section id={id}>{children}</section>
+  SettingsSection: ({
+    children,
+    id,
+    title,
+  }: {
+    children: ReactNode;
+    id?: string;
+    title?: ReactNode;
+  }) => (
+    <section id={id}>
+      <h2>{title}</h2>
+      {children}
+    </section>
   ),
 }));
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => state.navigate,
+}));
 import { RegistryContext } from "@effect/atom-react";
 import {
   MemorySettings,
@@ -938,6 +958,28 @@ async function supportedScreen(withDetails = true, followNavigation = false) {
   await render();
   return { render, registry };
 }
+
+it("keeps the Memory page usable when the environment does not offer site notes", async () => {
+  state.environment = {
+    serverConfig: { environment: { capabilities: { memory: { protocolVersion: 1 } } } },
+  };
+  const { AtomRegistry } = await import("effect/reactivity");
+  const registry = AtomRegistry.make();
+  const get = registry.get.bind(registry);
+  vi.spyOn(registry, "get").mockImplementation((atom) => {
+    const label = (atom as unknown as { label?: string }).label;
+    return label ? (fixtureAtomValue({ label }) as never) : get(atom);
+  });
+  await using screen = await renderScreen(
+    <RegistryContext value={registry}>
+      <MemorySettings target={validateMemorySettingsSearch({ environmentId: "remote-owner" })} />
+    </RegistryContext>,
+  );
+  await expect
+    .element(screen.getByRole("switch", { name: "Allow agent memory access" }))
+    .toBeInTheDocument();
+  await expect.element(screen.getByText("Site notes", { exact: true })).not.toBeInTheDocument();
+});
 
 it.each([false, true])(
   "clears an in-flight forget on write-only revoke and ignores its late result (after regrant: %s)",

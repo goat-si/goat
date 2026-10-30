@@ -803,6 +803,37 @@ describe("staged memory RPC", () => {
         expect(invoked).toBe(false);
       }),
   );
+  it.effect("rejects site notes without the advertised capability before dispatch", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      let invoked = false;
+      const client = {
+        [WS_METHODS.siteNotesList]: () => {
+          invoked = true;
+          return Effect.succeed([]);
+        },
+      } as unknown as WsRpcProtocolClient;
+      yield* SubscriptionRef.set(
+        h.activeSession,
+        Option.some({
+          ...session(client),
+          initialConfig: Effect.succeed({
+            environment: { capabilities: { memory: { protocolVersion: 1 } } },
+          } as ServerConfig),
+        }),
+      );
+      const result = yield* requestGuarded(WS_METHODS.siteNotesList, {}).pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, h.supervisor),
+        Effect.provideService(RpcPermissionGuard, { authorize: () => Effect.void }),
+        Effect.exit,
+      );
+      expect(Exit.isFailure(result)).toBe(true);
+      if (Exit.isFailure(result)) {
+        expect(Cause.squash(result.cause)).toBeInstanceOf(EnvironmentRpcUnavailableError);
+      }
+      expect(invoked).toBe(false);
+    }),
+  );
   it.effect.each(["capability", "method"] as const)(
     "rejects a missing memory stream %s before opening it",
     (missing) =>

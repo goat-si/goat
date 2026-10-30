@@ -99,6 +99,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       retainedLocalSpace: Schema.optionalKey(Schema.Boolean),
       /** memory.syncStatus may report a paused memory model when the request opts in. */
       generationHold: Schema.optionalKey(Schema.Boolean),
+      /** Site notes RPCs are absent on older servers. */
+      siteNotes: Schema.optionalKey(Schema.Boolean),
       /** Separate diagnostics/read and Settings reconcile RPCs; absent on older servers. */
       hubDiagnostics: Schema.optionalKey(Schema.Boolean),
       /** Server accepts the opt-in `aside` import source format; absent on older servers. */
