@@ -119,7 +119,6 @@ export const makeComputerUseStanding = (deps: {
   const record = Effect.fn("Handoffs.recordComputerUseScope")(function* (
     input: HandoffRespondInput,
     result: Handoff,
-    endsApproved: boolean,
   ) {
     if (
       result.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
@@ -142,10 +141,6 @@ export const makeComputerUseStanding = (deps: {
           )
           .pipe(Effect.mapError(unavailable));
       }
-    }
-    if (endsApproved) {
-      yield* clear(input.threadId);
-      yield* revalidateUnlocked(input.threadId);
     }
   });
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
@@ -180,13 +175,38 @@ export const makeComputerUseStanding = (deps: {
                 SELECT sequence FROM orchestration_events
                 WHERE application_event_version = 2 AND aggregate_kind = 'thread'
                   AND stream_id = ${input.requestedBy.threadId} AND event_type = 'message.updated'
+                  AND json_extract(payload_json, '$.role') = 'user'
                   AND json_extract(payload_json, '$.id') = ids.value
                 ORDER BY sequence LIMIT 1
               )
-              WHERE event.sequence > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks
+              WHERE json_extract(event.payload_json, '$.createdBy') = 'user'
+                AND json_extract(event.payload_json, '$.creationSource') IN ('web', 'mobile')
+                AND json_type(event.payload_json, '$.context.guest') IS NULL
+                AND json_extract(event.payload_json, '$.scheduledTaskId') IS NULL
+                AND json_extract(event.payload_json, '$.senderThreadId') IS NULL
+                AND json_extract(event.payload_json, '$.channel') IS NULL
+                AND COALESCE(json_extract(event.payload_json, '$.workflowScript'), 0) = 0
+                AND event.sequence > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks
                 WHERE scope IN ('', ${input.requestedBy.threadId})), 0)`.pipe(
               Effect.mapError(unavailable),
             );
+            const originals = new Map(eligible.map((row) => [row.message_id, row.text]));
+            const evidence = new Map<string, Array<(typeof input.namedMessages)[number]>>();
+            for (const entry of input.namedMessages) {
+              const original = originals.get(entry.messageId);
+              if (
+                typeof original !== "string" ||
+                !(
+                  mentions(original, entry.app) ||
+                  (entry.name !== undefined && mentions(original, entry.name))
+                )
+              )
+                continue;
+              const key = cuaAppKey(entry.app);
+              const entries = evidence.get(key) ?? [];
+              entries.push(entry);
+              evidence.set(key, entries);
+            }
             for (const app of apps) {
               const already = yield* allowed(input.requestedBy.threadId, [app], list);
               if (already) continue;
@@ -196,27 +216,10 @@ export const makeComputerUseStanding = (deps: {
                 WHERE thread_id = ${input.requestedBy.threadId} AND app_key = ${cuaAppKey(app)}`.pipe(
                 Effect.mapError(unavailable),
               );
-              const matches = (entry: (typeof input.namedMessages)[number]) => {
-                const original = eligible.find((row) => row.message_id === entry.messageId);
-                return (
-                  original !== undefined &&
-                  typeof original.text === "string" &&
-                  (mentions(original.text, entry.app) ||
-                    (entry.name !== undefined && mentions(original.text, entry.name)))
-                );
-              };
-              const candidate = input.namedMessages.find(
-                (entry) =>
-                  cuaAppKey(entry.app) === cuaAppKey(app) &&
-                  matches(entry) &&
-                  !used.some((row) => row.message_id === entry.messageId),
-              );
-              if (candidate === undefined) return Option.none();
-              named.push(
-                ...input.namedMessages.filter(
-                  (entry) => cuaAppKey(entry.app) === cuaAppKey(app) && matches(entry),
-                ),
-              );
+              const candidates = evidence.get(cuaAppKey(app)) ?? [];
+              const usedIds = new Set(used.map((row) => row.message_id));
+              if (!candidates.some((entry) => !usedIds.has(entry.messageId))) return Option.none();
+              named.push(...candidates);
             }
           }
         }
@@ -293,7 +296,7 @@ export const makeComputerUseStanding = (deps: {
     });
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
-  const revalidateUnlocked = (threadId?: ThreadId) =>
+  const revalidateUnlocked = (threadId?: ThreadId, endingHandoffId?: Handoff["handoffId"]) =>
     withAllowedSettings((list) =>
       Effect.gen(function* () {
         if (Option.isNone(leases)) return;
@@ -304,7 +307,7 @@ export const makeComputerUseStanding = (deps: {
           if (handoff.computerUseScope === undefined || handoff.apps === undefined) continue;
           if (yield* allowed(grant.threadId, handoff.apps, list)) continue;
           yield* leases.value.release([grant.handoffId]);
-          yield* deps.revoke(handoff);
+          if (grant.handoffId !== endingHandoffId) yield* deps.revoke(handoff);
         }
       }),
     );
@@ -312,5 +315,36 @@ export const makeComputerUseStanding = (deps: {
     const effect = revalidateUnlocked(threadId).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
-  return { validate, record, clear, auto, stop, revalidate, toggle };
+  const withSettings = Effect.fn("Handoffs.withComputerUseSettings")(<A, E, R>(
+    patch: { readonly enableCua?: boolean; readonly cuaAllowedApps?: ReadonlyArray<string> },
+    update: Effect.Effect<A, E, R>,
+  ) => {
+    const effect = Effect.gen(function* () {
+      if (Option.isNone(settings)) return yield* new HandoffError({ reason: "unavailable" });
+      const before = yield* settings.value.getSettings.pipe(Effect.mapError(unavailable));
+      if (patch.cuaAllowedApps !== undefined) {
+        const next = new Set(patch.cuaAllowedApps.map(cuaAppKey));
+        if (before.cuaAllowedApps.some((app) => !next.has(cuaAppKey(app))))
+          yield* sql`INSERT INTO computer_use_revocation_watermarks (scope, sequence)
+            VALUES ('', (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events))
+            ON CONFLICT(scope) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)`.pipe(
+            Effect.mapError(unavailable),
+          );
+      }
+      if (patch.enableCua !== undefined && (!patch.enableCua || !before.enableCua))
+        yield* stopUnlocked(undefined);
+      const result = yield* update;
+      if (patch.cuaAllowedApps !== undefined) yield* revalidateUnlocked().pipe(lock.withPermits(1));
+      return result;
+    });
+    return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
+  });
+  const end = Effect.fn("Handoffs.endComputerUseSession")(function* (
+    threadId: ThreadId,
+    handoffId: Handoff["handoffId"],
+  ) {
+    yield* clear(threadId);
+    yield* revalidateUnlocked(threadId, handoffId);
+  });
+  return { validate, record, clear, auto, stop, revalidate, toggle, end, withSettings };
 };

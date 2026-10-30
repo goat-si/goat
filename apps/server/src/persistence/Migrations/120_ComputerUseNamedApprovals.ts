@@ -27,5 +27,6 @@ export default Effect.gen(function* () {
   )`;
   yield* sql`CREATE INDEX computer_use_first_message_event
     ON orchestration_events(stream_id, json_extract(payload_json, '$.id'), sequence)
-    WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND event_type = 'message.updated'`;
+    WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND event_type = 'message.updated'
+      AND json_extract(payload_json, '$.role') = 'user'`;
 });

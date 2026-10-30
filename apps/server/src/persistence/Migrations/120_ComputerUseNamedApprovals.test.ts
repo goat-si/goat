@@ -2,6 +2,17 @@ import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+
+it.effect("the first-message index excludes assistant revisions", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 120 });
+    const rows = yield* sql<{
+      sql: string;
+    }>`SELECT sql FROM sqlite_master WHERE name = 'computer_use_first_message_event'`;
+    assert.include(rows[0]?.sql ?? "", "json_extract(payload_json, '$.role') = 'user'");
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 import { runMigrations } from "../Migrations.ts";
 
 it.effect.each(["client", "server"] as const)(
@@ -39,6 +50,7 @@ it.effect(
       SELECT sequence FROM orchestration_events
       WHERE application_event_version = 2 AND aggregate_kind = 'thread'
         AND stream_id = 'thread:test' AND event_type = 'message.updated'
+        AND json_extract(payload_json, '$.role') = 'user'
         AND json_extract(payload_json, '$.id') = 'message:test'
       ORDER BY sequence LIMIT 1`;
       assert.isTrue(plan.some((row) => row.detail.includes("computer_use_first_message_event")));

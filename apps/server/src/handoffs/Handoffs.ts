@@ -130,6 +130,10 @@ export class Handoffs extends Context.Service<
       enabled: boolean,
       update: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | HandoffError, R>;
+    readonly withComputerUseSettings: <A, E, R>(
+      patch: { readonly enableCua?: boolean; readonly cuaAllowedApps?: ReadonlyArray<string> },
+      update: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | HandoffError, R>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** A computer use request's answer for its waiting call; see computerUseContinuations. */
     readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
@@ -451,6 +455,7 @@ const make = Effect.gen(function* () {
       }
       const endsApproved =
         isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
+      if (endsApproved) yield* standing.end(input.threadId, input.handoffId);
       // Recorded before the transition commits, so the wake reactor never sees the end without
       // it; a repeated cancel keeps it.
       if (endsApproved)
@@ -463,7 +468,7 @@ const make = Effect.gen(function* () {
         isComputerUseGrant && !isHandoffPending(record.state),
         input.computerUseScope,
       );
-      yield* standing.record(input, result, endsApproved);
+      yield* standing.record(input, result);
       if (
         foregroundEpoch !== undefined &&
         isComputerUseGrant &&
@@ -924,6 +929,7 @@ const make = Effect.gen(function* () {
     stopComputerUseSessions: standing.stop,
     revalidateComputerUse: standing.revalidate,
     withComputerUseToggle: standing.toggle,
+    withComputerUseSettings: standing.withSettings,
     read,
     open,
     respond,
