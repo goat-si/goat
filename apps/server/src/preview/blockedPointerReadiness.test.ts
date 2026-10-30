@@ -89,3 +89,32 @@ it.effect("a fenced hover waiting for a target never scrolls when it appears", (
 it.effect("a fenced locator drag waiting for a source never scrolls when it appears", () =>
   pointerPreparation("drag"),
 );
+
+it.effect(
+  "an upload refused at its preparation gate does not expose a file target on the page",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* Effect.acquireRelease(
+          Effect.promise(() => chromium.launch({ headless: true })),
+          (browser) => Effect.promise(() => browser.close()),
+        );
+        const page = yield* Effect.promise(() => browser.newPage());
+        yield* Effect.promise(() => page.setContent('<input id="file" type="file">'));
+        const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+        const handle = yield* Effect.promise(() => page.locator("#file").elementHandle());
+        if (!handle) throw new Error("missing file input");
+        let exposed = -1;
+        const { uploadInto } = yield* Effect.promise(() => import("./PreviewUpload.ts"));
+        yield* Effect.promise(() =>
+          uploadInto(cdp, handle, [], async () => {
+            exposed = await page.evaluate(
+              "Object.keys(globalThis).filter(k => k.startsWith('__goatUploadTarget_')).length",
+            );
+            throw new Error("fenced");
+          }).catch(() => undefined),
+        );
+        expect(exposed).toBe(0);
+      }),
+    ),
+);

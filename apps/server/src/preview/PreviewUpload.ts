@@ -78,7 +78,10 @@ export const uploadInto = async (
   gate: DispatchGate,
 ) => {
   const key = `__goatUploadTarget_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
+  let stashed = false;
   try {
+    await gate();
+    gate.signal?.throwIfAborted();
     const multiple = await handle.evaluate((element, name) => {
       type FileInput = { tagName?: string; type?: string; multiple?: boolean; disabled?: boolean };
       const target = (
@@ -88,6 +91,7 @@ export const uploadInto = async (
       (globalThis as unknown as Record<string, unknown>)[name] = target;
       return target.multiple === true;
     }, key);
+    stashed = multiple !== null;
     if (multiple === null)
       throw new ServerBrowserOperationError(
         "PreviewAutomationTargetNotEditableError",
@@ -104,6 +108,7 @@ export const uploadInto = async (
     if (objectId !== undefined) {
       const { node } = await cdp.send("DOM.describeNode", { objectId });
       await gate();
+      gate.signal?.throwIfAborted();
       await cdp.send("DOM.setFileInputFiles", {
         files: [...paths],
         backendNodeId: node.backendNodeId,
@@ -118,6 +123,7 @@ export const uploadInto = async (
       );
     try {
       await gate();
+      gate.signal?.throwIfAborted();
       await framed.session.send("DOM.setFileInputFiles", {
         files: [...paths],
         backendNodeId: framed.backendNodeId,
@@ -127,11 +133,12 @@ export const uploadInto = async (
     }
   } finally {
     // The global lives in whichever frame owns the input; deleting it there is the frame's own call.
-    await handle
-      .evaluate((_element, name) => {
-        delete (globalThis as unknown as Record<string, unknown>)[name];
-      }, key)
-      .catch(constVoid);
+    if (stashed)
+      await handle
+        .evaluate((_element, name) => {
+          delete (globalThis as unknown as Record<string, unknown>)[name];
+        }, key)
+        .catch(constVoid);
   }
 };
 
