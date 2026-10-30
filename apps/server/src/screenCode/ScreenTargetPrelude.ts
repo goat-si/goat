@@ -102,7 +102,7 @@ const __checked = async (method, arg, queued = false) => {
     throw error;
   }
 };
-const __verdict = (reply) => (reply.c === 'confirmed' ? 'confirmed' : 'unverifiable');
+const __verdict = (reply) => reply.c === 'confirmed' ? 'confirmed' : reply.c === 'suspected_noop' ? 'suspected_noop' : 'unverifiable';
 const __keys = (key, tab) => {
   const parts = key === '+' ? ['+'] : key.split('+').filter((part) => part.length > 0);
   const last = parts.pop() ?? key;
@@ -177,7 +177,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const closed = observed.includes('observed:window_closed') && currentWindowId !== undefined ? [String(currentWindowId)] : [];
     const note = [opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
     const debug = __debug || arg.verify === true || verify;
-    return { ok: true, verdict, ...(note ? { note } : {}), ...(debug ? { result: { debug: { value, evidence: reply.e ?? [] } } } : {}) };
+    return { ok: true, verdict, ...(note ? { note } : {}), ...(reply.w?.length ? { warnings: reply.w } : {}), ...(debug ? { result: { debug: { value, evidence: reply.e ?? [] } } } : {}) };
 
   };
   const checkEmptyTarget = (target) => {

@@ -155,6 +155,35 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   return undefined;
 };
 
+const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): readonly string[] => {
+  const fields = object(value);
+  const focus = object(fields?.focus_restoration);
+  const pid =
+    typeof focus?.prior_pid === "number" &&
+    Number.isSafeInteger(focus.prior_pid) &&
+    focus.prior_pid > 0
+      ? focus.prior_pid
+      : undefined;
+  const reason = string(focus?.reason);
+  const focusWarning =
+    focus?.status === "abandoned"
+      ? `focus restoration abandoned${reason ? `: ${reason}` : ""}${pid ? ` (prior app pid ${pid})` : ""}`
+      : focus?.status === "restored"
+        ? `focus restored to the prior app${pid ? ` (pid ${pid})` : ""}`
+        : undefined;
+  const text = array(object(reply.result)?.content)
+    .map(object)
+    .map((part) => (part?.type === "text" ? string(part.text) : undefined))
+    .find((part) => part?.includes("Its effect is unverified."));
+  const after = text?.split("Its effect is unverified.", 2)[1];
+  const disabled = after?.split(/(?<=[.!?])\s+/u).find((sentence) => /disabled/i.test(sentence));
+  return [focusWarning, disabled, string(fields?.note), string(fields?.warning)]
+    .filter((item): item is string => item !== undefined)
+    .map((item) => item.replace(/\s+/gu, " ").trim().slice(0, 200))
+    .filter((item) => item.length > 0)
+    .slice(0, 4);
+};
+
 /** An input tool's answer as a receipt category, read the way computer use reads it. */
 export const driverResult = (
   tool: string,
@@ -168,9 +197,11 @@ export const driverResult = (
       : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
         ? "suspected_noop"
         : "unverifiable";
+  const warnings = driverWarnings(reply, value);
   return {
     value,
     category,
+    ...(warnings.length ? { warnings } : {}),
     // A result that did not do what was asked fails at the bridge; it keeps the driver's words.
     evidence:
       effect === "confirmed"

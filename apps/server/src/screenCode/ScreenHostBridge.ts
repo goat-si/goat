@@ -50,6 +50,7 @@ export interface ScreenHostDispatchResult {
   readonly imageMetadata?: ScreenImageMetadata;
   readonly category: ScreenEffectReceipt["category"];
   readonly evidence?: readonly string[];
+  readonly warnings?: readonly string[];
   readonly outcome?: ScreenActionOutcome;
 }
 
@@ -543,7 +544,11 @@ export class ScreenHostBridge {
             category !== "refused",
           ));
       // An unverifiable write is a success that may have committed; the receipt says so.
-      if (FAILED_CATEGORIES.has(category) && safety.writeStatus !== "not_applicable")
+      if (
+        FAILED_CATEGORIES.has(category) &&
+        category !== "suspected_noop" &&
+        safety.writeStatus !== "not_applicable"
+      )
         return yield* Effect.fail({
           ...failure(safety.possibleCommit ? "unknown_outcome" : "downstream_failure", call.callId),
           effectStarted: safety.possibleCommit,
@@ -567,6 +572,7 @@ export class ScreenHostBridge {
             limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
           });
       }
+      if (category === "suspected_noop" && safety.writeStatus !== "not_applicable") halt(safety);
       return { ...outcome, category, safety };
     });
     const guardedDispatch = dispatch.pipe(
@@ -755,6 +761,7 @@ export class ScreenHostBridge {
       callId: call.callId,
       outcome: "ok" as const,
       category: result.success.category,
+      ...(result.success.warnings?.length ? { warnings: result.success.warnings } : {}),
       ...(evidence.length
         ? { evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)) }
         : {}),

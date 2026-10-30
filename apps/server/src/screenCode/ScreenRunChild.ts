@@ -420,7 +420,7 @@ export async function runScreenChild(
         const value = vm.newString(
           JSON.stringify(
             reply.outcome === "ok"
-              ? { v: reply.value, c: reply.category, e: reply.evidence }
+              ? { v: reply.value, c: reply.category, e: reply.evidence, w: reply.warnings }
               : reply.error,
           ),
         );

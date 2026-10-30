@@ -14,7 +14,9 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page; Linux and Windows app actions use element numbers from observe().
-type Done = { ok: true; verdict: "confirmed" | "unverifiable"; note?: string; result?: { debug: { value?: unknown; evidence: string[] } } };
+type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"; note?: string; warnings?: string[]; result?: { debug: { value?: unknown; evidence: string[] } } };
+// suspected_noop: input went out but nothing changed; observe before retrying.
+// warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
 // Set screen.debug = true for diagnostic details on every input in this cell, or pass verify: true on supported app inputs to read evidence and include details for that call.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
 // ReadTime on observe and screenshot: host time of the read (the driver call, for a tab the browser's snapshot; tree parsing; rendering; the rest); absent when it would not fit the reply.
