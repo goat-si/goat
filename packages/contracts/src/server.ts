@@ -738,9 +738,10 @@ export const ServerProviderStatusChange = ServerProvider.mapFields(
 );
 export type ServerProviderStatusChange = typeof ServerProviderStatusChange.Type;
 
-/** `instanceIds` is the whole list in order; `providers` holds only the ones that changed. */
+/** `instanceIds` is the whole list in order; `changedInstanceIds` names the entries of `providers`. */
 export const ServerConfigProviderStatusChangesPayload = Schema.Struct({
   instanceIds: Schema.Array(ProviderInstanceId),
+  changedInstanceIds: Schema.Array(ProviderInstanceId),
   providers: ForwardCompatibleArray(ServerProviderStatusChange),
 });
 export type ServerConfigProviderStatusChangesPayload =

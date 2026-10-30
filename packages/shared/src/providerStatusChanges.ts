@@ -29,7 +29,11 @@ export function diffProviderStatuses(
     previous.length === next.length &&
     next.every((provider, index) => previous[index]?.instanceId === provider.instanceId);
   if (providers.length === 0 && sameOrder) return undefined;
-  return { instanceIds: next.map((provider) => provider.instanceId), providers };
+  return {
+    instanceIds: next.map((provider) => provider.instanceId),
+    changedInstanceIds: providers.map((provider) => provider.instanceId),
+    providers,
+  };
 }
 
 /** Unchanged providers and lists keep their objects, so memoized views skip them. */
@@ -39,10 +43,12 @@ export function applyProviderStatusChanges(
 ): ReadonlyArray<ServerProvider> {
   const before = new Map(previous.map((provider) => [provider.instanceId, provider] as const));
   const changed = new Map(changes.providers.map((provider) => [provider.instanceId, provider]));
+  const sentChanged = new Set(changes.changedInstanceIds);
   return changes.instanceIds.flatMap((instanceId): ServerProvider[] => {
     const old = before.get(instanceId);
     const change = changed.get(instanceId);
-    if (change === undefined) return old === undefined ? [] : [old];
+    // A change this client could not decode leaves the list, as it would from a full list.
+    if (change === undefined) return old === undefined || sentChanged.has(instanceId) ? [] : [old];
     return [
       {
         ...change,
