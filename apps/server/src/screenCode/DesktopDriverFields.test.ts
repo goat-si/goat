@@ -118,6 +118,40 @@ it.live.each([
   },
   {
     tool: "click",
+    reply: {
+      effect: "confirmed",
+      focus_restoration: { status: "restored", prior_pid: 123 },
+      note: "note text",
+      warning: "warning text",
+    },
+    source: "app.click(1)",
+    expected: {
+      ok: true,
+      verdict: "confirmed",
+      warnings: ["focus restored to the prior app (pid 123)", "note text", "warning text"],
+    },
+  },
+  {
+    tool: "press_key",
+    reply: new DriverSuccess(
+      { effect: "suspected_noop" },
+      "Keys were sent. The item read disabled after validation.",
+    ),
+    source: "app.press('cmd+z')",
+    expected: {
+      ok: true,
+      verdict: "suspected_noop",
+      warnings: ["The item read disabled after validation."],
+    },
+  },
+  {
+    tool: "click",
+    reply: { effect: "confirmed", warning: "x".repeat(250) },
+    source: "app.click(1)",
+    expected: { ok: true, verdict: "confirmed", warnings: ["x".repeat(200)] },
+  },
+  {
+    tool: "click",
     reply: { effect: "confirmed" },
     source: "app.click(1)",
     expected: { ok: true, verdict: "confirmed" },
