@@ -735,7 +735,11 @@ const make = Effect.gen(function* () {
       ),
     stopIfCurrent: (threadId, controlId) =>
       Clock.currentTimeMillis.pipe(
-        Effect.map((now) => end(threadId, "stopped", now, controlId)),
+        Effect.map((now) => {
+          const record = controls.get(threadId);
+          if (record === undefined || DateTime.toEpochMillis(record.expiresAt) <= now) return false;
+          return end(threadId, "stopped", now, controlId);
+        }),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
