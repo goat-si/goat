@@ -43,17 +43,30 @@ const pointerPreparation = (operation: "click" | "hover" | "drag") =>
         return original(selector, options);
       });
       const tab = { threadId, tabId: "tab", closing: false, page, control };
-      const action = control.agent("agent", (signal) => {
+      const fenced = yield* Deferred.make<void>();
+      yield* Effect.promise(() =>
+        page.route("https://blocked.test/**", (route) => route.fulfill({ body: "blocked" })),
+      );
+      page.on("framenavigated", (frame) => {
+        const observed = fence.observe(tab, frame.url());
+        if (observed) void observed.then(() => Deferred.doneUnsafe(fenced, Effect.void));
+      });
+      const action = control.agent("agent", async (signal) => {
         const gate = Object.assign(fence.gate(tab, "run", control.dispatchGate()), { signal });
         if (operation === "click")
-          return ServerBrowserPage.click(page, { locator: "#late" }, undefined, gate);
+          return void (await ServerBrowserPage.click(page, { locator: "#late" }, undefined, gate));
         if (operation === "hover")
-          return ServerBrowserPage.hover(page, { locator: "#late" }, undefined, gate);
-        return ServerBrowserPage.drag(page, { source: "#late", target: "#end" }, undefined, gate);
+          return void (await ServerBrowserPage.hover(page, { locator: "#late" }, undefined, gate));
+        await ServerBrowserPage.drag(page, { source: "#late", target: "#end" }, undefined, gate);
       });
       void action.catch(() => undefined);
       yield* Deferred.await(waiting);
-      yield* Effect.promise(() => fence.observe(tab, "https://blocked.test/")!);
+      yield* Effect.promise(() =>
+        page.evaluate(
+          "document.body.insertAdjacentHTML('beforeend', '<iframe src=\"https://blocked.test/\"></iframe>')",
+        ),
+      );
+      yield* Deferred.await(fenced);
       const result = yield* Effect.promise(() =>
         action.then(
           () => ({ ok: true as const }),
@@ -106,14 +119,18 @@ it.effect(
         if (!handle) throw new Error("missing file input");
         let exposed = -1;
         const { uploadInto } = yield* Effect.promise(() => import("./PreviewUpload.ts"));
-        yield* Effect.promise(() =>
+        const error = yield* Effect.promise(() =>
           uploadInto(cdp, handle, [], async () => {
             exposed = await page.evaluate(
               "Object.keys(globalThis).filter(k => k.startsWith('__goatUploadTarget_')).length",
             );
             throw new Error("fenced");
-          }).catch(() => undefined),
+          }).then(
+            () => undefined,
+            (cause: unknown) => cause,
+          ),
         );
+        expect(error).toEqual(new Error("fenced"));
         expect(exposed).toBe(0);
       }),
     ),

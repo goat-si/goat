@@ -11,7 +11,7 @@ export interface Readiness {
   /** Called once when the first check finds the target not ready, before waiting starts. */
   readonly onWaiting?: (() => void) | undefined;
 }
-interface ReadinessGate {
+export interface ReadinessGate {
   (): void | Promise<void>;
   readonly signal?: AbortSignal | undefined;
 }
@@ -187,15 +187,27 @@ export const waitUntilSelectable = async (
   values: ReadonlyArray<string>,
   deadline: number,
   readiness: Readiness,
+  gate: ReadinessGate,
 ) => {
-  const frame = await handle.ownerFrame();
+  const frame = await abortable(() => handle.ownerFrame(), gate.signal);
   if (frame === null) throw targetChanged();
-  if (await frame.evaluate(selectable, [handle, values] as const)) return true;
+  if (await abortable(() => frame.evaluate(selectable, [handle, values] as const), gate.signal))
+    return true;
   readiness.onWaiting?.();
   try {
-    const waiter = await frame.waitForFunction(selectable, [handle, values] as const, {
+    const waiting = frame.waitForFunction(selectable, [handle, values] as const, {
       timeout: remaining(deadline),
     });
+    let waiter;
+    try {
+      waiter = await abortable(() => waiting, gate.signal);
+    } catch (cause) {
+      void waiting.then(
+        (late) => late.dispose().catch(() => undefined),
+        () => undefined,
+      );
+      throw cause;
+    }
     void waiter.dispose().catch(() => undefined);
     return true;
   } catch (cause) {

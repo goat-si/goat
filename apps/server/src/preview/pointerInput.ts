@@ -4,7 +4,7 @@
  * @module pointerInput
  */
 import type { Page } from "playwright-core";
-import { remaining } from "./actionReadiness.ts";
+import { remaining, type ReadinessGate } from "./actionReadiness.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 
 type Point = { readonly x: number; readonly y: number };
@@ -13,20 +13,21 @@ type Point = { readonly x: number; readonly y: number };
  * Before each input after the first: an earlier one can open a dialog that holds the page past
  * the caller's deadline, or a person can take the tab, and then the rest must not go out.
  */
-const again = async (gate: () => void | Promise<void>, deadline: number) => {
+const again = async (gate: ReadinessGate, deadline: number) => {
   if (performance.now() >= deadline)
     throw new ServerBrowserOperationError(
       "PreviewAutomationTimeoutError",
       "The deadline passed partway through the pointer input, so the rest was not sent.",
     );
   await gate();
+  gate.signal?.throwIfAborted();
 };
 
 /** Presses at `from`, moves in `steps` to `to`, releases; each input passes the gate first. */
 export const dragBetween = async (
   page: Page,
   input: { readonly from: Point; readonly to: Point; readonly steps?: number | undefined },
-  gate: () => void | Promise<void>,
+  gate: ReadinessGate,
   deadline: number,
 ) => {
   const steps = input.steps ?? 10;
@@ -34,6 +35,7 @@ export const dragBetween = async (
   try {
     remaining(deadline);
     await gate();
+    gate.signal?.throwIfAborted();
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...input.from });
     await again(gate, deadline);
     await cdp.send("Input.dispatchMouseEvent", {
@@ -88,11 +90,12 @@ export const wheelAt = async (
   page: Page,
   at: Point,
   delta: readonly [number, number],
-  gate: () => void | Promise<void>,
+  gate: ReadinessGate,
   deadline: number,
 ) => {
   remaining(deadline);
   await gate();
+  gate.signal?.throwIfAborted();
   await page.mouse.move(at.x, at.y);
   await again(gate, deadline);
   await page.mouse.wheel(delta[0], delta[1]);

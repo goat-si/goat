@@ -73,7 +73,6 @@ import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { matchesState, stateConditions } from "./locatorState.ts";
 import { setRange } from "./rangeValue.ts";
 import { settleScroll } from "./scrollPositions.ts";
-
 export const toOperationError = (
   cause: unknown,
   timeoutMs?: number,
@@ -699,7 +698,11 @@ export const click = async (
     page.once("dialog", onDialog);
   });
   const aim = await aimClick(page, locator, point);
-  const watch = await watchClick(page, aim.frame);
+  const watch = await watchClick(page, aim.frame, gate).catch((cause: unknown) => {
+    page.off("dialog", onDialog);
+    releaseAim(aim);
+    throw cause;
+  });
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
   const press = async (count: number) => {
@@ -889,7 +892,7 @@ export const select = async (
   const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
   const handle = await elementOf(targetLocator(page, input)!, remaining(deadline), gate.signal);
   try {
-    const ready = await waitUntilSelectable(handle, input.values, deadline, readiness);
+    const ready = await waitUntilSelectable(handle, input.values, deadline, readiness, gate);
     const found = await handle.evaluate((element) => {
       if (element.tagName !== "SELECT") return null;
       const select = element as unknown as {

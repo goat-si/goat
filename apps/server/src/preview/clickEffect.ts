@@ -5,6 +5,7 @@
  */
 import { constVoid } from "effect/Function";
 import type { ElementHandle, Frame, JSHandle, Locator, Page } from "playwright-core";
+import type { ReadinessGate } from "./actionReadiness.ts";
 
 export type ClickEvidence =
   | "dom"
@@ -358,7 +359,13 @@ const findAim = async (page: Page, locator: Locator | null, point: Point): Promi
  * Starts watching before the click. `arm` begins counting right before the press, at the click's
  * target; `settle` waits briefly after it and returns the verdict.
  */
-export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) => {
+export const watchClick = async (
+  page: Page,
+  frame: Frame = page.mainFrame(),
+  gate: ReadinessGate = () => {},
+) => {
+  await gate();
+  gate.signal?.throwIfAborted();
   const seen = new Set<ClickEvidence>();
   // The page says the click followed a link into a new window; the browser says one opened. A
   // popup counts only with both: a blocked one (a sandboxed frame) or an earlier click's does not.
@@ -389,6 +396,8 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   let first: Promise<void> | undefined;
   let navigated: Promise<void> | undefined;
   const arm = async (aim: ClickAim) => {
+    await gate();
+    gate.signal?.throwIfAborted();
     const target: unknown = "element" in aim ? aim.element : aim.point;
     await bounded(watch?.evaluate((state, at) => state.arm(at), target).catch(constVoid));
     first = watch
