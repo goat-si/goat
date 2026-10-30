@@ -173,9 +173,10 @@ it.effect("a failed end transition cannot leave the session reusable", () =>
           },
           sessionId,
         );
-        yield* handoffs
+        const failed = yield* handoffs
           .respond({ threadId, handoffId: first.handoff.handoffId, action: "cancelled" }, sessionId)
           .pipe(Effect.result);
+        assert.equal(failed._tag, "Failure");
         yield* TestClock.adjust("31 minutes");
         assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
       }),
