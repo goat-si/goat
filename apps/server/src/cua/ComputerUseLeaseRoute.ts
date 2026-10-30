@@ -41,6 +41,7 @@ import {
 } from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as BrowserOriginGrants from "../preview/BrowserOriginGrantsLayer.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -198,6 +199,21 @@ export const reportLayer = HttpRouter.add(
     const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
     if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
     const value = report.value;
+    if ("browserClaimsSupported" in value || "browserClaimEnded" in value) {
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
+      const result = yield* (
+        "browserClaimsSupported" in value
+          ? grants.value.reportDriverCapability(value.browserClaimsSupported)
+          : grants.value.end(
+              threadId,
+              value.browserClaimEnded.claimId,
+              value.browserClaimEnded.claimGeneration,
+              value.browserClaimEnded.reason,
+            )
+      ).pipe(Effect.option);
+      return HttpServerResponse.empty({ status: Option.isSome(result) ? 204 : 503 });
+    }
     if ("driverEnded" in value) {
       const connections = yield* Effect.serviceOption(
         ComputerUseAgentConnections.ComputerUseAgentConnections,

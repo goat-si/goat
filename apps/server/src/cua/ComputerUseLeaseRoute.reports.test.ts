@@ -1,8 +1,9 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The test posts the proxy's raw JSON body.
 import { assert, describe, it } from "@effect/vitest";
-import { COMPUTER_USE_LEASE_ROUTE, ThreadId } from "@goat/contracts";
+import { COMPUTER_USE_LEASE_ROUTE, EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Tracer from "effect/Tracer";
 import { HttpMiddleware, HttpRouter } from "effect/http";
 
@@ -14,6 +15,8 @@ import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 
 const threadId = ThreadId.make("thread:bot");
 const outcomes = {
@@ -23,6 +26,76 @@ const outcomes = {
 } as const;
 
 describe("ComputerUseLeaseRoute reports", () => {
+  it.effect("ends only the credential thread's matching claim from an origin change report", () =>
+    Effect.gen(function* () {
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const claim = yield* grants.request({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (claim.status !== "pending") return assert.fail("expected pending");
+      const answer = yield* grants.answer(claim.claimId, true);
+      if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
+      const registry = yield* McpSessionRegistry.McpSessionRegistry.pipe(
+        Effect.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: (token: string) =>
+              Effect.succeed({
+                thread: { threadId: token === "other" ? ThreadId.make("thread:other") : threadId },
+              }),
+          }),
+        ),
+      );
+      const services = Context.make(McpSessionRegistry.McpSessionRegistry, registry).pipe(
+        Context.add(BrowserOriginGrants, { ...grants, reportDriverCapability: () => Effect.void }),
+      );
+      const { handler, dispose } = HttpRouter.toWebHandler(reportLayer, { disableLogger: true });
+      const post = (token: string) =>
+        Effect.promise(
+          async () =>
+            (
+              await handler(
+                new Request("http://goat.test" + COMPUTER_USE_LEASE_ROUTE, {
+                  method: "POST",
+                  headers: { authorization: `Bearer ${token}` },
+                  body: JSON.stringify({
+                    browserClaimEnded: {
+                      claimId: claim.claimId,
+                      claimGeneration:
+                        answer.agentResult.status === "attached"
+                          ? answer.agentResult.claim.claimGeneration
+                          : 0,
+                      reason: "origin_changed",
+                    },
+                  }),
+                }),
+                services,
+              )
+            ).status,
+        );
+      yield* Effect.gen(function* () {
+        assert.equal(yield* post("other"), 204);
+        assert.lengthOf(yield* grants.claimsFor(threadId), 1);
+        assert.equal(yield* post("good"), 204);
+        assert.deepEqual(yield* grants.claimsFor(threadId), []);
+        assert.equal(yield* grants.endReason(threadId, claim.claimId), "origin_changed");
+      }).pipe(Effect.ensuring(Effect.promise(() => dispose())));
+    }),
+  );
   it.effect("bearer-only primitive GET and ready, cutoff, and reply POSTs are refused", () =>
     Effect.gen(function* () {
       const services = Context.make(McpSessionRegistry.McpSessionRegistry, {

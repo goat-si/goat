@@ -267,12 +267,25 @@ export const ComputerUseLeaseDriverEnded = Schema.Struct({
 });
 export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
 
+export const ComputerUseLeaseBrowserCapability = Schema.Struct({
+  browserClaimsSupported: Schema.Boolean,
+});
+export const ComputerUseLeaseBrowserClaimEnded = Schema.Struct({
+  browserClaimEnded: Schema.Struct({
+    claimId: TrimmedNonEmptyString,
+    claimGeneration: Schema.Int,
+    reason: Schema.Literal("origin_changed"),
+  }),
+});
+
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,
   ComputerUseLeaseCursor,
   ComputerUseLeaseDriverEnded,
+  ComputerUseLeaseBrowserCapability,
+  ComputerUseLeaseBrowserClaimEnded,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 
