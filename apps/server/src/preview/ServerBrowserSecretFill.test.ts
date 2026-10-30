@@ -665,5 +665,6 @@ it.live("never permits history text retention on a secret-fill target", () => {
   return withFill(async (fill) => {
     await fill.fill(tab, fillRequest, later(), record);
     expect(await fill.historyField(tab, threadId)).toBeUndefined();
+    expect(fill.historySafe(tab, threadId)).toBe(false);
   });
 });

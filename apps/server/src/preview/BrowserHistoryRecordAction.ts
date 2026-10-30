@@ -21,7 +21,7 @@ export function makeBrowserHistoryRecordAction(
     tab: Tab,
     action: string,
     execute: () => Promise<A>,
-    details?: { url?: string; typedText?: string },
+    details?: { url?: string; typedText?: string; finishRetention?: () => Promise<boolean> },
   ): Promise<A> => {
     const event: {
       -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
@@ -33,19 +33,23 @@ export function makeBrowserHistoryRecordAction(
     };
     pushBounded(tab.actionTimeline, event, 50);
     const url = details?.url ?? tab.page.url();
-    const record = (outcome: {
+    const record = async (outcome: {
       verdict: "sent" | "refused" | "unknown_outcome";
       refusalCode?: string;
-    }) =>
-      run(
+    }) => {
+      const evidence = await (details?.finishRetention?.() ?? Promise.resolve(false));
+      const keep = outcome.verdict === "sent" && evidence;
+      await run(
         recordBrowserAction(history, {
           threadId: tab.threadId,
           url: action === "back" || action === "forward" ? tab.page.url() : url,
           action,
           ...outcome,
           ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
+          ...(keep ? { keepTypedText: true, normalField: true, secretProtected: false } : {}),
         }),
       );
+    };
     return execute().then(
       async (result) => {
         event.status = "succeeded";

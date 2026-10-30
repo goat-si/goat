@@ -968,5 +968,14 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  return { fill, guard, assertPixels, historyField, mask, maskText, signInState: signInStateOf };
+  return {
+    fill,
+    guard,
+    assertPixels,
+    historyField,
+    historySafe: (tab: SecretFillTab, threadId: ThreadId) => pixelsOff(tab, threadId) === null,
+    mask,
+    maskText,
+    signInState: signInStateOf,
+  };
 });

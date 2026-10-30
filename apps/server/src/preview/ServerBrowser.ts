@@ -97,6 +97,9 @@ import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
+import { makeBrowserInputRetention } from "./BrowserInputRetention.ts";
+import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { inputFence } from "./PreviewInputFence.ts";
@@ -347,10 +350,20 @@ const make = Effect.gen(function* () {
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const secretFill = yield* ServerBrowserSecretFill.make;
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const history = yield* makeComputerUseHistory;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const keepTypedText = () =>
+    Option.isSome(settings)
+      ? runPromise(
+          settings.value.getSettings.pipe(
+            Effect.map((value) => value.computerUseKeepTypedText),
+            Effect.orElseSucceed(() => false),
+          ),
+        )
+      : Promise.resolve(false);
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
@@ -1936,15 +1949,22 @@ const make = Effect.gen(function* () {
         );
       case "type": {
         const aimed = input as PreviewAutomationTypeInput;
+        const retention = makeBrowserInputRetention(
+          () => startBrowserInputEvidence(tab.page, tab.cdp),
+          keepTypedText,
+          () => secretFill.historySafe(tab, request.threadId),
+        );
         return recordAction(
           tab,
           "type",
           async () => {
             const gate = actionGate();
             const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
-            return ServerBrowserPage.type(tab.page, timed, gate);
+            return ServerBrowserPage.type(tab.page, timed, gate, {
+              onHistoryFocus: retention.onFocus,
+            });
           },
-          { typedText: aimed.text },
+          { typedText: aimed.text, finishRetention: retention.finish },
         );
       }
       case "press":
