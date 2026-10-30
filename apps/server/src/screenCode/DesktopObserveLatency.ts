@@ -811,6 +811,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     imagePart: reply.image,
     width,
     height,
+    window: { pid: bound.pid, windowId: bound.windowId },
   });
   if (!captured) return yield* Effect.fail(fail("downstream_failure"));
   const { metadata, image, shotBasis } = captured;

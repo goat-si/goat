@@ -73,6 +73,13 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   const structured = object(result?.structuredContent);
   const said = refusalText(result, structured);
   const driverCode = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  // GOAT's proxy refused a call this driver cannot take as asked; its words say what to do.
+  if (
+    structured?.detail === "outside_manifest" &&
+    structured.effect === undefined &&
+    driverCode === undefined
+  )
+    return { ...fail("unsupported", said), ...refusalOf(structured) };
   if (driverCode === "screen_locked")
     return {
       ...fail("screen_locked", "The screen is locked; stop until the person unlocks it."),
@@ -129,6 +136,32 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
           "stale_reference",
           "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).",
         ),
+        ...refusalOf(structured),
+      };
+    if (code === "stale_basis") {
+      const reason =
+        string(object(structured.refusal)?.reason) ?? string(structured.reason) ?? "unknown";
+      return {
+        ...fail(
+          "stale_reference",
+          `The window moved, resized or changed scale since that screenshot (${reason.slice(0, 80)}); take a new screenshot and click its [x, y] pixels. Nothing was sent.`,
+        ),
+        ...refusalOf(structured),
+      };
+    }
+    if (code === "background_unavailable")
+      return {
+        ...fail(
+          "unsupported",
+          said ??
+            "This window does not take background input; use another element or the keyboard.",
+        ),
+        ...refusalOf(structured),
+        refused: "backgroundUnavailable",
+      };
+    if (code === "foreground_unavailable")
+      return {
+        ...fail("unavailable", said ?? "The window could not be brought to the front."),
         ...refusalOf(structured),
       };
     const isInvalidCoord =

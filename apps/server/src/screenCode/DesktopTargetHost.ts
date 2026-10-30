@@ -664,10 +664,6 @@ export const createDesktopTargetHost = (deps: {
         return yield* Effect.fail(checkedMenu.error ?? fail("invalid_argument"));
       const path = checkedMenu.path;
       bound.pointsStale ??= "input";
-      if (!isMac) {
-        bound.screenshots?.clear();
-        delete bound.latestScreenshot;
-      }
       return yield* withInputEvidence(
         "invoke_menu",
         { pid: bound.pid, window_id: bound.windowId, path },
@@ -764,10 +760,6 @@ export const createDesktopTargetHost = (deps: {
     );
     if (!pointerResolved.ok) return yield* Effect.fail(pointerResolved.error);
     bound.pointsStale ??= "input";
-    if (!isMac) {
-      bound.screenshots?.clear();
-      delete bound.latestScreenshot;
-    }
     if (admission.clickedTableCell !== undefined)
       bound.lastClickedTableCell = admission.clickedTableCell;
     const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
