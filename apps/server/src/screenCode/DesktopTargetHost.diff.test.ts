@@ -772,3 +772,94 @@ it.effect("value labels cannot identify edited or moved fields, while identifier
     }
   }),
 );
+
+it.live.each([
+  {
+    label: "changed display",
+    diff: '~ AXStaticText = "8"',
+    count: 1,
+    expected: 'after click: changed (~ AXStaticText = "8")',
+    category: "effect_seen",
+  },
+  {
+    label: "no change",
+    diff: "no change since s1",
+    count: 1,
+    expected: "after click: no change seen; check before resending",
+    category: "suspected_noop",
+  },
+  {
+    label: "two inputs",
+    diff: '~ AXStaticText = "8"',
+    count: 2,
+    expected: 'after 2 inputs: changed (~ AXStaticText = "8")',
+    category: "effect_seen",
+  },
+])("first app observation records $label after input", (scenario) => {
+  let reads = 0;
+  const { host, sent } = fixture({
+    get_window_state: (args: Record<string, unknown>) => {
+      const snapshot = `s${++reads}`;
+      const old = goat2WindowState(args);
+      const full = {
+        ...old,
+        snapshot_id: snapshot,
+        elements:
+          "elements" in old
+            ? old.elements?.map((item) => ({
+                ...item,
+                element_token: `${snapshot}:${item.element_index}`,
+              }))
+            : undefined,
+      };
+      if (args.since === undefined) return full;
+      const { tree_markdown: _tree, ...diff } = full;
+      return {
+        ...diff,
+        since_status: scenario.diff.startsWith("no change") ? "no_change" : "diff",
+        tree_diff: scenario.diff,
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+        await app.observe(); const done = []; for (let i = 0; i < ${scenario.count}; i++) done.push(await app.click(1));
+        const first = await app.observe(); const second = await app.observe(); await app.click(1); return {done, first, second};`,
+    });
+    const value = result.value as {
+      done: unknown[];
+      first: { effect?: string };
+      second: { effect?: string };
+    };
+    expect(value.done).toEqual(
+      Array.from({ length: scenario.count }, () => ({ ok: true, verdict: "unverifiable" })),
+    );
+    expect(value.first.effect).toBe(scenario.expected);
+    expect(value.second.effect).toBeUndefined();
+    const clicks = result.journal.filter((entry) => entry.receipt.method === "click");
+    expect(clicks).toHaveLength(scenario.count + 1);
+    expect(clicks.slice(0, scenario.count).map((entry) => entry.receipt.category)).toEqual(
+      Array(scenario.count).fill(scenario.category),
+    );
+    expect(clicks[0]?.receipt.evidence).toContain(scenario.expected);
+    expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(3);
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
