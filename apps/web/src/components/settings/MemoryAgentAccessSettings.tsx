@@ -59,7 +59,7 @@ export function MemoryAgentAccessSettings({ environmentId }: { environmentId: En
           status={message ? <span role="status">{message}</span> : undefined}
         />
       </SettingsSection>
-      <MemorySitesSettings environmentId={environmentId} />
+      <MemorySitesSettings key={environmentId} environmentId={environmentId} />
     </>
   );
 }

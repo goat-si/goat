@@ -4,14 +4,16 @@ import { userEvent } from "vite-plus/test/browser";
 import { RegistryContext } from "@effect/atom-react";
 import { EnvironmentId, type SiteNoteListEntry } from "@goat/contracts";
 import { AtomRegistry } from "effect/reactivity";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 
 type ListResult = { readonly _tag: "Success"; readonly value: ReadonlyArray<SiteNoteListEntry> };
 const fixture = vi.hoisted(() => ({
   siteNotes: false,
   held: false,
-  lists: [] as Array<(result: ListResult) => void>,
+  lists: [] as Array<{ environmentId: string; resolve: (result: ListResult) => void }>,
+  holdWrites: false,
+  writes: [] as Array<() => void>,
 }));
 
 vi.mock("../../hooks/useSettings", async (original) => ({
@@ -35,14 +37,19 @@ vi.mock("../../state/memory", async (original) => {
     memoryEnvironment: {
       siteNotesList: {
         permissionAtom: () => siteNotes,
-        run: () =>
+        run: (_registry: unknown, { environmentId }: { environmentId: string }) =>
           fixture.held
-            ? new Promise((resolve) => fixture.lists.push(resolve))
+            ? new Promise((resolve) => fixture.lists.push({ environmentId, resolve }))
             : Promise.resolve({ _tag: "Success", value: [] }),
       },
       siteNotesWrite: {
         permissionAtom: () => siteNotes,
-        run: () => Promise.resolve({ _tag: "Success", value: undefined }),
+        run: () =>
+          fixture.holdWrites
+            ? new Promise((resolve) =>
+                fixture.writes.push(() => resolve({ _tag: "Success", value: undefined })),
+              )
+            : Promise.resolve({ _tag: "Success", value: undefined }),
       },
     },
   };
@@ -77,6 +84,8 @@ function setup(siteNotes: boolean, held = false) {
   fixture.siteNotes = siteNotes;
   fixture.held = held;
   fixture.lists = [];
+  fixture.holdWrites = false;
+  fixture.writes = [];
 }
 
 const savedNote: SiteNoteListEntry = {
@@ -118,9 +127,58 @@ it("keeps a saved note when the first list request answers after the reload", as
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
   await vi.waitFor(() => expect(fixture.lists).toHaveLength(2));
   const [initial, reload] = fixture.lists;
-  reload?.({ _tag: "Success", value: [savedNote] });
+  reload?.resolve({ _tag: "Success", value: [savedNote] });
   await expect.element(screen.getByText(savedNote.text)).toBeInTheDocument();
-  initial?.({ _tag: "Success", value: [] });
+  initial?.resolve({ _tag: "Success", value: [] });
   await userEvent.click(screen.getByRole("button", { name: "Edit" }));
   await expect.element(screen.getByLabelText(`Note for ${savedNote.origin}`)).toBeInTheDocument();
+});
+
+it("does not show a late list from a previous environment", async () => {
+  setup(true, true);
+  const registry = AtomRegistry.make();
+  const view = (id: string) => (
+    <RegistryContext value={registry}>
+      <MemoryAgentAccessSettings environmentId={EnvironmentId.make(id)} />
+    </RegistryContext>
+  );
+  await using screen = await render(view("a"));
+  await vi.waitFor(() => expect(fixture.lists).toHaveLength(1));
+  await screen.rerender(view("b"));
+  await vi.waitFor(() => expect(fixture.lists).toHaveLength(2));
+  expect(fixture.lists.map((list) => list.environmentId)).toEqual(["a", "b"]);
+  fixture.lists[1]?.resolve({ _tag: "Success", value: [] });
+  await act(async () => fixture.lists[0]?.resolve({ _tag: "Success", value: [savedNote] }));
+  await expect.element(screen.getByText(savedNote.text)).not.toBeInTheDocument();
+});
+
+it("keeps the current environment list when a previous environment save finishes", async () => {
+  setup(true, true);
+  fixture.holdWrites = true;
+  const registry = AtomRegistry.make();
+  const view = (id: string) => (
+    <RegistryContext value={registry}>
+      <MemoryAgentAccessSettings environmentId={EnvironmentId.make(id)} />
+    </RegistryContext>
+  );
+  await using screen = await render(view("a"));
+  await vi.waitFor(() => expect(fixture.lists).toHaveLength(1));
+  fixture.lists[0]?.resolve({ _tag: "Success", value: [savedNote] });
+  await expect.element(screen.getByText(savedNote.text)).toBeInTheDocument();
+  await userEvent.fill(screen.getByLabelText("Site address"), "https://other.example");
+  await userEvent.fill(screen.getByLabelText("Site note"), "Other note");
+  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await vi.waitFor(() => expect(fixture.writes).toHaveLength(1));
+  await screen.rerender(view("b"));
+  await expect.element(screen.getByText(savedNote.text)).not.toBeInTheDocument();
+  await vi.waitFor(() => expect(fixture.lists).toHaveLength(2));
+  const bNote = { ...savedNote, text: "Environment B note" };
+  fixture.lists[1]?.resolve({ _tag: "Success", value: [bNote] });
+  await expect.element(screen.getByText(bNote.text)).toBeInTheDocument();
+  fixture.writes[0]?.();
+  await vi.waitFor(() => expect(fixture.lists).toHaveLength(3));
+  expect(fixture.lists[2]?.environmentId).toBe("a");
+  await act(async () => fixture.lists[2]?.resolve({ _tag: "Success", value: [savedNote] }));
+  await expect.element(screen.getByText(savedNote.text)).not.toBeInTheDocument();
+  await expect.element(screen.getByText(bNote.text)).toBeInTheDocument();
 });
