@@ -3,7 +3,7 @@ import type { EnvironmentId } from "@goat/contracts";
 import {
   isEnvironmentUrlUnreachableError,
   openEnvironmentUrlExternally,
-  resolveEnvironmentExternalUrl,
+  urlNeedsEnvironmentRoute,
 } from "~/browser/openEnvironmentUrl";
 import { readLocalApi } from "~/localApi";
 
@@ -28,15 +28,11 @@ export function reportMarkdownExternalOpenFailure(target: string, cause: unknown
   );
 }
 
-/** True when the browser's own navigation to href would land on the wrong machine. */
 export function markdownLinkNeedsEnvironmentRoute(
   environmentId: EnvironmentId | null,
   href: string,
 ): boolean {
-  if (environmentId === null) return false;
-  const url = absoluteLinkUrl(href);
-  const resolved = resolveEnvironmentExternalUrl(environmentId, url);
-  return resolved._tag === "Unreachable" || resolved.url !== url;
+  return urlNeedsEnvironmentRoute(environmentId, absoluteLinkUrl(href));
 }
 
 export function openMarkdownLinkInSystemBrowser(environmentId: EnvironmentId | null, href: string) {

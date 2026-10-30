@@ -42,3 +42,13 @@ export async function openEnvironmentUrlExternally(
   if (!api) throw new Error("Link opening is unavailable.");
   await api.shell.openExternal(resolved.url);
 }
+
+/** True when the browser's own navigation to url would land on the wrong machine. */
+export function urlNeedsEnvironmentRoute(
+  environmentId: EnvironmentId | null,
+  url: string,
+): boolean {
+  if (environmentId === null) return false;
+  const resolved = resolveEnvironmentExternalUrl(environmentId, url);
+  return resolved._tag === "Unreachable" || resolved.url !== url;
+}
