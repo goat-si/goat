@@ -609,6 +609,30 @@ describe("live note editor", () => {
     expect(button("idea").disabled).toBe(false);
   });
 
+  it("refuses a delete confirmed after the editor started a re-sync", async () => {
+    mocks.rows = [];
+    mocks.connected = true;
+    mocks.live = true;
+    mocks.read.mockResolvedValue(AsyncResult.success(noteDocument("- [ ] task\n")));
+    await act(async () => render());
+    act(() => button("Delete note").click());
+    act(() => button("Editor resyncing").click());
+    await act(async () => confirmLastAlert()());
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Save or discard them before deleting");
+  });
+
+  it("holds Retry saving while the editor re-syncs", async () => {
+    mocks.enqueue.mockRejectedValueOnce(new Error("Phone storage unavailable"));
+    await live("- [ ] task\n");
+    mocks.liveNext = "- [x] task\n";
+    mocks.liveCheckbox = true;
+    await act(async () => button("Live edit").click());
+    expect(button("Retry saving on phone").disabled).toBe(false);
+    act(() => button("Editor resyncing").click());
+    expect(button("Retry saving on phone").disabled).toBe(true);
+  });
+
   it("ends editing for a saved new note on blur, so the hub read resumes", async () => {
     mocks.live = true;
     mocks.rows = [];

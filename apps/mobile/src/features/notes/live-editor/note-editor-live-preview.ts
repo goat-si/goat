@@ -110,13 +110,17 @@ function buildDecorations(view: EditorView): DecorationSet {
         revealed.add(line);
   const shown = (pos: number) => revealed.has(doc.lineAt(pos).number);
   const lineClasses = new Map<number, Set<string>>();
+  // Only visible lines get classes, so a long block costs what is on screen, not its length.
   const addLines = (from: number, to: number, className: string) => {
-    for (let pos = from; pos <= to;) {
-      const line = doc.lineAt(pos);
-      const classes = lineClasses.get(line.from) ?? new Set<string>();
-      classes.add(className);
-      lineClasses.set(line.from, classes);
-      pos = line.to + 1;
+    for (const visible of view.visibleRanges) {
+      const end = Math.min(to, visible.to);
+      for (let pos = Math.max(from, visible.from); pos <= end;) {
+        const line = doc.lineAt(pos);
+        const classes = lineClasses.get(line.from) ?? new Set<string>();
+        classes.add(className);
+        lineClasses.set(line.from, classes);
+        pos = line.to + 1;
+      }
     }
   };
   const ranges: Range<Decoration>[] = [];

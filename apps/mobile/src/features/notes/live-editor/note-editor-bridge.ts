@@ -14,7 +14,6 @@ export interface NoteEditorReceipt {
 const MAX_LAG = 64;
 // Edits buffered while a snapshot is outstanding; past this, ask again in case it was lost.
 const RESEND_AFTER = 100;
-const requestDoc = { type: "requestDoc" } as const;
 
 /**
  * React Native's copy of the editor text. The page numbers its edits within a generation, so a
@@ -25,6 +24,8 @@ export class NoteEditorBridge {
   private generation = 0;
   private seq = 0;
   private awaitingDoc = false;
+  /** Names the active recovery; replies to earlier ones are stale and ignored. */
+  private request = 0;
   /** Edits that arrived while a snapshot was outstanding; newer ones replay on top of it. */
   private buffered: EditorChange[] = [];
   /** Values handed to React that it may not have rendered yet. */
@@ -37,6 +38,11 @@ export class NoteEditorBridge {
   /** True while React Native's copy may be behind the page and a snapshot is outstanding. */
   get pending() {
     return this.awaitingDoc;
+  }
+
+  /** The request to send again while a recovery is outstanding. */
+  retry(): NoteEditorInbound | null {
+    return this.awaitingDoc ? this.requestDoc() : null;
   }
 
   /** Reconciles a rendered value; anything not an echo of the page replaces its text. */
@@ -62,10 +68,12 @@ export class NoteEditorBridge {
   receive(message: EditorReport): NoteEditorReceipt {
     if (message.generation !== this.generation) return {};
     if (message.type === "doc")
-      return this.snapshot(message.doc, message.seq, message.checkboxSeqs);
+      return message.id === this.request && message.seq >= this.seq
+        ? this.snapshot(message.doc, message.seq, message.checkboxSeqs)
+        : {};
     if (this.awaitingDoc) {
       this.buffered.push(message);
-      return this.buffered.length % RESEND_AFTER === 0 ? { send: requestDoc } : {};
+      return this.buffered.length % RESEND_AFTER === 0 ? { send: this.requestDoc() } : {};
     }
     const next = this.apply(message);
     if (next === null) return this.resync();
@@ -109,7 +117,12 @@ export class NoteEditorBridge {
   private resync(): NoteEditorReceipt {
     this.awaitingDoc = true;
     this.buffered = [];
-    return { send: requestDoc };
+    this.request++;
+    return { send: this.requestDoc() };
+  }
+
+  private requestDoc() {
+    return { type: "requestDoc", id: this.request } as const;
   }
 
   private accept(text: string, checkbox: boolean): NoteEditorReceipt {

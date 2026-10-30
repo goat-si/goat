@@ -160,7 +160,10 @@ function NoteEditorPage({
     [],
   );
   const giveUp = useEffectEvent(() => fail("no ready signal"));
-  const askAgain = useEffectEvent(() => send({ type: "requestDoc" }));
+  const askAgain = useEffectEvent(() => {
+    const request = bridge.retry();
+    if (request) send(request);
+  });
   // oxlint-disable-next-line goat/react-effect-budget -- a lost snapshot reply must not wait for more typing
   useEffect(() => {
     if (!resyncing) return;

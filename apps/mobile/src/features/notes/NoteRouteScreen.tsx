@@ -79,6 +79,7 @@ function NoteContent(props: NoteParams) {
   const [liveUnavailable, setLiveUnavailable] = useState<string | null>(null);
   // The live editor is re-reading its own text; its latest edits may not be in body yet.
   const [editorPending, setEditorPending] = useState(false);
+  const editorPendingRef = useRef(false);
   const [editorFocused, setEditorFocused] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const editorFocusedRef = useRef(false);
@@ -252,6 +253,16 @@ function NoteContent(props: NoteParams) {
   };
   const deleteNote = async (target: NoteDocument) => {
     if (deletingRef.current) return;
+    // The confirmation can stay open while the editor gains focus, edits or starts a re-sync.
+    if (
+      editorPendingRef.current ||
+      editorFocusedRef.current ||
+      localBody.current !== target.body ||
+      localStatus.current !== target.status
+    ) {
+      setError("This note has edits on this phone. Save or discard them before deleting.");
+      return;
+    }
     // A draft can be saved or restored while the confirmation is open.
     const draft = notesOutbox
       .getSnapshot()
@@ -403,7 +414,7 @@ function NoteContent(props: NoteParams) {
           fullWidth
           tone="primary"
           label="Retry saving on phone"
-          disabled={saving || !canWrite}
+          disabled={saving || !canWrite || editorHolding}
           onPress={() => void save(localBody.current, localStatus.current)}
         />
       ) : null}
@@ -529,7 +540,10 @@ function NoteContent(props: NoteParams) {
             onSourceChange={setShowSource}
             onLink={(href) => void tryOpenExternalUrl(href, "markdown-link")}
             onUnavailable={setLiveUnavailable}
-            onPendingChange={setEditorPending}
+            onPendingChange={(pending) => {
+              editorPendingRef.current = pending;
+              setEditorPending(pending);
+            }}
           />
           {editorFocused ? (
             <NoteEditorToolbar

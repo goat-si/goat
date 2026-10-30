@@ -201,7 +201,14 @@ function boot(init: NoteEditorInit) {
         if (!view.composing) applyDeferred();
         return;
       case "requestDoc":
-        post({ type: "doc", generation, seq, doc: noteText(view.state), checkboxSeqs });
+        post({
+          type: "doc",
+          id: message.id,
+          generation,
+          seq,
+          doc: noteText(view.state),
+          checkboxSeqs,
+        });
         return;
       case "command":
         switch (message.command) {

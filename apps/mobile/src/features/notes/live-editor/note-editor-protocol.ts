@@ -51,7 +51,8 @@ export type NoteEditorInbound =
   | { readonly type: "setDoc"; readonly generation: number; readonly doc: string }
   | { readonly type: "config"; readonly config: NoteEditorConfig }
   | { readonly type: "command"; readonly command: NoteEditorCommand }
-  | { readonly type: "requestDoc" };
+  /** `id` names one recovery; the page echoes it so a late reply to an older one is ignored. */
+  | { readonly type: "requestDoc"; readonly id: number };
 
 export type NoteEditorOutbound =
   | { readonly type: "ready"; readonly bootMs: number }
@@ -66,6 +67,8 @@ export type NoteEditorOutbound =
     }
   | {
       readonly type: "doc";
+      /** The requestDoc this answers. */
+      readonly id: number;
       readonly generation: number;
       readonly seq: number;
       readonly doc: string;
@@ -112,13 +115,14 @@ export function parseNoteEditorMessage(data: string): NoteEditorOutbound | null 
         : null;
     }
     case "doc": {
-      const { generation, seq, doc, checkboxSeqs } = message;
-      return isCount(generation) &&
+      const { id, generation, seq, doc, checkboxSeqs } = message;
+      return isCount(id) &&
+        isCount(generation) &&
         isCount(seq) &&
         typeof doc === "string" &&
         Array.isArray(checkboxSeqs) &&
         checkboxSeqs.every(isCount)
-        ? { type, generation, seq, doc, checkboxSeqs }
+        ? { type, id, generation, seq, doc, checkboxSeqs }
         : null;
     }
     case "focus":
