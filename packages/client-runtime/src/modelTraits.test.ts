@@ -1,69 +1,100 @@
-import type { ProviderOptionDescriptor } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { isReasoningSliderDescriptor, reasoningSliderPosition } from "./modelTraits.ts";
+import { type ProviderOptionDescriptor } from "@goat/contracts";
+import {
+  effortStepFraction,
+  findReasoningDescriptor,
+  resolveEffortStepIndex,
+} from "./modelTraits.ts";
 
-const select = (
+function selectDescriptor(
   id: string,
-  options: ReadonlyArray<{ id: string; isDefault?: boolean }>,
-): Extract<ProviderOptionDescriptor, { type: "select" }> => ({
-  id,
-  label: id,
-  type: "select",
-  options: options.map((option) => ({ ...option, label: option.id })),
-});
+  options: ReadonlyArray<{ id: string; label: string; isDefault?: boolean }>,
+  currentValue: string,
+): Extract<ProviderOptionDescriptor, { type: "select" }> {
+  return { id, label: id, type: "select", options: [...options], currentValue };
+}
 
-describe("isReasoningSliderDescriptor", () => {
-  it.each([
-    [
-      "Codex effort ladder",
-      select("reasoningEffort", [{ id: "low" }, { id: "medium" }, { id: "ultra" }]),
-      true,
+function serviceTierDescriptor(
+  currentValue: "default" | "priority" | "ultrafast" | "flex",
+): Extract<ProviderOptionDescriptor, { type: "select" }> {
+  return {
+    id: "serviceTier",
+    label: "Service Tier",
+    type: "select",
+    options: [
+      { id: "default", label: "Standard", isDefault: true },
+      { id: "priority", label: "Fast" },
+      { id: "ultrafast", label: "Ultrafast" },
+      { id: "flex", label: "Flex" },
     ],
+    currentValue,
+  };
+}
+
+const EFFORT = selectDescriptor(
+  "reasoningEffort",
+  [
+    { id: "high", label: "High" },
+    { id: "max", label: "Max" },
+  ],
+  "high",
+);
+
+const CONTEXT_WINDOW = selectDescriptor(
+  "contextWindow",
+  [
+    { id: "200k", label: "200k" },
+    { id: "1m", label: "1M" },
+  ],
+  "1m",
+);
+
+describe("effort slider", () => {
+  const steps = selectDescriptor(
+    "effort",
     [
-      "Claude effort with prompt-injected ultrathink",
-      select("effort", [{ id: "low" }, { id: "max" }, { id: "ultracode" }, { id: "ultrathink" }]),
-      true,
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium", isDefault: true },
+      { id: "high", label: "High" },
+      { id: "ultrathink", label: "Ultrathink" },
     ],
-    [
-      "Pi thinking levels",
-      select("thinking", [{ id: "off" }, { id: "minimal" }, { id: "high" }]),
-      true,
-    ],
-    ["Cursor thinking on/off", select("thinking", [{ id: "false" }, { id: "true" }]), false],
-    ["OpenCode named variants", select("variant", [{ id: "low" }, { id: "high" }]), false],
-    ["out-of-order levels", select("effort", [{ id: "high" }, { id: "low" }]), false],
-    ["a single level", select("effort", [{ id: "high" }]), false],
-    ["a non-reasoning select", select("contextWindow", [{ id: "low" }, { id: "high" }]), false],
-  ])("%s -> %s", (_name, descriptor, expected) => {
-    expect(isReasoningSliderDescriptor(descriptor)).toBe(expected);
-  });
-});
+    "",
+  );
 
-describe("reasoningSliderPosition", () => {
-  const descriptor = select("effort", [
-    { id: "low" },
-    { id: "high", isDefault: true },
-    { id: "max" },
-  ]);
-
-  it("places the current value and marks the provider default", () => {
-    expect(reasoningSliderPosition(descriptor, "max")).toEqual({ index: 2, defaultIndex: 1 });
+  it("drives the reasoning select even when context window comes first", () => {
+    expect(findReasoningDescriptor([CONTEXT_WINDOW, EFFORT])).toBe(EFFORT);
   });
 
-  it("falls back to the default stop when nothing is chosen yet", () => {
-    expect(reasoningSliderPosition(descriptor, undefined)).toEqual({ index: 1, defaultIndex: 1 });
-  });
-
-  it("gives up on a value the model does not offer, so the list picker can show it", () => {
-    expect(reasoningSliderPosition(descriptor, "xhigh")).toBeNull();
-  });
-
-  it("reports no default stop when the provider names none", () => {
+  it("hides the slider for models without a reasoning choice", () => {
+    expect(findReasoningDescriptor([CONTEXT_WINDOW, serviceTierDescriptor("default")])).toBeNull();
     expect(
-      reasoningSliderPosition(select("effort", [{ id: "low" }, { id: "high" }]), "low"),
-    ).toEqual({
-      index: 0,
-      defaultIndex: null,
-    });
+      findReasoningDescriptor([
+        selectDescriptor("effort", [{ id: "high", label: "High" }], "high"),
+      ]),
+    ).toBeNull();
+  });
+
+  it("places the thumb on the selected step, then the provider default", () => {
+    expect(resolveEffortStepIndex(steps, "ultrathink")).toBe(3);
+    expect(resolveEffortStepIndex(steps, null)).toBe(1);
+    expect(resolveEffortStepIndex(steps, "retired")).toBe(1);
+    expect(
+      resolveEffortStepIndex(
+        selectDescriptor(
+          "effort",
+          [
+            { id: "a", label: "A" },
+            { id: "b", label: "B" },
+          ],
+          "",
+        ),
+        null,
+      ),
+    ).toBe(0);
+  });
+
+  it("spreads dots and thumb stops edge to edge", () => {
+    expect([0, 1, 2, 3].map((index) => effortStepFraction(index, 4))).toEqual([0, 1 / 3, 2 / 3, 1]);
+    expect(effortStepFraction(0, 1)).toBe(0);
   });
 });

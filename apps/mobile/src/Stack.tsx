@@ -91,7 +91,9 @@ import {
 } from "./features/threads/NewTaskContextPickerScreens";
 import {
   ExistingThreadSettingsRouteProvider,
+  ExistingThreadModelPickerRouteScreen,
   ExistingThreadSettingsRouteScreen,
+  NewTaskModelPickerRouteScreen,
   NewTaskThreadSettingsRouteScreen,
 } from "./features/threads/ThreadSettingsSheet";
 import { draftRouteFlowProps } from "./draft-route-flow";
@@ -241,6 +243,24 @@ const THREAD_SETTINGS_SHEET_OPTIONS = {
   sheetAllowedDetents: [1],
   sheetGrabberVisible: true,
   nativeContentInsetHorizontally: false,
+};
+
+// The composer's reasoning popover: a short sheet sized to its controls, like the web popover.
+const THREAD_TRAITS_SHEET_OPTIONS = {
+  gestureEnabled: true,
+  headerShown: false,
+  presentation: "formSheet" as const,
+  sheetAllowedDetents: "fitToContents" as const,
+  sheetGrabberVisible: true,
+  ...(Platform.OS === "android" ? { sheetCornerRadius: 28 } : {}),
+};
+
+// The model catalog opens over the popover and needs the full height for search and groups.
+const THREAD_MODEL_PICKER_OPTIONS = {
+  gestureEnabled: true,
+  ...(Platform.OS === "android"
+    ? { headerShown: false, presentation: "card" as const }
+    : { ...SHEET_GLASS_HEADER_OPTIONS, ...THREAD_SETTINGS_SHEET_OPTIONS, title: "Models" }),
 };
 
 // Settings pages are root routes so they share the workspace's columns and header. The
@@ -847,13 +867,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
     NewTaskThreadSettings: createNativeStackScreen({
       screen: NewTaskThreadSettingsRouteScreen,
       linking: "new/draft/settings",
-      options: {
-        gestureEnabled: true,
-        headerShown: false,
-        ...(Platform.OS === "android"
-          ? { presentation: "card" as const }
-          : THREAD_SETTINGS_SHEET_OPTIONS),
-      },
+      options: THREAD_TRAITS_SHEET_OPTIONS,
+    }),
+    NewTaskModelPicker: createNativeStackScreen({
+      screen: NewTaskModelPickerRouteScreen,
+      options: THREAD_MODEL_PICKER_OPTIONS,
     }),
     ThreadTerminal: createNativeStackScreen({
       screen: ThreadTerminalRouteScreen,
@@ -933,15 +951,11 @@ const RootStackConfig = createWorkspaceStackNavigator({
     }),
     ThreadSettingsSheet: createNativeStackScreen({
       screen: ExistingThreadSettingsRouteScreen,
-      options: {
-        gestureEnabled: true,
-        headerShown: false,
-        ...(Platform.OS === "android"
-          ? { presentation: "card" as const }
-          : {
-              ...THREAD_SETTINGS_SHEET_OPTIONS,
-            }),
-      },
+      options: THREAD_TRAITS_SHEET_OPTIONS,
+    }),
+    ThreadModelPicker: createNativeStackScreen({
+      screen: ExistingThreadModelPickerRouteScreen,
+      options: THREAD_MODEL_PICKER_OPTIONS,
     }),
     ThreadQueue: createNativeStackScreen({
       screen: ThreadQueueSheet,

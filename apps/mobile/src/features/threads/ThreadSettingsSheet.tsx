@@ -1,13 +1,9 @@
-import { getProviderOptionCurrentValue } from "@goat/shared/model";
-import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { type NativeStackNavigationProp } from "@react-navigation/native-stack";
-import * as Haptics from "expo-haptics";
-import { createContext, use, useEffect, useEffectEvent, useState, type ReactNode } from "react";
-import { Platform, ScrollView, View } from "react-native";
+import { createContext, use, useEffect, useState, type ReactNode } from "react";
+import { Platform, ScrollView, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
-import * as Dialog from "../../components/ui/Dialog";
 import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -18,14 +14,10 @@ import { resolveProviderOptionDescriptors } from "../../lib/providerOptions";
 import { withRememberedModelOptions } from "../../state/use-model-option-memory";
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import { ThreadSettingsCatalogScreen } from "./ThreadSettingsCatalog";
-import { ThreadSettingsOverview } from "./ThreadSettingsOverview";
-import { ChoiceRow } from "./ThreadSettingsRows";
-import { selectableChoices } from "./thread-settings-options";
+import { ThreadSettingsTraits } from "./ThreadSettingsTraits";
 import {
   ThreadSettingsSessionProvider,
-  useThreadSettingsSession,
   type ThreadSettingsSessionProps,
-  type ThreadSettingsSubmenuPage,
 } from "./thread-settings-session";
 
 const THREAD_SETTINGS_HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(
@@ -73,275 +65,44 @@ export function useExistingThreadSettingsRoutePresentation() {
   return value;
 }
 
-function ThreadSettingsChoiceContent(props: {
-  readonly submenu: ThreadSettingsSubmenuPage;
-  readonly onSelected: () => void;
-}) {
-  const insets = useSafeAreaInsets();
-  const session = useThreadSettingsSession();
-  const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
+type RootNavigation = NativeStackNavigationProp<Record<string, object | undefined>>;
 
-  const activeDescriptor =
-    descriptorId !== null
-      ? session.displayedDescriptors.find(
-          (descriptor) => descriptor.type === "select" && descriptor.id === descriptorId,
-        )
-      : undefined;
-
-  const submenuContent =
-    props.submenu.kind === "runtime"
-      ? {
-          rows: session.runtimeModeChoices.map((choice) => ({
-            id: choice.mode,
-            label: choice.label,
-            description: choice.description,
-            selected: choice.mode === session.runtimeMode,
-            onPress: () => {
-              void Haptics.selectionAsync();
-              session.onUpdateRuntimeMode(choice.mode);
-              props.onSelected();
-            },
-          })),
-        }
-      : activeDescriptor?.type === "select"
-        ? {
-            rows: selectableChoices(activeDescriptor).map((choice) => ({
-              id: choice.id,
-              label: choice.label,
-              description: choice.description,
-              selected:
-                choice.id ===
-                (session.promptTraits.ultrathinkPromptControlled &&
-                activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
-                  ? "ultrathink"
-                  : getProviderOptionCurrentValue(
-                      activeDescriptor,
-                      session.displayedModelSelection,
-                      session.reportedModelSelection,
-                    )),
-              onPress: () => {
-                void Haptics.selectionAsync();
-                if (
-                  session.promptTraits.ultrathinkInBodyText &&
-                  activeDescriptor.id === session.promptTraits.primarySelectDescriptor?.id
-                ) {
-                  Dialog.alert(
-                    "Reasoning controlled by prompt",
-                    'Your prompt contains "ultrathink" in the text. Remove it to change this option.',
-                  );
-                  return;
-                }
-                session.applyOptionChange(activeDescriptor.id, choice.id);
-                props.onSelected();
-              },
-            })),
-          }
-        : null;
-
-  if (!submenuContent) {
-    return <View className="flex-1 bg-sheet" />;
-  }
-
-  return (
-    <ScrollView
-      className="flex-1 bg-sheet"
-      style={
-        Platform.OS === "android"
-          ? { width: "100%", maxWidth: 720, alignSelf: "center" }
-          : undefined
-      }
-      contentContainerStyle={{
-        paddingBottom: insets.bottom + 12,
-        paddingHorizontal: 16,
-        paddingTop: 16,
-      }}
-      contentInsetAdjustmentBehavior="automatic"
-      showsVerticalScrollIndicator={false}
-    >
-      <View className="overflow-hidden rounded-2xl bg-grouped-card">
-        {submenuContent.rows.map((row, index) => (
-          <ChoiceRow
-            key={row.id}
-            description={row.description}
-            isLast={index === submenuContent.rows.length - 1}
-            label={row.label}
-            selected={row.selected}
-            onPress={row.onPress}
-          />
-        ))}
-      </View>
-    </ScrollView>
-  );
-}
-
-type ThreadSettingsPickerStackParams = {
-  ThreadSettingsModels: undefined;
-  ThreadSettingsCatalog: undefined;
-  ThreadSettingsChoice: ThreadSettingsSubmenuPage & { readonly title: string };
-};
-
-type ThreadSettingsPickerPresentation = {
-  readonly onClose: () => void;
-};
-
-const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
-const ThreadSettingsPickerPresentationContext =
-  createContext<ThreadSettingsPickerPresentation | null>(null);
-
-function useThreadSettingsPickerPresentation() {
-  const value = use(ThreadSettingsPickerPresentationContext);
-  if (!value) {
-    throw new Error(
-      "useThreadSettingsPickerPresentation must be used inside ThreadSettingsPickerNavigator.",
-    );
-  }
-  return value;
-}
-
-function ThreadSettingsModelsScreen() {
-  const session = useThreadSettingsSession();
-  const presentation = useThreadSettingsPickerPresentation();
-  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
-  const commitAndClose = useEffectEvent(() => {
-    if (!session.commitPendingModel()) return;
-    presentation.onClose();
-  });
-  const openSubmenu = (submenu: ThreadSettingsSubmenuPage) => {
-    const title =
-      submenu.kind === "runtime"
-        ? "Runtime"
-        : (session.displayedDescriptors.find(
-            (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-          )?.label ?? "Option");
-    navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
-  };
-  const openCatalog = () => {
-    // The catalog's search field starts empty on every visit, so the query must too.
-    session.setSearchQuery("");
-    navigation.navigate("ThreadSettingsCatalog");
-  };
-
-  return (
-    <>
-      {Platform.OS === "android" ? (
-        <SheetHeader
-          onCancel={presentation.onClose}
-          title="Thread settings"
-          confirm={session.pendingModel ? { label: "Save", onPress: commitAndClose } : undefined}
-        />
-      ) : null}
-      <NativeStackScreenOptions options={{ headerShown: Platform.OS !== "android" }} />
-      <ScreenContent>
-        <ThreadSettingsOverview onOpenCatalog={openCatalog} onOpenSubmenu={openSubmenu} />
-      </ScreenContent>
-      {Platform.OS === "ios" ? (
-        <SheetHeader
-          title="Thread settings"
-          onCancel={presentation.onClose}
-          accessibilityLabel="Cancel thread settings"
-          confirm={{
-            label: session.pendingModel ? "Save thread settings" : "Done",
-            onPress: commitAndClose,
-          }}
-        />
-      ) : null}
-    </>
-  );
-}
-
-function ThreadSettingsCatalogRouteScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
-  const back = () => navigation.goBack();
-  return <ThreadSettingsCatalogScreen onBack={back} onPicked={back} />;
-}
-
-function ThreadSettingsChoiceScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
-  const route = useRoute<RouteProp<ThreadSettingsPickerStackParams, "ThreadSettingsChoice">>();
-
-  return (
-    <>
-      <NativeStackScreenOptions options={{ headerShown: Platform.OS !== "android" }} />
-      {Platform.OS === "android" ? (
-        <AndroidScreenHeader
-          title={route.params.title}
-          onBack={() => navigation.goBack()}
-          hideBottomBorder
-        />
-      ) : null}
-      <ScreenContent>
-        <ThreadSettingsChoiceContent
-          submenu={route.params}
-          onSelected={() => navigation.goBack()}
-        />
-      </ScreenContent>
-    </>
-  );
-}
-
-function ThreadSettingsPickerNavigator(props: ThreadSettingsPickerPresentation) {
-  const theme = useUniwindTheme();
-  const solidSheetBackground = theme["--color-sheet-solid"];
-  const foreground = theme["--color-foreground"];
-  const presentation = {
-    onClose: props.onClose,
-  };
-
-  return (
-    <ThreadSettingsPickerPresentationContext.Provider value={presentation}>
-      <ThreadSettingsPickerStack.Navigator
-        initialRouteName="ThreadSettingsModels"
-        screenOptions={{
-          animation: Platform.OS === "android" ? "default" : "slide_from_right",
-          contentStyle: { backgroundColor: solidSheetBackground },
-          gestureEnabled: true,
-          headerBackButtonDisplayMode: "minimal",
-          headerBackTitle: "",
-          headerShown: Platform.OS !== "android",
-          headerShadowVisible: false,
-          headerStyle: {
-            backgroundColor: NATIVE_LIQUID_GLASS_SUPPORTED ? "transparent" : solidSheetBackground,
-          },
-          headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
-          headerTintColor: foreground,
-          headerTitleStyle: { fontSize: 17, fontWeight: "700" },
-          scrollEdgeEffects: NATIVE_LIQUID_GLASS_SUPPORTED
-            ? THREAD_SETTINGS_HEADER_SCROLL_EDGE_EFFECTS
-            : undefined,
-        }}
-      >
-        <ThreadSettingsPickerStack.Screen
-          name="ThreadSettingsModels"
-          component={ThreadSettingsModelsScreen}
-          options={{ headerBackVisible: false, title: "Thread settings" }}
-        />
-        <ThreadSettingsPickerStack.Screen
-          name="ThreadSettingsCatalog"
-          component={ThreadSettingsCatalogRouteScreen}
-          options={{ title: "All models" }}
-        />
-        <ThreadSettingsPickerStack.Screen
-          name="ThreadSettingsChoice"
-          component={ThreadSettingsChoiceScreen}
-          options={({ route }) => ({ title: route.params.title })}
-        />
-      </ThreadSettingsPickerStack.Navigator>
-    </ThreadSettingsPickerPresentationContext.Provider>
-  );
-}
-
-export function ThreadSettingsPickerScreen(
-  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
+/** The composer's reasoning popover; its sheet sizes to this content. */
+function ThreadSettingsPopover(
+  props: ThreadSettingsSessionProps & { readonly onOpenModelPicker: () => void },
 ) {
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   return (
     <ThreadSettingsSessionProvider {...props}>
-      <ThreadSettingsPickerNavigator onClose={props.onClose} />
+      <ScreenContent fitToContents>
+        <ScrollView
+          className="bg-sheet"
+          style={{ flexGrow: 0, maxHeight: height * 0.85 }}
+          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) }}
+          showsVerticalScrollIndicator={false}
+        >
+          <ThreadSettingsTraits onOpenModelPicker={props.onOpenModelPicker} />
+        </ScrollView>
+      </ScreenContent>
+    </ThreadSettingsSessionProvider>
+  );
+}
+
+function ThreadModelPicker(props: ThreadSettingsSessionProps & { readonly onClose: () => void }) {
+  return (
+    <ThreadSettingsSessionProvider {...props}>
+      <ThreadSettingsCatalogScreen
+        onClose={props.onClose}
+        onBack={props.onClose}
+        onPicked={props.onClose}
+      />
     </ThreadSettingsSessionProvider>
   );
 }
 
 export function ExistingThreadSettingsRouteScreen() {
-  const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const navigation = useNavigation<RootNavigation>();
   const presentation = useExistingThreadSettingsRoutePresentation();
   const session = presentation.session;
 
@@ -354,39 +115,150 @@ export function ExistingThreadSettingsRouteScreen() {
   }, [navigation, session]);
 
   if (!session) {
-    return <View className="flex-1 bg-sheet" />;
+    return <View className="bg-sheet" />;
   }
 
   const { ownerId: _ownerId, ...settings } = session;
 
-  return <ThreadSettingsPickerScreen {...settings} onClose={() => navigation.goBack()} />;
+  return (
+    <ThreadSettingsPopover
+      {...settings}
+      onOpenModelPicker={() => navigation.dispatch(StackActions.push("ThreadModelPicker"))}
+    />
+  );
 }
 
-/** RNS owns nested sheet dismissal; Reasoning and Runtime remain ordinary pushes. */
-export function NewTaskThreadSettingsRouteScreen() {
+export function ExistingThreadModelPickerRouteScreen() {
+  const navigation = useNavigation<RootNavigation>();
+  const session = useExistingThreadSettingsRoutePresentation().session;
+  if (!session) {
+    return <View className="flex-1 bg-sheet" />;
+  }
+  const { ownerId: _ownerId, ...settings } = session;
+  return <ThreadModelPicker {...settings} onClose={() => navigation.goBack()} />;
+}
+
+function useNewTaskSettingsSession(): ThreadSettingsSessionProps {
   const flow = useNewTaskFlow();
-  const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
-  const optionDescriptors = resolveProviderOptionDescriptors({
-    capabilities: flow.selectedModelOption?.capabilities,
-    selections: flow.selectedModel?.options,
-  });
+  return {
+    environmentId: flow.selectedEnvironmentId,
+    projectId: flow.selectedProject?.id ?? null,
+    ...(flow.selectedModel ? { providerInstanceId: flow.selectedModel.instanceId } : {}),
+    providerGroups: flow.providerGroups,
+    selectedModel: flow.selectedModel,
+    prompt: flow.prompt,
+    onPromptChange: flow.setPrompt,
+    onSelectModel: (option) => flow.setSelectedModelKey(option.key, option.selection.options),
+    restoreSelection: withRememberedModelOptions,
+    optionDescriptors: resolveProviderOptionDescriptors({
+      capabilities: flow.selectedModelOption?.capabilities,
+      selections: flow.selectedModel?.options,
+    }),
+    onUpdateOptionSelections: flow.setSelectedModelOptions,
+    runtimeMode: flow.runtimeMode,
+    onUpdateRuntimeMode: flow.setRuntimeMode,
+  };
+}
+
+export function NewTaskThreadSettingsRouteScreen() {
+  const navigation = useNavigation<RootNavigation>();
+  const session = useNewTaskSettingsSession();
+  return (
+    <ThreadSettingsPopover
+      {...session}
+      onOpenModelPicker={() => navigation.dispatch(StackActions.push("NewTaskModelPicker"))}
+    />
+  );
+}
+
+export function NewTaskModelPickerRouteScreen() {
+  const navigation = useNavigation<RootNavigation>();
+  const session = useNewTaskSettingsSession();
+  return <ThreadModelPicker {...session} onClose={() => navigation.goBack()} />;
+}
+
+type ThreadSettingsPickerStackParams = {
+  ThreadSettingsTraits: undefined;
+  ThreadSettingsModels: undefined;
+};
+
+const ThreadSettingsPickerStack = createNativeStackNavigator<ThreadSettingsPickerStackParams>();
+const ThreadSettingsPickerCloseContext = createContext<(() => void) | null>(null);
+
+function ThreadSettingsTraitsScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
+  const onClose = use(ThreadSettingsPickerCloseContext);
+  const close = () => onClose?.();
+  return (
+    <>
+      {Platform.OS === "android" ? <SheetHeader title="Model" onClose={close} /> : null}
+      <NativeStackScreenOptions options={{ headerShown: Platform.OS !== "android" }} />
+      <ScreenContent>
+        <ScrollView
+          className="flex-1 bg-sheet"
+          contentInsetAdjustmentBehavior="automatic"
+          showsVerticalScrollIndicator={false}
+        >
+          <ThreadSettingsTraits
+            onOpenModelPicker={() => navigation.navigate("ThreadSettingsModels")}
+          />
+        </ScrollView>
+      </ScreenContent>
+      {Platform.OS === "ios" ? <SheetHeader title="Model" onClose={close} /> : null}
+    </>
+  );
+}
+
+function ThreadSettingsModelsScreen() {
+  const navigation = useNavigation<NativeStackNavigationProp<ThreadSettingsPickerStackParams>>();
+  const back = () => navigation.goBack();
+  return <ThreadSettingsCatalogScreen onBack={back} onPicked={back} />;
+}
+
+/** The same controls as the composer popover, as a full sheet with the catalog pushed inside. */
+export function ThreadSettingsPickerScreen(
+  props: ThreadSettingsSessionProps & { readonly onClose: () => void },
+) {
+  const theme = useUniwindTheme();
+  const solidSheetBackground = theme["--color-sheet-solid"];
+  const foreground = theme["--color-foreground"];
 
   return (
-    <ThreadSettingsPickerScreen
-      environmentId={flow.selectedEnvironmentId}
-      projectId={flow.selectedProject?.id ?? null}
-      {...(flow.selectedModel ? { providerInstanceId: flow.selectedModel.instanceId } : {})}
-      providerGroups={flow.providerGroups}
-      selectedModel={flow.selectedModel}
-      prompt={flow.prompt}
-      onPromptChange={flow.setPrompt}
-      onSelectModel={(option) => flow.setSelectedModelKey(option.key, option.selection.options)}
-      restoreSelection={withRememberedModelOptions}
-      optionDescriptors={optionDescriptors}
-      onUpdateOptionSelections={flow.setSelectedModelOptions}
-      runtimeMode={flow.runtimeMode}
-      onUpdateRuntimeMode={flow.setRuntimeMode}
-      onClose={() => navigation.goBack()}
-    />
+    <ThreadSettingsSessionProvider {...props}>
+      <ThreadSettingsPickerCloseContext.Provider value={props.onClose}>
+        <ThreadSettingsPickerStack.Navigator
+          initialRouteName="ThreadSettingsTraits"
+          screenOptions={{
+            animation: Platform.OS === "android" ? "default" : "slide_from_right",
+            contentStyle: { backgroundColor: solidSheetBackground },
+            gestureEnabled: true,
+            headerBackButtonDisplayMode: "minimal",
+            headerBackTitle: "",
+            headerShown: Platform.OS !== "android",
+            headerShadowVisible: false,
+            headerStyle: {
+              backgroundColor: NATIVE_LIQUID_GLASS_SUPPORTED ? "transparent" : solidSheetBackground,
+            },
+            headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
+            headerTintColor: foreground,
+            headerTitleStyle: { fontSize: 17, fontWeight: "700" },
+            scrollEdgeEffects: NATIVE_LIQUID_GLASS_SUPPORTED
+              ? THREAD_SETTINGS_HEADER_SCROLL_EDGE_EFFECTS
+              : undefined,
+          }}
+        >
+          <ThreadSettingsPickerStack.Screen
+            name="ThreadSettingsTraits"
+            component={ThreadSettingsTraitsScreen}
+            options={{ headerBackVisible: false, title: "Model" }}
+          />
+          <ThreadSettingsPickerStack.Screen
+            name="ThreadSettingsModels"
+            component={ThreadSettingsModelsScreen}
+            options={{ title: "Models" }}
+          />
+        </ThreadSettingsPickerStack.Navigator>
+      </ThreadSettingsPickerCloseContext.Provider>
+    </ThreadSettingsSessionProvider>
   );
 }

@@ -1,6 +1,6 @@
 import { RegistryContext } from "@effect/atom-react";
-import { EnvironmentId, ProviderInstanceId, type ModelSelection } from "@goat/contracts";
-import { createModelCapabilities } from "@goat/shared/model";
+import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
+import { createModelCapabilities, getProviderOptionDescriptors } from "@goat/shared/model";
 import { AtomRegistry } from "effect/reactivity";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -10,6 +10,7 @@ import type { ModelOption } from "../../lib/modelOptions";
 import {
   ThreadSettingsSessionProvider,
   useThreadSettingsSession,
+  type ThreadSettingsSessionProps,
   type ThreadSettingsSessionValue,
 } from "./thread-settings-session";
 
@@ -65,67 +66,94 @@ const opus: ModelOption = {
   selection: { instanceId: claude, model: "opus" },
 };
 
-describe("ThreadSettingsSessionProvider", () => {
-  it("Keep current drops a pending switch and its prompt when the thread's model is not in the catalog", async () => {
-    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-    const registry = AtomRegistry.make();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    const onSelectModel = vi.fn();
-    const onPromptChange = vi.fn();
-    const unlisted: ModelSelection = { instanceId: claude, model: "retired-model" };
-    let session: ThreadSettingsSessionValue | null = null;
-    const Probe = () => {
-      session = useThreadSettingsSession();
-      return null;
-    };
-    const current = () => {
-      if (!session) throw new Error("session not mounted");
-      return session;
-    };
-    try {
-      await act(async () =>
-        root.render(
-          <RegistryContext value={registry}>
-            <ThreadSettingsSessionProvider
-              environmentId={EnvironmentId.make("env-a")}
-              projectId={null}
-              providerGroups={[
-                { providerKey: "claudeAgent", providerLabel: "Claude", models: [opus] },
-              ]}
-              selectedModel={unlisted}
-              prompt="Fix the build"
-              onPromptChange={onPromptChange}
-              onSelectModel={onSelectModel}
-              optionDescriptors={[]}
-              onUpdateOptionSelections={vi.fn()}
-              runtimeMode="full-access"
-              onUpdateRuntimeMode={vi.fn()}
-            >
-              <Probe />
-            </ThreadSettingsSessionProvider>
-          </RegistryContext>,
-        ),
-      );
-      expect(current().appliedModel).toBeNull();
-      expect(current().appliedModelSelection).toEqual(unlisted);
-
-      await act(async () => current().pressModel(opus));
-      await act(async () => current().applyOptionChange("effort", "ultrathink"));
-      expect(current().pendingModel?.key).toBe(opus.key);
-
-      await act(async () => current().keepAppliedModel());
-      expect(current().pendingModel).toBeNull();
-      expect(current().displayedModelSelection).toEqual(unlisted);
-      expect(current().commitPendingModel()).toBe(true);
-      expect(onSelectModel).not.toHaveBeenCalled();
-      expect(onPromptChange).not.toHaveBeenCalled();
-    } finally {
+async function mountSession(
+  overrides: Partial<ThreadSettingsSessionProps> = {},
+): Promise<{ readonly session: () => ThreadSettingsSessionValue } & AsyncDisposable> {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const registry = AtomRegistry.make();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const probe: { current: ThreadSettingsSessionValue | null } = { current: null };
+  const Probe = (props: { readonly onSession: (session: ThreadSettingsSessionValue) => void }) => {
+    props.onSession(useThreadSettingsSession());
+    return null;
+  };
+  await act(async () =>
+    root.render(
+      <RegistryContext value={registry}>
+        <ThreadSettingsSessionProvider
+          environmentId={EnvironmentId.make("env-a")}
+          projectId={null}
+          providerGroups={[{ providerKey: "claudeAgent", providerLabel: "Claude", models: [opus] }]}
+          selectedModel={{ instanceId: claude, model: "sonnet" }}
+          prompt="Fix the build"
+          onPromptChange={vi.fn()}
+          onSelectModel={vi.fn()}
+          optionDescriptors={[]}
+          onUpdateOptionSelections={vi.fn()}
+          runtimeMode="full-access"
+          onUpdateRuntimeMode={vi.fn()}
+          {...overrides}
+        >
+          <Probe
+            onSession={(session) => {
+              probe.current = session;
+            }}
+          />
+        </ThreadSettingsSessionProvider>
+      </RegistryContext>,
+    ),
+  );
+  return {
+    session: () => {
+      if (!probe.current) throw new Error("session not mounted");
+      return probe.current;
+    },
+    [Symbol.asyncDispose]: async () => {
       await act(async () => root.unmount());
       registry.dispose();
       container.remove();
       vi.unstubAllGlobals();
-    }
+    },
+  };
+}
+
+describe("ThreadSettingsSessionProvider", () => {
+  it("applies a model picked from the composer with its remembered options", async () => {
+    const onSelectModel = vi.fn();
+    const remembered = [{ id: "effort", value: "high" }];
+    await using mounted = await mountSession({
+      onSelectModel,
+      restoreSelection: (selection) => ({ ...selection, options: remembered }),
+    });
+
+    let applied = false;
+    await act(async () => {
+      applied = mounted.session().selectModel(opus);
+    });
+
+    expect(applied).toBe(true);
+    expect(onSelectModel).toHaveBeenCalledWith({
+      ...opus,
+      selection: { ...opus.selection, options: remembered },
+    });
+  });
+
+  it("writes the ultrathink step as a prompt prefix instead of a model option", async () => {
+    const onPromptChange = vi.fn();
+    const onUpdateOptionSelections = vi.fn();
+    const descriptors = getProviderOptionDescriptors({ caps: opus.capabilities!, selections: [] });
+    await using mounted = await mountSession({
+      selectedModel: opus.selection,
+      optionDescriptors: descriptors,
+      onPromptChange,
+      onUpdateOptionSelections,
+    });
+
+    await act(async () => mounted.session().applyOptionChange("effort", "ultrathink"));
+
+    expect(onPromptChange).toHaveBeenCalledWith(expect.stringMatching(/^Ultrathink:/));
+    expect(onUpdateOptionSelections).not.toHaveBeenCalled();
   });
 });

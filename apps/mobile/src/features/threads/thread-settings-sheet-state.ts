@@ -1,5 +1,5 @@
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
-import type { ModelSelection, ProviderInstanceId } from "@goat/contracts";
+import type { ProviderInstanceId } from "@goat/contracts";
 
 export function modelFavoriteKey(provider: ProviderInstanceId, model: string): string {
   return `${provider}:${model}`;
@@ -35,30 +35,10 @@ export function modelMatchesCatalogQuery(input: {
   ].some((value) => value.toLocaleLowerCase().includes(query));
 }
 
-export function pendingModelAfterPress(input: {
-  readonly current: ModelOption | null;
-  readonly pressed: ModelOption;
-  readonly pressedIsApplied: boolean;
-  readonly restoreSelection?: (selection: ModelSelection) => ModelSelection;
-}): ModelOption | null {
-  if (input.pressedIsApplied) {
-    return null;
-  }
-  if (input.current?.key === input.pressed.key) {
-    return input.current;
-  }
-  return input.restoreSelection
-    ? { ...input.pressed, selection: input.restoreSelection(input.pressed.selection) }
-    : input.pressed;
-}
-
-export function canCommitPendingModel(
-  pending: ModelOption,
-  groups: ReadonlyArray<ProviderGroup>,
-): boolean {
+export function canSelectModel(option: ModelOption, groups: ReadonlyArray<ProviderGroup>): boolean {
   return groups.some((group) =>
     group.models.some(
-      (model) => model.key === pending.key && !model.isUnavailable && !model.isHidden,
+      (model) => model.key === option.key && !model.isUnavailable && !model.isHidden,
     ),
   );
 }

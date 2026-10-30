@@ -131,13 +131,13 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
-## Thread settings on mobile
+## Model and reasoning on mobile
 
-Thread settings opens with the current model, a reasoning slider, and the runtime mode. The
-slider offers only the levels the model supports and marks the provider default; a model without
-reasoning levels says so instead. **Switch model** lists your favorites and the models your recent
-threads used, and **All models** opens the full catalog with search, provider filters, hidden
-models, and pull to refresh. A different model takes effect when you tap **Save**.
+Tap the model button in the composer to open the reasoning popover. It shows the current reasoning
+level, the model it applies to, and a slider over the levels that model offers; a model without
+reasoning levels says so instead. Runtime and the model's other options sit below the slider. Tap
+the model name to open the model picker, with favorites, search, provider filters, hidden models,
+and pull to refresh. Picking a model applies it right away.
 
 ## Quote an assistant response
 

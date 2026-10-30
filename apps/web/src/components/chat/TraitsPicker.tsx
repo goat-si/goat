@@ -1,5 +1,8 @@
 import {
   buildTraitsTriggerDisplay,
+  effortStepFraction,
+  findReasoningDescriptor,
+  resolveEffortStepIndex,
   getDescriptorStringValue,
   getTraitSelectChange,
   replaceDescriptorCurrentValue,
@@ -332,31 +335,6 @@ export interface TraitsMenuContentProps {
 }
 
 type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
-
-/** The reasoning select the composer's effort slider drives, or null when the model has none. */
-export function findReasoningDescriptor(
-  selectDescriptors: ReadonlyArray<SelectDescriptor>,
-): SelectDescriptor | null {
-  return (
-    selectDescriptors.find(
-      (descriptor) =>
-        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id) && descriptor.options.length > 1,
-    ) ?? null
-  );
-}
-
-/** The slider step for a selected value, falling back to the provider default, then the first. */
-export function resolveEffortStepIndex(
-  descriptor: SelectDescriptor,
-  selectedValue: string | null,
-): number {
-  const selected = descriptor.options.findIndex((option) => option.id === selectedValue);
-  if (selected >= 0) return selected;
-  return Math.max(
-    0,
-    descriptor.options.findIndex((option) => option.isDefault),
-  );
-}
 
 /** Shared selection state and writers for the traits menu and the composer effort popover. */
 function useTraitsController({
@@ -751,7 +729,7 @@ const EFFORT_THUMB_SIZE = "2rem";
 
 /** The effort slider's dots sit under each thumb stop, so they share its edge-aligned math. */
 function effortStopPosition(index: number, stepCount: number): string {
-  const fraction = stepCount > 1 ? index / (stepCount - 1) : 0;
+  const fraction = effortStepFraction(index, stepCount);
   return `calc(${EFFORT_THUMB_SIZE} / 2 + (100% - ${EFFORT_THUMB_SIZE}) * ${fraction})`;
 }
 
@@ -881,9 +859,7 @@ function ComposerTraitsPicker({
                     aria-hidden="true"
                     className="absolute inset-y-0 start-0 rounded-full bg-primary"
                     style={{
-                      width: `calc(${EFFORT_THUMB_SIZE} + (100% - ${EFFORT_THUMB_SIZE}) * ${
-                        steps.length > 1 ? stepIndex / (steps.length - 1) : 0
-                      })`,
+                      width: `calc(${EFFORT_THUMB_SIZE} + (100% - ${EFFORT_THUMB_SIZE}) * ${effortStepFraction(stepIndex, steps.length)})`,
                     }}
                   />
                   {steps.map((option, index) => (

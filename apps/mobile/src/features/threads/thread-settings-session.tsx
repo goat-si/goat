@@ -1,5 +1,4 @@
 import { getPromptControlledTraits, getTraitSelectChange } from "@goat/client-runtime/model-traits";
-import { recentModelKeys } from "@goat/client-runtime/model-quick-picks";
 import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
 import type {
   EnvironmentId,
@@ -11,7 +10,6 @@ import type {
   RuntimeMode,
   ServerSettings,
 } from "@goat/contracts";
-import { getProviderOptionDescriptors } from "@goat/shared/model";
 import {
   modelPreferencesMigrationPatch,
   resolveModelPreferences,
@@ -33,20 +31,12 @@ import { applyProviderOptionSelection } from "../../lib/providerOptions";
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentServerConfigsAtom, serverEnvironment } from "../../state/server";
-import { environmentThreadShells } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { rememberModelOptions } from "../../state/use-model-option-memory";
 import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
 } from "./thread-settings-options";
-import {
-  canCommitPendingModel,
-  modelFavoriteKey,
-  pendingModelAfterPress,
-} from "./thread-settings-sheet-state";
-
-const RECENT_MODEL_LIMIT = 8;
+import { canSelectModel, modelFavoriteKey } from "./thread-settings-sheet-state";
 
 const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
   readonly provider: ProviderInstanceId;
@@ -55,10 +45,6 @@ const EMPTY_MODEL_FAVORITES: ReadonlyArray<{
 export const FAVORITES_PROVIDER_FILTER = "@favorites";
 // Servers that predate `migrateModelPreferences` drop it and keep reporting null favorites.
 const attemptedMigrationGenerations = new Map<EnvironmentId, number>();
-
-export type ThreadSettingsSubmenuPage =
-  | { readonly kind: "descriptor"; readonly id: string }
-  | { readonly kind: "runtime" };
 
 export type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
@@ -85,11 +71,6 @@ export type ThreadSettingsSessionValue = {
   /** The thread's model, even when the catalog hides it; null only when no provider lists it. */
   readonly appliedModel: ModelOption | null;
   readonly appliedModelSelection: ModelSelection | null;
-  /** The pending model, else the applied one. */
-  readonly displayedModel: ModelOption | null;
-  readonly recentModelKeys: ReadonlyArray<string>;
-  /** Drops the pending model, even when the applied one is hidden or no longer listed. */
-  readonly keepAppliedModel: () => void;
   readonly favoriteKeys: ReadonlySet<string>;
   readonly favoritesLoaded: boolean;
   readonly toggleFavorite: (option: ModelOption) => void;
@@ -100,21 +81,18 @@ export type ThreadSettingsSessionValue = {
   readonly runtimeMode: RuntimeMode;
   readonly runtimeModeChoices: ReturnType<typeof runtimeModeChoicesForSupportedModes>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
-  readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  readonly descriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly promptTraits: ReturnType<typeof getPromptControlledTraits>;
-  readonly displayedModelSelection: ModelSelection | null;
   readonly reportedModelSelection: ModelSelection | null;
   readonly providerExpansionOverrides: ReadonlySet<string>;
   readonly hasLegacyModels: boolean;
-  readonly pendingModel: ModelOption | null;
   readonly providerFilter: string | null;
   readonly searchQuery: string;
   readonly showLegacy: boolean;
   readonly applyOptionChange: (id: string, value: string | boolean) => void;
-  readonly commitPendingModel: () => boolean;
   readonly isApplied: (option: ModelOption) => boolean;
-  readonly isDisplayed: (option: ModelOption) => boolean;
-  readonly pressModel: (option: ModelOption) => void;
+  /** Applies the model now; false when it cannot be used. */
+  readonly selectModel: (option: ModelOption) => boolean;
   readonly setProviderFilter: (providerKey: string | null) => void;
   readonly setSearchQuery: (query: string) => void;
   readonly setShowLegacy: (showLegacy: boolean) => void;
@@ -135,22 +113,6 @@ export function ThreadSettingsSessionProvider(
     props.environmentId ? environmentCatalog.stateAtom(props.environmentId) : null,
   ).data;
   const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
-  // Read once per environment so rows hold still while the sheet is open and streaming threads
-  // do not re-render it.
-  const readRecents = (environmentId: EnvironmentId | null) => ({
-    environmentId,
-    keys: environmentId
-      ? recentModelKeys(
-          registry.get(environmentThreadShells.threadShellsAtom),
-          environmentId,
-          RECENT_MODEL_LIMIT,
-        )
-      : [],
-  });
-  const [recents, setRecents] = useState(() => readRecents(props.environmentId));
-  if (recents.environmentId !== props.environmentId) {
-    setRecents(readRecents(props.environmentId));
-  }
   const [manageHidden, setManageHidden] = useState(false);
   const pendingHidden = useRef(new Set<string>());
   const pendingFavorites = useRef(
@@ -297,25 +259,11 @@ export function ThreadSettingsSessionProvider(
   const [providerExpansionOverrides, setProviderExpansionOverrides] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const [pendingModel, setPendingModel] = useState<ModelOption | null>(null);
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
-  const displayedPrompt = pendingModel ? (pendingPrompt ?? props.prompt) : props.prompt;
-
   const isApplied = (option: ModelOption) =>
     option.selection.instanceId === props.selectedModel?.instanceId &&
     option.selection.model === props.selectedModel.model;
-  const isDisplayed = (option: ModelOption) =>
-    pendingModel ? option.key === pendingModel.key : isApplied(option);
-
-  const displayedDescriptors = pendingModel
-    ? pendingModel.capabilities
-      ? getProviderOptionDescriptors({
-          caps: pendingModel.capabilities,
-          selections: pendingModel.selection.options,
-        })
-      : []
-    : props.optionDescriptors;
-  const promptTraits = getPromptControlledTraits(displayedDescriptors, displayedPrompt);
+  const descriptors = props.optionDescriptors;
+  const promptTraits = getPromptControlledTraits(descriptors, props.prompt);
   const findApplied = (groups: ReadonlyArray<ProviderGroup>) =>
     groups.flatMap((group) => group.models).find((option) => isApplied(option));
   const appliedModel =
@@ -334,9 +282,8 @@ export function ThreadSettingsSessionProvider(
         )
       : undefined) ??
     null;
-  const displayedModel = pendingModel ?? appliedModel;
   const runtimeModeChoices = runtimeModeChoicesForSupportedModes(
-    displayedModel?.supportedRuntimeModes,
+    appliedModel?.supportedRuntimeModes,
   );
   const compatibleRuntimeMode = compatibleRuntimeModeForChoices(
     props.runtimeMode,
@@ -346,62 +293,40 @@ export function ThreadSettingsSessionProvider(
   const hasLegacyModels = props.providerGroups.some((group) =>
     group.models.some((model) => model.isLegacy),
   );
-  const commitPendingModel = () => {
-    if (pendingModel) {
-      if (!canCommitPendingModel(pendingModel, props.providerGroups)) {
-        Dialog.alert(
-          "Model unavailable",
-          "Set up this provider on web or desktop, or select another model.",
-        );
-        return false;
-      }
-      void Haptics.selectionAsync();
-      props.onSelectModel(pendingModel);
-      if (pendingPrompt !== null && pendingPrompt !== props.prompt) {
-        props.onPromptChange(pendingPrompt);
-      }
+  const selectModel = (option: ModelOption) => {
+    if (isApplied(option)) return true;
+    if (!canSelectModel(option, props.providerGroups)) {
+      Dialog.alert(
+        "Model unavailable",
+        "Set up this provider on web or desktop, or select another model.",
+      );
+      return false;
     }
+    void Haptics.selectionAsync();
+    props.onSelectModel(
+      props.restoreSelection
+        ? { ...option, selection: props.restoreSelection(option.selection) }
+        : option,
+    );
     return true;
   };
 
   const applyOptionChange = (id: string, value: string | boolean) => {
-    const descriptor = displayedDescriptors.find((entry) => entry.id === id);
+    const descriptor = descriptors.find((entry) => entry.id === id);
     const change =
       descriptor?.type === "select" && typeof value === "string"
-        ? getTraitSelectChange(
-            { ...promptTraits, descriptors: displayedDescriptors },
-            descriptor,
-            displayedPrompt,
-            value,
-          )
+        ? getTraitSelectChange({ ...promptTraits, descriptors }, descriptor, props.prompt, value)
         : null;
     if (descriptor?.type === "select") {
       if (!change) return;
-      if (change.prompt !== displayedPrompt) {
-        if (pendingModel) {
-          setPendingPrompt(change.prompt);
-        } else {
-          props.onPromptChange(change.prompt);
-        }
-      }
+      if (change.prompt !== props.prompt) props.onPromptChange(change.prompt);
       if (!("modelOptions" in change)) return;
     }
     const next =
       change && "modelOptions" in change
         ? (change.modelOptions ?? [])
-        : applyProviderOptionSelection(displayedDescriptors, { id, value });
-    if (!next) {
-      return;
-    }
-    if (pendingModel) {
-      rememberModelOptions(pendingModel.selection.instanceId, pendingModel.selection.model, next);
-      setPendingModel({
-        ...pendingModel,
-        selection: { ...pendingModel.selection, options: next },
-      });
-    } else {
-      props.onUpdateOptionSelections(next);
-    }
+        : applyProviderOptionSelection(descriptors, { id, value });
+    if (next) props.onUpdateOptionSelections(next);
   };
 
   const toggleProvider = (providerKey: string) => {
@@ -414,33 +339,12 @@ export function ThreadSettingsSessionProvider(
     });
   };
 
-  const pressModel = (option: ModelOption) => {
-    void Haptics.selectionAsync();
-    if (isApplied(option) || option.key !== pendingModel?.key) {
-      setPendingPrompt(null);
-    }
-    setPendingModel((current) =>
-      pendingModelAfterPress({
-        current,
-        pressed: option,
-        pressedIsApplied: isApplied(option),
-        restoreSelection: props.restoreSelection,
-      }),
-    );
-  };
-
   const value = {
     environmentId: props.environmentId,
     providerInstanceId: props.providerInstanceId,
     providerGroups,
     appliedModel,
     appliedModelSelection: props.selectedModel,
-    displayedModel,
-    recentModelKeys: recents.keys,
-    keepAppliedModel: () => {
-      setPendingModel(null);
-      setPendingPrompt(null);
-    },
     manageHidden,
     setManageHidden,
     toggleHidden,
@@ -448,23 +352,19 @@ export function ThreadSettingsSessionProvider(
     runtimeMode: compatibleRuntimeMode,
     runtimeModeChoices,
     onUpdateRuntimeMode: props.onUpdateRuntimeMode,
-    displayedDescriptors,
+    descriptors,
     promptTraits,
-    displayedModelSelection: pendingModel?.selection ?? props.selectedModel,
-    reportedModelSelection: pendingModel ? null : (props.reportedModelSelection ?? null),
+    reportedModelSelection: props.reportedModelSelection ?? null,
     favoriteKeys,
     favoritesLoaded,
     providerExpansionOverrides,
     hasLegacyModels,
-    pendingModel,
     providerFilter,
     searchQuery,
     showLegacy: showLegacyToggle,
     applyOptionChange,
-    commitPendingModel,
     isApplied,
-    isDisplayed,
-    pressModel,
+    selectModel,
     setProviderFilter,
     setSearchQuery,
     setShowLegacy: setShowLegacyToggle,

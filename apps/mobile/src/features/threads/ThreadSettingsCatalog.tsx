@@ -3,6 +3,7 @@ import { AnimatedLegendList } from "@legendapp/list/reanimated";
 import { formatProviderUpdateRequiredNotice } from "@goat/client-runtime/providerUpdateRequiredModels";
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, RefreshControl, TextInput, View } from "react-native";
+import { useKeyboardState } from "react-native-keyboard-controller";
 import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -13,6 +14,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import * as Dialog from "../../components/ui/Dialog";
 import { IconButton } from "../../components/ui/IconButton";
 import { ScreenContent } from "../../components/ui/ScreenContent";
+import { SheetHeader } from "../../components/ui/SheetHeader";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { ModelOption } from "../../lib/modelOptions";
@@ -150,8 +152,7 @@ function ThreadSettingsModelListRow(props: {
 }) {
   const session = useThreadSettingsSession();
   const onPress = () => {
-    session.pressModel(props.option);
-    props.onPicked();
+    if (session.selectModel(props.option)) props.onPicked();
   };
 
   return (
@@ -169,7 +170,7 @@ function ThreadSettingsModelListRow(props: {
       }
       hiddenUpdatePending={session.pendingHiddenKeys.has(props.option.key)}
       option={props.option}
-      selected={session.isDisplayed(props.option)}
+      selected={session.isApplied(props.option)}
     />
   );
 }
@@ -212,7 +213,7 @@ function buildThreadSettingsCatalogItems(
         ? group.models
         : group.models.filter(
             (model) =>
-              !model.isLegacy || session.isDisplayed(model) || session.favoriteKeys.has(model.key),
+              !model.isLegacy || session.isApplied(model) || session.favoriteKeys.has(model.key),
           );
     const visibleModels = favoritesFirst(
       catalogModels.filter(
@@ -281,6 +282,8 @@ function buildThreadSettingsCatalogItems(
 
 function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
   const insets = useSafeAreaInsets();
+  // The keyboard covers the list's bottom, and on iOS the search toolbar rides above it.
+  const keyboardHeight = useKeyboardState((state) => (state.isVisible ? state.height : 0));
   const session = useThreadSettingsSession();
   const refreshProvidersCommand = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
@@ -351,7 +354,6 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
     // oxlint-disable-next-line goat/require-registered-list-scroll -- Sheet content; sheets sit outside workspace columns and keep their own header handling.
     <AnimatedLegendList
       alwaysBounceVertical
-      automaticallyAdjustKeyboardInsets
       automaticallyAdjustsScrollIndicatorInsets
       className="flex-1 bg-sheet"
       style={
@@ -370,7 +372,11 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
       keyboardDismissMode="on-drag"
       keyboardShouldPersistTaps="handled"
       maintainVisibleContentPosition={THREAD_SETTINGS_MAINTAIN_VISIBLE_CONTENT_POSITION}
-      ListFooterComponent={<View style={{ height: insets.bottom + bottomToolbarInset + 12 }} />}
+      ListFooterComponent={
+        <View
+          style={{ height: Math.max(insets.bottom, keyboardHeight) + bottomToolbarInset + 12 }}
+        />
+      }
       ListHeaderComponent={
         <>
           {Platform.OS === "android" ? (
@@ -432,6 +438,8 @@ function useThreadSettingsMailSearchToolbar() {
 }
 
 export function ThreadSettingsCatalogScreen(props: {
+  /** Present when the catalog is its own sheet rather than a pushed page. */
+  readonly onClose?: () => void;
   readonly onBack: () => void;
   readonly onPicked: () => void;
 }) {
@@ -492,7 +500,7 @@ export function ThreadSettingsCatalogScreen(props: {
     <>
       {Platform.OS === "android" ? (
         <AndroidScreenHeader
-          title="All models"
+          title="Models"
           onBack={props.onBack}
           hideBottomBorder
           trailing={
@@ -577,6 +585,9 @@ export function ThreadSettingsCatalogScreen(props: {
       <ScreenContent>
         <ThreadSettingsCatalogList onPicked={props.onPicked} />
       </ScreenContent>
+      {Platform.OS === "ios" && props.onClose ? (
+        <SheetHeader presentation="native" title="Models" onClose={props.onClose} />
+      ) : null}
       {Platform.OS === "ios" && !usesNativeMailSearchToolbar ? (
         <Toolbar placement="bottom">
           <Toolbar.Menu
