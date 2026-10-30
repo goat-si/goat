@@ -394,6 +394,7 @@ function NoteContent(props: NoteParams) {
                       editable={canWrite && !saving && restored}
                       onChangeText={sourceEditor.onChangeText}
                       onSelectionChange={sourceEditor.onSelectionChange}
+                      onKeyPress={sourceEditor.onKeyPress}
                     />
                   </Suspense>
                 )}

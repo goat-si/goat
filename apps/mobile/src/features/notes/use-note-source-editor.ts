@@ -2,22 +2,11 @@ import { useRef, useState } from "react";
 import {
   LIVE_MARKDOWN_MAX_LENGTH,
   applyNoteEditorChange,
-  noteEditorChangeIsAmbiguous,
   noteEditorView,
   type NoteEditorSelection,
 } from "./note-source-text";
 
-// Backspace reports its cursor move right after the change; a later selection is the user's.
-const SETTLE_WINDOW_MS = 250;
-
 type EditorView = { readonly source: string; readonly text: string };
-type AmbiguousEdit = {
-  readonly source: string;
-  readonly previous: string;
-  readonly text: string;
-  readonly applied: string;
-  readonly at: number;
-};
 
 /**
  * Keeps the formatted editor's LF text in step with the exact note source. `source` is the
@@ -33,43 +22,33 @@ export function useNoteSourceEditor(
   // Change events can arrive before a re-render, as during IME composition.
   const viewRef = useRef<EditorView | null>(null);
   const selection = useRef<NoteEditorSelection | null>(null);
-  const ambiguous = useRef<AmbiguousEdit | null>(null);
-  const show = (next: EditorView) => {
-    viewRef.current = next;
-    setView(next);
-    change(next.source);
-  };
+  // React Native reports the Backspace key before the change it makes; forward delete has none.
+  const backspace = useRef(false);
   return {
     value: (body: string) => viewText(view, body),
+    onKeyPress: (key: string) => {
+      backspace.current = key === "Backspace";
+    },
     onChangeText: (text: string) => {
       const before = source.current;
       const previous = viewText(viewRef.current, before);
-      const next = applyNoteEditorChange(before, previous, text, selection.current);
-      ambiguous.current = noteEditorChangeIsAmbiguous(before, previous, text, selection.current)
-        ? { source: before, previous, text, applied: next, at: Date.now() }
-        : null;
+      const next = applyNoteEditorChange(
+        before,
+        previous,
+        text,
+        selection.current,
+        backspace.current,
+      );
+      backspace.current = false;
       // Pasted CRLF stays out of the view so its offsets keep matching the source.
-      show({ source: next, text: text.includes("\r") ? noteEditorView(next) : text });
+      const shown = { source: next, text: text.includes("\r") ? noteEditorView(next) : text };
+      viewRef.current = shown;
+      setView(shown);
+      change(next);
       if (next.length > LIVE_MARKDOWN_MAX_LENGTH) tooLarge();
     },
     onSelectionChange: (next: NoteEditorSelection) => {
       selection.current = next;
-      const pending = ambiguous.current;
-      ambiguous.current = null;
-      if (
-        !pending ||
-        source.current !== pending.applied ||
-        Date.now() - pending.at > SETTLE_WINDOW_MS
-      )
-        return;
-      const settled = applyNoteEditorChange(
-        pending.source,
-        pending.previous,
-        pending.text,
-        next,
-        true,
-      );
-      if (settled !== pending.applied) show({ source: settled, text: pending.text });
     },
   };
 }

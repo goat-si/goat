@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { parseNoteMarkdown, type NoteMarkdownRangeType } from "./note-live-markdown-parser";
 import { noteFallbackFixtures, noteSourceFixtures } from "./note-source-fixtures";
+import { LIVE_MARKDOWN_MAX_LENGTH } from "./note-source-text";
 
 function styled(text: string, type: NoteMarkdownRangeType) {
   return parseNoteMarkdown(text)
@@ -138,10 +139,17 @@ describe("note live markdown parser", () => {
   });
 
   it("keeps block styles but stops inline styles once a note exceeds its marker budget", () => {
-    const text = "`c`\n".repeat(30_000) + "# Heading **b**\n";
-    expect(styled(text, "code")).toHaveLength(25_000);
+    const text = "\\*".repeat(8).concat("\n").repeat(4000) + "# Heading **b**\n";
+    expect(styled(text, "syntax").filter((part) => part === "\\")).toHaveLength(25_000);
     expect(styled(text, "h1")).toEqual(["Heading **b**"]);
     expect(styled(text, "bold")).toEqual([]);
+  });
+
+  it("formats nothing past the formatted editor's size limit", () => {
+    const heading = "# a\n";
+    const limit = heading.repeat(LIVE_MARKDOWN_MAX_LENGTH / heading.length);
+    expect(styled(limit, "h1")).toHaveLength(LIVE_MARKDOWN_MAX_LENGTH / heading.length);
+    expect(parseNoteMarkdown(limit + "x")).toEqual([]);
   });
 
   it("styles emphasis and bare URLs at the very start and end of a note", () => {

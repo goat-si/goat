@@ -2,7 +2,6 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   LIVE_MARKDOWN_MAX_LENGTH,
   applyNoteEditorChange,
-  noteEditorChangeIsAmbiguous,
   noteEditorFallback,
   noteEditorView,
 } from "./note-source-text";
@@ -125,19 +124,16 @@ describe("note source text", () => {
     );
   });
 
-  it("settles a backspace-or-forward-delete with the selection reported after it", () => {
+  it("reads a deletion between mixed line endings by the key that made it", () => {
     const source = "a\r\n\nb";
-    const before = { start: 2, end: 2 };
-    expect(noteEditorChangeIsAmbiguous(source, "a\n\nb", "a\nb", before)).toBe(true);
-    // Forward delete leaves the cursor in place; backspace moves it back.
-    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 2, end: 2 }, true)).toBe(
-      "a\r\nb",
-    );
+    const cursor = { start: 2, end: 2 };
+    // Backspace removes the first break; forward delete, which reports no key, the second.
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", cursor, true)).toBe("a\nb");
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", cursor, false)).toBe("a\r\nb");
+    // A selection already moved back by the backspace gives the same answer.
     expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 1, end: 1 }, true)).toBe(
       "a\nb",
     );
-    // Uniform endings give the same bytes either way, so nothing waits.
-    expect(noteEditorChangeIsAmbiguous("a\n\nb", "a\n\nb", "a\nb", before)).toBe(false);
   });
 
   it("joins lines by removing the whole CRLF", () => {

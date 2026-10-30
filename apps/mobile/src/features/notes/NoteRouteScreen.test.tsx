@@ -106,6 +106,7 @@ vi.mock("./NoteLiveMarkdownEditor", () => ({
     value: string;
     onChangeText: (value: string) => void;
     onSelectionChange: (selection: { start: number; end: number }) => void;
+    onKeyPress: (key: string) => void;
     editable: boolean;
   }) => (
     <>
@@ -116,6 +117,7 @@ vi.mock("./NoteLiveMarkdownEditor", () => ({
         onChange={(event) => props.onChangeText(event.target.value)}
       />
       <button onClick={() => props.onSelectionChange(mocks.selection)}>Report selection</button>
+      <button onClick={() => props.onKeyPress("Backspace")}>Press Backspace</button>
     </>
   ),
 }));
@@ -522,37 +524,23 @@ describe("formatted note editor", () => {
   });
 
   it.each([
-    ["forward delete, which reports no new selection", null, "a\r\nb"],
-    ["backspace, which moves the cursor back", { start: 1, end: 1 }, "a\nb"],
+    ["forward delete, which reports no key", false, "a\r\nb"],
+    ["backspace", true, "a\nb"],
   ] as const)(
     "saves the deleted line break between mixed endings after %s",
-    async (_name, after, saved) => {
+    async (_name, backspace, saved) => {
       await editorFor("a\r\n\nb");
-      using _now = vi.spyOn(Date, "now").mockReturnValue(0);
       mocks.selection = { start: 2, end: 2 };
       act(() => button("Report selection").click());
+      if (backspace) act(() => button("Press Backspace").click());
       act(() => type("a\nb"));
-      if (after) {
-        mocks.selection = after;
-        act(() => button("Report selection").click());
-      }
+      // A later cursor move changes nothing.
+      mocks.selection = { start: 1, end: 1 };
+      act(() => button("Report selection").click());
       await act(async () => button("Save on phone").click());
       expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe(saved);
     },
   );
-
-  it("keeps a forward delete when the cursor moves back later", async () => {
-    await editorFor("a\r\n\nb");
-    using now = vi.spyOn(Date, "now").mockReturnValue(0);
-    mocks.selection = { start: 2, end: 2 };
-    act(() => button("Report selection").click());
-    act(() => type("a\nb"));
-    now.mockReturnValue(1000);
-    mocks.selection = { start: 1, end: 1 };
-    act(() => button("Report selection").click());
-    await act(async () => button("Save on phone").click());
-    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("a\r\nb");
-  });
 
   it("moves to the plain editor when a paste passes the formatted editor's limit", async () => {
     await editorFor("short");

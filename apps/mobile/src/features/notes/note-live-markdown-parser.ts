@@ -22,6 +22,9 @@ export interface NoteMarkdownRange {
 }
 
 const MAX_INLINE_LINE = 2000;
+// LIVE_MARKDOWN_MAX_LENGTH in note-source-text.ts, kept here so the native pass over a large paste
+// is free before the screen moves to the plain editor. Importing it would load this module at start.
+const MAX_FORMATTED_LENGTH = 100_000;
 // Inline markers styled per parse. Each costs about a microsecond on Hermes, so a note made of
 // markers would stall typing; past this the rest of the note keeps only its block styles.
 const INLINE_MARKER_BUDGET = 25_000;
@@ -345,6 +348,7 @@ function isTableDelimiterRow(line: string) {
 export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
   const ranges: NoteMarkdownRange[] = [];
   const length = text.length;
+  if (length > MAX_FORMATTED_LENGTH) return ranges;
   const scan: InlineScan = {
     regex: /[\\|`<![:*_~]/g,
     next: -1,

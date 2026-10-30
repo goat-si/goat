@@ -63,24 +63,22 @@ function editSpan(
   previous: string,
   next: string,
   selection: NoteEditorSelection | null,
-  selectionAfterChange: boolean,
+  backspace: boolean,
 ) {
   const delta = next.length - previous.length;
   if (selection) {
     const { start, end } = selection;
     // Only a placement that explains the change is used, so equal neighbors, such as two line
-    // breaks with different source endings, resolve to the one at the cursor. A deletion reads as
-    // forward delete first: Android reports no selection when the cursor stays put, and backspace
-    // always moves it. After a change the cursor sits where text was deleted, or past what was typed.
+    // breaks with different source endings, resolve to the one at the cursor. The selection may
+    // already be the one after the change, so both sides of the cursor are tried; the Backspace
+    // key decides which side a deletion tries first.
     const candidates: Array<readonly [number, number]> = [];
-    if (selectionAfterChange) {
-      if (start === end)
-        candidates.push(delta < 0 ? [start, start - delta] : [start - delta, start - delta]);
-    } else {
-      if (end > start) candidates.push([start, end]);
-      if (delta < 0) candidates.push([start, start - delta], [start + delta, start]);
-      else candidates.push([start, start], [start - delta, start - delta]);
-    }
+    if (end > start) candidates.push([start, end]);
+    if (delta < 0) {
+      const before = [start + delta, start] as const;
+      const after = [start, start - delta] as const;
+      candidates.push(...(backspace ? [before, after] : [after, before]));
+    } else candidates.push([start, start], [start - delta, start - delta]);
     for (const [from, to] of candidates)
       if (explains(previous, next, from, to)) return { from, to, nextEnd: to + delta };
   }
@@ -106,10 +104,10 @@ export function applyNoteEditorChange(
   previousView: string,
   nextView: string,
   selection: NoteEditorSelection | null = null,
-  selectionAfterChange = false,
+  backspace = false,
 ): string {
   if (previousView === nextView) return source;
-  const span = editSpan(previousView, nextView, selection, selectionAfterChange);
+  const span = editSpan(previousView, nextView, selection, backspace);
   let inserted = nextView.slice(span.from, span.nextEnd).replaceAll("\r\n", "\n");
   if (source.includes("\r\n") && inserted.includes("\n")) {
     const crlf = source.split("\r\n").length - 1;
@@ -120,28 +118,4 @@ export function applyNoteEditorChange(
   const from = sourceOffset(source, span.from);
   const to = sourceOffset(source, span.to);
   return source.slice(0, from) + inserted + source.slice(to);
-}
-
-/**
- * Whether a deletion at a cursor reads as both backspace and forward delete, with different
- * source results. The selection the input reports after the change settles which it was.
- */
-export function noteEditorChangeIsAmbiguous(
-  source: string,
-  previousView: string,
-  nextView: string,
-  selection: NoteEditorSelection | null,
-): boolean {
-  if (!selection || selection.start !== selection.end || nextView.length >= previousView.length)
-    return false;
-  const cursor = selection.start;
-  const deleted = previousView.length - nextView.length;
-  if (
-    !explains(previousView, nextView, cursor - deleted, cursor) ||
-    !explains(previousView, nextView, cursor, cursor + deleted)
-  )
-    return false;
-  const remove = (from: number, to: number) =>
-    source.slice(0, sourceOffset(source, from)) + source.slice(sourceOffset(source, to));
-  return remove(cursor - deleted, cursor) !== remove(cursor, cursor + deleted);
 }

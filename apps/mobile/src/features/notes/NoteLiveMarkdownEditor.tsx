@@ -14,6 +14,7 @@ export default function NoteLiveMarkdownEditor(props: {
   readonly editable: boolean;
   readonly onChangeText: (value: string) => void;
   readonly onSelectionChange: (selection: NoteEditorSelection) => void;
+  readonly onKeyPress: (key: string) => void;
 }) {
   const { appearance, themeVariables: theme } = useAppearancePreferences();
   // Formatted runs get absolute sizes natively, so scale them with the system text size too.
@@ -35,6 +36,7 @@ export default function NoteLiveMarkdownEditor(props: {
       editable={props.editable}
       onChangeText={props.onChangeText}
       onSelectionChange={(event) => props.onSelectionChange(event.nativeEvent.selection)}
+      onKeyPress={(event) => props.onKeyPress(event.nativeEvent.key)}
       parser={parseNoteMarkdown}
       markdownStyle={{
         syntax: { color: theme["--color-foreground-muted"] },
