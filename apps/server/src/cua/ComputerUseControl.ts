@@ -95,7 +95,7 @@ export const hasCard = (control: ComputerUseControl, state: ComputerUseControlSt
   control.acted === true &&
   (state._tag === "ended"
     ? state.reason === "stopped" || state.reason === "stopped_all"
-    : control.idle !== true);
+    : (state._tag === "paused" && state.reason === "screen_locked") || control.idle !== true);
 
 export type ComputerUseControlState =
   | {

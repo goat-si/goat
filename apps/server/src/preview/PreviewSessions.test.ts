@@ -195,6 +195,13 @@ describe("preview sessions", () => {
 
   it("leaves out a control between its thread's turns, when no agent acts on the screen", () => {
     expect(desktopSession(base, { ...control, idle: true }, active, detected)).toBeUndefined();
+    const locked = desktopSession(
+      base,
+      { ...control, idle: true },
+      { _tag: "paused", reason: "screen_locked" },
+      detected,
+    );
+    expect(locked && previewSessionChip(locked)).toBe("Screen locked");
     // A person's stop still shows until the next turn replaces it.
     expect(
       desktopSession(
