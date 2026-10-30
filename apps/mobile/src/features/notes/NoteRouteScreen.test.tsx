@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { AsyncResult } from "effect/reactivity";
 import * as Cause from "effect/Cause";
+import { NoteConflictError } from "@goat/contracts";
 import type { NoteOutboxRow } from "@goat/client-runtime/notes";
 import { document as noteDocument, row } from "./test-fixtures";
 
@@ -17,6 +18,9 @@ const { mocks, Children } = vi.hoisted(() => ({
     taskIndex: 0,
     taskText: "task",
     read: vi.fn(),
+    remove: vi.fn(),
+    alert: vi.fn(),
+    goBack: vi.fn(),
     enqueue: vi.fn(),
     restore: vi.fn(),
     flush: vi.fn(),
@@ -24,7 +28,7 @@ const { mocks, Children } = vi.hoisted(() => ({
 }));
 vi.mock("react-native", () => ({
   View: Children,
-  Alert: { alert: vi.fn() },
+  Alert: { alert: mocks.alert },
   Platform: { OS: "ios" },
 }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({
@@ -35,7 +39,7 @@ vi.mock("../../components/ui/ScreenScrollView", () => ({
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: Children }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ goBack: vi.fn(), dispatch: vi.fn(), navigate: vi.fn() }),
+  useNavigation: () => ({ goBack: mocks.goBack, dispatch: vi.fn(), navigate: vi.fn() }),
   usePreventRemove: () => undefined,
 }));
 vi.mock("../../components/ui/AppBar", () => ({ AppBar: () => null }));
@@ -53,7 +57,10 @@ vi.mock("../../components/ui/AppText", () => ({
     />
   ),
 }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => mocks.read }));
+vi.mock("../../state/use-atom-command", () => ({
+  useAtomCommand: (command: { label: string }) =>
+    command.label === "delete" ? mocks.remove : mocks.read,
+}));
 vi.mock("../../native/SelectableMarkdownText", () => ({
   SelectableMarkdownText: ({
     markdown,
@@ -93,7 +100,9 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 vi.mock("./NoteLinkedThread", () => ({ NoteLinkedThread: () => null }));
-vi.mock("./rpc/notes", () => ({ notesRpc: { read: {} } }));
+vi.mock("./rpc/notes", () => ({
+  notesRpc: { read: { label: "read" }, delete: { label: "delete" } },
+}));
 vi.mock("./notes-state", () => ({
   notesCommandOptions: {},
   notesError: String,
@@ -157,11 +166,113 @@ beforeEach(() => {
   mocks.taskIndex = 0;
   mocks.taskText = "task";
   mocks.read.mockReset().mockResolvedValue(AsyncResult.success(noteDocument()));
+  mocks.remove.mockReset().mockResolvedValue(AsyncResult.success({ path: "note.md" }));
+  mocks.alert.mockReset();
+  mocks.goBack.mockReset();
   mocks.enqueue.mockReset().mockResolvedValue(undefined);
   mocks.restore.mockReset().mockResolvedValue(undefined);
   mocks.flush.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => act(() => root.unmount()));
+
+/** Presses the destructive choice of the last confirmation the screen showed. */
+function confirmLastAlert() {
+  const choices = mocks.alert.mock.calls.at(-1)?.[2] as
+    | ReadonlyArray<{ style?: string; onPress?: () => void }>
+    | undefined;
+  const confirm = choices?.find((choice) => choice.style === "destructive");
+  if (!confirm?.onPress) throw new Error("Missing destructive confirmation");
+  return confirm.onPress;
+}
+
+describe("note delete", () => {
+  const synced = async () => {
+    mocks.rows = [];
+    mocks.connected = true;
+    await act(async () => render());
+  };
+
+  it("deletes the loaded revision only after confirmation, then leaves the note", async () => {
+    await synced();
+    act(() => button("Delete note").click());
+    expect(mocks.remove).not.toHaveBeenCalled();
+    await act(async () => confirmLastAlert()());
+    expect(mocks.remove).toHaveBeenCalledWith({
+      environmentId: "hub",
+      input: { path: "note.md", baseRevision: "b".repeat(64) },
+    });
+    expect(mocks.goBack).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the note on a conflict, shows the hub's version and asks again before retrying", async () => {
+    await synced();
+    const current = noteDocument("theirs", "c".repeat(64));
+    mocks.remove.mockResolvedValueOnce(
+      AsyncResult.failure(
+        Cause.fail(new NoteConflictError({ path: current.path, current, message: "changed" })),
+      ),
+    );
+    act(() => button("Delete note").click());
+    await act(async () => confirmLastAlert()());
+    expect(mocks.goBack).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("theirs");
+    expect(container.textContent).toContain("This note changed on the hub");
+    expect(mocks.alert).toHaveBeenCalledOnce();
+    act(() => button("Delete note").click());
+    expect(mocks.alert).toHaveBeenCalledTimes(2);
+    await act(async () => confirmLastAlert()());
+    expect(mocks.remove).toHaveBeenLastCalledWith({
+      environmentId: "hub",
+      input: { path: "note.md", baseRevision: "c".repeat(64) },
+    });
+  });
+
+  it("is unavailable offline or while this phone holds a draft", async () => {
+    await synced();
+    expect(button("Delete note").disabled).toBe(false);
+    await act(async () => {
+      mocks.connected = false;
+      render();
+    });
+    expect(button("Delete note").disabled).toBe(true);
+    await act(async () => {
+      mocks.rows = [row()];
+      mocks.connected = true;
+      render();
+    });
+    expect(button("Delete note").disabled).toBe(true);
+  });
+
+  it("refuses a confirmation that arrives after a draft was saved on this phone", async () => {
+    await synced();
+    act(() => button("Delete note").click());
+    mocks.rows = [row()];
+    await act(async () => confirmLastAlert()());
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Sync or discard them before deleting");
+  });
+
+  it("sends one request while a delete is in flight and blocks edits meanwhile", async () => {
+    await synced();
+    const pending = Promise.withResolvers<unknown>();
+    mocks.remove.mockReturnValueOnce(pending.promise);
+    act(() => button("Delete note").click());
+    const confirm = confirmLastAlert();
+    await act(async () => {
+      confirm();
+      confirm();
+    });
+    expect(mocks.remove).toHaveBeenCalledOnce();
+    expect(button("Deleting…").disabled).toBe(true);
+    expect(button("Edit markdown").disabled).toBe(true);
+    await act(async () =>
+      pending.resolve(AsyncResult.failure(Cause.fail(new Error("connection lost")))),
+    );
+    expect(mocks.goBack).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("connection lost");
+    expect(button("Delete note").disabled).toBe(false);
+  });
+});
 
 describe("note editor snapshot", () => {
   it("keeps unsaved text and releases saving after storage fails so the edit can be retried", async () => {
