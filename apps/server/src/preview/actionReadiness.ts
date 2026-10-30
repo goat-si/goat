@@ -108,6 +108,7 @@ export const waitUntilWritable = async (
   }
   await revealFramesOf(handle, deadline, gate);
   await gate();
+  gate.signal?.throwIfAborted();
   await abortable(
     () => handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
     gate.signal,
@@ -129,6 +130,7 @@ export const revealFramesOf = async (
       chain.unshift(await frame.frameElement());
     for (const element of chain) {
       await gate?.();
+      gate?.signal?.throwIfAborted();
       await abortable(
         () => element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
         gate?.signal,

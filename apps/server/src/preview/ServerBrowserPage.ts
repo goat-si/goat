@@ -260,8 +260,9 @@ const targetPoint = (
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
   deadline: number,
+  gate: DispatchGate,
 ) =>
-  locatePoint(page, locator, input, deadline).catch((cause: unknown) => {
+  locatePoint(page, locator, input, deadline, gate).catch((cause: unknown) => {
     throw unsentOnTimeout(cause);
   });
 
@@ -270,17 +271,20 @@ const locatePoint = async (
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
   deadline: number,
+  gate: DispatchGate,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
   const target = await elementOf(locator, remaining(deadline));
   try {
-    await revealFramesOf(target, deadline);
+    await revealFramesOf(target, deadline, gate);
   } finally {
     void target.dispose().catch(constVoid);
   }
   const viewport = page.viewportSize();
   let box = await locator.boundingBox({ timeout: remaining(deadline) });
   if (!inViewport(box, viewport)) {
+    await gate();
+    gate.signal?.throwIfAborted();
     await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
     box = await locator.boundingBox({ timeout: remaining(deadline) });
   }
@@ -663,7 +667,7 @@ export const click = async (
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
-  const point = await targetPoint(page, locator, input, deadline);
+  const point = await targetPoint(page, locator, input, deadline, gate);
   await pointer(point, "click");
   const button = input.button ?? "left";
   if (locator !== null) await settled(locator, deadline);
@@ -845,7 +849,7 @@ export const hover = async (
   const deadline = actionDeadline(timeout, gate.deadline);
   // Hovering only shows things, so a selector naming several rows hovers the first of them.
   const locator = targetLocator(page, input)?.first() ?? null;
-  await pointer(await targetPoint(page, locator, input, deadline), "move");
+  await pointer(await targetPoint(page, locator, input, deadline, gate), "move");
   if (locator === null) {
     remaining(deadline);
     await gate();
@@ -953,7 +957,7 @@ export const drag = async (
   }
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
-  const start = await targetPoint(page, source, {}, deadline);
+  const start = await targetPoint(page, source, {}, deadline, gate);
   await pointer(start, "move");
   await settled(source, deadline, false);
   await settled(target, deadline, false);
