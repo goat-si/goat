@@ -74,7 +74,7 @@ export function applyObservedEffect(
       APP_INPUTS.has(call.method) &&
       admittedIndex !== undefined &&
       result.observedWindow !== undefined &&
-      result.safety.possibleCommit
+      result.safety?.possibleCommit
     ) {
       const pending = state.pendingObserved.get(target) ?? [];
       pending.push({ index: admittedIndex, window: result.observedWindow });
