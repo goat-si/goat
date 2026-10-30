@@ -542,18 +542,20 @@ export const cutOffCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, 
     ],
     structuredContent: read
       ? {
-          code: reason === "stopped" ? "stopped_by_person" : "interrupted",
+          code:
+            reason === "stopped" || reason === "stopped_all" ? "stopped_by_person" : "interrupted",
           detail: reason,
           safety: {
             possibleCommit: false,
-            retryClass: reason === "stopped" ? "never" : "same_key",
+            retryClass: reason === "stopped" || reason === "stopped_all" ? "never" : "same_key",
             writeStatus: "not_applicable",
             code: "read_indeterminate",
           },
         }
       : {
           effect: "unverifiable",
-          code: reason === "stopped" ? "stopped_by_person" : "interrupted",
+          code:
+            reason === "stopped" || reason === "stopped_all" ? "stopped_by_person" : "interrupted",
           detail: reason,
           safety: unknownWriteSafety,
         },

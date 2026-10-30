@@ -226,7 +226,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly appHolders?: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<AppHolder>>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
-    readonly stopIfCurrent?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
+    readonly stopAllIfCurrent?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     readonly screenLocked?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /**
      * Records the window an agent's admitted call named, or where its cursor is on it (see
@@ -595,6 +595,11 @@ const make = Effect.gen(function* () {
   };
 
   /** Every agent's input calls on this host, keyed by control id and call (#1235). */
+  const stopAllAt = (now: number) => {
+    foreground.clear();
+    return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
+  };
+
   const agentInputs = makeAgentInputLog();
   /**
    * Whether a proxy's report time is close to this server's clock, which the proxy shares on
@@ -734,12 +739,18 @@ const make = Effect.gen(function* () {
         Effect.map((now) => end(threadId, "stopped", now)),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
-    stopIfCurrent: (threadId, controlId) =>
+    stopAllIfCurrent: (threadId, controlId) =>
       Clock.currentTimeMillis.pipe(
         Effect.map((now) => {
           const record = controls.get(threadId);
-          if (record === undefined || DateTime.toEpochMillis(record.expiresAt) <= now) return false;
-          return end(threadId, "stopped", now, controlId);
+          if (
+            record?.controlId !== controlId ||
+            !acting(record) ||
+            DateTime.toEpochMillis(record.expiresAt) <= now
+          )
+            return false;
+          stopAllAt(now);
+          return true;
         }),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
@@ -816,10 +827,7 @@ const make = Effect.gen(function* () {
       else agentInputs.ended(key, report.at);
       return true;
     }),
-    stopAll: Effect.map(Clock.currentTimeMillis, (now) => {
-      foreground.clear();
-      return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
-    }).pipe(Effect.tap(() => changed)),
+    stopAll: Effect.map(Clock.currentTimeMillis, stopAllAt).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>

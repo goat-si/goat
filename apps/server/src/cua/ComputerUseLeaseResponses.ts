@@ -52,7 +52,7 @@ export const refusal = (
   const refused = {
     refused: computerUseRefusalReason(detail),
     detail,
-    ...(detail === "stopped" ? { code: "stopped_by_person" } : {}),
+    ...(detail === "stopped" || detail === "stopped_all" ? { code: "stopped_by_person" } : {}),
     safety: refusalSafety(detail, call?.tool, call?.args),
   };
   return JSON.stringify(
@@ -114,7 +114,7 @@ export const cutOff = (
     dispatched: true,
   });
   const safety: ActionOutcomeSafety =
-    cause._tag === "end" && cause.reason === "stopped"
+    cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
       ? { ...outcomeSafety, retryClass: "never" }
       : outcomeSafety;
   const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
@@ -131,10 +131,20 @@ export const cutOff = (
     result: {
       content: [{ type: "text", text }],
       structuredContent: read
-        ? { code: detail === "stopped" ? "stopped_by_person" : "interrupted", detail, safety }
+        ? {
+            code:
+              detail === "stopped" || detail === "stopped_all"
+                ? "stopped_by_person"
+                : "interrupted",
+            detail,
+            safety,
+          }
         : {
             effect: "unverifiable",
-            code: detail === "stopped" ? "stopped_by_person" : "interrupted",
+            code:
+              detail === "stopped" || detail === "stopped_all"
+                ? "stopped_by_person"
+                : "interrupted",
             detail,
             safety,
           },

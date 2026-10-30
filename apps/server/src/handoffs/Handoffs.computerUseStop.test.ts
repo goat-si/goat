@@ -98,6 +98,10 @@ it.effect.each(["button", "person_esc"] as const)(
           );
           yield* PubSub.take(wake);
           const live = yield* leases.control(threadId, yield* leases.active(threadId));
+          const otherControl = yield* leases.control(
+            otherThread,
+            yield* leases.active(otherThread),
+          );
           // Its agent reads the window, so the thread has a card to stop (#1555).
           yield* leases.callReservation(threadId, {
             action: "reserve",
@@ -132,7 +136,10 @@ it.effect.each(["button", "person_esc"] as const)(
           const listed = (yield* leases.sessions).find(
             ({ control }) => control.threadId === threadId,
           );
-          assert.deepEqual(listed?.state, { _tag: "ended", reason: "stopped" });
+          assert.deepEqual(listed?.state, {
+            _tag: "ended",
+            reason: source === "button" ? "stopped" : "stopped_all",
+          });
           // A turn whose attachment was already under way finishes after the Stop and mints a new
           // control. It can act on no app, so the thread's one card stays the stopped one (WS9).
           const late = yield* leases.control(threadId, Option.none());
@@ -142,8 +149,8 @@ it.effect.each(["button", "person_esc"] as const)(
             const stale = yield* stopComputerUseFromHelper(
               Option.some(leases),
               service,
-              threadId,
-              live.controlId,
+              otherThread,
+              otherControl.controlId,
             );
             assert.isFalse(stale.stopped);
             assert.equal((yield* leases.controlState(threadId, late.controlId))._tag, "active");
@@ -154,21 +161,32 @@ it.effect.each(["button", "person_esc"] as const)(
           );
           assert.deepEqual(
             afterLate.map(({ control, state }) => [control.controlId === late.controlId, state]),
-            [[false, { _tag: "ended", reason: "stopped" }]],
+            [[false, { _tag: "ended", reason: source === "button" ? "stopped" : "stopped_all" }]],
           );
           assert.equal(
             (yield* service.read({ threadId, handoffId: held.handoffId })).state,
             "cancelled",
           );
-          // Only the stopped thread lets go: another thread's grant keeps its apps.
-          assert.equal((yield* leases.state(otherThread, elsewhere.handoffId))._tag, "active");
-          const next = yield* ask(otherThread, [app]);
-          yield* worker.drain();
-          const approved = yield* service.respond(
-            { threadId: otherThread, handoffId: next.handoffId, action: "completed" },
-            owner.sessionId,
-          );
-          assert.equal(approved.state, "completed");
+          if (source === "person_esc") {
+            assert.deepEqual(yield* leases.controlState(otherThread, otherControl.controlId), {
+              _tag: "ended",
+              reason: "stopped_all",
+            });
+            assert.equal(
+              (yield* service.read({ threadId: otherThread, handoffId: elsewhere.handoffId }))
+                .state,
+              "cancelled",
+            );
+          } else {
+            assert.equal((yield* leases.state(otherThread, elsewhere.handoffId))._tag, "active");
+            const next = yield* ask(otherThread, [app]);
+            yield* worker.drain();
+            const approved = yield* service.respond(
+              { threadId: otherThread, handoffId: next.handoffId, action: "completed" },
+              owner.sessionId,
+            );
+            assert.equal(approved.state, "completed");
+          }
         }).pipe(
           Effect.provide(
             Handoffs.layer.pipe(

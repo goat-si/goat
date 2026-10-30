@@ -60,12 +60,12 @@ layer("ComputerUseLeases controls", (it) => {
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const owner = ThreadId.make("thread-expired-escape");
       const control = yield* leases.control(owner, Option.none());
-      const stopIfCurrent = leases.stopIfCurrent;
-      if (stopIfCurrent === undefined) return yield* Effect.die("missing stopIfCurrent");
+      const stopAllIfCurrent = leases.stopAllIfCurrent;
+      if (stopAllIfCurrent === undefined) return yield* Effect.die("missing stopAllIfCurrent");
       yield* TestClock.adjust("61 minutes");
-      assert.isFalse(yield* stopIfCurrent(owner, control.controlId));
+      assert.isFalse(yield* stopAllIfCurrent(owner, control.controlId));
       const replacement = yield* leases.control(owner, Option.none());
-      assert.isFalse(yield* stopIfCurrent(owner, control.controlId));
+      assert.isFalse(yield* stopAllIfCurrent(owner, control.controlId));
       assert.equal((yield* leases.controlState(owner, replacement.controlId))._tag, "active");
       yield* leases.stop(owner);
     }),
