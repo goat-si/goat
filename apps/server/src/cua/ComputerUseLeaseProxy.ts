@@ -220,6 +220,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (latest?.connectionId !== request.connectionId) continue;
       outstanding.delete(key);
       if (latest.cancelled) {
+        yield* latest.sink.recordOutcome?.("{}", "unknown_outcome") ?? Effect.void;
         options.onCancelledRequestSettled?.(key);
         continue;
       }
@@ -251,8 +252,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
-  // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
-  // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
     // Runs for every driver line, so it opens no span of its own.
     const handle = Effect.fnUntraced(function* (line: string) {
@@ -295,6 +294,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         }
         yield* agentInput.ended(key);
         if (request.cancelled) {
+          yield* request.sink.recordOutcome?.(line) ?? Effect.void;
           yield* drawOverlay({ type: "reply", id: key, failed: true });
           yield* release(request, true, driverRefused(request.tool, message, request.args));
           if (gone() || paused !== undefined || idle) return;

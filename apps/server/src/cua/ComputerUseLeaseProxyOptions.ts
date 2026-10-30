@@ -76,6 +76,7 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
   });
 
 export interface ReplySink {
+  readonly recordOutcome?: (line: string, status?: "unknown_outcome") => Effect.Effect<void>;
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],

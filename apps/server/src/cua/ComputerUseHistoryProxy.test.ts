@@ -104,3 +104,32 @@ it.effect("reports a server admission refusal without dispatch", () =>
     assert.equal(yield* h.driverQueued, 0);
   }),
 );
+
+it.effect("records the outcome of a cancelled call after the driver answers", () =>
+  Effect.gen(function* () {
+    const reports = yield* Queue.unbounded<ComputerUseLeaseCallOutcome>();
+    const h = yield* harness({ onCallOutcome: (report) => Queue.offer(reports, report) });
+    yield* h.push(active());
+    yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
+    yield* h.nextToDriver;
+    yield* h.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 1 },
+      }),
+    );
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { structuredContent: { effect: "confirmed" } },
+      }),
+    );
+    yield* h.reply(JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }));
+    yield* h.nextToProvider;
+    assert.equal(yield* Queue.size(reports), 1);
+    assert.equal((yield* Queue.take(reports)).verdict, "sent");
+  }),
+);

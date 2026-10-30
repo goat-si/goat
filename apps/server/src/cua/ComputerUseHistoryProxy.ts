@@ -86,14 +86,20 @@ export const historySink = (
       ? {}
       : { app: { id: label.bundleId, name: label.name } }),
   };
+  let recorded = false;
+  const recordOutcome = (line: string, status?: string) => {
+    if (recorded) return Effect.void;
+    recorded = true;
+    const outcome = callOutcome(options.controlId, call, line, status);
+    return outcome === undefined || options.onCallOutcome === undefined
+      ? Effect.void
+      : Effect.forkIn(Effect.ignoreCause(options.onCallOutcome(outcome)), scope).pipe(
+          Effect.asVoid,
+        );
+  };
   return {
-    answer: (line, status, context) => {
-      const outcome = callOutcome(options.controlId, call, line, status);
-      return outcome === undefined || options.onCallOutcome === undefined
-        ? sink.answer(line, status, context)
-        : Effect.forkIn(Effect.ignoreCause(options.onCallOutcome(outcome)), scope).pipe(
-            Effect.andThen(sink.answer(line, status, context)),
-          );
-    },
+    recordOutcome,
+    answer: (line, status, context) =>
+      recordOutcome(line, status).pipe(Effect.andThen(sink.answer(line, status, context))),
   };
 };
