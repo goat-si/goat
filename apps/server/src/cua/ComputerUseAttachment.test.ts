@@ -57,6 +57,7 @@ const fakeLeases = (input: {
   /** Every control on every app asked for, by whether it was for unattended work. */
   const everyApp: Array<boolean> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
+    ownsControl: () => Effect.die("unused"),
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
     holder: () => Effect.succeed(Option.fromNullishOr(input.holder)),
     channelOrigin: () => Effect.die("unused"),
