@@ -1,5 +1,9 @@
 import { expect, it } from "vite-plus/test";
-import { addBlockedBrowserHost, removeBlockedBrowserHost } from "./blockedBrowserHosts.ts";
+import {
+  addBlockedBrowserHost,
+  INVALID_BLOCKED_HOST,
+  removeBlockedBrowserHost,
+} from "./blockedBrowserHosts.ts";
 
 it("normalizes additions and removes the selected host", () => {
   expect(addBlockedBrowserHost(["existing.test"], " Example.COM. ")).toEqual({
@@ -13,8 +17,9 @@ it("normalizes additions and removes the selected host", () => {
   expect(removeBlockedBrowserHost(["one.test", "two.test"], "one.test")).toEqual(["two.test"]);
 });
 
-it("reports contract validation failures without changing the existing list", () => {
-  const result = addBlockedBrowserHost(["existing.test"], "https://example.com/path");
-  expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error.length).toBeGreaterThan(0);
+it("explains a rejected entry in words a person can act on", () => {
+  expect(addBlockedBrowserHost(["existing.test"], "https://example.com/path")).toEqual({
+    ok: false,
+    error: INVALID_BLOCKED_HOST,
+  });
 });
