@@ -11,9 +11,17 @@ const rows = (draft: ScreenObservationDraft) => {
   const found = new Set<string>();
   const byIdentity = new Map<string, { line: string; element: Element; index: number }>();
   const plain: string[] = [];
+  let textParent: { key: string; depth: number } | undefined;
   for (const line of draft.indexedText.split("\n")) {
     const ref = line.match(/\[ref=([^\]]+)\]/)?.[1];
     if (!ref) {
+      const depth = line.length - line.trimStart().length;
+      const parent =
+        textParent && depth > textParent.depth ? byIdentity.get(textParent.key) : undefined;
+      if (parent && /^-\s*text:/.test(line.trim())) {
+        parent.line += `\n${line}`;
+        continue;
+      }
       if (line.trim()) plain.push(line);
       continue;
     }
@@ -25,6 +33,7 @@ const rows = (draft: ScreenObservationDraft) => {
     const key = identity(element);
     if (byIdentity.has(key)) return undefined;
     byIdentity.set(key, { line, element, index });
+    textParent = { key, depth: line.length - line.trimStart().length };
   }
   return found.size === elements.size ? { byIdentity, plain } : undefined;
 };

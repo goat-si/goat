@@ -488,8 +488,7 @@ export class ScreenObservations {
         draft.complete &&
         !draft.truncated &&
         old.draft.lineage === draft.lineage &&
-        old.draft.targetGeneration === draft.targetGeneration &&
-        old.draft.surfaceGeneration === draft.surfaceGeneration;
+        old.draft.targetGeneration === draft.targetGeneration;
       if (valid) {
         const diff = diffTabObservation(old.draft, draft, old.observation.observationId);
         if (diff) {
