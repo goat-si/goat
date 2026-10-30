@@ -21,9 +21,9 @@ type Send = (
 ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
 
 const SELECT_TEXT_UNSUPPORTED =
-  "This computer's driver does not offer select_text yet, or GOAT has not enabled it; nothing was sent. To replace a field's whole value, use setValue(target, value).";
+  "select_text is unavailable here: only the macOS driver has it, and this computer's driver lacks it or was started without it; nothing was sent. To replace a field's whole value, use setValue(target, value).";
 const MENU_BAR_EXTRAS_UNSUPPORTED =
-  "This computer's driver does not offer menu bar extras yet, or GOAT has not enabled them; nothing was sent. Bind an app window with screen.app() or hand the status item to the person.";
+  "GOAT does not enable menu bar extras: the driver's one tool for them can also press status items other apps own, outside GOAT's app approvals, and cannot be limited to listing; nothing was sent. Bind an app window with screen.app() or hand the status item to the person.";
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)

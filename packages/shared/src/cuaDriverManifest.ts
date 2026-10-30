@@ -40,6 +40,7 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "press_key",
   "hotkey",
   "set_value",
+  "select_text",
   "invoke_menu",
   "bring_to_front",
   "launch_app",
@@ -92,6 +93,18 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
   browser_download: "saves files to disk; the manifest grants no file paths",
   browser_set_input_files: "uploads local files; the manifest grants no file paths",
   get_browser_state: "browser tools need per-origin grants",
+  menu_bar_extras:
+    "one tool both lists and presses status items and the manifest cannot allow only the list; a press reaches items other apps own under SystemUIServer, runs nested in run_script where GOAT cannot read the operation, and leaves a menu open on the shared screen outside GOAT's reservations",
+  mouse_button_down:
+    "Linux-only raw button stroke; drag covers a whole stroke, and a button a cut-off call left down stays held",
+  mouse_button_up: "Linux-only raw button stroke; drag covers a whole stroke",
+  mouse_drag: "Linux-only raw pointer stroke; drag covers a whole stroke",
+  parallel_mouse_drag: "Linux-only multi-pointer strokes outside the click and drag outcome model",
+  debug_window_info:
+    "Windows-only debug dump of window internals; list_windows and get_window_state cover agents",
+  history_status: "the driver's own history of past activity is not offered",
+  history_query:
+    "returns the driver's recorded past activity across every app, outside the admitted apps",
 } as const satisfies Readonly<Record<string, string>>;
 
 /**

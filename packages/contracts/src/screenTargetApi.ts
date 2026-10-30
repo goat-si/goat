@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/11";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/12";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -75,6 +75,9 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
 interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }): Promise<Done>; launch(): Promise<Done>;
+  selectText(t: Target, text: string, o?: { occurrence?: number; prefix?: string; suffix?: string; selection?: "text" | "cursor_before" | "cursor_after" }): Promise<Done>;
+  // selectText (macOS): selects text inside a field named by number, id or role and name, never a point, leaving its value as is; the text must match once
+  // unless a zero-based occurrence picks one (prefix and suffix narrow the matches); cursor_before or cursor_after places the caret there instead.
   windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
 
 const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
