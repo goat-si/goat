@@ -109,7 +109,14 @@ export const fixture = Effect.fn(function* (
      * helperStart holds the first agent helper's start, checkStart the first readiness check
      * helper's, until release or that host's stop.
      */
-    hold?: "start" | "stop" | "monitor" | "helperStart" | "checkStart" | "agentManifest";
+    hold?:
+      | "start"
+      | "stop"
+      | "monitor"
+      | "helperStart"
+      | "checkStart"
+      | "agentManifest"
+      | "manifestOnly";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -416,8 +423,12 @@ export const fixture = Effect.fn(function* (
     },
     imageHasContent: async () => !options.blankCapture,
     prepareManifest: async (input) => {
-      // agentManifest holds the first agent manifest until release.
-      if (options.hold === "agentManifest" && input.scope === "agents" && !manifestHeld) {
+      // agentManifest and manifestOnly hold the first agent manifest until release.
+      if (
+        (options.hold === "agentManifest" || options.hold === "manifestOnly") &&
+        input.scope === "agents" &&
+        !manifestHeld
+      ) {
         manifestHeld = true;
         Deferred.doneUnsafe(manifestPreparing, Exit.void);
         await gate.promise;

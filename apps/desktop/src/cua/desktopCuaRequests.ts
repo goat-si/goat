@@ -4,6 +4,16 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 /**
+ * Records the start a host serves now. The ones it served before are superseded: a late Stop of
+ * one of them must leave the host to the newer start.
+ */
+export const serve = (host: { serving?: string; superseded?: Set<string> }, requestId: string) => {
+  if (host.serving !== undefined && host.serving !== requestId)
+    (host.superseded ??= new Set()).add(host.serving);
+  host.serving = requestId;
+};
+
+/**
  * Handles requests in order, one at a time under the driver's lock, but notes a Stop as it
  * arrives. A start and its Stop share a request id, so the start a Stop names can be cut short
  * instead of holding the Stop in the queue until it gives up; the Stop itself is still handled in

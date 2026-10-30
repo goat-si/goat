@@ -39,7 +39,7 @@ import {
 } from "./helperReadiness.ts";
 import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
-import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
+import { makeStopFirstRequests, serve } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -836,11 +836,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         }
         if (!requests.stopped(request.requestId) && !(yield* spawn(selected, "agents"))) return;
       }
+      // Recorded even for a start its Stop cuts short, so a newer start's host outlives that Stop.
+      if (owned) serve(owned, request.requestId);
       if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
       const entry = owned!;
-      if (entry.serving !== undefined && entry.serving !== request.requestId)
-        (entry.superseded ??= new Set()).add(entry.serving);
-      entry.serving = request.requestId;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),
       );
