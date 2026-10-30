@@ -159,9 +159,14 @@ designated requirement, never a pid or path alone. The driver would remain the h
 - A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
   desktop, and its display. Any change of epoch invalidates every element ref issued under it.
 - App observations start with a full tree. Later reads request a driver diff against the latest
-  snapshot and retain the new snapshot's element tokens and frames internally. A driver fallback
+  snapshot and retain the new snapshot's element tokens and frames internally. Numbers from the latest full observation remain valid until a diff adds, removes or renumbers
+  rows. After that, apply each diff and use the latest observation's numbers, or read the full list
+  with `observe({diff:false})`. A driver fallback
   returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
-  computed by GOAT's observation tracker. Model-facing observations omit the element array.
+  computed by GOAT's observation tracker using role, accessible name and native main-frame ref
+  within a known document lineage. A frame ref or ambiguous row resets the diff to a full read.
+  Added, changed and removed rows use `+`, `~` and `-`; unchanged numbers stay valid in the new
+  observation. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
