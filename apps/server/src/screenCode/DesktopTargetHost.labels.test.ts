@@ -40,13 +40,15 @@ it.effect(
           context,
         );
       yield* bind({}, { bundle_id: "org.example.Editor", name: "hunter2" });
-      // Linux's oversized app list reaches no listing, and this window reports no app name: the
-      // driver's app filter also matches names, so the call's bundle_id is not a confirmed id.
+      // Linux's oversized app list reaches no listing, and this window reports its id but no app
+      // name: with no app row behind it, the call's bundle_id is not a confirmed id.
       yield* bind(
         {
           list_apps: oversized,
           list_windows: (args: { app?: string }) =>
-            args.app === "hunter2" ? windows : { windows: [] },
+            args.app === "hunter2"
+              ? { windows: [{ ...windows.windows[0], bundle_id: "hunter2" }] }
+              : { windows: [] },
         },
         { bundle_id: "hunter2", name: "hunter2" },
       );

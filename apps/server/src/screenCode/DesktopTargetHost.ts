@@ -380,51 +380,50 @@ export const createDesktopTargetHost = (deps: {
           return yield* Effect.fail(fail("stale_reference"));
         return { reply, windows: object(driverValue(reply))?.windows };
       });
-      // The window is found by its id among every window, so a duplicate id or another owner
-      // shows. Only macOS's `app` filter compares bundle ids; Linux and Windows match a
-      // substring of the window's app or process name, which is no proof of the app. So a cut
-      // app list leaves macOS on that filter, and every other list starts unfiltered.
-      const bundleFiltered = isMac && bundleId !== undefined && !Array.isArray(listed);
+      // One process: its own list, every layer (macOS lists only layer 0 without a pid); window
+      // ids are unique on a host. Otherwise every window, so the found window shows its owner. A
+      // cut app list narrows by the bundle filter, a name substring match on every platform, so
+      // matchBindWindow then checks the window's own app_name.
+      const [onlyPid] = Array.isArray(listed) && pids.size === 1 ? [...pids] : [];
       let { reply: windowsReply, windows: listedWindows } = yield* listWindows(
-        bundleFiltered ? { app: bundleId } : {},
+        onlyPid !== undefined
+          ? { pid: onlyPid }
+          : bundleId && !Array.isArray(listed)
+            ? { app: bundleId }
+            : {},
       );
-      // A list another app's filter chose can leave out windows of the bound pid, so its
-      // baseline is read again; macOS's bundle filter lists all of that app's windows.
-      let partial = false;
-      if (!bundleFiltered && !Array.isArray(listedWindows)) {
-        // Every window passed the reply cap: the app's own processes, or its filter, list fewer.
-        const known = [...pids].filter((pid) => pid !== undefined);
-        const narrower: ReadonlyArray<Record<string, unknown>> =
-          known.length > 0 ? known.map((pid) => ({ pid })) : bundleId ? [{ app: bundleId }] : [];
-        if (narrower.length === 0)
-          return yield* Effect.fail(
-            fail(
-              "downstream_failure",
-              "The window list came back incomplete; pass the app's bundle_id or name with window_id.",
-            ),
-          );
-        const parts: unknown[] = [];
-        for (const windowArgs of narrower) {
-          const part = yield* listWindows(windowArgs);
-          if (!Array.isArray(part.windows)) return yield* Effect.fail(fail("downstream_failure"));
-          parts.push(...part.windows);
-          windowsReply = part.reply;
-        }
-        listedWindows = parts;
-        partial = known.length === 0;
+      let listedPid = onlyPid;
+      // Not among that process's windows: whose window it is, if anyone's, decides the answer.
+      if (
+        onlyPid !== undefined &&
+        Array.isArray(listedWindows) &&
+        !listedWindows.some((window) => object(window)?.window_id === requestedWindow)
+      ) {
+        ({ reply: windowsReply, windows: listedWindows } = yield* listWindows({}));
+        listedPid = undefined;
       }
+      // A list cut at the reply cap cannot show the window, its owner, or a duplicate of its id.
+      if (!Array.isArray(listedWindows))
+        return yield* Effect.fail(
+          fail(
+            "downstream_failure",
+            "The window list came back incomplete, so window " +
+              requestedWindow +
+              " could not be checked and nothing was bound. Try again.",
+          ),
+        );
       const matched = matchBindWindow({
         listedApps: listed,
         listedWindows,
         bundleId,
         name,
         requestedWindow,
-        bundleFiltered,
       });
       if (matched.error || !matched.pid || !matched.window)
         return yield* Effect.fail(matched.error ?? fail("target_missing"));
       const { pid, app, window: foundWin } = matched;
-      const baseline = partial ? (yield* listWindows({ pid })).windows : listedWindows;
+      // The baseline later window checks compare with: the bound process's own complete list.
+      const baseline = listedPid === pid ? listedWindows : (yield* listWindows({ pid })).windows;
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );

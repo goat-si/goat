@@ -184,7 +184,7 @@ it.live("a name no app row carries launches nothing when the window list comes b
   });
 });
 
-it.effect.each(["linux", "win32"] as const)(
+it.effect.each(["linux", "win32", "darwin"] as const)(
   "a cut app list on %s binds a window only by its own app_name or its id",
   (platform) =>
     Effect.gen(function* () {
@@ -235,7 +235,7 @@ it.effect("a window id listed for two processes is ambiguous even when one match
 );
 
 it.effect(
-  "a window list cut at the cap is read again per process, and window_id alone is refused",
+  "a window list cut at the cap refuses every bind but one through the app's only process",
   () =>
     Effect.gen(function* () {
       const { host, sent } = fixture(
@@ -253,9 +253,12 @@ it.effect(
       expect(thunar._tag).toBe("Success");
       expect(
         sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
-      ).toEqual([{}, { pid: 900 }]);
-      const alone = yield* bindResult(host, { window_id: 4194307 });
-      expect(alone._tag === "Failure" && alone.failure.code).toBe("downstream_failure");
+      ).toEqual([{ pid: 900 }]);
+      // Neither can show whose window it is or that no other window has its id.
+      for (const args of [{ window_id: 4194307 }, { name: "python3", window_id: 4194307 }]) {
+        const refused = yield* bindResult(host, args);
+        expect(refused._tag === "Failure" && refused.failure.code).toBe("downstream_failure");
+      }
     }),
 );
 
@@ -283,6 +286,6 @@ it.effect(
       expect(thunar._tag).toBe("Success");
       expect(
         sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
-      ).toEqual([{}, { app: "thunar" }, { pid: 900 }]);
+      ).toEqual([{ app: "thunar" }, { pid: 900 }]);
     }),
 );
