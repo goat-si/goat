@@ -10,6 +10,13 @@ export default Effect.gen(function* () {
       AND json_extract(payload_json, '$.handoff.target.path') = 'computer_use.grant'
       AND json_extract(payload_json, '$.handoff.state') = 'completed'
       AND json_extract(payload_json, '$.handoff.actor.type') = 'client'
+    UNION ALL
+    SELECT 1 FROM orchestration_events
+    WHERE application_event_version = 2 AND event_type = 'turn-item.updated'
+      AND json_extract(payload_json, '$.type') = 'human_handoff'
+      AND json_extract(payload_json, '$.handoff.target.path') = 'computer_use.grant'
+      AND json_extract(payload_json, '$.handoff.state') = 'completed'
+      AND json_extract(payload_json, '$.handoff.actor.type') = 'client'
     LIMIT 1`;
   yield* sql`CREATE TABLE computer_use_named_messages (
     thread_id TEXT NOT NULL, app_key TEXT NOT NULL, message_id TEXT NOT NULL,
