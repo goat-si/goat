@@ -80,7 +80,7 @@ export interface ThreadStreamDiagnostic {
   readonly lastEventAt: number | null;
   readonly lastEventType: string | null;
   readonly reply: ThreadStreamReply | null;
-  /** "dropped" when the row was committed but its observation was later evicted. */
+  /** "dropped" when the row's observation was evicted, or may have been once eviction history overflowed. */
   readonly replyRow: ThreadFeedReplyRow | "dropped" | null;
   readonly transitions: ReadonlyArray<ThreadStreamTransition>;
 }
@@ -91,6 +91,8 @@ type MutableDiagnostic = {
   transitions: ThreadStreamTransition[];
   rows: Map<string, ThreadFeedReplyRow>;
   evictedRows: Set<string>;
+  /** Some eviction history was itself dropped, so an unknown row may have been committed. */
+  evictionsForgotten: boolean;
   awaitingFirstItem: boolean;
   phase: EventPhase;
   pendingStart: ThreadStreamStart | null;
@@ -134,6 +136,7 @@ function freshRecord(environmentId: string, threadId: string): MutableDiagnostic
     transitions: [],
     rows: new Map(),
     evictedRows: new Set(),
+    evictionsForgotten: false,
     awaitingFirstItem: false,
     phase: "live",
     pendingStart: null,
@@ -213,6 +216,15 @@ export function noteThreadStreamSnapshot(
   record.snapshots += 1;
   record.lastSequence = input.sequence;
   if (input.reply !== null) setReply(record, input.reply, `${input.source} snapshot`);
+  else if (record.reply !== null) {
+    // The snapshot replaced the state and holds no reply, so the tracked one is gone from it.
+    record.reply = {
+      ...record.reply,
+      appliedLength: null,
+      updatedVia: `${input.source} snapshot`,
+      updatedAt: clock(),
+    };
+  }
   if (input.source === "http") {
     // The HTTP snapshot loads before the socket subscribes, so it starts the next attempt.
     record.pendingStart = "http snapshot";
@@ -342,6 +354,7 @@ export function noteThreadFeedReplyRow(
       if (record.evictedRows.size > MAX_ROWS * 2) {
         const oldest = record.evictedRows.values().next().value;
         if (oldest !== undefined) record.evictedRows.delete(oldest);
+        record.evictionsForgotten = true;
       }
     }
   }
@@ -412,16 +425,28 @@ export function snapshotReply(projection: OrchestrationV2ThreadProjection): Rece
 
 export function readThreadStreamDiagnostics(): ReadonlyArray<ThreadStreamDiagnostic> {
   return [...records.values()]
-    .map(({ awaitingFirstItem: _a, phase: _r, pendingStart: _p, rows, evictedRows, ...record }) => {
-      const id = record.reply?.messageId;
-      const diagnostic: ThreadStreamDiagnostic = {
-        ...record,
-        replyRow:
-          id === undefined ? null : (rows.get(id) ?? (evictedRows.has(id) ? "dropped" : null)),
-        transitions: [...record.transitions],
-      };
-      return diagnostic;
-    })
+    .map(
+      ({
+        awaitingFirstItem: _a,
+        phase: _r,
+        pendingStart: _p,
+        rows,
+        evictedRows,
+        evictionsForgotten,
+        ...record
+      }) => {
+        const id = record.reply?.messageId;
+        const diagnostic: ThreadStreamDiagnostic = {
+          ...record,
+          replyRow:
+            id === undefined
+              ? null
+              : (rows.get(id) ?? (evictedRows.has(id) || evictionsForgotten ? "dropped" : null)),
+          transitions: [...record.transitions],
+        };
+        return diagnostic;
+      },
+    )
     .reverse();
 }
 
@@ -450,7 +475,7 @@ function formatReply(
     row === null
       ? "row not committed while open"
       : row === "dropped"
-        ? "row committed earlier, observation no longer kept"
+        ? "row observation no longer kept (it may have been committed earlier)"
         : `row committed ${row.length} at ${formatTime(row.committedAt)}, ${row.visible ? "on screen" : "offscreen"}${row.unmountedAt === null ? "" : `, unmounted at ${formatTime(row.unmountedAt)}`}`;
   return [
     `  latest reply ${reply.messageId}: received ${reply.receivedLength ?? "unknown"} chars via ${reply.receivedVia ?? "unknown"} at ${formatTime(reply.receivedAt)}`,

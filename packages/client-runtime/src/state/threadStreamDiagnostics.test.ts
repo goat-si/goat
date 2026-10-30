@@ -130,7 +130,27 @@ describe("thread stream diagnostics", () => {
       ...events(2),
       reply: { messageId: "early", receivedLength: 2, appliedLength: 2 },
     });
-    expect(report()).toContain("row committed earlier, observation no longer kept");
+    expect(report()).toContain("row observation no longer kept");
+
+    for (let index = 0; index < 20; index += 1)
+      noteThreadFeedReplyRow("env", "thread", `later-${index}`, { length: 1, visible: false });
+    noteThreadStreamEvents("env", "thread", {
+      ...events(3),
+      reply: { messageId: "never-recorded", receivedLength: 1, appliedLength: 1 },
+    });
+    // Eviction history overflowed, so an unseen row may still have been committed.
+    expect(report()).toContain("row observation no longer kept");
+  });
+
+  it("marks the tracked reply missing from state when a snapshot without it replaces the state", () => {
+    const { thread } = setup();
+    noteThreadStreamEvents("env", "thread", events(1, { reply: [9, 9] }));
+    noteThreadStreamSnapshot("env", "thread", { sequence: 2, source: "socket", reply: null });
+    expect(thread()?.reply).toMatchObject({
+      receivedLength: 9,
+      appliedLength: null,
+      updatedVia: "socket snapshot",
+    });
   });
 
   it("reports a row committed before its reply was selected", () => {
