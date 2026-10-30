@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 
 export const admitEnable = Effect.fn("ComputerUseSettings.admitEnable")(function* () {
@@ -34,8 +35,27 @@ export const setEnabled = Effect.fn("ComputerUseSettings.setEnabled")(function* 
   enabled: boolean,
   authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
 ) {
-  if (enabled) yield* admitEnable();
   const settings = yield* ServerSettings.ServerSettingsService;
+  if (enabled) {
+    const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
+    if (Option.isNone(handoffs))
+      return yield* new ServerSettingsError({
+        settingsPath: "computer-use",
+        operation: "normalize",
+        reason: "Cannot clear previous computer use sessions.",
+      });
+    yield* handoffs.value.stopComputerUseSessions().pipe(
+      Effect.mapError(
+        (cause) =>
+          new ServerSettingsError({
+            settingsPath: "computer-use",
+            operation: "normalize",
+            cause,
+          }),
+      ),
+    );
+  }
+  if (enabled) yield* admitEnable();
   const stored = yield* settings.updateSettings({ enableCua: enabled }, authorizeAtCommit);
   return { enabled: stored.enableCua };
 });

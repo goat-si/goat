@@ -934,6 +934,7 @@ export const ComputerUseRequestResult = Schema.Union([
        */
       "not_granted",
       "unknown_app",
+      "app_not_allowed",
       /** The person declined, or cancelled the request before answering. */
       "declined",
       "cancelled",

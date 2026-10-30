@@ -1,6 +1,9 @@
 import { assert, it } from "@effect/vitest";
 import {
   type ComputerUseRequestInput,
+  CommandId,
+  MessageId,
+  ProjectId,
   EnvironmentId,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   Handoff,
@@ -18,17 +21,268 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { stopAllComputerUse, stopComputerUse } from "./ComputerUseRpcHandlers.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import { MAC_STANDALONE_REASON } from "./CuaDisplayCapability.ts";
 
 import {
   leasesDetecting,
   purpose,
+  requestWithHandoffs,
   sessionId,
   supported,
   type Signals,
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
+
+it.effect("session approval renews an expired lease without a pending approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        yield* TestClock.adjust("31 minutes");
+        const renewed = yield* request({ apps: ["COM.EXAMPLE.EDITOR"] });
+        assert.equal(renewed.kind, "available");
+        const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+        const cards = records.turnItems.filter((item) => item.type === "human_handoff");
+        assert.equal(cards.length, 2);
+        assert.isTrue(
+          cards.every(
+            (item) => item.type === "human_handoff" && item.handoff.state === "completed",
+          ),
+        );
+      }),
+    ),
+  ),
+);
+
+it.effect("a session choice survives restarting the handoff service", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Editor"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            {
+              threadId,
+              handoffId: first.handoff.handoffId,
+              action: "completed",
+              computerUseScope: "session",
+            },
+            sessionId,
+          );
+        }),
+      );
+      yield* TestClock.adjust("31 minutes");
+      yield* withRequests(orchestrator, supported, ({ request }) =>
+        Effect.gen(function* () {
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        }),
+      );
+    }),
+  ),
+);
+
+it.effect("ending a session admission requires another approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        const address = { threadId, handoffId: first.handoff.handoffId };
+        yield* handoffs.respond(
+          { ...address, action: "completed", computerUseScope: "session" },
+          sessionId,
+        );
+        yield* handoffs.respond({ ...address, action: "cancelled" }, sessionId);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
+
+it.effect("Stop clears a session even after its lease expires", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        yield* TestClock.adjust("31 minutes");
+        yield* stopComputerUse(Option.some(leases), handoffs, sessionId, threadId);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
+
+it.effect("Stop all clears session choices without active leases", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        yield* TestClock.adjust("31 minutes");
+        yield* stopAllComputerUse(Option.some(leases), handoffs, sessionId);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
+
+it.effect("a session choice does not approve the same app in another thread", () =>
+  withHarness(({ orchestrator, worker }) =>
+    Effect.gen(function* () {
+      const other = ThreadId.make("thread:session-other");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("session-other-create"),
+        threadId: other,
+        projectId: ProjectId.make("project:handoff-tests"),
+        title: "Other",
+        modelSelection: { instanceId, model: "fake" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("session-other-message"),
+        threadId: other,
+        messageId: MessageId.make("message:session-other"),
+        text: "Use the app",
+        attachments: [],
+        dispatchMode: { type: "start_immediately" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* worker.drain();
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Editor"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            {
+              threadId,
+              handoffId: first.handoff.handoffId,
+              action: "completed",
+              computerUseScope: "session",
+            },
+            sessionId,
+          );
+          yield* TestClock.adjust("31 minutes");
+          const otherResult = yield* requestWithHandoffs(
+            handoffs,
+            other,
+          )({ apps: ["com.example.Editor"] });
+          assert.equal(otherResult.kind, "needs_human");
+        }),
+      );
+    }),
+  ),
+);
+
+it.effect("always approval renews without a card until removed in settings", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "always",
+          },
+          sessionId,
+        );
+        yield* TestClock.adjust("31 minutes");
+        assert.equal((yield* request({ apps: ["COM.EXAMPLE.EDITOR"] })).kind, "available");
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ cuaAllowedApps: [] });
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
+
+it.effect("removing an always choice ends its current admission", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "always",
+          },
+          sessionId,
+        );
+        yield* (yield* ServerSettings.ServerSettingsService).updateSettings({ cuaAllowedApps: [] });
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        assert.equal((yield* leases.state(threadId, first.handoff.handoffId))._tag, "ended");
+      }),
+    ),
+  ),
+);
+
+it.effect("Stop does not remove an always choice", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "always",
+          },
+          sessionId,
+        );
+        yield* stopComputerUse(Option.some(leases), handoffs, sessionId, threadId);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+      }),
+    ),
+  ),
+);
 
 it.effect(
   "refuses a window title absent from the host app listing without creating an approval (#1536)",
@@ -103,7 +357,7 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
               const result = yield* request({ apps: ["com.example.Editor", app] });
               assert.equal(result.kind, "refused");
               if (result.kind !== "refused") return assert.fail(`${app} must not ask a person`);
-              assert.equal(result.reason, "unknown_app");
+              assert.equal(result.reason, "app_not_allowed");
               assert.deepEqual(result.unknownApps, [app]);
               assert.include(result.message, "password");
             }

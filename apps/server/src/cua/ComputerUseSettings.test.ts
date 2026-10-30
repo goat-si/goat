@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 import { layerServerSettings } from "../serverSettingsLayers.testkit.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ComputerUseSettings from "./ComputerUseSettings.ts";
@@ -16,6 +17,7 @@ const base = Layer.mergeAll(
     Layer.provide(NodeServices.layer),
   ),
   ServerSettings.layerTest(),
+  Layer.mock(Handoffs.Handoffs)({ stopComputerUseSessions: () => Effect.succeed([]) }),
 );
 
 it.effect("enables computer use only after driver admission and disables it again", () =>
@@ -63,6 +65,7 @@ it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
       settings.updateSettings({ cuaAllowedApps: ["com.1password.1password"] }),
     );
     expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") expect(result.failure.message).toContain("protected app");
     expect((yield* settings.getSettings).cuaAllowedApps).toEqual([]);
   }).pipe(Effect.provide(base)),
 );

@@ -3582,6 +3582,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     handoffId: TurnItemId,
     state: HandoffState,
     actor: HandoffActor,
+    computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
   }),
   Schema.Struct({
     type: Schema.Literal("delegated_task.remote.register"),

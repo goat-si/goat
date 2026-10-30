@@ -1,5 +1,6 @@
 import {
   HandoffError,
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
   isHandoffPending,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2InternalCommand,
@@ -77,6 +78,12 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
     const now = yield* DateTime.now;
     const decide = Effect.gen(function* () {
       if (command.type === "handoff.create") {
+        const automatic =
+          command.handoff.state === "completed" &&
+          command.handoff.actor.type === "server" &&
+          command.handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+          command.handoff.apps !== undefined &&
+          command.handoff.computerUseForeground === undefined;
         const existing = projection.turnItems.find((item) => item.id === command.handoff.handoffId);
         if (existing) return existing;
         const run = projection.runs.find((run) => run.id === command.runId);
@@ -85,7 +92,7 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
           run.rootNodeId !== command.nodeId ||
           command.handoff.requestedBy.threadId !== command.threadId ||
           run.providerInstanceId !== command.handoff.requestedBy.providerInstanceId ||
-          command.handoff.state !== "pending"
+          (command.handoff.state !== "pending" && !automatic)
         )
           return yield* new HandoffError({ reason: "invalid_request" });
         const pending = projection.turnItems.flatMap((item) => {
@@ -93,6 +100,7 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
           return handoff && isHandoffPending(handoff.state) ? [handoff] : [];
         });
         if (
+          !automatic &&
           pending.some(
             (handoff) =>
               handoff.kind === command.handoff.kind &&
@@ -102,7 +110,8 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
           )
         )
           return yield* new HandoffError({ reason: "conflict" });
-        if (pending.length >= 3) return yield* new HandoffError({ reason: "limit_reached" });
+        if (!automatic && pending.length >= 3)
+          return yield* new HandoffError({ reason: "limit_reached" });
         return {
           id: command.handoff.handoffId,
           threadId: command.threadId,
@@ -113,10 +122,10 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
           nativeItemRef: null,
           parentItemId: null,
           ordinal: yield* nextTurnItemOrdinal(projection),
-          status: "waiting" as const,
+          status: automatic ? ("completed" as const) : ("waiting" as const),
           title: command.handoff.title,
           startedAt: now,
-          completedAt: null,
+          completedAt: automatic ? now : null,
           updatedAt: now,
           type: "human_handoff" as const,
           handoff: command.handoff,
@@ -129,7 +138,14 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
       const ended =
         run === undefined ||
         ["completed", "failed", "cancelled", "interrupted"].includes(run.status);
-      const handoff = yield* transitionHandoff(record, command.state, command.actor, now, ended);
+      const handoff = yield* transitionHandoff(
+        record,
+        command.state,
+        command.actor,
+        now,
+        ended,
+        command.computerUseScope,
+      );
       // Secret completion is only recorded after SecretRequests stores the value.
       if (existing.type === "secret_request" && handoff.state === "completed")
         return yield* new HandoffError({ reason: "conflict" });

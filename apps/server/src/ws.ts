@@ -2701,7 +2701,19 @@ export const layerWsRpc = (
                 settingsPath: config.settingsPath,
                 operation: "normalize",
               });
-            if (patch.enableCua === true) yield* ComputerUseSettings.admitEnable();
+            if (patch.enableCua === true) {
+              yield* handoffs.stopComputerUseSessions().pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath: config.settingsPath,
+                      operation: "normalize",
+                      cause,
+                    }),
+                ),
+              );
+              yield* ComputerUseSettings.admitEnable();
+            }
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),
