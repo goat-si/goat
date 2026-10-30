@@ -49,6 +49,72 @@ const state = {
   ],
 };
 
+it.live.each([
+  [
+    { status: "abandoned", reason: "panic", prior_pid: 123 },
+    "focus restoration failed (panic): the prior app (pid 123) may not have been restored",
+  ],
+  [
+    { status: "abandoned", reason: "unconfirmed", prior_pid: 123 },
+    "focus restoration unconfirmed: the prior app (pid 123) may not be in front",
+  ],
+  [
+    { status: "abandoned", reason: "user_input", prior_pid: 123 },
+    "focus restoration abandoned: user_input (prior app pid 123)",
+  ],
+  [{ status: "restored", prior_pid: 123 }, "focus restored to the prior app (pid 123)"],
+])("text-only focus restoration reaches input and observation warnings: %s", ([focus, warning]) =>
+  Effect.gen(function* () {
+    const blocks = ["Action completed.", `focus_restoration: ${JSON.stringify(focus)}`];
+    const { host } = fixture({
+      get_window_state: new DriverSuccess(state, blocks),
+      click: new DriverSuccess({ effect: "unverifiable", summary: "Action completed." }, blocks),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+        "const observation = await app.observe(); const done = await app.click(1); " +
+        "return { observation: observation.warnings, done };",
+    );
+    expect(result.value).toEqual({
+      observation: [warning],
+      done: { ok: true, verdict: "unverifiable", warnings: [warning] },
+    });
+  }),
+);
+
+it.live("structured focus restoration wins over text and malformed blocks are ignored", () =>
+  Effect.gen(function* () {
+    const blocks = [
+      "Action completed.",
+      "focus_restoration: {invalid}",
+      'prefix focus_restoration: {"status":"restored"}',
+      'focus_restoration: {"status":"abandoned","reason":"panic"}',
+    ];
+    const { host } = fixture({
+      get_window_state: new DriverSuccess(state, blocks.slice(0, 3)),
+      click: new DriverSuccess(
+        { effect: "unverifiable", focus_restoration: { status: "restored", prior_pid: 123 } },
+        blocks,
+      ),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+        "const observation = await app.observe(); const done = await app.click(1); " +
+        "return { hasWarnings: 'warnings' in observation, done };",
+    );
+    expect(result.value).toEqual({
+      hasWarnings: false,
+      done: {
+        ok: true,
+        verdict: "unverifiable",
+        warnings: ["focus restored to the prior app (pid 123)"],
+      },
+    });
+  }),
+);
+
 it.live("app clicks return a compact Done and expose details only on request", () =>
   Effect.gen(function* () {
     const { host } = fixture({
