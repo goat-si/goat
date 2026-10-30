@@ -10,7 +10,11 @@ import type { EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { memo, useCallback, useContext, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import {
+  KeyboardAvoidingView,
+  useReanimatedKeyboardAnimation,
+} from "react-native-keyboard-controller";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -25,7 +29,7 @@ import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
-import { goatBotComposerBottomInsets } from "./goatBotComposerInsets";
+import { goatBotComposerBottomPadding } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 
@@ -344,13 +348,19 @@ export function GoatBotScreen(props: {
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const insets = useSafeAreaInsets();
-  // A fixed resting padding, with the keyboard lift net of it, keeps the composer from jumping
-  // when the keyboard opens or closes.
-  const composerInsets = goatBotComposerBottomInsets(
+  const composerPadding = goatBotComposerBottomPadding(
     props.floatingTabs
       ? { bottomSafeArea: props.floatingTabs.bottomSafeArea, floatingTabs: true }
       : { bottomSafeArea: insets.bottom, floatingTabs: false },
   );
+  // The padding follows the keyboard frame by frame on the UI thread, in step with the
+  // KeyboardAvoidingView lift, so the composer never jumps when the keyboard opens or closes.
+  const keyboard = useReanimatedKeyboardAnimation();
+  const composerPaddingStyle = useAnimatedStyle(() => ({
+    paddingBottom:
+      composerPadding.closed +
+      (composerPadding.open - composerPadding.closed) * keyboard.progress.value,
+  }));
   // A glass header is transparent: the list reaches under it and UIKit insets it, so the header's
   // scroll-edge effect covers the rows. Anything pinned above the list starts below that header.
   // An opaque header already sits above the content.
@@ -389,12 +399,7 @@ export function GoatBotScreen(props: {
     }
   };
   return (
-    <KeyboardAvoidingView
-      className="flex-1 bg-screen"
-      automaticOffset
-      behavior="height"
-      keyboardVerticalOffset={composerInsets.keyboardVerticalOffset}
-    >
+    <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
       {hasBanner ? (
         <View
           accessibilityRole="alert"
@@ -464,9 +469,9 @@ export function GoatBotScreen(props: {
           session.activity ? <GoatBotActivityBubble text={session.activity.text} /> : null
         }
       />
-      <View
+      <Animated.View
         className="flex-row items-end gap-2 border-t border-border px-4 pt-2"
-        style={{ paddingBottom: composerInsets.paddingBottom }}
+        style={composerPaddingStyle}
       >
         <TextInput
           accessibilityLabel="Message GOAT Bot"
@@ -509,7 +514,7 @@ export function GoatBotScreen(props: {
             <Text className="text-xl font-semibold text-white">↑</Text>
           </View>
         </Pressable>
-      </View>
+      </Animated.View>
     </KeyboardAvoidingView>
   );
 }

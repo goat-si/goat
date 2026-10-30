@@ -74,9 +74,13 @@ vi.mock("@legendapp/list/react-native", () => ({
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
 }));
+vi.mock("react-native-reanimated", () => ({
+  default: { View: (props: { children?: unknown }) => props.children },
+  useAnimatedStyle: (style: () => object) => style(),
+}));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  useKeyboardState: () => false,
+  useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }),
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0, top: 0 }),
