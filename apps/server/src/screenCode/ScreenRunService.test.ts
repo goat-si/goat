@@ -43,25 +43,132 @@ it.live("a tab binding receives a saved note once across cells", () =>
     yield* runMigrations();
     yield* Effect.gen(function* () {
       const notes = yield* SiteNotes.SiteNotes;
-      yield* notes.write({ origin: "https://example.test", text: "saved procedure", author: "person" });
-      const targetRef = { id: "target", kind: "tab" as const, environmentId: "env", runId: "r", turnId: "t", generation: 0 };
+      yield* notes.write({
+        origin: "https://example.test",
+        text: "saved procedure",
+        author: "person",
+      });
+      const targetRef = {
+        id: "target",
+        kind: "tab" as const,
+        environmentId: "env",
+        runId: "r",
+        turnId: "t",
+        generation: 0,
+      };
       const dispatcher = {
         availability: () => Effect.succeed([{ kind: "tab" as const, available: true }]),
-        dispatch: () => Effect.succeed({ value: { targetRef, tab: { tabId: "tab", title: "Page", url: "https://example.test/" } }, category: "confirmed" as const }),
+        dispatch: () =>
+          Effect.succeed({
+            value: {
+              targetRef,
+              tab: { tabId: "tab", title: "Page", url: "https://example.test/" },
+            },
+            category: "confirmed" as const,
+          }),
       };
       yield* Effect.gen(function* () {
         const service = yield* ScreenRunService;
-        const request = { runId: "r", turnId: "t", threadId: "thread", environmentId: "env", invocation: { ...invocation, capabilities: new Set(["preview" as const]), reauthorize: () => Effect.void } };
-        const first = yield* service.runCell({ ...request, source: "return (await screen.tab({tabId: 'tab'})).note;" });
+        const request = {
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: {
+            ...invocation,
+            capabilities: new Set(["preview" as const]),
+            reauthorize: () => Effect.void,
+          },
+        };
+        const first = yield* service.runCell({
+          ...request,
+          source: "return (await screen.tab({tabId: 'tab'})).note;",
+        });
         expect(first.value).toContain("saved procedure");
-        const second = yield* service.runCell({ ...request, source: "return (await screen.tab({tabId: 'tab'})).note ?? null;" });
+        const second = yield* service.runCell({
+          ...request,
+          source: "return (await screen.tab({tabId: 'tab'})).note ?? null;",
+        });
         expect(second.value).toBeNull();
         yield* service.finishTurn({ ...request, reason: "test" });
-      }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
-        dispatcher,
-        invocation: { command: process.execPath, entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
-        assetResolver: () => resolveScreenRuntimeAsset("dev"),
-      }).pipe(Layer.provide(NodeServices.layer))));
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    }).pipe(Effect.provide(SiteNotes.layer));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.live("a tab read after navigation delivers the current origin note", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    yield* Effect.gen(function* () {
+      const notes = yield* SiteNotes.SiteNotes;
+      yield* notes.write({
+        origin: "https://next.example",
+        text: "next procedure",
+        author: "person",
+      });
+      const targetRef = {
+        id: "target",
+        kind: "tab" as const,
+        environmentId: "env",
+        runId: "r",
+        turnId: "t",
+        generation: 0,
+      };
+      const dispatcher = {
+        availability: () => Effect.succeed([{ kind: "tab" as const, available: true }]),
+        dispatch: (call: { method: string }) =>
+          Effect.succeed({
+            value:
+              call.method === "select_tab"
+                ? { targetRef, tab: { tabId: "tab", title: "Page", url: "https://first.example/" } }
+                : { url: "https://next.example/page", text: "page" },
+            category: "confirmed" as const,
+          }),
+      };
+      yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const request = {
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: {
+            ...invocation,
+            capabilities: new Set(["preview" as const]),
+            reauthorize: () => Effect.void,
+          },
+        };
+        const result = yield* service.runCell({
+          ...request,
+          source:
+            "const tab = await screen.tab({tabId: 'tab'}); await tab.read(); return tab.note;",
+        });
+        expect(result.value).toContain("next procedure");
+        expect(notes.hasTouched("thread", "https://next.example")).toBe(true);
+        yield* service.finishTurn({ ...request, reason: "test" });
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
     }).pipe(Effect.provide(SiteNotes.layer));
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
