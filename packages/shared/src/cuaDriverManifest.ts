@@ -59,7 +59,7 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "set_agent_cursor_theme",
 ] as const;
 
-export const CUA_DRIVER_CLAIM_TOOLS = [
+const CUA_DRIVER_CLAIM_TOOLS = [
   "get_browser_state",
   "browser_navigate",
   "browser_click",

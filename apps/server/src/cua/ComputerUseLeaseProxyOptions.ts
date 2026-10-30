@@ -31,11 +31,11 @@ import * as Stream from "effect/Stream";
 
 import type { AgentInputReport } from "./agentInputReports.ts";
 import { SCREEN_CALL_EXPIRED } from "./ComputerUseLeaseMessages.ts";
-import { type JsonRpcId, refusal } from "./ComputerUseLeaseResponses.ts";
+import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
-import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
+import { type Envelope, parse, OWN_ID } from "./ComputerUseLeaseProtocol.ts";
 
 export const PRIMITIVE_ID = "goat:primitive:";
 
@@ -452,3 +452,18 @@ export interface LeaseProxyOptions<EU, ED> {
    */
   readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
 }
+
+export const reservedProviderRequest = (
+  id: JsonRpcId | null | undefined,
+  method: string | undefined,
+  expectedConnection: string | undefined,
+) => {
+  if (expectedConnection !== undefined || method === undefined || typeof id !== "string")
+    return undefined;
+  const prefix = id.startsWith(OWN_ID)
+    ? OWN_ID
+    : id.startsWith(PRIMITIVE_ID)
+      ? PRIMITIVE_ID
+      : undefined;
+  return prefix === undefined ? undefined : reservedIdAnswer(id, prefix);
+};

@@ -1,10 +1,13 @@
+import type { ComputerUseLeaseUpdate } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import type { OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
+import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
+import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-export const replaceCallArguments = (
-  line: string,
-  args: Readonly<Record<string, unknown>>,
-): string => {
+const replaceCallArguments = (line: string, args: Readonly<Record<string, unknown>>): string => {
   const value: unknown = JSON.parse(line);
   if (!isRecord(value) || !isRecord(value.params)) throw new Error("Invalid tool call envelope.");
   return JSON.stringify({ ...value, params: { ...value.params, arguments: args } });
@@ -99,7 +102,11 @@ export const scopeBrowserCall = (
   )
     return { refused: true as const };
   return {
-    args: { ...args, origin_scope: claim.origins },
+    args: {
+      ...args,
+      origin_scope: claim.origins,
+      ...(args.session === undefined ? {} : { session: args.session }),
+    },
     claimId: claim.claimId,
     claimGeneration: claim.claimGeneration,
   };
@@ -143,4 +150,127 @@ export const refusesClaimedBrowserDesktopCall = (
     );
   };
   return (desktopTools.has(name) || name === "run_steps") && containsPid(args, 0);
+};
+
+export interface SelectedClaim {
+  readonly claimId: string;
+  readonly claimGeneration: number;
+  readonly origins: string;
+}
+
+export const makeProxyBrowserClaims = () => {
+  let pids: ReadonlyArray<number> = [];
+  let claims: ReadonlyArray<ProxyBrowserClaim> = [];
+  const invalid = new Set<string>();
+  const key = (claim: ProxyBrowserClaim) => JSON.stringify([claim.claimId, claim.claimGeneration]);
+  const update = (value: ComputerUseLeaseUpdate) => {
+    if (value.state !== "active") return;
+    pids = value.claimedBrowserPids ?? [];
+    claims = value.browserClaims ?? [];
+  };
+  const gate = (id: JsonRpcId, line: string, message: Envelope) => {
+    const browser = scopeBrowserCall(
+      message.params?.name,
+      message.params?.arguments,
+      claims.filter((claim) => !invalid.has(key(claim))),
+    );
+    if ("refused" in browser)
+      return {
+        refused: refusal(
+          id,
+          message.method,
+          "outside_manifest",
+          "This browser call has no approved claim.",
+        ),
+      };
+    if (browser.args !== undefined) {
+      const selected: SelectedClaim = {
+        claimId: browser.claimId,
+        claimGeneration: browser.claimGeneration,
+        origins: JSON.stringify(browser.args.origin_scope),
+      };
+      line = replaceCallArguments(line, browser.args);
+      message = { ...message, params: { ...message.params, arguments: browser.args } };
+      if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
+        return {
+          refused: refusal(
+            id,
+            message.method,
+            "outside_manifest",
+            "Desktop access to a claimed browser is not permitted.",
+          ),
+        };
+      return { line, message, selected };
+    }
+    if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
+      return {
+        refused: refusal(
+          id,
+          message.method,
+          "outside_manifest",
+          "Desktop access to a claimed browser is not permitted.",
+        ),
+      };
+    return { line, message, selected: undefined };
+  };
+  const allowed = (selected: SelectedClaim | undefined, message: Envelope) =>
+    (selected === undefined ||
+      claims.some(
+        (claim) =>
+          !invalid.has(key(claim)) &&
+          claim.claimId === selected.claimId &&
+          claim.claimGeneration === selected.claimGeneration &&
+          JSON.stringify(claim.origins) === selected.origins,
+      )) &&
+    !refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids);
+  const selectedClaim = (selected: SelectedClaim | undefined) =>
+    selected === undefined
+      ? undefined
+      : claims.find(
+          (claim) =>
+            claim.claimId === selected.claimId &&
+            claim.claimGeneration === selected.claimGeneration,
+        );
+  const outside = (result: unknown, claim: ProxyBrowserClaim | undefined) => {
+    if (claim === undefined || !browserReplyOutsideClaim(result, claim)) return false;
+    invalid.add(key(claim));
+    return true;
+  };
+  const refuseReply = Effect.fn("ComputerUseLeaseProxyBrowserClaims.refuseReply")(function* (
+    request: OutstandingCall,
+    key: string,
+    outstanding: Map<string, OutstandingCall>,
+    gone: () => boolean,
+    release: (request: OutstandingCall, completed: true, notSent: boolean) => Effect.Effect<void>,
+  ) {
+    yield* release(request, true, true);
+    if (gone()) return;
+    outstanding.delete(key);
+    yield* request.sink.answer(
+      refusal(
+        request.id,
+        request.method,
+        "outside_manifest",
+        "The browser claim ended because the origin changed.",
+      ),
+      "settled",
+    );
+  });
+  const attach = (
+    request: OutstandingCall,
+    selected: SelectedClaim | undefined,
+  ): OutstandingCall => {
+    const claim = selectedClaim(selected);
+    return claim === undefined ? request : { ...request, browserClaim: claim };
+  };
+  const unsupported = Effect.fn("ComputerUseLeaseProxyBrowserClaims.unsupported")(function* (
+    selected: SelectedClaim | undefined,
+    supported: () => Effect.Effect<boolean>,
+    id: JsonRpcId,
+    method: string | undefined,
+  ) {
+    if (selected === undefined || (yield* supported())) return undefined;
+    return refusal(id, method, "outside_manifest", "This driver does not support browser claims.");
+  });
+  return { update, gate, allowed, outside, refuseReply, attach, unsupported };
 };

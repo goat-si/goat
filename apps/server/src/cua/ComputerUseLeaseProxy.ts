@@ -44,11 +44,8 @@ import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDr
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import {
-  browserReplyOutsideClaim,
-  refusesClaimedBrowserDesktopCall,
-  replaceCallArguments,
-  scopeBrowserCall,
-  type ProxyBrowserClaim,
+  makeProxyBrowserClaims,
+  type SelectedClaim,
 } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
@@ -79,7 +76,6 @@ import {
   RECONNECTING,
   REQUEST_ID_BUSY,
   SCREEN_CALL_EXPIRED,
-  SCREEN_SHARED,
   TURN_ENDED,
   WRONG_DISPLAY,
 } from "./ComputerUseLeaseMessages.ts";
@@ -94,7 +90,7 @@ import {
   interruptionRefusal,
   offScreenAnswer,
   refusal,
-  reservedIdAnswer,
+  unsentOutcome,
   unsentCallRefusal,
 } from "./ComputerUseLeaseResponses.ts";
 import {
@@ -103,12 +99,12 @@ import {
   forwardPrimitiveRequests,
   beginHops,
   outstandingCall,
+  reservedProviderRequest,
   type OutstandingCall,
   type ReplySink,
   type LeaseProxyOptions,
 } from "./ComputerUseLeaseProxyOptions.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
-
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
   options: LeaseProxyOptions<EU, ED>,
 ) {
@@ -126,11 +122,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let shared = false;
   // An older applied update cannot lift the latest receipt's restriction (sharedNow).
   let sharedTaken = false;
-  let claimedBrowserPids: ReadonlyArray<number> = [];
-  let browserClaims: ReadonlyArray<ProxyBrowserClaim> = [];
-  const invalidBrowserClaims = new Set<string>();
-  const claimKey = (claim: ProxyBrowserClaim) =>
-    JSON.stringify([claim.claimId, claim.claimGeneration]);
+  const browserClaims = makeProxyBrowserClaims();
   const sharedNow = () => shared || sharedTaken;
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
@@ -315,24 +307,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           options.onCancelledRequestSettled?.(key);
           return;
         }
-        if (
-          request.browserClaim !== undefined &&
-          browserReplyOutsideClaim(message.result, request.browserClaim)
-        ) {
-          invalidBrowserClaims.add(claimKey(request.browserClaim));
-          yield* release(request, true, true);
-          if (gone()) return;
-          outstanding.delete(key);
-          return yield* request.sink.answer(
-            refusal(
-              request.id,
-              request.method,
-              "outside_manifest",
-              "The browser claim ended because the origin changed.",
-            ),
-            "settled",
-          );
-        }
+        if (browserClaims.outside(message.result, request.browserClaim))
+          return yield* browserClaims.refuseReply(request, key, outstanding, gone, release);
         const session = message.result?.structuredContent?.session;
         if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
         if (request.method === "tools/call") {
@@ -596,8 +572,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // Another thread's grant only denies, so it counts as soon as it is taken.
     if (update?.state === "active" && update.controlId === options.controlId) {
       sharedTaken = update.shared === true;
-      claimedBrowserPids = update.claimedBrowserPids ?? [];
-      browserClaims = update.browserClaims ?? [];
+      browserClaims.update(update);
     }
     // The server's latest word, paused or idle too: a reused control lasts longer.
     const expiry = update !== undefined && "expiresAt" in update ? update.expiresAt : undefined;
@@ -702,9 +677,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
     // holds the lock (#1416), counts as applied: the call never reaches a child.
     let selectedForeground: ComputerUseForegroundGrant | undefined;
-    let selectedClaim:
-      | { readonly claimId: string; readonly claimGeneration: number; readonly origins: string }
-      | undefined;
+    let selectedClaim: SelectedClaim | undefined;
     const notSent = (requestId: JsonRpcId) =>
       unsentCallRefusal(requestId, message?.method, {
         held: held(),
@@ -726,17 +699,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return yield* sink.answer(staleGeneration(message.id ?? "", "tools/call"), "not_started");
     const id = message.id;
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
-    // The proxy's own ids are reserved: an answer under one would pass for the proxy's own
-    // list_apps lookup and could teach it which app a pid is.
-    if (
-      isRequest &&
-      expectedConnection === undefined &&
-      typeof id === "string" &&
-      (id.startsWith(OWN_ID) || id.startsWith(PRIMITIVE_ID))
-    )
-      return yield* sink.answer(
-        reservedIdAnswer(id, id.startsWith(OWN_ID) ? OWN_ID : PRIMITIVE_ID),
-      );
+    const reserved = reservedProviderRequest(id, message.method, expectedConnection);
+    if (reserved !== undefined) return yield* sink.answer(reserved);
     const cancelled = cancelledRequestKey(line);
     if (cancelled !== undefined) {
       handshakeAnswers.cancel(cancelled);
@@ -761,44 +725,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
-      const browser = scopeBrowserCall(
-        message.params?.name,
-        message.params?.arguments,
-        browserClaims.filter((claim) => !invalidBrowserClaims.has(claimKey(claim))),
-      );
-      if ("refused" in browser)
-        return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "outside_manifest",
-            "This browser call has no approved claim.",
-          ),
-        );
-      if ("args" in browser) {
-        selectedClaim = {
-          claimId: browser.claimId,
-          claimGeneration: browser.claimGeneration,
-          origins: JSON.stringify(browser.args.origin_scope),
-        };
-        line = replaceCallArguments(line, browser.args);
-        message = { ...message, params: { ...message.params, arguments: browser.args } };
-      }
-      if (
-        refusesClaimedBrowserDesktopCall(
-          message.params?.name,
-          message.params?.arguments,
-          claimedBrowserPids,
-        )
-      )
-        return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "outside_manifest",
-            "Desktop access to a claimed browser is not permitted.",
-          ),
-        );
+      const browser = browserClaims.gate(id, line, message);
+      if (browser.refused !== undefined) return yield* sink.answer(browser.refused);
+      ({ line, message, selected: selectedClaim } = browser);
       if (
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
@@ -818,15 +747,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
-      if (selectedClaim !== undefined && !(yield* batches.browserSupported()))
-        return yield* sink.answer(
-          refusal(
-            id,
-            message.method,
-            "outside_manifest",
-            "This driver does not support browser claims.",
-          ),
-        );
+      const unsupported = yield* browserClaims.unsupported(
+        selectedClaim,
+        batches.browserSupported,
+        id,
+        message.method,
+      );
+      if (unsupported !== undefined) return yield* sink.answer(unsupported);
       const batch = yield* batches.scope(id, line, message, () => notSent(id));
       if ("refused" in batch) return yield* sink.answer(batch.refused);
       ({ line, message } = batch);
@@ -896,19 +823,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       paused === undefined &&
       finished === undefined &&
       !held() &&
-      (selectedClaim === undefined ||
-        browserClaims.some(
-          (claim) =>
-            !invalidBrowserClaims.has(claimKey(claim)) &&
-            claim.claimId === selectedClaim?.claimId &&
-            claim.claimGeneration === selectedClaim.claimGeneration &&
-            JSON.stringify(claim.origins) === selectedClaim.origins,
-        )) &&
-      !refusesClaimedBrowserDesktopCall(
-        message?.params?.name,
-        message?.params?.arguments,
-        claimedBrowserPids,
-      ) &&
+      browserClaims.allowed(selectedClaim, message) &&
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     const name = message?.method === "tools/call" ? message.params?.name : undefined;
@@ -981,7 +896,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* release({ reservationId, connectionId: current.connectionId });
       return yield* sink.answer(answer, "settled", { tool: "move_cursor" });
     }
-
     const kinds =
       isRequest && message?.method === "tools/call"
         ? inputKinds(
@@ -1046,18 +960,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Effect.sync(() => {
         if (!isRequest) return;
         if (primitive !== undefined) dispatchedPrimitives.add(primitive);
-        const claim =
-          selectedClaim === undefined
-            ? undefined
-            : browserClaims.find(
-                (entry) =>
-                  entry.claimId === selectedClaim?.claimId &&
-                  entry.claimGeneration === selectedClaim.claimGeneration,
-              );
-        const sent = {
-          ...outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive),
-          ...(claim === undefined ? {} : { browserClaim: claim }),
-        };
+        const sent = browserClaims.attach(
+          outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive),
+          selectedClaim,
+        );
         outstanding.set(JSON.stringify(id), sent);
       });
     const outcome = yield* sendUnlessShared(
@@ -1075,18 +981,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* release({ reservationId, connectionId: current.connectionId }, undefined, true);
       yield* agentInput.ended(key);
       yield* drawOverlay({ type: "reply", id: key, failed: true });
-      return yield* sink.answer(
-        outcome === "shared"
-          ? refusal(id, message?.method, "screen_shared", SCREEN_SHARED)
-          : outcome === "expired"
-            ? refusal(
-                id,
-                message?.method,
-                "expired",
-                "This call’s permission expired before dispatch, so it did not run. Observe the current approval before trying again.",
-              )
-            : notSent(id),
-      );
+      return yield* sink.answer(unsentOutcome(outcome, id, message?.method, () => notSent(id)));
     }
     if (primitive !== undefined && isRequest)
       yield* unanswered.watch(JSON.stringify(id), primitiveDeadline);
