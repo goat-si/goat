@@ -495,6 +495,7 @@ export function buildThreadListV2Items(input: {
     const slim = new Set([...snoozed, ...settled]);
     const snoozedThreads = new Set(snoozed);
     const pinnedThreads = new Set(pinned);
+    const priorityThreads = new Set(priority);
     const threadByKey = new Map(
       listedThreads.map((thread) => [
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
@@ -511,7 +512,8 @@ export function buildThreadListV2Items(input: {
         thread,
         variant: slim.has(thread) ? "slim" : "card",
         snoozed: snoozedThreads.has(thread),
-        pinned: pinnedThreads.has(thread),
+        pinned:
+          pinnedThreads.has(thread) || (priorityThreads.has(thread) && thread.pinnedAt != null),
         wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
         isLast: index === results.length - 1,
       })),

@@ -19,6 +19,8 @@ import { effectiveSnoozed, threadWokeAt } from "@goat/client-runtime/state/threa
 import type { EnvironmentId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
 
+import { heldPriorityKeys } from "./threadListV2PriorityHolds";
+
 export { LAUNCH_GROUP_CHILD_LIMIT, threadHasUnseenCompletion, type LaunchLift };
 
 /** A subagent's identity, enough to find the row that owns a thread it launched. */
@@ -182,6 +184,7 @@ export function threadListV2ReorderExcludedKeys(
     input.settlementEnvironmentIds,
     input.snoozeEnvironmentIds,
     input.queuedThreadKeys,
+    heldPriorityKeys(),
   ];
   if (
     args.length === lastExcludedInput.length &&
@@ -196,10 +199,13 @@ export function threadListV2ReorderExcludedKeys(
       input.hiddenBotThreadKeys?.has(keyOf(thread)) !== true,
   );
   lastExcludedInput = args;
-  lastExcludedKeys = launchReorderExcludedKeys(
-    foldThreadListV2({ listed, owners: input.owners ?? input.threads, lifecycle: input }),
-    input,
-  );
+  lastExcludedKeys = new Set([
+    ...launchReorderExcludedKeys(
+      foldThreadListV2({ listed, owners: input.owners ?? input.threads, lifecycle: input }),
+      input,
+    ),
+    ...heldPriorityKeys(),
+  ]);
   return lastExcludedKeys;
 }
 

@@ -152,7 +152,9 @@ export function threadListV2ListItemsAreEqual(
         previous.rows.length === item.rows.length &&
         previous.rows.every(
           (row, index) =>
-            row.thread === item.rows[index]?.thread && row.wokeAt === item.rows[index]?.wokeAt,
+            row.thread === item.rows[index]?.thread &&
+            row.wokeAt === item.rows[index]?.wokeAt &&
+            (row.lift ?? null) === (item.rows[index]?.lift ?? null),
         ) &&
         previous.foldedUnseen.length === item.foldedUnseen.length &&
         previous.foldedUnseen.every(

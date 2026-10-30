@@ -3,7 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { ThreadPriorityHolds } from "@goat/client-runtime/state/thread-list-priority";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
@@ -17,6 +17,7 @@ import {
   threadListInboxReturns,
 } from "./threadListV2";
 import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
+import { publishHeldPriorityKeys } from "./threadListV2PriorityHolds";
 import { computeThreadMoveAvailability } from "./threadOrder";
 import {
   useRevealLaunchGroups,
@@ -46,8 +47,15 @@ const sameHolds = (left: ThreadPriorityHolds, right: ThreadPriorityHolds) =>
  * releases it. Holds last while the list is mounted.
  */
 function usePriorityHolds() {
+  const listId = useId();
   const [holds, setHolds] = useState<ThreadPriorityHolds>(() => new Map());
   const [releases, setReleases] = useState<ReadonlySet<string>>(() => new Set());
+  const heldKeys = [...holds.keys()].sort().join("\n");
+  // oxlint-disable-next-line goat/react-effect-budget -- row menus and Arrange threads plan moves outside React and must skip rows this list holds
+  useEffect(() => {
+    publishHeldPriorityKeys(listId, new Set(heldKeys.length === 0 ? [] : heldKeys.split("\n")));
+    return () => publishHeldPriorityKeys(listId, null);
+  }, [listId, heldKeys]);
   const observe = (rows: ReadonlyArray<EnvironmentThreadShell> | null) => {
     if (rows === null) return;
     const next: ThreadPriorityHolds = new Map(

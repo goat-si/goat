@@ -2,10 +2,6 @@ import { isAtomCommandInterrupted } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   markPriorityRead,
-  resolveThreadPriorityRank,
-  selectPriorityClear,
-  selectPriorityMarkReadTargets,
-  withFoldedUnseen,
   type ThreadPriorityReadPlan,
 } from "@goat/client-runtime/state/thread-list-priority";
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
@@ -20,14 +16,10 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ThreadListV2Section } from "./thread-list-v2-items";
 import type { ThreadListV2PriorityHeaderListItem } from "./threadListV2";
+import { threadListV2PriorityReadPlans } from "./threadListV2PriorityRead";
 
 type Plan = ThreadPriorityReadPlan<EnvironmentThreadShell>;
 
-const keyOf = (thread: Pick<EnvironmentThreadShell, "environmentId" | "id">) =>
-  `${thread.environmentId}:${thread.id}`;
-// Mobile keeps no visit watermark of its own; the server's lastVisitedAt is the read state.
-const NO_LOCAL_VISITS: Readonly<Record<string, string | undefined>> = {};
-const NO_ATTENTION: ReadonlyMap<string, unknown> = new Map();
 const canOperate = (thread: EnvironmentThreadShell) =>
   readEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
 
@@ -40,52 +32,18 @@ export const ThreadListV2PriorityHeader = memo(function ThreadListV2PriorityHead
   readonly onRestore: (key: string) => void;
 }) {
   const { rows, foldedUnseen } = props;
-  const threads = useMemo(() => rows.map((row) => row.thread), [rows]);
   const scoped = useMemo(
-    () => [...threads, ...foldedUnseen.map((entry) => entry.thread)],
-    [threads, foldedUnseen],
+    () => [...rows.map((row) => row.thread), ...foldedUnseen.map((entry) => entry.thread)],
+    [rows, foldedUnseen],
   );
   const operable = useEnvironmentsWithScope(scoped, AuthOrchestrationOperateScope);
   const visitThread = useAtomCommand(threadEnvironment.visit, "Mark thread as read");
-  const wokeAtByKey = new Map(rows.map((row) => [keyOf(row.thread), row.wokeAt]));
-  const withFolded = (plan: Plan, operate: (thread: EnvironmentThreadShell) => boolean) =>
-    withFoldedUnseen(plan, {
-      rows: threads,
-      unseenUnder: (key) =>
-        foldedUnseen.flatMap((entry) => (entry.rowKey === key ? [entry.thread] : [])),
-      canOperate: operate,
-      // A row in Priority only through unread work folded under it.
-      liftedOnly: (row) =>
-        resolveThreadPriorityRank({
-          thread: row,
-          wokeAt: wokeAtByKey.get(keyOf(row)) ?? null,
-          hasChildAttention: false,
-        }) === null,
-    });
-  const markAllPlan = (operate: (thread: EnvironmentThreadShell) => boolean) => {
-    const targets = selectPriorityMarkReadTargets({
-      threads,
-      localLastVisitedAtByKey: NO_LOCAL_VISITS,
-      wokeAtByKey,
-      canOperate: operate,
-    });
-    return withFolded({ markRead: targets, releaseKeys: targets.map(keyOf) }, operate);
-  };
-  const clearPlan = (operate: (thread: EnvironmentThreadShell) => boolean) =>
-    withFolded(
-      selectPriorityClear({
-        threads,
-        localLastVisitedAtByKey: NO_LOCAL_VISITS,
-        wokeAtByKey,
-        attentionByOwnerKey: NO_ATTENTION,
-        canOperate: operate,
-      }),
-      operate,
-    );
   const isOperable = (thread: EnvironmentThreadShell) => operable.has(thread.environmentId);
-  const canMarkAllRead = markAllPlan(isOperable).markRead.length > 0;
-  const clearable = clearPlan(isOperable);
-  const canClearRead = clearable.markRead.length > 0 || clearable.releaseKeys.length > 0;
+  const available = threadListV2PriorityReadPlans({ rows, foldedUnseen, canOperate: isOperable });
+  const canMarkAllRead = available.markAll.markRead.length > 0;
+  const canClearRead =
+    available.clear.markRead.length > 0 || available.clear.releaseKeys.length > 0;
+  const plansNow = () => threadListV2PriorityReadPlans({ rows, foldedUnseen, canOperate });
 
   const run = (plan: Plan) => {
     const visitedAt = new Date().toISOString();
@@ -131,9 +89,8 @@ export const ThreadListV2PriorityHeader = memo(function ThreadListV2PriorityHead
           isAnchoredToRight
           title="Priority"
           onPressAction={({ nativeEvent }) => {
-            if (nativeEvent.event === "mark-all-read" && canMarkAllRead)
-              run(markAllPlan(canOperate));
-            if (nativeEvent.event === "clear-read" && canClearRead) run(clearPlan(canOperate));
+            if (nativeEvent.event === "mark-all-read" && canMarkAllRead) run(plansNow().markAll);
+            if (nativeEvent.event === "clear-read" && canClearRead) run(plansNow().clear);
           }}
         >
           <Pressable

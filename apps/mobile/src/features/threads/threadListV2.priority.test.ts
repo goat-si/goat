@@ -15,8 +15,13 @@ import { makeThreadShellFixture } from "../../test-fixtures";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  getThreadListV2OrderedSection,
+  type ThreadListV2Item,
   type ThreadListV2ListItem,
 } from "./threadListV2";
+import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
+import { publishHeldPriorityKeys } from "./threadListV2PriorityHolds";
+import { threadListV2PriorityReadPlans } from "./threadListV2PriorityRead";
 
 type LayoutInput = Parameters<typeof buildThreadListV2Items>[0];
 
@@ -167,5 +172,57 @@ describe("threadListV2 Priority", () => {
     expect(layout.priorityCount).toBe(0);
     expect(layout.priorityThreads).toBeNull();
     expect(layout.items.map((item) => String(item.thread.id))).toEqual(["busy task"]);
+  });
+
+  it("leaves a held Priority row out of every reorder path, so moves skip past it", () => {
+    const threads = ["above", "held", "below"].map((id, index) =>
+      makeThread(id, { activeOrderKey: `a${index}` }),
+    );
+    const placement = { threads, now: NOW };
+    const ordered = () =>
+      getThreadListV2OrderedSection({
+        ...placement,
+        section: "active",
+        excludedThreadKeys: threadListV2ReorderExcludedKeys(placement),
+      }).map((thread) => String(thread.id));
+    expect(ordered()).toEqual(["above", "held", "below"]);
+    publishHeldPriorityKeys("list", new Set([`${environmentId}:held`]));
+    try {
+      expect(ordered()).toEqual(["above", "below"]);
+    } finally {
+      publishHeldPriorityKeys("list", null);
+    }
+    expect(ordered()).toEqual(["above", "held", "below"]);
+  });
+
+  it("keeps a launcher with running work under it when Clear read releases read rows", () => {
+    const read = makeThread("read", { latestRun: completedRun, lastVisitedAt: AFTER });
+    const launcher = makeThread("launcher");
+    const row = (thread: EnvironmentThreadShell, lift: ThreadListV2Item["lift"]) => ({
+      thread,
+      variant: "card" as const,
+      snoozed: false,
+      pinned: false,
+      wokeAt: null,
+      isLast: false,
+      lift,
+    });
+    const plans = threadListV2PriorityReadPlans({
+      rows: [row(read, null), row(launcher, "working")],
+      foldedUnseen: [],
+      canOperate: () => true,
+    });
+    expect(plans.clear.releaseKeys).toEqual([`${environmentId}:read`]);
+    expect(plans.markAll.markRead).toEqual([]);
+  });
+
+  it("keeps the pin on a pinned thread that searching finds in Priority", () => {
+    const layout = buildThreadListV2Items({
+      threads: [makeThread("busy pinned", { runtime: running, pinnedAt: NOW })],
+      environmentId: null,
+      searchQuery: "busy",
+      now: NOW,
+    });
+    expect(layout.items[0]?.pinned).toBe(true);
   });
 });
