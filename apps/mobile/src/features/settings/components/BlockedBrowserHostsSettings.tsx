@@ -56,7 +56,7 @@ export function BlockedBrowserHostsSettings(props: {
       />
       <Button label="Add host" disabled={disabled} onPress={add} />
       {error ? (
-        <Text accessibilityRole="alert" className="text-sm text-danger">
+        <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
           {error}
         </Text>
       ) : null}
