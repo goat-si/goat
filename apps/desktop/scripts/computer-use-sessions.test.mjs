@@ -266,6 +266,47 @@ describe.skipIf(platform !== "darwin")("macOS helper service's agent sessions", 
     expect((await attach(a)).reply.type).toBe("attached");
   });
 
+  it("starts no driver for an attach a Stop overtook while it read its manifest", async () => {
+    const service = await startService();
+    // A FIFO manifest holds the attach inside its manifest read, after it reserved the session,
+    // and the writer's open settles exactly when the service starts reading.
+    const fifo = NodePath.join(directory, "held-manifest-" + process.hrtime.bigint());
+    NodeChildProcess.execFileSync("mkfifo", [fifo]);
+    const token = NodeCrypto.randomBytes(32).toString("base64url");
+    const opened = await service.request("openSession", {
+      sessionId: "a",
+      token,
+      capabilityManifestPath: fifo,
+      environment: [],
+    });
+    const a = { sessionId: "a", token, ...opened.result };
+    const reading = NodeFS.promises.open(fifo, "w");
+    const connection = await connect(a.socketPath);
+    expect((await connection.lines.take()).type).toBe("challenge");
+    connection.send({ session: "a", launch: a.launch, token, channel: "mcp" });
+    const writer = await reading;
+    // The service is inside the manifest read now: it has started no driver yet.
+    const children = NodeChildProcess.execFileSync("ps", ["-A", "-o", "ppid=,pid="], {
+      encoding: "utf8",
+    })
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(([parent]) => parent === service.greeting.pid);
+    expect(children).toEqual([]);
+    expect((await service.request("stopSession", { sessionId: "a" })).result).toEqual({
+      stopped: true,
+    });
+    await writer.writeFile("{}");
+    await writer.close();
+    // The Stop ended the reserved attachment with its connection, before any driver existed.
+    expect(await connection.lines.take()).toBeUndefined();
+    // Once every process holding the service's stderr has ended, all a driver could have said
+    // has arrived: none started.
+    service.child.stdin.end();
+    await service.stdioClosed;
+    expect(service.diagnostics()).not.toContain("driver-parent:");
+  });
+
   it("ends a driver whose connection closes while the driver no longer reads its input", async () => {
     const service = await startService();
     const a = await service.open("a");
