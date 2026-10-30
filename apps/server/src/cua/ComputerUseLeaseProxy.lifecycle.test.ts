@@ -69,6 +69,32 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
     }),
   );
 
+  it.effect("Escape stops the local driver when the server cannot accept the report", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ personStop: true, personStopAccepted: false });
+      yield* h.push(active());
+      yield* h.driverStarted;
+      yield* h.escape;
+      yield* h.escapeReported;
+      yield* h.killed;
+      yield* h.send(call(79, "list_apps"));
+      assert.deepInclude((yield* h.nextToProvider).result, {
+        isError: true,
+        structuredContent: {
+          refused: "userStoppedSession",
+          detail: "stopped",
+          code: "stopped_by_person",
+          safety: {
+            possibleCommit: false,
+            retryClass: "never",
+            writeStatus: "not_started",
+            code: "write_refused_terminal",
+          },
+        },
+      });
+    }),
+  );
+
   it.effect("reports helper Escape from the active control", () =>
     Effect.gen(function* () {
       const h = yield* harness({ personStop: true });

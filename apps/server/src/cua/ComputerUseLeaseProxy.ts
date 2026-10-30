@@ -118,6 +118,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let finished: LeaseEnd | undefined;
   let paused: ComputerUsePauseReason | undefined;
   let idle = false;
+  let personStopPending = false;
   let screenLockPending = false;
   let screenLockConfirmed = false;
   let apps: ReadonlySet<string> | undefined;
@@ -418,7 +419,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           const onPersonStop = options.onPersonStop;
           yield* driver.personStop.pipe(
             Stream.runForEach(() =>
-              active() && lifecycle.current === current ? onPersonStop() : Effect.void,
+              Effect.gen(function* () {
+                if (!active() || lifecycle.current !== current || personStopPending) return;
+                personStopPending = true;
+                yield* Effect.gen(function* () {
+                  const accepted = yield* onPersonStop();
+                  if (!accepted)
+                    yield* Effect.logWarning(
+                      "Could not report Escape stop to GOAT; stopping the local driver.",
+                    );
+                  yield* lifecycleLock.withPermits(1)(end("stopped"));
+                }).pipe(Effect.forkIn(scope));
+              }),
             ),
             Effect.forkIn(current.scope),
           );
@@ -750,6 +762,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if ("answer" in keyCall) return yield* sink.answer(keyCall.answer);
     if (isRequest && message?.method === "tools/call") {
+      if (personStopPending)
+        return yield* sink.answer(
+          refusal(id, message.method, "stopped", LEASE_END_MESSAGES.stopped),
+        );
       if (screenLockPending)
         return yield* sink.answer(
           refusal(

@@ -100,6 +100,7 @@ export const harness = Effect.fn(function* (
      */
     readonly humanInput?: boolean;
     readonly personStop?: boolean;
+    readonly personStopAccepted?: boolean;
     readonly screenLock?: boolean;
     readonly onHumanInput?: (
       events: ReadonlyArray<{
@@ -227,7 +228,14 @@ export const harness = Effect.fn(function* (
         ),
         Effect.asVoid,
       ),
-    ...(options.personStop ? { onPersonStop: () => Queue.offer(escapeReports, undefined) } : {}),
+    ...(options.personStop
+      ? {
+          onPersonStop: () =>
+            Queue.offer(escapeReports, undefined).pipe(
+              Effect.as(options.personStopAccepted ?? true),
+            ),
+        }
+      : {}),
     ...(options.screenLock ? { onScreenLocked: () => Queue.offer(lockedReports, undefined) } : {}),
     output: (line, reply) =>
       Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
