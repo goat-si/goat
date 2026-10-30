@@ -7,12 +7,14 @@ import {
 } from "@goat/client-runtime/state/fleet-machine-description";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
+import { use } from "react";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../../components/ui/AppText";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { ListSection } from "../../../components/ui/ListSection";
 import { useAppActive } from "../../../lib/appState";
+import { NativeWorkspaceTabActivityContext } from "../../../native/v5-workspace-context";
 import { mobileFleet } from "../../../state/fleet";
 import { environmentPresentations } from "../../../state/presentation";
 import { useAdaptiveWorkspaceLayout } from "../../layout/adaptive-workspace-context";
@@ -31,12 +33,14 @@ const plural = (count: number, one: string, many = one + "s") =>
 
 /**
  * The Usage screen's Fleet tab: what runs on every machine this phone reaches, as the web's Fleet
- * page counts it. It reads nothing while the screen is covered or the app is in the background.
+ * page counts it. It reads nothing while the screen is covered, its retained iOS workspace tab is
+ * hidden, or the app is in the background.
  */
 export default function UsageFleetSection() {
   const focused = useIsFocused();
   const appActive = useAppActive();
-  return focused && appActive ? <FleetContent /> : null;
+  const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
+  return focused && appActive && tabActive ? <FleetContent /> : null;
 }
 
 function FleetContent() {
