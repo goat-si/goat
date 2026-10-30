@@ -55,6 +55,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.computerUseResume]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewSessionsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.computerUseStatusChanges]: AuthOrchestrationReadScope,
+  [WS_METHODS.computerUseHistory]: AuthOrchestrationReadScope,
   [WS_METHODS.previewSessionsControl]: AuthOrchestrationOperateScope,
   // Viewing a desktop window takes the same grant as viewing a browser tab's stream.
   [WS_METHODS.previewSessionsFrames]: AuthOrchestrationReadScope,

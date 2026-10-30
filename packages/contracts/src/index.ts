@@ -12,6 +12,7 @@ export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
 export * from "./cua.ts";
+export * from "./computerUseHistory.ts";
 export * from "./screenCode.ts";
 export * from "./screenTargetApi.ts";
 export * from "./computerUseProtocol.ts";
