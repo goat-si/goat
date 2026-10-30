@@ -44,6 +44,7 @@ import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDr
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import {
+  browserReplyOutsideClaim,
   refusesClaimedBrowserDesktopCall,
   replaceCallArguments,
   scopeBrowserCall,
@@ -127,6 +128,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let sharedTaken = false;
   let claimedBrowserPids: ReadonlyArray<number> = [];
   let browserClaims: ReadonlyArray<ProxyBrowserClaim> = [];
+  const invalidBrowserClaims = new Set<string>();
+  const claimKey = (claim: ProxyBrowserClaim) =>
+    JSON.stringify([claim.claimId, claim.claimGeneration]);
   const sharedNow = () => shared || sharedTaken;
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
@@ -310,6 +314,24 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           outstanding.delete(key);
           options.onCancelledRequestSettled?.(key);
           return;
+        }
+        if (
+          request.browserClaim !== undefined &&
+          browserReplyOutsideClaim(message.result, request.browserClaim)
+        ) {
+          invalidBrowserClaims.add(claimKey(request.browserClaim));
+          yield* release(request, true, true);
+          if (gone()) return;
+          outstanding.delete(key);
+          return yield* request.sink.answer(
+            refusal(
+              request.id,
+              request.method,
+              "outside_manifest",
+              "The browser claim ended because the origin changed.",
+            ),
+            "settled",
+          );
         }
         const session = message.result?.structuredContent?.session;
         if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
@@ -742,7 +764,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const browser = scopeBrowserCall(
         message.params?.name,
         message.params?.arguments,
-        browserClaims,
+        browserClaims.filter((claim) => !invalidBrowserClaims.has(claimKey(claim))),
       );
       if ("refused" in browser)
         return yield* sink.answer(
@@ -877,6 +899,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       (selectedClaim === undefined ||
         browserClaims.some(
           (claim) =>
+            !invalidBrowserClaims.has(claimKey(claim)) &&
             claim.claimId === selectedClaim?.claimId &&
             claim.claimGeneration === selectedClaim.claimGeneration &&
             JSON.stringify(claim.origins) === selectedClaim.origins,
@@ -1023,7 +1046,18 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Effect.sync(() => {
         if (!isRequest) return;
         if (primitive !== undefined) dispatchedPrimitives.add(primitive);
-        const sent = outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive);
+        const claim =
+          selectedClaim === undefined
+            ? undefined
+            : browserClaims.find(
+                (entry) =>
+                  entry.claimId === selectedClaim?.claimId &&
+                  entry.claimGeneration === selectedClaim.claimGeneration,
+              );
+        const sent = {
+          ...outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive),
+          ...(claim === undefined ? {} : { browserClaim: claim }),
+        };
         outstanding.set(JSON.stringify(id), sent);
       });
     const outcome = yield* sendUnlessShared(

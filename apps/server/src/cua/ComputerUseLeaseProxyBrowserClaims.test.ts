@@ -256,6 +256,44 @@ effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", 
   }),
 );
 
+effectIt.effect(
+  "the proxy withholds a claimed tab reply after it navigates outside its grant",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push({
+        ...active(),
+        browserClaims: [
+          {
+            claimId: "claim-1",
+            claimGeneration: 1,
+            pid: 42,
+            windowId: 7,
+            tabId: "tab-1",
+            origins: ["https://example.test"],
+          },
+        ],
+      });
+      yield* h.applied;
+      yield* supportedDriver(h);
+      yield* h.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+      assert.equal((yield* h.nextToDriver).id, 3);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          result: { structuredContent: { tab_id: "tab-1", url: "https://other.test/secret" } },
+        }),
+      );
+      const reply = yield* h.nextToProvider;
+      assert.isFalse(JSON.stringify(reply).includes("other.test"));
+      assert.isFalse(JSON.stringify(reply).includes("secret"));
+      yield* h.send(call(4, "browser_click", { tab_id: "tab-1" }));
+      assert.equal((yield* h.nextToProvider).id, 4);
+      assert.equal(yield* h.driverQueued, 0);
+    }),
+);
+
 effectIt.effect("a newly claimed pid fences a desktop call held before dispatch", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();

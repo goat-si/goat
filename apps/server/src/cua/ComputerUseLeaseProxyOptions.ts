@@ -110,6 +110,7 @@ const hopTimes = (hops: PrimitiveHops | undefined, answeredAt: number) => {
 
 /** A request the proxy sent to the driver and has not answered yet. */
 export interface OutstandingCall {
+  readonly browserClaim?: import("./ComputerUseLeaseProxyBrowserClaims.ts").ProxyBrowserClaim;
   readonly id: JsonRpcId;
   readonly method: string;
   readonly tool?: string;
