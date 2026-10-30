@@ -17,7 +17,6 @@ export const browserClaimEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
-    listing: "core",
     annotations: {
       title: "Request browser tab access",
       idempotentHint: false,
@@ -36,7 +35,6 @@ export const browserClaimEntries = {
     requires: "thread",
     dryRun: "unsupported",
     humanSteps: [],
-    listing: "core",
     annotations: { title: "List browser tab claims", idempotentHint: true, openWorldHint: false },
   }),
 } as const;
