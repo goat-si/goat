@@ -86,7 +86,7 @@ it("offers Input Monitoring as optional without blocking computer use", async ()
   const f = fixture();
   await using _screen = await dialog(f);
   expect(text()).toContain("Input Monitoring (optional)");
-  expect(text()).toContain("lets you press Esc to stop the agent");
+  expect(text()).toContain("Lets you press Esc to stop the agent.");
   await allowAll();
   expect(button("Turn on")?.disabled).toBe(false);
 });
