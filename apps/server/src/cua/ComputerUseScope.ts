@@ -276,7 +276,7 @@ export function learnApps(
           ? known?.bundleId !== entry.bundleId
           : known?.name !== entry.name && known?.id !== entry.id) ||
         (entry.executable !== undefined &&
-          known.executable !== undefined &&
+          known?.executable !== undefined &&
           appKey(entry.executable) !== appKey(known.executable))
       )
         into.delete(entry.pid);
