@@ -248,6 +248,7 @@ export type ScreenReadPhases = typeof ScreenReadPhases.Type;
 
 export const ScreenObservation = Schema.Struct({
   observationId: id,
+  snapshot: Schema.optionalKey(id),
   targetRef: ScreenTargetRef,
   targetGeneration: natural,
   surfaceGeneration: natural,
@@ -308,6 +309,10 @@ export const ScreenObservation = Schema.Struct({
   phases: Schema.optionalKey(ScreenReadPhases),
 }).check(Schema.makeFilter((value) => jsonBytes(value) <= 128 * 1024));
 export type ScreenObservation = typeof ScreenObservation.Type;
+
+export type ScreenModelObservation = Omit<ScreenObservation, "elements" | "indexedText"> & {
+  readonly text: string;
+};
 
 const ScreenOutcomeStatus = Schema.Literals(["confirmed", "refused", "failed", "unknown"]);
 

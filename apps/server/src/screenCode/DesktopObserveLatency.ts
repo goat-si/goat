@@ -129,6 +129,7 @@ const buildDesktopReadArgs = (input: {
   readonly jpeg: boolean;
   readonly limit: number;
   readonly filter?: string | undefined;
+  readonly since?: string | undefined;
 }): Record<string, unknown> => ({
   pid: input.pid,
   window_id: input.windowId,
@@ -138,6 +139,7 @@ const buildDesktopReadArgs = (input: {
   max_elements: input.limit,
   ...(input.capture ? {} : { tree_format: "both" }),
   ...(input.filter === undefined ? {} : { query: input.filter }),
+  ...(input.since === undefined ? {} : { since: input.since }),
 });
 
 /**
@@ -326,8 +328,16 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       fail("invalid_argument", "Query by {role, name, text, id}: name at least one."),
     );
   const search = query && driverQuery(query);
-  // A driver diff (`since`) keeps only changed rows and retires the others' tokens, and
-  // goat.7 fails its own count check on it, so every desktop read is full: all refs stay usable.
+  const baseObservationId = string(args.baseObservationId);
+  const since =
+    !capture &&
+    !query &&
+    args.interactiveOnly !== true &&
+    args.mode === "diff" &&
+    bound.diffBaseline === true &&
+    baseObservationId === bound.observationId
+      ? bound.snapshotId
+      : undefined;
   let readWindow = bound.windowId;
   const read = Effect.fn("DesktopObserveLatency.read")(function* (
     limit: number,
@@ -346,6 +356,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         jpeg: deps.jpegScreenshots,
         limit,
         filter,
+        since:
+          windowId === bound.windowId && limit === READ_BOUNDS[0] && filter === undefined
+            ? since
+            : undefined,
       }),
       call,
       context,
@@ -359,6 +373,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
+    delete bound.diffBaseline;
     delete bound.pages;
     delete bound.elementsByToken;
     delete bound.rows;
@@ -425,6 +440,25 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   let observationId = kept;
   if (kept === undefined) {
     const parseAt = yield* Clock.currentTimeMillis;
+    const status = string(state.since_status);
+    const diffText = string(state.tree_diff);
+    const isDiff =
+      since !== undefined &&
+      !followedSheet &&
+      (status === "diff" || status === "no_change") &&
+      diffText !== undefined;
+    const fallbackReason =
+      args.mode !== "diff" || isDiff
+        ? undefined
+        : followedSheet
+          ? "full read: window changed"
+          : since === undefined
+            ? baseObservationId === bound.observationId
+              ? "full read: scope changed"
+              : "full read: observation expired"
+            : status === "unknown_snapshot"
+              ? "full read: snapshot expired"
+              : `full read: ${(status ?? "diff unavailable").replaceAll("_", " ")}`;
     const tree = parseDesktopTreeState({ state, filtered, query, interactive });
     bound.frames = elementFrames(tree.elements);
     // The agent reads frames in window points; internal geometry stays in the driver's screen points.
@@ -460,6 +494,9 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       query !== undefined,
       interactive,
     );
+    const snapshotId = string(state.snapshot_id);
+    const snapshotBudget =
+      snapshotId === undefined ? 0 : Buffer.byteLength(JSON.stringify(snapshotId)) + 12;
     const observation = yield* Effect.try({
       try: () =>
         observations.renderObservation({
@@ -471,17 +508,20 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               filtered,
               limit,
               shown: placed.rows,
-              shownText: tree.shownText,
+              shownText: isDiff ? diffText : tree.shownText,
               omitted,
               screen,
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
                 ?.title,
             }),
           ),
-          mode: query ? "query" : "full",
+          mode: query ? "query" : isDiff ? "diff" : "full",
+          ...(isDiff && baseObservationId !== undefined
+            ? { prediffed: true, baseObservationId }
+            : {}),
           ...(scope === undefined ? {} : { scope }),
-          ...(!capture && args.mode === "diff" ? { resetReason: "desktop_reads_full" } : {}),
-          limits: { treeBytes: rawBudget },
+          ...(fallbackReason === undefined ? {} : { resetReason: fallbackReason }),
+          limits: { treeBytes: Math.max(0, rawBudget - snapshotBudget) },
         }),
       catch: renderFailure,
     });
@@ -492,8 +532,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       delete bound.needsSettleBeforeCapture;
       if (followedSheet) deps.setEpoch(nextEpoch);
       commitObservedSheet(bound, sheet, nextRef, nextBounds);
-      const snapshotId = string(state.snapshot_id);
       if (snapshotId !== undefined) bound.snapshotId = snapshotId;
+      bound.diffBaseline = query === undefined && !interactive && !observation.truncated;
       // A read its budget cut keeps the rest for observe({after}) until the next read.
       if (observation.elements.length < tree.shown.length)
         bound.pages = {
@@ -515,7 +555,14 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         renderMs,
         hops: hopsOf(call),
       });
-      return { value: withObserveTiming(observation, timing, rawBudget), category: "unverifiable" };
+      return {
+        value: withObserveTiming(
+          { ...observation, ...(snapshotId === undefined ? {} : { snapshot: snapshotId }) },
+          timing,
+          rawBudget,
+        ),
+        category: "unverifiable",
+      };
     }
   }
   if (observationId === undefined) return yield* Effect.fail(fail("downstream_failure"));

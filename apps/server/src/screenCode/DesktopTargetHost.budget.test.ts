@@ -344,7 +344,7 @@ const runCell = (source: string) =>
 const PAGE =
   "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); const first = await app.observe(); " +
   "const after = Number(/after:(\\d+)/.exec(first.omitted.find((o) => o.kind === 'budget').detail)[1]); " +
-  "const page = await app.observe({after}); const cells = page.elements.filter((e) => e.role === 'AXCell');";
+  'const page = await app.observe({after}); const cells = [...page.text.matchAll(/\\[(\\d+)\\] AXCell = "([^"]+)"/g)].map((m) => ({ index: Number(m[1]), name: m[2] }));';
 const windowsWithBounds = {
   windows: [
     {
