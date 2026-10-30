@@ -220,16 +220,18 @@ export async function startBrowserInputEvidence(page: Page) {
       await cleanup();
       return hidden();
     }
+    const monitoredObject = monitorId;
+    const focusedObject = focusId;
     return {
       finish: async () => {
         try {
           const answer = await cdp.send("Runtime.callFunctionOn", {
-            objectId: monitorId,
+            objectId: monitoredObject,
             functionDeclaration: "function(){return this.finish()}",
             returnByValue: true,
           });
           const focusedAfter = await cdp.send("DOM.describeNode", {
-            objectId: focusId,
+            objectId: focusedObject,
             depth: 1,
             pierce: true,
           });
