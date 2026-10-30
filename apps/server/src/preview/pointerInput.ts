@@ -57,15 +57,18 @@ export const dragBetween = async (
       }
       await again(gate, deadline);
     } catch (cause) {
-      await cdp.send("Input.cancelDragging");
-      // One release at the starting point resets the pressed button after a cut.
-      await cdp.send("Input.dispatchMouseEvent", {
-        type: "mouseReleased",
-        ...input.from,
-        button: "left",
-        buttons: 0,
-        clickCount: 1,
-      });
+      try {
+        await cdp.send("Input.cancelDragging");
+      } finally {
+        // One release at the starting point resets the pressed button after a cut.
+        await cdp.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          ...input.from,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        });
+      }
       throw cause;
     }
     await cdp.send("Input.dispatchMouseEvent", {

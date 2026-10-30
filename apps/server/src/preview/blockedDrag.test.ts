@@ -4,6 +4,7 @@ import { chromium } from "playwright-core";
 import { expect } from "vite-plus/test";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
+import { dragBetween } from "./pointerInput.ts";
 
 it.effect("a blocked visit during a locator drag prevents the drop", () =>
   Effect.scoped(
@@ -135,4 +136,49 @@ it.effect(
         expect(events).toEqual([["pointerup", 40, 40]]);
       }),
     ),
+);
+
+it.effect("a failed drag cancellation still sends the accepted start-point release", () =>
+  Effect.gen(function* () {
+    const calls: Array<{ method: string; params?: object }> = [];
+    const session = {
+      send: async (method: string, params?: object) => {
+        calls.push({ method, params });
+        if (method === "Input.cancelDragging") throw new Error("cancel failed");
+        return {};
+      },
+      detach: async () => {},
+    };
+    const page = {
+      context: () => ({ newCDPSession: async () => session }),
+    } as unknown as import("playwright-core").Page;
+    let gates = 0;
+    const error = yield* Effect.promise(() =>
+      dragBetween(
+        page,
+        { from: { x: 2, y: 3 }, to: { x: 8, y: 9 } },
+        () => {
+          if (++gates === 3) throw new BrowserControlInterrupted("blocked", "blocked_url", false);
+        },
+        Infinity,
+      ).then(
+        () => null,
+        (cause: unknown) => cause,
+      ),
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(
+      calls.filter(
+        (call) =>
+          call.method === "Input.dispatchMouseEvent" &&
+          "type" in (call.params ?? {}) &&
+          (call.params as { type: string }).type === "mouseReleased",
+      ),
+    ).toEqual([
+      {
+        method: "Input.dispatchMouseEvent",
+        params: { type: "mouseReleased", x: 2, y: 3, button: "left", buttons: 0, clickCount: 1 },
+      },
+    ]);
+  }),
 );
