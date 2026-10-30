@@ -83,58 +83,55 @@ it.live("app clicks return a compact Done and expose details only on request", (
   }),
 );
 
-it.live("input results preserve no-op and belief-changing driver warnings without debug", () =>
+it.live.each([
+  {
+    tool: "click",
+    reply: { effect: "suspected_noop" },
+    source: "app.click(1)",
+    expected: { ok: true, verdict: "suspected_noop" },
+  },
+  {
+    tool: "click",
+    reply: {
+      effect: "confirmed",
+      focus_restoration: { status: "abandoned", reason: "user_input", prior_pid: 123 },
+    },
+    source: "app.click(1)",
+    expected: {
+      ok: true,
+      verdict: "confirmed",
+      warnings: ["focus restoration abandoned: user_input (prior app pid 123)"],
+    },
+  },
+  {
+    tool: "press_key",
+    reply: new DriverSuccess(
+      { effect: "unverifiable", code: "ax_action_unverified" },
+      "Sent AXPress to Edit > Undo for window 7; the requested chord was not sent as keys. Its effect is unverified. The item read disabled before the press.",
+    ),
+    source: "app.press('cmd+z')",
+    expected: {
+      ok: true,
+      verdict: "unverifiable",
+      warnings: ["The item read disabled before the press."],
+    },
+  },
+  {
+    tool: "click",
+    reply: { effect: "confirmed" },
+    source: "app.click(1)",
+    expected: { ok: true, verdict: "confirmed" },
+  },
+])("input $tool preserves $expected.verdict and warnings without debug", (entry) =>
   Effect.gen(function* () {
-    const cases = [
-      {
-        tool: "click",
-        reply: { effect: "suspected_noop" },
-        source: "app.click(1)",
-        expected: { ok: true, verdict: "suspected_noop" },
-      },
-      {
-        tool: "click",
-        reply: {
-          effect: "confirmed",
-          focus_restoration: { status: "abandoned", reason: "user_input", prior_pid: 123 },
-        },
-        source: "app.click(1)",
-        expected: {
-          ok: true,
-          verdict: "confirmed",
-          warnings: ["focus restoration abandoned: user_input (prior app pid 123)"],
-        },
-      },
-      {
-        tool: "press_key",
-        reply: new DriverSuccess(
-          { effect: "unverifiable", code: "ax_action_unverified" },
-          "Sent AXPress to Edit > Undo for window 7; the requested chord was not sent as keys. Its effect is unverified. The item read disabled before the press.",
-        ),
-        source: "app.press('cmd+z')",
-        expected: {
-          ok: true,
-          verdict: "unverifiable",
-          warnings: ["The item read disabled before the press."],
-        },
-      },
-      {
-        tool: "click",
-        reply: { effect: "confirmed" },
-        source: "app.click(1)",
-        expected: { ok: true, verdict: "confirmed" },
-      },
-    ];
-    for (const entry of cases) {
-      const { host } = fixture({ get_window_state: state, [entry.tool]: entry.reply });
-      const res = yield* runCell(
-        host,
-        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); return await " +
-          entry.source +
-          ";",
-      );
-      expect(res.value).toEqual(entry.expected);
-    }
+    const { host } = fixture({ get_window_state: state, [entry.tool]: entry.reply });
+    const res = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); return await " +
+        entry.source +
+        ";",
+    );
+    expect(res.value).toEqual(entry.expected);
   }),
 );
 
