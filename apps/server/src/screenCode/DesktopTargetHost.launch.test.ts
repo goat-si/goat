@@ -101,7 +101,7 @@ it.live("a closed app launches and binds its first window in one screen.app call
     const result = yield* cell(
       host,
       "const app = await screen.app({bundle_id: 'org.example.Editor'}); const seen = await app.observe(); " +
-        "return {launched: app.launched, windowId: app.windowId, kind: app.kind, read: seen.elements.length > 0};",
+        "return {launched: app.launched, windowId: app.windowId, kind: app.kind, read: seen.text.includes('Apply')};",
     );
     expect(result.value).toEqual({ launched: true, windowId: 7, kind: "app", read: true });
     expect(tools(sent).slice(0, 2)).toEqual(["list_apps", "launch_app"]);

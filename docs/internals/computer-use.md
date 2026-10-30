@@ -158,14 +158,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
 
 - A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
   desktop, and its display. Any change of epoch invalidates every element ref issued under it.
-- The first observation of a window is full. Later ones are diffs against the latest observation
-  of the same lineage, with added, changed and removed refs; "removed" means not seen, because
-  accessibility reads can miss nodes. GOAT's observation tracker
-  (`packages/shared/src/computerUseObservation.ts`) assigns refs by tree position, so a ref keeps
-  naming the same control while the driver's own tokens rotate, and gives a position a ref only
-  when it is unambiguous all the way up. A full observation starts a new lineage and says why.
-- A ref from an older lineage or epoch is refused with `staleElement` or `epochChanged`. The
-  helper never guesses among several matches.
+- App observations start with a full tree. Later reads request a driver diff against the latest
+  snapshot and retain the new snapshot's element tokens and frames internally. A driver fallback
+  returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
+  computed by GOAT's observation tracker. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).

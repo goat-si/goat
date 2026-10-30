@@ -112,6 +112,7 @@ export interface BoundWindow {
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
+  diffBaseline?: boolean;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
   pointsStale?: "input" | "restart";
   /** Input ran without a post-input 60 ms settle sleep; the next screenshot settles first. */

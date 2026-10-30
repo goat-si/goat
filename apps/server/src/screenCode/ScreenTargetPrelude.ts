@@ -200,7 +200,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       );
     if (typeof target === 'number') {
       const found = observation.elements.find((item) => item.index === target);
-      if (!found) throw new ScreenError('stale_reference', 'No [' + target + '] in the latest observe; observe again.', true);
+      if (!found) throw new ScreenError('stale_reference', 'No [' + target + '] in the latest observe; observe() then use the new numbers.', true);
       return found;
     }
     // An accessibility id is exact and the same in every language.
@@ -295,7 +295,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const observe = async (arg = {}) => {
     if (__legacy(arg)) {
-      try { return remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); }
+      try { const { elements: _elements, ...value } = remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); return value; }
       catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
     }
     __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query']);
@@ -328,7 +328,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       }
       catch (raw) { seen.observation = undefined; throw __error(raw); }
     }
-    const { indexedText, ...rest } = observation;
+    const { indexedText, elements: _elements, ...rest } = observation;
     const shown = { text: indexedText, ...rest, ...(seen.image && arg.screenshot ? { image: seen.image } : {}) };
     // Cells written before text read indexedText; it is not enumerable, so results do not carry it twice.
     Object.defineProperty(shown, 'indexedText', { value: indexedText, enumerable: false });

@@ -154,7 +154,7 @@ it.live(
           "await app.screenshot(); " +
           "await app.click([10, 10]); " +
           "const hiddenWait = await app.waitFor({window: 'hidden'}, 0); " +
-          "return { genMoved, oldPointCode, badAction, buttons: obs.elements.length, hiddenMet: hiddenWait.met };",
+          "return { genMoved, oldPointCode, badAction, buttons: [...obs.text.matchAll(/\\[\\d+\\]/g)].length, hiddenMet: hiddenWait.met };",
       );
       expect(res.value).toMatchObject({
         genMoved: true,
@@ -554,7 +554,7 @@ it.live(
       failParent = false;
       const recovered = yield* runCell(
         "const obs = await sheetApp.observe(); " +
-          "return { winAfter: sheetApp.windowId, note: sheetApp.note, scope: obs.scope, count: obs.elements.length };",
+          "return { winAfter: sheetApp.windowId, note: sheetApp.note, scope: obs.scope, count: [...obs.text.matchAll(/\\[\\d+\\]/g)].length };",
       );
       expect(recovered.value).toEqual({
         winAfter: 72907,

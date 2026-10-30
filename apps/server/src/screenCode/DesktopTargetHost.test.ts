@@ -320,6 +320,7 @@ type Observed = {
   baseObservationId?: string;
   resetReason?: string;
   indexedText: string;
+  snapshot?: string;
   elements: Array<{ name: string; ref: ScreenElementRef }>;
 };
 const refAt = (observed: Observed, index: number) => {
@@ -327,47 +328,6 @@ const refAt = (observed: Observed, index: number) => {
   if (!ref) throw new Error(`The observation must have element `);
   return ref;
 };
-
-it.effect(
-  "a desktop diff read is a full read, so every element keeps a ref the next input can use",
-  () =>
-    Effect.gen(function* () {
-      // goat.7 answers a since read with typed_output_mismatch, so a since read fails the cell.
-      const { host, sent } = fixture({
-        get_window_state: (args: Record<string, unknown>) =>
-          args.since === undefined
-            ? goat2WindowState(args)
-            : new DriverError({ code: "typed_output_mismatch", execution_state: "unknown" }),
-      });
-      const bound = yield* host.bindApp(
-        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
-        context,
-      );
-      const ref = bound.value as ScreenTargetRef;
-      const observe = (args: Record<string, string>) =>
-        host
-          .observe(call("get_accessibility_tree", args, ref), context)
-          .pipe(Effect.map((result) => result.value as Observed));
-      const full = yield* observe({});
-      expect(sent.at(-1)?.args).toMatchObject({ tree_format: "both" });
-      expect(full.mode).toBe("full");
-
-      const again = yield* observe({ mode: "diff", baseObservationId: full.observationId });
-      expect(sent.at(-1)?.args).not.toHaveProperty("since");
-      expect(again).toMatchObject({ mode: "full", resetReason: "desktop_reads_full" });
-      expect(again.elements.map((element) => element.name)).toEqual(["Document", "Apply"]);
-      yield* host.invoke(call("click", { elementRef: refAt(again, 1) }, ref), context);
-      expect(sent.at(-1)).toMatchObject({ tool: "click", args: { element_token: "s0000000a:1" } });
-
-      // The earlier read's refs retire with its observation, before any input.
-      const before = sent.length;
-      const retired = yield* host
-        .invoke(call("click", { elementRef: refAt(full, 1) }, ref), context)
-        .pipe(Effect.result);
-      expect(retired._tag === "Failure" && retired.failure.code).toBe("stale_reference");
-      expect(sent).toHaveLength(before);
-    }),
-);
 
 it.effect(
   "a desktop screenshot keeps the tree's element refs only while the driver keeps its snapshot",
@@ -399,8 +359,8 @@ it.effect(
         ),
         context,
       )).value as Observed;
-      expect(sent.at(-1)?.args).not.toHaveProperty("since");
-      expect(diff.mode).toBe("full");
+      expect(sent.at(-1)?.args).toMatchObject({ since: "s0000000a" });
+      expect(diff).toMatchObject({ mode: "full", resetReason: "full read: diff unavailable" });
 
       // Another snapshot, the tree's snapshot invalidated, or no snapshot named: refs retire.
       for (const replacing of [
