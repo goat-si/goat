@@ -141,64 +141,60 @@ const rowState = (snapshot: string, lifted: boolean) => ({
   ],
 });
 
-for (const liftedAtFirst of [true, false]) {
-  it.live(
-    liftedAtFirst
-      ? "a text-named baseline forces a full read before resolving its name"
-      : "an unlabeled row in a diff forces a full read before resolving its name",
-    () => {
-      let reads = 0;
-      const { host, sent } = fixture({
-        get_window_state: (args: Record<string, unknown>) => {
-          reads++;
-          const snapshot = `s${reads}`;
-          if (args.since !== undefined) {
-            const { tree_markdown: _markdown, ...state } = rowState(snapshot, true);
-            return { ...state, since_status: "diff", tree_diff: "~ [1] AXRow" };
-          }
-          return rowState(snapshot, liftedAtFirst || reads > 1);
-        },
-      });
-      return Effect.gen(function* () {
-        const service = yield* ScreenRunService;
-        const result = yield* service.runCell({
-          runId: "r",
-          turnId: "t",
-          threadId: "thread",
-          environmentId: "env",
-          invocation: context.invocation,
-          source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+it.live.each([true, false])(
+  "text-named rows force a full read before resolving their name (lifted at first: %s)",
+  (liftedAtFirst) => {
+    let reads = 0;
+    const { host, sent } = fixture({
+      get_window_state: (args: Record<string, unknown>) => {
+        reads++;
+        const snapshot = `s${reads}`;
+        if (args.since !== undefined) {
+          const { tree_markdown: _markdown, ...state } = rowState(snapshot, true);
+          return { ...state, since_status: "diff", tree_diff: "~ [1] AXRow" };
+        }
+        return rowState(snapshot, liftedAtFirst || reads > 1);
+      },
+    });
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
           const first = await app.observe(); const second = await app.observe();
           await app.click('Target row'); return {first: first.mode, mode: second.mode, reason: second.resetReason};`,
-        });
-        expect(result.value).toEqual({
-          first: "full",
-          mode: "full",
-          reason: "full read: rows named by their text",
-        });
-        const calls = sent.filter((entry) => entry.tool === "get_window_state");
-        expect(calls).toHaveLength(liftedAtFirst ? 2 : 3);
-        expect(calls[0]?.args).not.toHaveProperty("since");
-        if (liftedAtFirst) expect(calls[1]?.args).not.toHaveProperty("since");
-        else {
-          expect(calls[1]?.args).toMatchObject({ since: "s1" });
-          expect(calls[2]?.args).not.toHaveProperty("since");
-        }
-        expect(sent.find((entry) => entry.tool === "click")?.args).toMatchObject({
-          element_token: liftedAtFirst ? "s2:1" : "s3:1",
-        });
-      }).pipe(
-        Effect.provide(
-          ScreenRunService.layerWithRuntime({
-            dispatcher: createScreenDispatchRouter({ app: host }),
-            invocation: {
-              command: process.execPath,
-              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-            },
-            assetResolver: () => resolveScreenRuntimeAsset("dev"),
-          }).pipe(Layer.provide(NodeServices.layer)),
-        ),
-      );
-    },
-  );
-}
+      });
+      expect(result.value).toEqual({
+        first: "full",
+        mode: "full",
+        reason: "full read: rows named by their text",
+      });
+      const calls = sent.filter((entry) => entry.tool === "get_window_state");
+      expect(calls).toHaveLength(liftedAtFirst ? 2 : 3);
+      expect(calls[0]?.args).not.toHaveProperty("since");
+      if (liftedAtFirst) expect(calls[1]?.args).not.toHaveProperty("since");
+      else {
+        expect(calls[1]?.args).toMatchObject({ since: "s1" });
+        expect(calls[2]?.args).not.toHaveProperty("since");
+      }
+      expect(sent.find((entry) => entry.tool === "click")?.args).toMatchObject({
+        element_token: liftedAtFirst ? "s2:1" : "s3:1",
+      });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ app: host }),
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
+);
