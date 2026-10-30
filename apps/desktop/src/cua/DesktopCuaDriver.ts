@@ -669,10 +669,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       captured && selected.kind === "helper" && helperCanCheckCapture
         ? captureCheckFailure(
             yield* Effect.promise(() =>
-              native.captureCheck(selected.bundle, {
-                pid: native.processId,
-                windowId: windowId.value,
-              }),
+              native.captureCheck(
+                selected.bundle,
+                { pid: native.processId, windowId: windowId.value },
+                requests.signal(),
+              ),
             ),
             COMPUTER_USE_HELPER_NAME,
           )

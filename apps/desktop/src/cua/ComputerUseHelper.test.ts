@@ -12,6 +12,7 @@ import { vi } from "vite-plus/test";
 import {
   ComputerUseHelperError,
   classifyHelperBundle,
+  checkHelperCapture,
   daemonMismatch,
   listHelperApplications,
   makeHelperHost,
@@ -456,6 +457,27 @@ describe("ComputerUseHelper daemon admission", () => {
     assert.equal((await helperError(started)).code, "incompatible_daemon");
     assert.deepEqual(helper.signals, ["SIGKILL"]);
     assert.isUndefined(host.servicePid());
+  });
+
+  it("a cancelled capture check kills its helper and says so", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // It never answers captureCheck, as a helper stuck capturing.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const cancel = new AbortController();
+    const checked = checkHelperCapture(
+      helper.process,
+      BUNDLE_ID,
+      { pid: 1, windowId: 2 },
+      cancel.signal,
+    );
+    await asked.promise;
+    cancel.abort(new ComputerUseHelperError("aborted", "Computer use stopped."));
+    assert.equal((await checked).kind, "failed");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
   });
 
   it("a cancelled app listing kills its helper and the driver it runs", async (context) => {

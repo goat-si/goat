@@ -117,7 +117,8 @@ export const fixture = Effect.fn(function* (
       | "checkStart"
       | "agentManifest"
       | "manifestOnly"
-      | "listing";
+      | "listing"
+      | "capture";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -173,6 +174,8 @@ export const fixture = Effect.fn(function* (
   const stopSeen = yield* Deferred.make<void>();
   const listing = yield* Deferred.make<void>();
   let listingCancelled = false;
+  const capturing = yield* Deferred.make<void>();
+  let captureCancelled = false;
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
@@ -261,8 +264,18 @@ export const fixture = Effect.fn(function* (
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
     },
-    captureCheck: async (bundle, target) => {
+    captureCheck: async (bundle, target, signal) => {
       captureChecks.push({ bundleId: bundle.bundleId, ...target });
+      // capture holds the first capture check until the start it serves is stopped.
+      if (options.hold === "capture" && signal && !captureCancelled) {
+        Deferred.doneUnsafe(capturing, Exit.void);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        captureCancelled = true;
+        return { kind: "failed", reason: "stopped" };
+      }
       const outcome = options.captureCheck ?? "pictured";
       if (outcome === "pictured") return { kind: "pictured", width: 64, height: 40 };
       if (outcome === "crashed") return { kind: "failed", reason: "exited (code 134)" };
@@ -689,6 +702,9 @@ export const fixture = Effect.fn(function* (
     /** The agent manifest's app listing has started. */
     listing: Deferred.await(listing),
     listingCancelled: () => listingCancelled,
+    /** The readiness check's capture check has started. */
+    capturing: Deferred.await(capturing),
+    captureCancelled: () => captureCancelled,
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),

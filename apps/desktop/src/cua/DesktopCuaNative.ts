@@ -132,6 +132,7 @@ export interface DesktopCuaDriverDependencies {
   readonly captureCheck: (
     bundle: HelperBundle,
     target: { readonly pid: number; readonly windowId: number },
+    signal?: AbortSignal,
   ) => Promise<CaptureCheckOutcome>;
   /**
    * The helper bundle this build ships. absent: packaged macOS stays off; other builds may run
@@ -224,8 +225,13 @@ export const dependencies: DesktopCuaDriverDependencies = {
     platform === "win32"
       ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
       : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
-  captureCheck: (bundle, target) =>
-    checkHelperCapture(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId, target),
+  captureCheck: (bundle, target, signal) =>
+    checkHelperCapture(
+      spawnHelperProcess(bundle.executable, "darwin"),
+      bundle.bundleId,
+      target,
+      signal,
+    ),
   helperBundlePath: resolveHelperBundle,
   agentRoute: probeAgentRoute,
   helperService: (bundle) =>

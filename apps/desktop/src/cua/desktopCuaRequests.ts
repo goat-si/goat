@@ -66,6 +66,8 @@ export const makeStopFirstRequests = () => {
                   Effect.ensuring(
                     Effect.sync(() => {
                       handling = undefined;
+                      // Work a start began never outlives it, even when its handling is cut off.
+                      cancel?.abort();
                       cancel = undefined;
                       if (request.enabled) return;
                       stopped.delete(request.requestId);

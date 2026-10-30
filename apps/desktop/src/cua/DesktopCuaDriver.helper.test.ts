@@ -618,6 +618,32 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       ),
   );
 
+  it.effect(
+    "a Stop sent during the readiness check's capture check cancels it and starts nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+            captureCheck: "pictured",
+            hold: "capture",
+          });
+          yield* test.request("agent");
+          yield* test.capturing;
+          yield* test.request("agent", false);
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          assert.isTrue(test.captureCancelled());
+          assert.deepEqual(
+            test.helperLaunches.map(({ verify }) => verify),
+            [true],
+          );
+        }),
+      ),
+  );
+
   it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
     Effect.scoped(
       Effect.gen(function* () {

@@ -465,15 +465,17 @@ export async function checkHelperCapture(
   process: HelperProcess,
   expectedBundleId: string,
   target: { readonly pid: number; readonly windowId: number },
+  signal?: AbortSignal,
 ): Promise<CaptureCheckOutcome> {
   let session: HelperSession;
   try {
-    session = await openHelperSession(process, expectedBundleId);
+    session = await openHelperSession(process, expectedBundleId, signal);
   } catch (error) {
     return { kind: "failed", reason: helperFailure(error) };
   }
   try {
-    const size = decodeCaptureSize(await session.request("captureCheck", target));
+    const captured = session.request("captureCheck", target);
+    const size = decodeCaptureSize(await (signal ? unlessAborted(captured, signal) : captured));
     return size._tag === "Some"
       ? { kind: "pictured", ...size.value }
       : { kind: "failed", reason: "it answered without a picture" };
@@ -491,7 +493,8 @@ export async function checkHelperCapture(
           : helperFailure(error),
     };
   } finally {
-    await session.close();
+    // Cancelled, it is killed with the driver it runs.
+    await session.close({ force: signal?.aborted === true });
   }
 }
 
