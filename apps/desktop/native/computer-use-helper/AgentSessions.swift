@@ -58,15 +58,15 @@ final class AgentSessions {
     let session: Session
     let generation: UInt64
     let connection: Int32
-    let driver: SessionDriver
+    /// Set once the driver started and no Stop overtook the start.
+    var driver: SessionDriver?
     var native: McpNativeSession?
     var overlay: SessionOverlay?
     var overlayAttached = false
     var ended = false
     var connectionClosed = false
-    init(session: Session, generation: UInt64, connection: Int32, driver: SessionDriver) {
+    init(session: Session, generation: UInt64, connection: Int32) {
       self.session = session; self.generation = generation; self.connection = connection
-      self.driver = driver
     }
   }
 
@@ -85,7 +85,9 @@ final class AgentSessions {
 
   private let lock = NSLock()
   private var sessions: [String: Session] = [:]
-  private var accepted: UInt64 = 0
+  /// The sequence number of the last connection the socket accepted, taking every connection
+  /// already waiting to be accepted first. Set by the listener; nothing is accepted without it.
+  var fenceAccepts: () -> UInt64 = { 0 }
   let launchToken: Data
   private let launch: (Spec) throws -> SessionDriver
   private let report: ([String: Any]) -> Void
@@ -115,7 +117,8 @@ final class AgentSessions {
   @discardableResult func stop(id: String) -> Bool {
     lock.lock()
     guard let session = sessions[id] else { lock.unlock(); return false }
-    session.fencedThrough = accepted
+    // Under the lock every authorization takes: no connection the fence covers attaches after.
+    session.fencedThrough = fenceAccepts()
     let live = session.live
     lock.unlock()
     if let live { end(live) }
@@ -126,7 +129,7 @@ final class AgentSessions {
   func close(id: String) {
     lock.lock()
     let session = sessions.removeValue(forKey: id)
-    session.map { $0.fencedThrough = accepted }
+    if let session { session.fencedThrough = fenceAccepts() }
     let live = session?.live
     lock.unlock()
     if let live { end(live) }
@@ -138,13 +141,6 @@ final class AgentSessions {
   }
 
   // MARK: Socket side
-
-  /// Called as each connection is accepted, before it says anything; names it for Stop's fence.
-  func admit() -> UInt64 {
-    lock.lock(); defer { lock.unlock() }
-    accepted += 1
-    return accepted
-  }
 
   private func authorize(_ request: [String: Any], sequence: UInt64) -> Result<Session, Refusal> {
     guard let id = request["session"] as? String, let launch = request["launch"] as? String,
@@ -159,10 +155,12 @@ final class AgentSessions {
     return .success(session)
   }
 
-  /// Starts a driver for an authenticated MCP connection. The caller owns the connection only
-  /// when this fails.
+  /// Starts a driver for an authenticated MCP connection. The attachment is reserved under the
+  /// lock and the driver started outside it, so a slow start never holds up another session's
+  /// Stop; a Stop that lands meanwhile ends the start. The caller owns the connection only when
+  /// this fails.
   func attachMcp(_ request: [String: Any], sequence: UInt64, connection: Int32,
-                 native: (Attachment) -> McpNativeSession) -> Result<Attachment, Refusal> {
+                 native: (Attachment, SessionDriver) -> McpNativeSession) -> Result<Attachment, Refusal> {
     lock.lock()
     let session: Session
     switch authorize(request, sequence: sequence) {
@@ -170,21 +168,35 @@ final class AgentSessions {
     case .success(let found): session = found
     }
     guard session.live == nil else { lock.unlock(); return .failure(.busy) }
-    let driver: SessionDriver
-    do { driver = try launch(session.spec) } catch { lock.unlock(); return .failure(.noDriver) }
     session.generation += 1
-    let attachment = Attachment(
-      session: session, generation: session.generation, connection: connection, driver: driver)
-    // Built before it is published: an end that follows always reaches its native work.
-    attachment.native = native(attachment)
+    let attachment = Attachment(session: session, generation: session.generation, connection: connection)
     session.live = attachment
     lock.unlock()
-    // The relay ends the attachment once the driver's output drains; this only reports the exit.
+    let driver: SessionDriver
+    do { driver = try launch(session.spec) } catch {
+      lock.lock()
+      if session.live === attachment { session.live = nil }
+      attachment.ended = true
+      lock.unlock()
+      return .failure(.noDriver)
+    }
+    let made = native(attachment, driver)
+    lock.lock()
+    let overtaken = attachment.ended
+    if !overtaken { attachment.driver = driver; attachment.native = made }
+    lock.unlock()
     driver.onExit { [weak self] code in
       self?.report([
         "type": "sessionDriverExited", "sessionId": session.id,
         "generation": Int(attachment.generation), "driverPid": Int(driver.pid), "code": Int(code),
       ])
+    }
+    if overtaken {
+      driver.signal(SIGKILL)
+      made.endInput()
+      try? driver.input.close()
+      try? driver.output.close()
+      return .failure(.stopped)
     }
     return .success(attachment)
   }
@@ -198,7 +210,9 @@ final class AgentSessions {
     case .failure(let refusal): lock.unlock(); return .failure(refusal)
     case .success(let found): session = found
     }
-    guard let live = session.live, !live.ended else { lock.unlock(); return .failure(.noDriver) }
+    guard let live = session.live, !live.ended, live.driver != nil else {
+      lock.unlock(); return .failure(.noDriver)
+    }
     guard !live.overlayAttached else { lock.unlock(); return .failure(.busy) }
     live.overlayAttached = true
     lock.unlock()
@@ -221,9 +235,11 @@ final class AgentSessions {
     if attachment.session.live === attachment { attachment.session.live = nil }
     if !attachment.connectionClosed { shutdown(attachment.connection, SHUT_RDWR) }
     let overlay = attachment.overlay
+    let driver = attachment.driver
+    let native = attachment.native
     lock.unlock()
-    attachment.driver.signal(SIGKILL)
-    attachment.native?.endInput()
+    driver?.signal(SIGKILL)
+    native?.endInput()
     overlay?.end()
   }
 

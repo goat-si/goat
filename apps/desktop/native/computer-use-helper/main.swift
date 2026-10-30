@@ -177,6 +177,24 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
   exit(code)
 }
 
+/// SIGKILL to every other process in this launcher's group, so a driver that handles or ignores
+/// SIGTERM cannot outlive its service; killpg would end this launcher too, before it reports
+/// the service's exit status. A pid is signalled only while it is still in this group.
+func killGroupMembers() {
+  let group = getpgrp()
+  let size = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
+  guard size > 0 else { return }
+  // Room for members started while the list is read.
+  var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.size + 32)
+  let filled = proc_listpids(
+    UInt32(PROC_PGRP_ONLY), UInt32(group), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+  guard filled > 0 else { return }
+  for pid in pids.prefix(Int(filled) / MemoryLayout<pid_t>.size)
+  where pid > 0 && pid != getpid() && getpgid(pid) == group {
+    kill(pid, SIGKILL)
+  }
+}
+
 /// An agent connection's helper ends with the proxy that started it, however that proxy ends:
 /// a driver mid-action reads stdin's end only between calls, so it must not outlive the proxy
 /// that enforces its lease. This launcher leads the connection's process group (the proxy
@@ -254,7 +272,7 @@ func runLauncher() -> Never {
     // A service that died alone (a crash, a stray SIGKILL) leaves its drivers behind: one for an
     // agent connection, one per session for the shared service. This launcher still leads the
     // group and is alive, so the group id is still this group's.
-    if getpgrp() == getpid() { killpg(getpid(), SIGTERM) }
+    if getpgrp() == getpid() { killGroupMembers() }
     exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   dispatchMain()
@@ -575,8 +593,9 @@ final class DriverService {
     }
     if listener == nil {
       listener = try SessionListener(
-        peerRefusal: socketPeerRefusal, admit: { [sessions] in sessions.admit() },
+        peerRefusal: socketPeerRefusal,
         serve: { [unowned self] fd, sequence, request in serveSession(fd, sequence, request) })
+      sessions.fenceAccepts = { [listener] in listener?.fence() ?? 0 }
     }
     try sessions.open(
       id: id, token: Data(token.utf8), spec: AgentSessions.Spec(manifestPath: manifest, settable: settable))
@@ -605,13 +624,13 @@ final class DriverService {
     switch request["channel"] as? String {
     case "mcp":
       let attached = sessions.attachMcp(request, sequence: sequence, connection: fd) {
-        [sessions] attachment in
+        [sessions] attachment, driver in
         let end = { (_: Int32, _: String) in sessions.end(attachment) }
         // The provider writer owns a duplicate, closed with it, so a late native write can never
         // reach a descriptor number the relay already closed and the kernel reused.
         let provider = FileHandle(fileDescriptor: dup(fd), closeOnDealloc: true)
         return McpNativeSession(
-          driver: McpWire(attachment.driver.input, failure: end),
+          driver: McpWire(driver.input, failure: end),
           provider: McpWire(provider, failure: end),
           manifest: readNativeManifest(attachment.session.spec.manifestPath), fail: end)
       }
@@ -620,7 +639,7 @@ final class DriverService {
       case .success(let attachment):
         sessionLine(fd, [
           "type": "attached", "channel": "mcp", "servicePid": Int(getpid()),
-          "driverPid": Int(attachment.driver.pid), "generation": Int(attachment.generation),
+          "driverPid": Int(attachment.driver?.pid ?? 0), "generation": Int(attachment.generation),
           "bundleId": bundleId,
         ])
         relaySession(attachment, sessions: sessions)
@@ -630,7 +649,7 @@ final class DriverService {
         [sessions] attachment in
         sessionLine(fd, [
           "type": "attached", "channel": "overlay", "servicePid": Int(getpid()),
-          "driverPid": Int(attachment.driver.pid), "generation": Int(attachment.generation),
+          "driverPid": Int(attachment.driver?.pid ?? 0), "generation": Int(attachment.generation),
         ])
         return DispatchQueue.main.sync {
           OverlayChannel(channel: fd, closesChannel: true) { [weak sessions] in

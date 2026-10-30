@@ -138,11 +138,15 @@
     capability manifest, its own native MCP session, and an overlay channel bound to that driver,
     with its own acks and input reports; a pausing hide interrupts only its own session's native
     work. A session runs one driver at a time. The connection's end is the Stop boundary: the
-    driver is killed at once, mid-action or not, and a desktop `stopSession` does the same and
-    refuses every connection accepted before it, so a Stop that crosses an attach still wins.
-    `closeSession` also forgets the session and its token. Drivers are reaped by the one object
-    that signals them, so no signal reaches a reused pid, and when the service dies alone its
-    launcher ends its process group, drivers included. Until stage c, each agent connection's
+    service watches for it apart from the relay, so the driver is killed at once, mid-action or
+    not, even while it has stopped reading its input. A desktop `stopSession` does the same and
+    refuses every connection that reached the socket before it, accepted or still waiting, so a
+    Stop that crosses an attach still wins; a driver whose start a Stop overtakes is killed, and
+    one session's slow start never holds up another's Stop. An overlay command still queued when
+    its channel ends is dropped, so nothing shows after the hide. `closeSession` also forgets the
+    session and its token. Drivers are reaped by the one object that signals them, so no signal
+    reaches a reused pid, and when the service dies alone its launcher sends SIGKILL to every
+    other process of its group, drivers that ignore SIGTERM included. Until stage c, each agent connection's
     proxy still starts its own helper with `--mcp` for its driver and Stop ends the pair (D3
     amendment 2); the desktop's readiness check starts its own helper with `--mcp` the same
     way. Direct mode has no driver cursor overlay, so the helper draws
@@ -170,9 +174,11 @@
     lives in a fresh 0700 directory per launch (under the user's temporary directory, or `/tmp`
     when that path is too long for a socket), and serves a peer only when its uid is this user's
     and, in a release helper, the kernel's audit token for the connection names code signed by
-    GOAT's team, the same policy as the parent check. Each connection is challenged, must answer
-    with one auth line (session, launch token, session token, channel) within two seconds and 4
-    KiB, and at most eight are unauthenticated at once. Tokens are compared in constant time,
+    GOAT's team, the same policy as the parent check. Each connection is challenged and must
+    answer with one auth line (session, launch token, session token, channel) of at most 4 KiB
+    within two seconds of its accept, the peer check included (a check still running at the
+    deadline is not interrupted, but the connection is then closed); at most eight are
+    unauthenticated at once. Tokens are compared in constant time,
     never logged, and die with the session or the launch.
 
     Stage c switches the proxies and must meet these criteria: the proxy gets the session

@@ -317,9 +317,13 @@ final class OverlayChannel: SessionOverlay {
   private let closesChannel: Bool
   private let writes = DispatchQueue(label: "si.goat.computer-use.overlay-writes")
   private var closed = false
-  private var ending = false
+  /// Guards closed and ended across the reader, the writer queue, main and end().
+  private let state = NSLock()
+  private var ended = false
   private let overlay: AgentOverlay
   private var input: InputActivity?
+
+  private var isEnded: Bool { state.lock(); defer { state.unlock() }; return ended }
 
   /// Call on the main thread. native names the session whose work a pausing hide interrupts.
   init(channel: Int32, closesChannel: Bool, native: @escaping () -> McpNativeSession?) {
@@ -355,7 +359,10 @@ final class OverlayChannel: SessionOverlay {
           else { continue }
           // Cancellation reaches native observations before a busy AppKit queue can delay it.
           interruptNativeMcp(command, session: native())
+          if isEnded { continue }
           DispatchQueue.main.async {
+            // end() queues its hide after setting ended, so no show can follow that hide.
+            guard !self.isEnded else { return }
             overlay.apply(command)
             // Hand the change to the window server now, and answer on the next turn of the
             // main loop, after it has been committed.
@@ -365,28 +372,37 @@ final class OverlayChannel: SessionOverlay {
         }
       }
       end()
-      // Only this reader closes the descriptor, after its last read and the queued writes.
-      if closesChannel { writes.async { [self] in closed = true; close(channel) } }
+      // Only this reader closes the descriptor, after its last read and the queued writes, and
+      // under the lock end() shuts it down with, so no shutdown reaches a reused number.
+      if closesChannel {
+        writes.async { [self] in
+          state.lock(); closed = true; close(channel); state.unlock()
+        }
+      }
     }
   }
 
   private func write(_ line: @escaping () -> String) {
     writes.async { [self] in
-      guard !closed else { return }
+      // closed changes only on this queue, so it cannot change during the write below.
+      guard !closed, !isEnded else { return }
       let bytes = Array(line().utf8)
       _ = bytes.withUnsafeBytes { Darwin.write(channel, $0.baseAddress, $0.count) }
     }
   }
 
-  /// Hides the overlay, stops reporting input and ends the channel's reads; idempotent.
+  /// Hides the overlay, stops reporting input and ends the channel's reads; idempotent. The
+  /// shutdown happens here, never behind a write blocked on a peer that stopped reading, and
+  /// it unblocks that write.
   func end() {
+    state.lock()
+    let first = !ended
+    ended = true
+    if first && closesChannel && !closed { shutdown(channel, SHUT_RDWR) }
+    state.unlock()
+    guard first else { return }
     input?.stop()
     DispatchQueue.main.async { [overlay] in overlay.hide() }
-    writes.async { [self] in
-      guard !ending, !closed else { return }
-      ending = true
-      if closesChannel { shutdown(channel, SHUT_RDWR) }
-    }
   }
 }
 

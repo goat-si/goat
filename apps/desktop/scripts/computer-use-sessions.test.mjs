@@ -80,6 +80,8 @@ describe.skipIf(platform !== "darwin")("macOS helper service's agent sessions", 
         else milestones.push(milestone);
     });
     const exited = new Promise((resolve) => child.once("exit", (code) => resolve(code)));
+    // Every process holding the service's stderr has ended: launcher, service and drivers.
+    const stdioClosed = new Promise((resolve) => child.once("close", resolve));
     const replies = new Map();
     const events = [];
     const eventWaiters = [];
@@ -123,6 +125,7 @@ describe.skipIf(platform !== "darwin")("macOS helper service's agent sessions", 
       child,
       greeting,
       exited,
+      stdioClosed,
       request,
       open,
       /** The driver exit the service reports for a session. */
@@ -261,6 +264,40 @@ describe.skipIf(platform !== "darwin")("macOS helper service's agent sessions", 
     early.send({ session: "a", launch: a.launch, token: a.token, channel: "mcp" });
     expect(await early.lines.take()).toEqual({ type: "refused", reason: "stopped" });
     expect((await attach(a)).reply.type).toBe("attached");
+  });
+
+  it("ends a driver whose connection closes while the driver no longer reads its input", async () => {
+    const service = await startService();
+    const a = await service.open("a");
+    const b = await service.open("b");
+    const held = await readied(await attach(a));
+    const other = await readied(await attach(b));
+    held.send({ jsonrpc: "2.0", id: 2, method: "fixture/hold" });
+    await service.stderrIncludes("holding");
+    // One frame larger than the driver's input pipe: the service reads all of it from the
+    // socket, then blocks writing it to a driver that stopped reading.
+    const bulk = { jsonrpc: "2.0", method: "fixture/bulk", params: { data: "x".repeat(1 << 20) } };
+    await new Promise((resolve) => held.socket.write(JSON.stringify(bulk) + "\n", resolve));
+    held.socket.destroy();
+    const exit = await service.driverExit("a", 1);
+    expect(exit.driverPid).toBe(held.reply.driverPid);
+    expect((await echo(other, "b")).params.who).toBe("b");
+  });
+
+  it("ends every driver, one that ignores SIGTERM too, when the service dies alone", async () => {
+    const service = await startService();
+    const a = await service.open("a");
+    const stubborn = await readied(await attach(a));
+    stubborn.send({ jsonrpc: "2.0", method: "fixture/ignore-term" });
+    await service.stderrIncludes("ignoring-term");
+    // Mid-action as well, so it never reads the end of its input either.
+    stubborn.send({ jsonrpc: "2.0", id: 3, method: "fixture/hold" });
+    await service.stderrIncludes("holding");
+    process.kill(service.greeting.pid, "SIGKILL");
+    expect(await service.exited).toBe(128 + 9);
+    // The driver holds the service's stderr, so the launcher's stdio closes only once it ended.
+    await service.stdioClosed;
+    await stubborn.closed;
   });
 
   it("forgets a closed session and ends every driver with the service", async () => {
