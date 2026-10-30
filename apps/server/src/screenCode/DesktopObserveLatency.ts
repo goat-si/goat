@@ -352,14 +352,12 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       : undefined;
   let retired = false;
   let readWindow = bound.windowId;
-  let readCount = 0;
   const read = Effect.fn("DesktopObserveLatency.read")(function* (
     limit: number,
     filter?: string,
     windowId = readWindow,
     allowDiff = true,
   ) {
-    readCount++;
     const sentAt = yield* Clock.currentTimeMillis;
     const reply = yield* deps.boundRequest(
       bound,
@@ -473,10 +471,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     (retired || bound.fullObservationId === undefined || baseObservationId === undefined);
   if (needsFullForNames || tooManyMoved || missingDiffBase) {
     retire();
-    if (readCount !== 1)
-      return yield* Effect.fail(fail("downstream_failure", "Cannot safely render the diff."));
     reply = yield* read(limit, undefined, expectedWindowId, false);
     state = normalizeSheetState(yield* verifyReply(object(driverValue(reply)), expectedWindowId));
+    if (state.since_status === "diff" || state.since_status === "no_change")
+      return yield* Effect.fail(fail("downstream_failure", "The full read returned a diff."));
   }
   const fromSheetId = bound.windowId;
   const interactive = !capture && args.interactiveOnly === true;
