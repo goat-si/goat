@@ -456,7 +456,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           <TooltipTrigger render={<span className="flex min-w-0 flex-1 flex-col" />}>
             <span className="truncate font-medium text-sm leading-5">{name}</span>
             <span className="truncate text-muted-foreground text-xs leading-4">
-              {previewSessionDetail(session)}
+              {chip === "Screen locked" ? chip : previewSessionDetail(session)}
             </span>
           </TooltipTrigger>
           <TooltipPopup side="top">{detail ? `${detail} · ${chip}` : chip}</TooltipPopup>
