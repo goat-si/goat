@@ -270,7 +270,7 @@ describe.skipIf(platform !== "darwin")("macOS helper service's agent sessions", 
     const service = await startService();
     // A FIFO manifest holds the attach inside its manifest read, after it reserved the session,
     // and the writer's open settles exactly when the service starts reading.
-    const fifo = NodePath.join(directory, "held-manifest-" + process.hrtime.bigint());
+    const fifo = NodePath.join(directory, "held-manifest-" + NodeCrypto.randomUUID());
     NodeChildProcess.execFileSync("mkfifo", [fifo]);
     const token = NodeCrypto.randomBytes(32).toString("base64url");
     const opened = await service.request("openSession", {
