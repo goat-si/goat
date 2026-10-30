@@ -173,7 +173,7 @@ export const threadLeaseUpdates = (input: {
                     ? {}
                     : { interruptions: value.interruptions }),
                   ...(value.shared === true ? { shared: true } : {}),
-                  browserClaimVersion,
+                  ...(browserClaimVersion === 0 ? {} : { browserClaimVersion }),
                   ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                   ...(browserClaims.length === 0 ? {} : { browserClaims }),
                   ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
@@ -239,12 +239,12 @@ export const withPrimitiveRequests = <A, R>(
             ) {
               if (typeof value === "object" && value !== null && "state" in value) {
                 activeState = value.state === "active";
-                if (
-                  activeState &&
-                  "browserClaimVersion" in value &&
-                  typeof value.browserClaimVersion === "number"
-                )
-                  latestRevision = value.browserClaimVersion;
+                // An active state without a version carries claim revision 0.
+                if (activeState)
+                  latestRevision =
+                    "browserClaimVersion" in value && typeof value.browserClaimVersion === "number"
+                      ? value.browserClaimVersion
+                      : 0;
               }
               yield* Queue.offer(output, value);
             });

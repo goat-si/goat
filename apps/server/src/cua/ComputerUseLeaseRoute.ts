@@ -171,7 +171,7 @@ export const leaseUpdates = (input: {
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
-                browserClaimVersion,
+                ...(browserClaimVersion === 0 ? {} : { browserClaimVersion }),
                 ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                 ...(browserClaims.length === 0 ? {} : { browserClaims }),
                 ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
