@@ -795,6 +795,7 @@ describe("computer use lease route", () => {
               Layer.mock(ComputerUseLeases.ComputerUseLeases)({
                 foregroundApprovalEpoch: Effect.die("unused"),
                 proxy: undefined,
+                currentControl: () => Effect.succeedNone,
                 callReservation: (_owner, call) =>
                   Effect.sync(() => {
                     received.push(call);
@@ -869,6 +870,7 @@ describe("computer use lease route", () => {
               Layer.mock(ComputerUseLeases.ComputerUseLeases)({
                 releaseApps: () => Effect.void,
                 streamOpened: () => Effect.void,
+                currentControl: () => Effect.succeedNone,
                 foregroundApprovalEpoch: Effect.die("unused"),
                 proxy: undefined,
                 callReservation: (owner, call) =>
