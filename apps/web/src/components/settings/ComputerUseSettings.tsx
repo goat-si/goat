@@ -23,6 +23,10 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     (settings) => settings.disabledBuiltInSkills,
   );
   const movePointer = useEnvironmentSettings(environmentId, (settings) => settings.cuaMovePointer);
+  const keepTypedText = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.computerUseKeepTypedText,
+  );
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
@@ -68,6 +72,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     enabled,
     disabledSkills,
     movePointer,
+    keepTypedText,
     canConfigure,
     status: query.data,
     error: query.error,
@@ -168,6 +173,7 @@ function ComputerUseControls({
       localCheck={host.localCheck}
       disabledSkills={host.disabledSkills}
       movePointer={host.movePointer}
+      keepTypedText={host.keepTypedText}
       save={host.save}
       bridge={{
         checkGrants,
