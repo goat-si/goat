@@ -208,7 +208,7 @@ import {
   openMarkdownLinkExternally,
   openMarkdownLinkInSystemBrowser,
   reportMarkdownExternalOpenFailure,
-} from "./chat/markdownExternalLink";
+} from "./chat/markdownSystemBrowserLink";
 import { ARTIFACT_TEMPLATE_ICON_BY_KIND } from "./chat/artifactTemplateIcons";
 
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
