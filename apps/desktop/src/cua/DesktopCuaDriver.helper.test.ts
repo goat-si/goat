@@ -502,7 +502,8 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
           });
           yield* test.request("agent");
           yield* test.manifestPreparing;
-          // Nothing runs for this start yet, so its Stop can only be noted.
+          // Nothing runs for this start yet, so its Stop can only be noted. The helper it then
+          // starts never answers: only that Stop can end it.
           yield* test.request("agent", false);
           yield* test.stopSeen;
           yield* test.release;

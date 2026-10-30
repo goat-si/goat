@@ -346,13 +346,19 @@ export const fixture = Effect.fn(function* (
             };
           }
           Deferred.doneUnsafe(starting, Exit.void);
-          const held = options.hold === (helper.verify ? "checkStart" : "helperStart");
+          // agentManifest also holds that agent's start, until its host stops.
+          const held =
+            options.hold === (helper.verify ? "checkStart" : "helperStart") ||
+            (options.hold === "agentManifest" && !helper.verify);
           if (held && !helperStartHeld) {
             helperStartHeld = true;
             Deferred.doneUnsafe(helperStarting, Exit.void);
             // As makeHelperHost: a stop during the start cancels it.
-            if (await Promise.race([gate.promise.then(() => false), stopped.promise]))
-              throw new Error("Computer use stopped while the helper was starting.");
+            const until =
+              options.hold === "agentManifest"
+                ? stopped.promise
+                : Promise.race([gate.promise.then(() => false), stopped.promise]);
+            if (await until) throw new Error("Computer use stopped while the helper was starting.");
           }
           // As makeHelperHost: an agent connection gets the helper's own command, no socket.
           if (helper.direct)
