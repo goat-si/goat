@@ -36,6 +36,9 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("proxy history report
         [6, 6, 6],
       );
       assert.deepEqual(yield* history.listForThread("thread:b"), []);
+      const { app: _app, ...unresolved } = report;
+      yield* recordCallOutcome(history, "thread:a", unresolved, false);
+      assert.equal((yield* history.listForThread("thread:a"))[0]?.appName, "Unknown app");
     }),
   );
 });

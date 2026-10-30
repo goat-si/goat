@@ -14,7 +14,9 @@ export const recordCallOutcome = Effect.fn("ComputerUseHistory.recordCallOutcome
     threadId,
     target: {
       kind: "app",
-      ...(report.app === undefined ? {} : { id: report.app.id, name: report.app.name }),
+      ...(report.app === undefined
+        ? { name: "Unknown app" }
+        : { id: report.app.id, name: report.app.name }),
     },
     method: report.tool,
     verdict: report.verdict,
