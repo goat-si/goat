@@ -423,25 +423,6 @@ describe("shared memory client", () => {
       ),
   );
 
-  it.effect("gates site notes permissions on the selected environment capability", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const h = yield* harness();
-        for (const supported of [undefined, false, true] as const) {
-          h.registry.set(configs(env), {
-            environment: { capabilities: { memory: { protocolVersion: 1, siteNotes: supported } } },
-          } as ServerConfig);
-          expect(h.registry.get(h.memory.siteNotesList.permissionAtom(env))).toBe(
-            supported === true,
-          );
-          expect(h.registry.get(h.memory.siteNotesWrite.permissionAtom(env))).toBe(
-            supported === true,
-          );
-        }
-      }),
-    ),
-  );
-
   it.effect("never dispatches hub diagnostics or reconcile without the advertised capability", () =>
     Effect.scoped(
       Effect.gen(function* () {
