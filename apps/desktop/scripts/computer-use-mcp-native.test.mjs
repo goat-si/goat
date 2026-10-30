@@ -226,6 +226,16 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
     expect(reply.result.tools.filter((entry) => entry.name === "health_report")).toHaveLength(1);
   });
 
+  it("reports a transport failure with its typed code once the driver has exited", async () => {
+    const session = await start();
+    // Nobody reads the agent's side any more, so the driver's next reply cannot be written.
+    session.child.stdout.destroy();
+    session.child.stdin.write(
+      JSON.stringify({ jsonrpc: "2.0", id: "echo", method: "fixture/echo" }) + "\n",
+    );
+    expect((await session.closed).code).toBe(74);
+  });
+
   it("refuses non-object, malformed and non-UTF8 frames before driver dispatch", async () => {
     for (const frame of [
       "[]\n",
