@@ -47,7 +47,9 @@ function FakeNativeComposer(props: {
     const document = JSON.parse(props.controlledDocumentJson) as Document;
     if (document.mostRecentEventCount < native.eventCount) return;
     if (document.isNativeEcho && document.value !== native.value) return;
-    const tokensChanged = document.tokensJson !== native.tokensJson;
+    // Native rebuilds when a chip's presentation changes, not when typing only shifts its offsets.
+    const tokensChanged =
+      chipPresentation(document.tokensJson) !== chipPresentation(native.tokensJson);
     native.tokensJson = document.tokensJson;
     if (tokensChanged || document.value !== native.value) {
       native.writes.push("text:" + document.value);
@@ -63,6 +65,13 @@ function FakeNativeComposer(props: {
     }
   }, [props.controlledDocumentJson]);
   return null;
+}
+
+function chipPresentation(tokensJson: string) {
+  const tokens = JSON.parse(tokensJson) as Array<Record<string, unknown>>;
+  return JSON.stringify(
+    tokens.map(({ start: _start, end: _end, ...presentation }) => presentation),
+  );
 }
 
 vi.hoisted(() =>
@@ -116,9 +125,9 @@ import {
 } from "../state/composerDraftSelection";
 import { resolveComposerMenuSelection } from "../features/threads/use-composer-command-menu";
 
-function nativeEdit(value: string) {
+function nativeEdit(value: string, caret: number) {
   native.value = value;
-  native.selection = { start: value.length, end: value.length };
+  native.selection = { start: caret, end: caret };
   native.eventCount += 1;
   return { value, selection: native.selection, eventCount: native.eventCount };
 }
@@ -182,22 +191,32 @@ function Host({ initial }: { readonly initial: string }) {
   );
 }
 
-async function typeKorean(prefix: string, batched: boolean, caretEvents = false) {
+async function typeKorean(
+  prefix: string,
+  suffix: string,
+  { batched, caretEvents }: { readonly batched: boolean; readonly caretEvents: boolean },
+) {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  native.value = prefix;
+  native.value = prefix + suffix;
   native.selection = { start: prefix.length, end: prefix.length };
   native.eventCount = 0;
   native.tokensJson = "[]";
   // Attaching a photo inserts its chip and remembers the caret after it.
-  draft.text = prefix;
-  rememberComposerDraftSelection(DRAFT_KEY, prefix, { start: prefix.length, end: prefix.length });
+  draft.text = prefix + suffix;
+  rememberComposerDraftSelection(DRAFT_KEY, prefix + suffix, {
+    start: prefix.length,
+    end: prefix.length,
+  });
   const root = createRoot(document.createElement("div"));
-  await act(async () => root.render(<Host initial={prefix} />));
+  await act(async () => root.render(<Host initial={prefix + suffix} />));
   native.writes = [];
   for (const keystroke of KEYSTROKES) {
     // Each step edits native state and returns the event it emits.
     const steps = keystroke.flatMap((value) => {
-      const change = () => ({ kind: "change" as const, ...nativeEdit(prefix + value) });
+      const change = () => ({
+        kind: "change" as const,
+        ...nativeEdit(prefix + value + suffix, prefix.length + value.length),
+      });
       if (!caretEvents) return [change];
       const caret = () => {
         native.eventCount += 1;
@@ -236,26 +255,31 @@ const CHIP = formatComposerContextReference({
   contextId: "att-1" as ComposerContextId,
   label: "IMG_0001.jpg",
 });
+const SECOND_CHIP = formatComposerContextReference({
+  kind: "image",
+  contextId: "att-2" as ComposerContextId,
+  label: "IMG_0002.jpg",
+});
 
-const DELIVERIES = [
-  { delivery: "batched", batched: true, caretEvents: false },
-  { delivery: "one render per event", batched: false, caretEvents: false },
-  { delivery: "batched, caret events", batched: true, caretEvents: true },
-  { delivery: "one render per event, caret events", batched: false, caretEvents: true },
-];
-
-it.each(DELIVERIES)(
-  "JS asks native for no text or caret writes while Korean composes in plain text ($delivery)",
-  async ({ batched, caretEvents }) => {
-    expect(await typeKorean("", batched, caretEvents)).toEqual({ value: "오기 전", writes: [] });
-  },
+const CASES = [
+  { place: "in plain text", prefix: "", suffix: "" },
+  { place: "after an image chip", prefix: CHIP + " ", suffix: "" },
+  { place: "before an image chip", prefix: "", suffix: " " + CHIP },
+  { place: "between image chips", prefix: CHIP + " ", suffix: " " + SECOND_CHIP },
+].flatMap((placement) =>
+  [
+    { delivery: "batched", batched: true, caretEvents: false },
+    { delivery: "one render per event", batched: false, caretEvents: false },
+    { delivery: "batched, caret events", batched: true, caretEvents: true },
+    { delivery: "one render per event, caret events", batched: false, caretEvents: true },
+  ].map((delivery) => ({ ...placement, ...delivery })),
 );
 
-it.each(DELIVERIES)(
-  "JS asks native for no text or caret writes while Korean composes after an image chip ($delivery)",
-  async ({ batched, caretEvents }) => {
-    expect(await typeKorean(CHIP + " ", batched, caretEvents)).toEqual({
-      value: CHIP + " 오기 전",
+it.each(CASES)(
+  "JS asks native for no text or caret writes while Korean composes $place ($delivery)",
+  async ({ prefix, suffix, ...delivery }) => {
+    expect(await typeKorean(prefix, suffix, delivery)).toEqual({
+      value: prefix + "오기 전" + suffix,
       writes: [],
     });
   },

@@ -657,9 +657,15 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     if tokensJson != document.tokensJson {
+      let nextTokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
+      // Typing before a chip only shifts its offsets, and UIKit already moved the attachment.
+      // Rebuilding for that would reset the keyboard on every keystroke; a chip that was
+      // inserted or removed still rebuilds through documentMatchesExpectedTokens.
+      if Self.chipPresentation(nextTokens) != Self.chipPresentation(tokens) {
+        tokensNeedRebuild = true
+      }
       tokensJson = document.tokensJson
-      tokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
-      tokensNeedRebuild = true
+      tokens = nextTokens
     }
     let previousSelection = sourceSelection()
     value = document.value
@@ -896,7 +902,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     isApplyingControlledValue = true
     textView.attributedText = makeAttributedDocument()
-    let targetSelection = requestedSelection ?? previousSelection
+    let targetSelection = currentRequestedSelection() ?? previousSelection
     requestedSelection = nil
     requestedSelectionValue = nil
     textView.selectedRange = displayRange(for: targetSelection)
@@ -1185,21 +1191,22 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   private func applyRequestedSelection() {
-    guard let requestedSelection else {
-      return
-    }
     // Moving the caret commits marked text, so an IME composition would end mid-syllable.
     // The request waits for the composition to finish; see applyRequestedSelectionAfterComposition.
-    guard textView.markedTextRange == nil else {
+    guard requestedSelection != nil, textView.markedTextRange == nil else {
       return
     }
-    let nextRange = displayRange(for: requestedSelection)
+    let request = currentRequestedSelection()
+    self.requestedSelection = nil
+    requestedSelectionValue = nil
+    guard let request else {
+      return
+    }
+    let nextRange = displayRange(for: request)
     guard nextRange.location <= textView.attributedText.length,
           NSMaxRange(nextRange) <= textView.attributedText.length else {
       return
     }
-    self.requestedSelection = nil
-    requestedSelectionValue = nil
     // Programmatically assigning selectedRange resets the keyboard's
     // autocorrect and predictive-text context even when the range is
     // unchanged, so a no-op assignment must be skipped.
@@ -1213,16 +1220,24 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   private func applyRequestedSelectionAfterComposition() {
-    guard requestedSelection != nil, textView.markedTextRange == nil else {
-      return
-    }
-    // Offsets refer to the text the request was made against; typing since then owns the caret.
-    guard requestedSelectionValue == textView.serializedText() else {
-      requestedSelection = nil
-      requestedSelectionValue = nil
-      return
-    }
     applyRequestedSelection()
+  }
+
+  /// A caret request's offsets refer to the text it was made against; once typing has changed
+  /// that text, the caret belongs to the typing and the request no longer applies.
+  private func currentRequestedSelection() -> ComposerSelectionPayload? {
+    guard let requestedSelection,
+          requestedSelectionValue == nil || requestedSelectionValue == textView.serializedText() else {
+      return nil
+    }
+    return requestedSelection
+  }
+
+  private static func chipPresentation(_ tokens: [ComposerTokenPayload]) -> [String] {
+    tokens.map {
+      [$0.type, $0.source, $0.label, $0.detail ?? "", $0.accent ?? "", $0.iconUri ?? "", $0.tintsIcon == true ? "1" : "0"]
+        .joined(separator: "\u{1F}")
+    }
   }
 
   private func restoreSelectionBeforeFocusingTap() {
