@@ -374,7 +374,7 @@ function NoteContent(props: NoteParams) {
                     }
                   >
                     <NoteVisualEditor
-                      body={localBody.current}
+                      body={body}
                       editable={canWrite && !saving && restored}
                       handleRef={visualEditor}
                       onChange={() => setDirty(true)}

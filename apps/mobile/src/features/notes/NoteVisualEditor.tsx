@@ -98,10 +98,11 @@ export default function NoteVisualEditor(props: {
   const undo = async () => {
     await snapshot();
     const stack = history.current;
-    if (stack.length < 2 || !input.current) return;
+    const previous = stack.at(-2);
+    if (previous === undefined || !input.current) return;
     stack.pop();
     restoring.current = true;
-    input.current.setValue(stack.at(-1)!);
+    input.current.setValue(previous);
     setCanUndo(stack.length > 1);
     props.onChange();
   };
