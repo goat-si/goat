@@ -16,7 +16,7 @@ import type {
   ScreenRunError,
 } from "@goat/contracts";
 import { COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE } from "@goat/contracts";
-import { driverValue, fail } from "./DesktopDriverReplies.ts";
+import { driverValue, fail, focusRestorationWarning } from "./DesktopDriverReplies.ts";
 import { hopsOf } from "./DesktopHops.ts";
 import { settleCaptureIfNeeded } from "./DesktopEvidence.ts";
 import { boundsOf, elementFrames, sameRect, windowOrigin } from "./DesktopFrames.ts";
@@ -466,6 +466,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       ? bound.snapshotId
       : undefined;
   let retired = false;
+  const warnings: string[] = [];
   let readWindow = bound.windowId;
   const read = Effect.fn("DesktopObserveLatency.read")(function* (
     limit: number,
@@ -498,6 +499,9 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       context,
     );
     driverMs += elapsed(sentAt, yield* Clock.currentTimeMillis);
+    const warning = focusRestorationWarning(driverValue(reply));
+    if (warning && !warnings.includes(warning) && warnings.length < 4)
+      warnings.push(warning.slice(0, 200));
     return reply;
   });
   // A read that ran retired the driver's earlier tokens, so their refs go even when its
@@ -598,7 +602,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     ? (boundsOf(state.window_bounds) ??
       bound.boundWindows?.find((w) => w.window_id === expectedWindowId)?.bounds)
     : bound.windowBounds;
-  const rawBudget = observationReplyBudget(call, context.limits);
+  const warningBytes = warnings.length ? Buffer.byteLength(JSON.stringify({ warnings })) : 0;
+  const rawBudget = observationReplyBudget(call, context.limits, warningBytes);
   // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the tree's
   // observation, rows and frames stay and the reply's tree is not read at all. Any other read
   // has retired them in the driver, so the old refs go now, before a render that may fail.
@@ -770,7 +775,11 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       });
       return {
         value: withObserveTiming(
-          { ...observation, ...(snapshotId === undefined ? {} : { snapshot: snapshotId }) },
+          {
+            ...observation,
+            ...(snapshotId === undefined ? {} : { snapshot: snapshotId }),
+            ...(warnings.length ? { warnings } : {}),
+          },
           timing,
           rawBudget,
         ),

@@ -468,7 +468,11 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       ...hopsPhase(call),
     },
   };
-  const upgrade = proven && base?.category !== "confirmed" && base?.category !== "refused";
+  const upgrade =
+    proven &&
+    base?.category !== "confirmed" &&
+    base?.category !== "refused" &&
+    base?.category !== "suspected_noop";
   // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
   const unproven = closing && !closedByClose && base?.category === "confirmed";
   return {

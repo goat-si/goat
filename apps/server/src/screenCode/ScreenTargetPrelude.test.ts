@@ -156,6 +156,41 @@ const formTab = {
   controlGeneration: 0,
 };
 
+it.live("a tab click returns a compact Done", () => {
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>() =>
+      Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+        effect: "unverifiable",
+        evidence: [],
+      } as A),
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); await tab.claim(); const plain = await tab.click('button'); const verified = await tab.click('button', {verify: true}); return {plain, verified};",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: {
+          status: "completed",
+          value: {
+            plain: { ok: true, verdict: "unverifiable" },
+            verified: { result: { debug: { evidence: expect.any(Array) } } },
+          },
+        },
+      });
+      if (result?._tag === "Success") {
+        const value = result.success.value as { plain: unknown };
+        expect(value.plain).toEqual({ ok: true, verdict: "unverifiable" });
+        expect(Buffer.byteLength(JSON.stringify(value.plain))).toBeLessThanOrEqual(200);
+      }
+    }),
+  );
+});
+
 it.live("a tab target can be bound again in a later cell by its identity or tabId", () => {
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
     listBoundTabs: () => Effect.succeed([formTab]),
@@ -596,6 +631,7 @@ it.live(
       const [result] = yield* runCells(broker, [
         `const tab = await screen.tab({tabId: 'form'});
         await tab.claim();
+        screen.debug = true;
         const done = await tab.click('#submit', { count: 2 });
         const empty = await tab.click('#empty');
         const none = await tab.click('#none');
@@ -603,8 +639,8 @@ it.live(
         const refused = [];
         for (const attempt of [() => tab.click('#submit', { count: 4 }), () => tab.click({ selector: '#submit', count: 9 })])
           try { await attempt(); } catch (error) { refused.push([error.code, error.nothingSent]); }
-        return { ms: typeof done.ms, driverMs: typeof done.phases?.driverMs, raw: done.result?._timing,
-          empty: empty.result, none: 'result' in none, noneMs: typeof none.ms, legacy, refused };`,
+        return { ms: typeof done.result.debug.value._timing?.ms, driverMs: typeof done.result.debug.value._timing?.phases?.driverMs, raw: undefined,
+          empty: empty.result.debug.value, none: none.result.debug.value?._noResult !== true, noneMs: typeof none.result.debug.value?._timing?.ms, legacy, refused };`,
       ]);
       expect(result).toMatchObject({
         _tag: "Success",
@@ -616,7 +652,7 @@ it.live(
             empty: {},
             none: false,
             noneMs: "number",
-            legacy: { ok: true },
+            legacy: { ok: true, verdict: "unverifiable" },
             refused: [
               ["invalid_argument", true],
               ["invalid_argument", true],

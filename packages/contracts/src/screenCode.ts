@@ -292,6 +292,7 @@ export const ScreenObservation = Schema.Struct({
   ).check(Schema.isMaxLength(4096)),
   image: Schema.optionalKey(ScreenImageMetadata),
   resetReason: Schema.optionalKey(text(200)),
+  warnings: Schema.optionalKey(Schema.Array(text(200)).check(Schema.isMaxLength(4))),
   /** What the observation covered: the whole window or page, interactive controls, or a scope. */
   scope: Schema.optionalKey(text(1024)),
   /** Regions the observation could not include, so absence there proves nothing. */
@@ -453,6 +454,8 @@ export const ScreenHostReply = strict(
     error: Schema.optionalKey(ScreenRunError),
     /** The call's receipt category, so a Target method can report what the host confirmed. */
     category: Schema.optionalKey(ScreenEffectReceipt.fields.category),
+    evidence: Schema.optionalKey(Schema.Array(Schema.String)),
+    warnings: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 export type ScreenHostReply = typeof ScreenHostReply.Type;

@@ -8,6 +8,7 @@ import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
 export const screenTargetPrelude = (methods: ReadonlyArray<string>): string => String.raw`
 var __screenValues = Object.create(null);
 var __screenResults = [];
+let __debug = false;
 const __values = new Proxy(__screenValues, {
   set(target, key, value) {
     const json = JSON.stringify(value);
@@ -102,7 +103,7 @@ const __checked = async (method, arg, queued = false) => {
     throw error;
   }
 };
-const __verdict = (reply) => (reply.c === 'confirmed' ? 'confirmed' : 'unverifiable');
+const __verdict = (reply) => reply.c === 'confirmed' ? 'confirmed' : reply.c === 'suspected_noop' ? 'suspected_noop' : 'unverifiable';
 const __keys = (key, tab) => {
   const parts = key === '+' ? ['+'] : key.split('+').filter((part) => part.length > 0);
   const last = parts.pop() ?? key;
@@ -163,33 +164,27 @@ const __target = (binding, note, owner, extraProps = {}) => {
       !('coordinate_space' in arg)
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
-    return __call(method, { ...withRegion, targetRef: ref });
+    const args = { ...withRegion, targetRef: ref };
+    return __inputs.has(method) ? __reply(method, [args]).then((reply) => done(reply, args)) : __call(method, args);
   };
-  const act = async (name, method, arg) => {
+  const act = async (name, method, arg, verify = false) => {
     if (tab && method !== 'click' && method !== 'right_click') retire();
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (__batchWithoutTarget.has(method) || arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
-    if (reply.v === undefined) return { verdict };
-    const isObj = reply.v !== null && typeof reply.v === 'object' && !Array.isArray(reply.v);
-    const observed = isObj && Array.isArray(reply.v._observed) ? reply.v._observed : undefined;
-    // The host's time for this call rides in _timing and comes out on Done as ms and phases.
-    const timing = isObj && reply.v._timing && typeof reply.v._timing === 'object' ? reply.v._timing : undefined;
-    let cleanResult = reply.v;
-    if (isObj && ('_observed' in reply.v || '_timing' in reply.v || '_noResult' in reply.v)) {
-      const { _observed: _omitted, _timing: _timed, _noResult: _none, ...rest } = reply.v;
-      cleanResult = rest;
-    }
-    const extra =
-      isObj
-        ? {
-            ...(timing ? { ms: timing.ms, phases: timing.phases } : {}),
-            ...(observed && observed.length > 0 ? { observed } : {}),
-            ...('point' in reply.v ? { point: reply.v.point } : {}),
-            ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
-          }
-        : {};
-    return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
+    return done(reply, arg, verify);
+  };
+  const done = (reply, arg, verify = false) => {
+    const verdict = __verdict(reply);
+    const value = reply.v;
+    const isObj = value !== null && typeof value === 'object' && !Array.isArray(value);
+    const observed = [...(isObj && Array.isArray(value._observed) ? value._observed : []), ...(reply.e ?? [])];
+    const opened = [...new Set(observed.filter((line) => /^observed:window_opened:\d{1,16}$/.test(line)).map((line) => line.split(':')[2]))];
+    const closed = observed.includes('observed:window_closed') && currentWindowId !== undefined ? [String(currentWindowId)] : [];
+    const note = [opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
+    const debug = __debug || arg.verify === true || verify;
+    return { ok: true, verdict, ...(note ? { note } : {}), ...(reply.w?.length ? { warnings: reply.w } : {}), ...(debug ? { result: { debug: { value, evidence: reply.e ?? [] } } } : {}) };
+
   };
   const checkEmptyTarget = (target) => {
     if (target === undefined || target === null ||
@@ -394,7 +389,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         return call('click', target);
       }
       // timeoutMs is a tab's wait for its target; action names an app's accessibility action.
-      options = __only('click options', options, ['button', 'count', 'send', ...(tab ? ['timeoutMs'] : ['action', 'verify', 'modifiers'])]);
+      options = __only('click options', options, ['button', 'count', 'send', 'verify', ...(tab ? ['timeoutMs'] : ['action', 'modifiers'])]);
       if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
         throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);
       if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
@@ -410,7 +405,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
           ...(!tab && options.modifiers !== undefined ? { modifiers: options.modifiers } : {}),
           ...(!tab && options.verify === true ? { verify: true } : {}),
-        });
+        }, options.verify === true);
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     // Tabs move the pointer over the target, which shows hover-only controls; apps cannot yet.
@@ -423,7 +418,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       });
     },
     type: (text, target, options = {}) => {
-      options = __only('type options', options, tab ? ['send'] : ['send', 'replace', 'verify']);
+      options = __only('type options', options, tab ? ['send', 'verify'] : ['send', 'replace', 'verify']);
       if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Click the point first, then type without a target.', true);
       const run = () =>
@@ -433,7 +428,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(!tab && options && options.replace === true ? { replace: true } : {}),
           ...(!tab && options && options.send === true ? { send: true } : {}),
           ...(!tab && options && options.verify === true ? { verify: true } : {}),
-        });
+        }, options.verify === true);
       return target !== undefined && needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     press: async (key, target, options = {}) => {
@@ -442,7 +437,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
         !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
-      const actualOpts = __only('press options', targetIsSendOpts ? target : options, tab ? ['send', 'holdMs'] : ['send', 'verify', 'holdMs']);
+      const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs']);
       if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))
         throw new ScreenError('invalid_argument', 'holdMs must be an integer from 0 to 30000; nothing was sent.', true);
       if (tab && actualOpts.holdMs !== undefined)
@@ -457,7 +452,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ...(!tab && actualOpts && actualOpts.send === true ? { send: true } : {}),
         ...(!tab && actualOpts && actualOpts.verify === true ? { verify: true } : {}),
         ...(!tab && actualOpts.holdMs !== undefined ? { holdMs: actualOpts.holdMs } : {}),
-      });
+      }, actualOpts.verify === true);
     },
     scroll: (target, direction, amount = 3) => {
       if (typeof direction !== 'string') { checkEmptyTarget(target); return call('scroll', target); }
@@ -487,7 +482,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     drag: (...args) => {
       let [from, to, options = {}] = args;
       if (args.length < 2) { checkEmptyTarget(from); return call('drag', from); }
-      options = __only('drag options', options, tab ? ['send'] : ['send', 'verify']);
+      options = __only('drag options', options, ['send', 'verify']);
       checkTarget(from);
       checkTarget(to);
       if (tab) {
@@ -495,12 +490,12 @@ const __target = (binding, note, owner, extraProps = {}) => {
         const target = aim(to);
         // A map or canvas drags between two screenshot points; an element and a point do not mix.
         if (source.point && target.point)
-          return act('drag', 'drag', { point: source.point, toPoint: target.point });
+          return act('drag', 'drag', { point: source.point, toPoint: target.point }, options.verify === true);
         if (source.point || target.point) throw new ScreenError('unsupported', 'Drag between two elements or two points [x, y].', true);
         return act('drag', 'drag', {
           ...(source.ref ? { sourceRef: source.ref } : { sourceSelector: source.selector }),
           ...(target.ref ? { destinationRef: target.ref } : { destinationSelector: target.selector }),
-        });
+        }, options.verify === true);
       }
       const run = () =>
         act('drag', 'drag', {
@@ -733,6 +728,7 @@ const __launch = async (query = {}) => {
 };
 globalThis.ScreenError = ScreenError;
 globalThis.screen = Object.freeze({ values: __values, state: {},
+  get debug() { return __debug; }, set debug(value) { __debug = value === true; },
   discover: async () => {
     const result = { apps: [], windows: [], tabs: [], unavailable: {} };
     try { result.apps = await __call('list_apps', {}); result.windows = await __call('list_windows', {}); }
