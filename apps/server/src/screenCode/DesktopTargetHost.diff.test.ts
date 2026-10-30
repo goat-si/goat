@@ -907,3 +907,54 @@ it.live("a full-read fallback after input does not attach observation evidence",
     ),
   );
 });
+
+it.live("an observation through a second binding covers input to the same window", () => {
+  let reads = 0;
+  const { host } = fixture({
+    click: { effect: "unverifiable" },
+    get_window_state: (args: Record<string, unknown>) => {
+      const snapshot = `s${++reads}`;
+      const old = goat2WindowState(args);
+      const full = {
+        ...old,
+        snapshot_id: snapshot,
+        elements:
+          "elements" in old
+            ? old.elements?.map((item) => ({
+                ...item,
+                element_token: `${snapshot}:${item.element_index}`,
+              }))
+            : undefined,
+      };
+      return args.since === undefined
+        ? full
+        : { ...full, since_status: "diff", tree_diff: '~ AXStaticText = "8"' };
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const a = await screen.app({bundle_id:'org.example.Editor', window_id:7}); const b = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await a.observe(); await b.observe(); await a.click(1); return await b.observe();`,
+    });
+    expect(result.value).toMatchObject({ effect: 'after click: changed (~ AXStaticText = "8")' });
+    expect(
+      result.journal.find((entry) => entry.receipt.method === "click")?.receipt.observedEffect,
+    ).toMatchObject({ state: "change_seen" });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
