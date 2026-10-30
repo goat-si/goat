@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   manifestApplied,
+  browserReplyOutsideClaim,
   scopeBrowserCall,
   refusesClaimedBrowserDesktopCall,
   supportsBrowserClaims,
@@ -47,6 +48,13 @@ it("requires the applied manifest hash and no reload error", () => {
     ),
   ).toBe(false);
   expect(manifestApplied({}, hash)).toBe(false);
+});
+
+it("detects an out-of-scope claimed tab reply without treating redacted other tabs as evidence", () => {
+  const claim = { claimId: "claim-1", claimGeneration: 1, pid: 42, windowId: 7, tabId: "tab-1", origins: ["https://example.test"] };
+  expect(browserReplyOutsideClaim({ structuredContent: { refusal: { code: "browser_origin_outside_scope" } } }, claim)).toBe(true);
+  expect(browserReplyOutsideClaim({ structuredContent: { tab_id: "tab-1", url: "https://other.test/secret" } }, claim)).toBe(true);
+  expect(browserReplyOutsideClaim({ structuredContent: { tabs: [{ tab_id: "tab-1", url: "https://example.test/" }, { tab_id: "tab-2", active: false }] } }, claim)).toBe(false);
 });
 
 it("limits browser calls to the claimed tab and replaces caller supplied origin scopes", () => {
