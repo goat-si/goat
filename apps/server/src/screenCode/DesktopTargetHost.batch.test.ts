@@ -25,6 +25,8 @@ const cellService = (host: ReturnType<typeof fixture>["host"], groups?: string[]
               ...host,
               dispatchBatch: (calls, context, mark) => {
                 groups.push(calls.map((call) => call.method));
+                if (host.dispatchBatch === undefined)
+                  throw new Error("Missing desktop batch dispatcher");
                 return host.dispatchBatch(calls, context, mark);
               },
             },
