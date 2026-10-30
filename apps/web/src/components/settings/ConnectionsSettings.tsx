@@ -811,7 +811,7 @@ export function ConnectionsSettings() {
     actions: {
       onTurnOnNetworkAccess: () => setPendingDesktopServerExposureMode("network-accessible"),
       onTurnOnTailscaleHttps: handleStartTailscaleServeSetup,
-      onTurnOffTailscaleHttps: handleStartTailscaleServeDisable,
+      onTurnOffTailscaleHttps: () => setDisableTailscaleServeDialogOpen(true),
     },
   };
   const renderAuthorizedClients = (presentation: AccessSectionPresentation) => (

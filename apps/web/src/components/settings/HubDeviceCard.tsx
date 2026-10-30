@@ -56,7 +56,7 @@ type HubDeviceCardProps = {
   /** Null outside the desktop app or while it loads. */
   readonly exposureState: DesktopServerExposureState | null;
   readonly connectActions: ConnectReachabilityActions & {
-    readonly onTurnOffTailscaleHttps: (endpoint: AdvertisedEndpoint) => void;
+    readonly onTurnOffTailscaleHttps: () => void;
   };
   readonly isNetworkAccessPending: boolean;
   readonly networkAccessError: string | null;
@@ -190,26 +190,30 @@ export function HubDeviceCard({
     if (next && target?.kind === "tailscale-https") void issueCredential(target);
   }
 
+  // The saved setting drives the switch, so a Serve that stopped answering can still be turned off.
+  const serveOn = exposure?.tailscaleServeEnabled ?? false;
   const tailscaleRow = showTailscaleRow ? (
     <SettingsRow
       title={searchableSetting("tailscale-https").title}
       description={
-        tailscaleHttpsEndpoint
-          ? tailscaleHttpsEndpoint.status === "available"
-            ? tailscaleHttpsEndpoint.httpBaseUrl
-            : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-          : missingTailscaleEndpointDescription(exposureState)
+        tailscaleHttpsEndpoint?.status === "available"
+          ? tailscaleHttpsEndpoint.httpBaseUrl
+          : serveOn
+            ? "Tailscale HTTPS is on, but Tailscale is not answering."
+            : tailscaleHttpsEndpoint
+              ? "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
+              : missingTailscaleEndpointDescription(exposureState)
       }
       control={
-        tailscaleHttpsEndpoint ? (
+        tailscaleHttpsEndpoint || serveOn ? (
           <Switch
-            checked={tailscaleHttpsEndpoint.status === "available"}
+            checked={serveOn || tailscaleHttpsEndpoint?.status === "available"}
             disabled={isNetworkAccessPending}
-            onCheckedChange={(checked) =>
-              checked
-                ? connectActions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint)
-                : connectActions.onTurnOffTailscaleHttps(tailscaleHttpsEndpoint)
-            }
+            onCheckedChange={(checked) => {
+              if (!checked) connectActions.onTurnOffTailscaleHttps();
+              else if (tailscaleHttpsEndpoint)
+                connectActions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint);
+            }}
             aria-label="Enable Tailscale HTTPS"
           />
         ) : connectReachabilityStep(exposure, null) === "network-access" ? (

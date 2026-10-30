@@ -20,6 +20,7 @@ import {
 } from "./connectFlowResume";
 import { HubDeviceCard } from "./HubDeviceCard";
 import { pairingLinkConnectFlow } from "./PairingLinkConnectFlow";
+import "../../index.css";
 
 const mocks = vi.hoisted(() => ({ createCredential: vi.fn() }));
 vi.mock("~/environments/primary", async (importOriginal) => ({
@@ -124,7 +125,7 @@ it("phone QR: turning on Network access reopens the QR dialog once, only after a
   {
     await using _screen = await render(<Card connectActions={actions} />, { router: false });
     await page.getByRole("button", { name: "Show phone QR" }).click();
-    await expect.element(dialog().getByText("GOAT restarts to apply this")).toBeVisible();
+    await expect.element(dialog().getByText(/GOAT restarts to apply this/)).toBeVisible();
     await dialog().getByRole("button", { name: "Turn on Network access" }).click();
     expect(actions.onTurnOnNetworkAccess).toHaveBeenCalledTimes(1);
     await expect.element(dialog()).not.toBeInTheDocument();
@@ -144,7 +145,7 @@ it("phone QR: turning on Network access reopens the QR dialog once, only after a
       <Card connectActions={actions} exposureState={null} isNetworkAccessPending />,
       { router: false },
     );
-    await expect.element(dialog().getByText("Checking network settings")).toBeVisible();
+    await expect.element(dialog().getByText(/Checking network settings/)).toBeVisible();
     await screen.rerender(
       <Card
         connectActions={actions}
@@ -166,7 +167,7 @@ it("phone QR: turning on Network access reopens the QR dialog once, only after a
   }
 });
 
-it("phone QR: offers Tailscale HTTPS only while Serve is off, and explains an unreachable Serve", async () => {
+it("phone QR: offers Tailscale HTTPS only while Serve is off; an unreachable Serve is explained and can be turned off", async () => {
   const actions = setup();
   {
     await using _screen = await render(
@@ -191,8 +192,29 @@ it("phone QR: offers Tailscale HTTPS only while Serve is off, and explains an un
       { router: false },
     );
     await page.getByRole("button", { name: "Show phone QR" }).click();
-    await expect.element(dialog().getByText("Tailscale is not answering")).toBeVisible();
+    await expect.element(dialog().getByText(/Tailscale is not answering/)).toBeVisible();
     expect(dialog().getByRole("button", { name: "Turn on Tailscale HTTPS" }).query()).toBeNull();
+    await dialog().getByRole("button", { name: "Done" }).click();
+    // The switch follows the saved setting, so an unreachable Serve can still be turned off.
+    const serveSwitch = page.getByRole("switch", { name: "Enable Tailscale HTTPS" });
+    await expect.element(serveSwitch).toBeChecked();
+    await serveSwitch.click();
+    expect(actions.onTurnOffTailscaleHttps).toHaveBeenCalledTimes(1);
+  }
+  {
+    // With Network access off, turning it on still gives a local network path.
+    await using _screen = await render(
+      <Card
+        connectActions={actions}
+        endpoints={[httpsUnreachable]}
+        exposureState={exposure("local-only", true)}
+      />,
+      { router: false },
+    );
+    await page.getByRole("button", { name: "Show phone QR" }).click();
+    await expect
+      .element(dialog().getByRole("button", { name: "Turn on Network access" }))
+      .toBeVisible();
   }
 });
 

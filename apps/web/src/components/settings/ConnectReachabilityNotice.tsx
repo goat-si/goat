@@ -19,9 +19,9 @@ export function connectReachabilityStep(
   tailscaleHttpsEndpoint: AdvertisedEndpoint | null,
 ): ConnectReachabilityStep | null {
   if (state === null || tailscaleHttpsEndpoint?.status === "available") return null;
+  if (state.mode === "local-only") return "network-access";
   // Serve already on but unreachable: enabling it again would not restart or fix anything.
   if (state.tailscaleServeEnabled) return "tailscale-unreachable";
-  if (state.mode === "local-only") return "network-access";
   return tailscaleHttpsEndpoint ? "tailscale-https" : null;
 }
 
