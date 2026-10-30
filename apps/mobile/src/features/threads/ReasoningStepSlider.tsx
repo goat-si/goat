@@ -11,7 +11,11 @@ const THUMB_SIZE = 32;
 /** The web composer's effort slider: a dotted track whose thumb snaps between the model's steps. */
 export function ReasoningStepSlider(props: {
   readonly label: string;
-  readonly steps: ReadonlyArray<{ readonly id: string; readonly label: string }>;
+  readonly steps: ReadonlyArray<{
+    readonly id: string;
+    readonly label: string;
+    readonly isDefault?: boolean | undefined;
+  }>;
   readonly index: number;
   readonly disabled: boolean;
   /** The step under the finger while dragging, null when the drag ends. */
@@ -76,7 +80,13 @@ export function ReasoningStepSlider(props: {
         accessible
         accessibilityRole="adjustable"
         accessibilityLabel={props.label}
-        accessibilityValue={{ text: props.steps[shown]?.label ?? "" }}
+        accessibilityValue={{
+          min: 0,
+          max: Math.max(0, count - 1),
+          now: shown,
+          text:
+            (props.steps[shown]?.label ?? "") + (props.steps[shown]?.isDefault ? " · Default" : ""),
+        }}
         accessibilityState={{ disabled: props.disabled }}
         accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
         onAccessibilityAction={({ nativeEvent }) => {

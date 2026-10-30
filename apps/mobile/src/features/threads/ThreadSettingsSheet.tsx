@@ -77,8 +77,8 @@ function ThreadSettingsPopover(
     <ThreadSettingsSessionProvider {...props}>
       <ScreenContent fitToContents>
         <ScrollView
-          className="bg-sheet"
-          style={{ flexGrow: 0, maxHeight: height * 0.85 }}
+          className="bg-sheet ios:flex-1"
+          style={Platform.OS === "android" ? { flexGrow: 0, maxHeight: height * 0.85 } : undefined}
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) }}
           showsVerticalScrollIndicator={false}
         >
