@@ -1018,6 +1018,7 @@ vi.mock("../threads/use-thread-list-v2-shelf-preferences", () => ({
 }));
 vi.mock("../threads/use-thread-list-v2-launch-groups", () => ({
   useThreadListV2LaunchGroups: () => ({ loaded: true, toggle() {}, showAll() {}, reveal() {} }),
+  useRevealLaunchGroups: () => {},
 }));
 vi.mock("../threads/thread-list-v2-items", () => ({
   ThreadListV2Row: (props: { thread: EnvironmentThreadShell }) => <p>{props.thread.title}</p>,

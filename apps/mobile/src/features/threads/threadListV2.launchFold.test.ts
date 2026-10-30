@@ -197,6 +197,50 @@ describe("mobile thread list launch folds", () => {
     );
   });
 
+  it("keeps a launcher's own request ahead of one waiting under it", () => {
+    expect(liftedThreadListV2Status("input", "approval")).toBe("input");
+    expect(liftedThreadListV2Status("approval", "input")).toBe("approval");
+    expect(liftedThreadListV2Status("working", "input")).toBe("input");
+    expect(liftedThreadListV2Status("ready", "working")).toBe("ready");
+  });
+
+  it("keeps a launch group with its launcher at a shelf boundary", () => {
+    const layout = layoutOf(
+      [
+        shell("launcher"),
+        shell("done", { launchedBy: "launcher" }),
+        shell("busy-elsewhere", { running: true }),
+      ],
+      { workingShelfEnabled: true, workingShelfExpanded: true },
+    );
+    const list = buildThreadListV2ListItems({
+      items: layout.items,
+      launchMarkers: layout.launchMarkers,
+      pendingTasks: [],
+      workingCount: layout.workingCount,
+      workingShelfExpanded: true,
+      workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+    });
+    expect(list.map((item) => item.type)).toEqual([
+      "v2-thread",
+      "v2-launch-group",
+      "v2-working-shelf",
+      "v2-thread",
+    ]);
+  });
+
+  it("lists a settled launcher once work folded under it has loaded", () => {
+    const layout = layoutOf(
+      [
+        shell("launcher", { settled: true }),
+        shell("done", { launchedBy: "launcher", settled: true }),
+      ],
+      { isListedSettled: (thread) => thread.id === "done", settledShelfExpanded: true },
+    );
+    expect(layout.listedSettledThreads.map((thread) => String(thread.id))).toEqual(["launcher"]);
+    expect(rows(layout)).toEqual(["launcher"]);
+  });
+
   it("marks a launcher unread for unread work folded under it, settled work included", () => {
     const active = layoutOf([
       shell("launcher"),

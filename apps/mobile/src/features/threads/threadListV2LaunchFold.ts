@@ -214,13 +214,13 @@ export function sortLiftedThreads(
     .map((entry) => entry.thread);
 }
 
-/** A row's status with a request waiting in work folded under it, as a subagent's would read. */
+/** A row's status with a request waiting in work folded under it; its own requests come first. */
 export function liftedThreadListV2Status<S extends string>(
   status: S,
   lift: LaunchLift | null | undefined,
 ): S | "approval" | "input" {
-  if (status === "approval" || lift === "approval") return "approval";
-  if (status === "input" || lift === "input") return "input";
+  if (status === "approval" || status === "input") return status;
+  if (lift === "approval" || lift === "input") return lift;
   return status;
 }
 

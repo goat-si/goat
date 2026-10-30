@@ -1,7 +1,7 @@
 import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
@@ -16,7 +16,10 @@ import {
 } from "./threadListV2";
 import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
 import { computeThreadMoveAvailability } from "./threadOrder";
-import { useThreadListV2LaunchGroups } from "./use-thread-list-v2-launch-groups";
+import {
+  useRevealLaunchGroups,
+  useThreadListV2LaunchGroups,
+} from "./use-thread-list-v2-launch-groups";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -155,13 +158,7 @@ export function useThreadListV2(input: {
     ),
   });
   useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);
-  const revealKeys = layout.launchRevealKeys.join("\n");
-  const { reveal } = launchGroups;
-  // oxlint-disable-next-line goat/react-effect-budget -- Selecting a folded thread writes its groups' expansion to device preferences, so they stay open after it.
-  useEffect(() => {
-    if (revealKeys.length > 0) reveal(revealKeys.split("\n"));
-    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- reveal is rebuilt each render; the keys decide.
-  }, [revealKeys]);
+  useRevealLaunchGroups(launchGroups, layout.launchRevealKeys);
   const contentOnlyThreadKeys = useKeySet([...layout.contentOnlyThreadKeys].sort().join("\n"));
   const scopedProjectKeys =
     input.projectRefs == null

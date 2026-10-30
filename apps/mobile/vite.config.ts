@@ -14,6 +14,7 @@ const reactTests = [
   "src/widgets/useSubscriptionUsage.test.tsx",
   "src/features/threads/use-visible-second-clock.test.tsx",
   "src/features/threads/useThreadListV2.test.tsx",
+  "src/features/threads/use-thread-list-v2-launch-groups.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",
   "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
   "src/features/cloud/AccountDeletionSection.test.tsx",

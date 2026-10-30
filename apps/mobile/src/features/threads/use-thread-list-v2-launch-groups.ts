@@ -1,6 +1,6 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import type { ThreadListV2LaunchGroupState } from "./threadListV2LaunchFold";
@@ -51,6 +51,11 @@ export function useThreadListV2LaunchGroups(selectedThreadKey: string | null) {
   const expanded =
     (loaded ? preferencesResult.value.threadListLaunchGroupsExpanded : undefined) ?? NO_EXPANDED;
   const current = useSyncExternalStore(subscribe, readSession, readSession);
+  // oxlint-disable-next-line goat/react-effect-budget -- The shared session forgets a collapse made for the previous selection once the selection changes.
+  useEffect(() => {
+    if (session.route !== selectedThreadKey)
+      setSession({ ...session, route: selectedThreadKey, routeCollapsed: NO_KEYS });
+  }, [selectedThreadKey]);
   const state: ThreadListV2LaunchGroupState = {
     expanded,
     showAll: current.showAll,
@@ -94,4 +99,21 @@ export function useThreadListV2LaunchGroups(selectedThreadKey: string | null) {
       });
     },
   };
+}
+
+/**
+ * Remembers the groups above a selected folded thread once preferences load, so they stay open
+ * after it. `keys` are the layout's launchRevealKeys.
+ */
+export function useRevealLaunchGroups(
+  groups: Pick<ReturnType<typeof useThreadListV2LaunchGroups>, "loaded" | "reveal">,
+  keys: readonly string[],
+) {
+  const joined = keys.join("\n");
+  const { loaded, reveal } = groups;
+  // oxlint-disable-next-line goat/react-effect-budget -- Selecting a folded thread writes its groups' expansion to device preferences, so they stay open after it.
+  useEffect(() => {
+    if (loaded && joined.length > 0) reveal(joined.split("\n"));
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- reveal is rebuilt each render; the keys and loading decide.
+  }, [joined, loaded]);
 }
