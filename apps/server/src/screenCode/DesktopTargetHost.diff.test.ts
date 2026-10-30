@@ -124,6 +124,63 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
   }),
 );
 
+it.effect(
+  "a desktop diff keeps unnumbered and multi-line rows and drops the driver's token header",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const { host } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          reads++;
+          const snapshot = `s${reads}`;
+          const old = goat2WindowState(args);
+          const full = {
+            ...old,
+            snapshot_id: snapshot,
+            elements:
+              "elements" in old
+                ? old.elements?.map((item) => ({
+                    ...item,
+                    element_token: `${snapshot}:${item.element_index}`,
+                  }))
+                : undefined,
+          };
+          if (args.since === undefined) return full;
+          const { tree_markdown: _tree, ...diff } = full;
+          return {
+            ...diff,
+            since_status: "diff",
+            tree_diff: [
+              "since s1: 0 added, 2 changed, 0 removed. Use element_tokens s2:N for + and ~ rows and unchanged rows; - ids are from s1.",
+              '~ AXStaticText = "8"',
+              '~ [1] AXButton "Apply" [actions=[press,name:move',
+              "target:0x0]]",
+            ].join("\n"),
+          };
+        },
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observe = (args: Record<string, string>) =>
+        host
+          .observe(call("get_accessibility_tree", args, ref), context)
+          .pipe(Effect.map((result) => result.value as Observed));
+      const full = yield* observe({});
+      const diff = yield* observe({ mode: "diff", baseObservationId: full.observationId });
+      expect(diff.indexedText).toBe(
+        [
+          '~ AXStaticText = "8"',
+          '~ [1] AXButton "Apply" [actions=[press,name:move',
+          "target:0x0]]",
+          `other numbers unchanged; latest full observation is ${full.observationId}`,
+        ].join("\n"),
+      );
+    }),
+);
+
 it.effect("a diff after a filtered observation reads the whole window", () =>
   Effect.gen(function* () {
     const { host, sent } = fixture({

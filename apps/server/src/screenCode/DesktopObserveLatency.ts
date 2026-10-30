@@ -308,6 +308,18 @@ const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
   };
 });
 
+/** The driver's diff rows as the model reads them: its header and hints name tokens it never sees. */
+const modelDiffRows = (diffText: string) =>
+  diffText
+    .split("\n")
+    .filter((line) => !/^since \S+: \d+ added|^Rows and indices are as before/.test(line))
+    .map((line) =>
+      line.startsWith("reindexed: more shifted ranges")
+        ? "reindexed: more ranges shifted; observe({diff:false}) for a fresh index"
+        : line,
+    )
+    .join("\n");
+
 export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(function* (
   deps: DesktopObserveDeps,
   bound: BoundWindow,
@@ -550,12 +562,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               shownText: isDiff
                 ? currentStatus === "no_change"
                   ? `no change; numbers unchanged; latest full observation is ${bound.fullObservationId}`
-                  : `${diffText
-                      .split("\n")
-                      .filter((line) => /^[+~-] \[\d+\]|^reindexed:/.test(line))
-                      .join(
-                        "\n",
-                      )}\nother numbers unchanged; latest full observation is ${bound.fullObservationId}`
+                  : `${modelDiffRows(diffText)}\nother numbers unchanged; latest full observation is ${bound.fullObservationId}`
                 : tree.shownText,
               omitted,
               screen,
