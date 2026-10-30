@@ -759,7 +759,7 @@ it.live(
         expect(result.value).toMatchObject({
           pageText: '- button "Add Element" [0]\n- link "Home" [1]',
           clicks: ["unverifiable", "unverifiable", "unverifiable", "unverifiable"],
-          tabNote: true,
+          tabNote: false,
           // An app point needs a current screenshot; nothing goes to the driver without one.
           pointRefusal: { code: "invalid_argument", nothingSent: true },
           dragged: "unverifiable",

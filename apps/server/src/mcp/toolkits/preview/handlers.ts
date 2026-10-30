@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  OrchestratorMcpFailure,
   PREVIEW_RECORDING_STOP_TIMEOUT_MS,
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
@@ -40,7 +41,19 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { browserGuideFor } from "../../../preview/BrowserGuide.ts";
+import * as SiteNotes from "../../../preview/SiteNotes.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
+
+const requireSiteNotes = Effect.serviceOption(SiteNotes.SiteNotes).pipe(
+  Effect.flatMap(Effect.fromOption),
+  Effect.mapError(
+    () =>
+      new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: "Site notes are unavailable.",
+      }),
+  ),
+);
 
 /** Whether a preview the agent
  * said nothing about surfaces is the user's `browserAutoShowFloatingPreview`
@@ -164,10 +177,12 @@ const browserGuide = Effect.fn("PreviewToolkit.browserGuide")(function* (
   const invocation = yield* McpInvocationContext.McpInvocationContext;
   if (invocation.thread === undefined) return {};
   const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const notes = yield* requireSiteNotes;
   const guide = browserGuideFor(
     config._tag === "Some" ? config.value.stateDir : undefined,
     invocation.thread.threadId,
     "url" in result && typeof result.url === "string" ? result.url : undefined,
+    notes.deliverOnce,
   );
   return guide === undefined ? {} : { guide };
 });
@@ -269,6 +284,39 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
 });
 
 const handlers = {
+  goat_browser_site_note_read: McpToolAccess.readsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
+      const notes = yield* requireSiteNotes;
+      if (!notes.hasTouched(scope.thread.threadId, input.origin))
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Site notes are readable only for sites this thread has opened.",
+        });
+      return { note: notes.noteFor(input.origin) ?? null };
+    }),
+  ),
+  goat_browser_site_note_write: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
+      const notes = yield* requireSiteNotes;
+      yield* notes.writeAgent(scope.thread.threadId, input).pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({
+              code: error._tag === "SiteNoteError" ? "invalid_request" : "orchestration_error",
+              message:
+                error._tag === "SiteNoteError"
+                  ? error.reason === "secret"
+                    ? "Do not save secrets in site notes; use goat_preview_fill_secret for passwords or handoff.create for other secrets."
+                    : `Site note rejected: ${error.reason}.`
+                  : "Site note storage failed.",
+            }),
+        ),
+      );
+      return { ok: true as const };
+    }),
+  ),
   preview_dialog: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) => invokeTargeted<PreviewAutomationStatus>("dialog", input)),
   ),

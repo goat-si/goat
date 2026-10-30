@@ -1,6 +1,36 @@
 import { entry } from "../entry.ts";
 
 export const previewEntries = {
+  "browser_site_note.read": entry({
+    resource: "browser_site_note",
+    verb: "read",
+    name: "goat_browser_site_note_read",
+    toolkit: "preview",
+    summary: "Read a site's saved note",
+    description: "Read the saved browser note for an HTTP or HTTPS origin.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read site note", idempotentHint: true, openWorldHint: false },
+  }),
+  "browser_site_note.write": entry({
+    resource: "browser_site_note",
+    verb: "write",
+    name: "goat_browser_site_note_write",
+    toolkit: "preview",
+    summary: "Save a site's note",
+    description: "Save a note for an origin this thread has visited, up to 1024 UTF-8 bytes.",
+    effect: "write",
+    capability: "threads.launch",
+    idempotencyReason: "Replacing a note with the same text has the same result.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Save site note", idempotentHint: true, openWorldHint: false },
+  }),
   "preview.read": entry({
     resource: "preview",
     verb: "read",
