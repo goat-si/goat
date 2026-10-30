@@ -24,6 +24,8 @@ updatedBy: user # user or agent
 ---
 ```
 
+GOAT writes this header back on every save, so a note that had none gains one, and its keys may be reordered. The note's text below the header, including a byte order mark at the start of the file, is kept as you wrote it.
+
 The notes folder is a git repository. GOAT commits every change a couple of seconds after it lands, including edits made outside GOAT, so you can see who changed what and restore an older version with ordinary git commands.
 
 ## Editing

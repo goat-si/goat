@@ -951,7 +951,7 @@ it.effect("keeps a UTF-8 byte order mark through a body edit and leaves it out o
         "user",
       );
       const bytes = yield* fs.readFile(`${notesDir}/${name}`);
-      assert.deepStrictEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+      assert.deepStrictEqual(Array.from(bytes.subarray(0, 3)), [0xef, 0xbb, 0xbf]);
       assert.isTrue((yield* fs.readFileString(`${notesDir}/${name}`)).endsWith("more\n"));
     }
   }).pipe(Effect.provide(layer())),
