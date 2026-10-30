@@ -177,10 +177,8 @@ function NoteEditorPage({
   useEffect(() => {
     if (!ready) return;
     const replacement = bridge.sync(props.value);
-    if (replacement) {
-      send(replacement);
-      notePending();
-    }
+    // A replacement ends any resync; the next snapshot reply clears the pending state.
+    if (replacement) send(replacement);
     const config = JSON.stringify(props.config);
     if (config !== sentConfig.current) {
       sentConfig.current = config;

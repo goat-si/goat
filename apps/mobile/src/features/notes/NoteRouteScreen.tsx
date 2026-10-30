@@ -184,22 +184,22 @@ function NoteContent(props: NoteParams) {
     localBody.current = nextBody;
     setStatus(nextStatus);
     localStatus.current = nextStatus;
+    const edit = {
+      environmentId,
+      path: props.path,
+      body: nextBody,
+      status: nextStatus,
+      baseRevision: editBase.current,
+      localUpdatedAt: Date.now(),
+    };
+    // A focused editor skips the read after an acknowledged save; the outbox then bases this
+    // save on the hub's revision of the previous one.
+    const continues = savedSnapshot.current;
+    const enqueue = () =>
+      continues ? notesOutbox.enqueue(edit, continues) : notesOutbox.enqueue(edit);
     let stored = false;
     try {
-      // A focused editor skips the read after an acknowledged save; the outbox then bases this
-      // save on the hub's revision of the previous one.
-      const edit = {
-        environmentId,
-        path: props.path,
-        body: nextBody,
-        status: nextStatus,
-        baseRevision: editBase.current,
-        localUpdatedAt: Date.now(),
-      };
-      const continues = savedSnapshot.current;
-      editBase.current = await (continues
-        ? notesOutbox.enqueue(edit, continues)
-        : notesOutbox.enqueue(edit));
+      editBase.current = await enqueue();
       stored = true;
     } catch (error) {
       setDirty(true);

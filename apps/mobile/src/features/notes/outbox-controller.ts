@@ -198,15 +198,14 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
           await serialize(async () => {
             const row = find(environmentId, sent.path);
             if (!row) return;
+            const sentEdit = sent.inFlight;
             if (delivery.type === "saved") {
-              const next = acknowledgeNote(
-                row,
-                sent.inFlight!.localUpdatedAt,
-                delivery.note.revision,
-              );
-              if (!next)
+              const next = sentEdit
+                ? acknowledgeNote(row, sentEdit.localUpdatedAt, delivery.note.revision)
+                : row;
+              if (!next && sentEdit)
                 acknowledged.set(noteOutboxKey(row.environmentId, row.path), {
-                  base: sent.inFlight!.baseRevision,
+                  base: sentEdit.baseRevision,
                   note: delivery.note,
                 });
               await replace(row, next);
