@@ -187,9 +187,9 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
 /// instead: cleanup matters more than the exit status.
 func killGroupMembers() {
   let group = getpgrp()
-  /// Members seen as zombies by the previous pass's check. A gone pid is never kept here, so a
-  /// pid the kernel reuses for a new member is never taken for settled.
-  var zombies = Set<pid_t>()
+  /// Members seen as zombies by the previous pass's check, each with its start time. A pid the
+  /// kernel reaps and hands to a new member in between starts later, so it never counts.
+  var zombies: [pid_t: ProcessStart] = [:]
   for _ in 0..<100 {
     let size = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
     // Room for members started while the list is read.
@@ -203,12 +203,17 @@ func killGroupMembers() {
     guard filled > 0 else { break }
     let count = Int(filled) / MemoryLayout<pid_t>.size
     let members = pids.prefix(count).filter { $0 > 0 && $0 != getpid() }
-    // A full buffer may have cut the listing short, so it never settles anything.
-    if count < capacity && members.allSatisfy(zombies.contains) { return }
-    zombies = []
+    // A full buffer may have cut the listing short, so it never settles anything. Each member
+    // is read again: it must still be the zombie the previous check saw, not a pid reused since.
+    let settled = members.allSatisfy { pid in
+      if case .zombie(let start) = processState(pid) { return zombies[pid] == start }
+      return false
+    }
+    if count < capacity && settled { return }
+    zombies = [:]
     for pid in members {
       switch processState(pid) {
-      case .zombie: zombies.insert(pid)
+      case .zombie(let start): zombies[pid] = start
       case .gone: break
       case .living: if getpgid(pid) == group { kill(pid, SIGKILL) }
       }
@@ -219,7 +224,13 @@ func killGroupMembers() {
   killpg(group, SIGKILL)
 }
 
-enum ProcessState { case living, zombie, gone }
+/// When a process started, which tells it apart from a later process given the same pid.
+struct ProcessStart: Equatable {
+  let seconds: Int
+  let microseconds: Int32
+}
+
+enum ProcessState { case living, zombie(ProcessStart), gone }
 
 /// A zombie has exited and waits only to be reaped; a gone pid names no process now. Read with
 /// sysctl: proc_pidinfo cannot read a zombie, which has no task left.
@@ -230,7 +241,9 @@ func processState(_ pid: pid_t) -> ProcessState {
   // A failed read keeps it living, so it is signalled and listed again rather than trusted.
   guard sysctl(&name, UInt32(name.count), &info, &size, nil, 0) == 0 else { return .living }
   if size == 0 { return .gone }
-  return info.kp_proc.p_stat == SZOMB ? .zombie : .living
+  guard info.kp_proc.p_stat == SZOMB else { return .living }
+  let started = info.kp_proc.p_starttime
+  return .zombie(ProcessStart(seconds: started.tv_sec, microseconds: started.tv_usec))
 }
 
 /// An agent connection's helper ends with the proxy that started it, however that proxy ends:
