@@ -23,7 +23,6 @@ import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import {
   applyWslEnableSelection,
   isWslSettingsRowVisible,
-  missingTailscaleEndpointDescription,
   resolveLocalVersionStatusLabel,
 } from "./ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -124,6 +123,8 @@ import { ConnectionEnvironmentsSection } from "./ConnectionEnvironmentsSection";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { HostsSettings } from "./HostsSettings";
 import { HubDeviceCard } from "./HubDeviceCard";
+import { armConnectFlowResume, cancelConnectFlowResume } from "./connectFlowResume";
+import { pairingLinkConnectFlow } from "./PairingLinkConnectFlow";
 import { RemoteLaunchesSettings } from "./RemoteLaunchesSettings";
 import { WorktreeCheckoutHealthNotice } from "./WorktreeCheckoutHealthNotice";
 import { ensureLocalApi } from "../../localApi";
@@ -188,6 +189,7 @@ export function ConnectionsSettings() {
     ReadonlyMap<string, string>
   >(() => new Map());
   const handlePairingLinkCreated = (created: AuthPairingCredentialResult) => {
+    pairingLinkConnectFlow.finish();
     setCreatedPairingCredentials((current) => new Map(current).set(created.id, created.credential));
   };
   const [revokingDesktopPairingLinkId, setRevokingDesktopPairingLinkId] = useState<string | null>(
@@ -314,6 +316,7 @@ export function ConnectionsSettings() {
       return;
     setIsUpdatingDesktopServerExposure(true);
     setDesktopServerExposureMutationError(null);
+    armConnectFlowResume();
     try {
       await desktopBridge.setServerExposureMode(checked ? "network-accessible" : "local-only");
       refreshDesktopNetworkAccessState();
@@ -321,6 +324,7 @@ export function ConnectionsSettings() {
       setIsUpdatingDesktopServerExposure(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to update network exposure.";
+      cancelConnectFlowResume();
       setPendingDesktopServerExposureMode(null);
       setDesktopServerExposureMutationError(message);
       toastManager.add(
@@ -350,6 +354,7 @@ export function ConnectionsSettings() {
     if (!isTailscaleServePortValid) return;
     setIsUpdatingTailscaleServe(true);
     setDesktopServerExposureMutationError(null);
+    armConnectFlowResume();
     const settled = await settlePromise(async () => {
       await desktopBridge.setTailscaleServeEnabled({
         enabled: true,
@@ -362,6 +367,7 @@ export function ConnectionsSettings() {
       const error = Cause.squash(settled.cause);
       const message =
         error instanceof Error ? error.message : "Failed to configure Tailscale HTTPS.";
+      cancelConnectFlowResume();
       setDesktopServerExposureMutationError(message);
       toastManager.add(
         stackedThreadToast({
@@ -390,6 +396,7 @@ export function ConnectionsSettings() {
       return;
     setIsUpdatingTailscaleServe(true);
     setDesktopServerExposureMutationError(null);
+    armConnectFlowResume();
     const settled = await settlePromise(async () => {
       await desktopBridge.setTailscaleServeEnabled({
         enabled: false,
@@ -401,6 +408,7 @@ export function ConnectionsSettings() {
     if (settled._tag === "Failure") {
       const error = Cause.squash(settled.cause);
       const message = error instanceof Error ? error.message : "Failed to disable Tailscale HTTPS.";
+      cancelConnectFlowResume();
       setDesktopServerExposureMutationError(message);
       toastManager.add(
         stackedThreadToast({
@@ -796,34 +804,16 @@ export function ConnectionsSettings() {
     );
   };
 
-  const renderTailscaleRow = () => (
-    <SettingsRow
-      title={searchableSetting("tailscale-https").title}
-      description={
-        tailscaleHttpsEndpoint
-          ? tailscaleHttpsEndpoint.status === "available"
-            ? tailscaleHttpsEndpoint.httpBaseUrl
-            : "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
-          : missingTailscaleEndpointDescription(desktopServerExposureState)
-      }
-      control={
-        tailscaleHttpsEndpoint ? (
-          <Switch
-            checked={tailscaleHttpsEndpoint.status === "available"}
-            disabled={isUpdatingTailscaleServe}
-            onCheckedChange={(checked) => {
-              if (checked) {
-                handleStartTailscaleServeSetup(tailscaleHttpsEndpoint);
-                return;
-              }
-              handleStartTailscaleServeDisable(tailscaleHttpsEndpoint);
-            }}
-            aria-label="Enable Tailscale HTTPS"
-          />
-        ) : null
-      }
-    />
-  );
+  const connectProps = {
+    state: canManageLocalBackend && desktopBridge ? desktopServerExposureState : null,
+    tailscaleHttpsEndpoint,
+    disabled: isUpdatingDesktopServerExposure || isUpdatingTailscaleServe,
+    actions: {
+      onTurnOnNetworkAccess: () => setPendingDesktopServerExposureMode("network-accessible"),
+      onTurnOnTailscaleHttps: handleStartTailscaleServeSetup,
+      onTurnOffTailscaleHttps: () => setDisableTailscaleServeDialogOpen(true),
+    },
+  };
   const renderAuthorizedClients = (presentation: AccessSectionPresentation) => (
     <>
       {desktopAccessManagementError ? (
@@ -1068,6 +1058,9 @@ export function ConnectionsSettings() {
                   <AuthorizedClientsHeaderAction
                     delegatableScopes={currentSessionScopes ?? []}
                     onPairingLinkCreated={handlePairingLinkCreated}
+                    connectFlow={
+                      desktopBridge ? pairingLinkConnectFlow.slot(connectProps) : undefined
+                    }
                     clientSessions={
                       canReadAccess &&
                       authAccessChanges.error === null &&
@@ -1100,8 +1093,9 @@ export function ConnectionsSettings() {
           <AlertDialog
             open={pendingDesktopServerExposureMode !== null && canManageLocalBackend}
             onOpenChange={(open) => {
-              if (!open && !isUpdatingDesktopServerExposure)
-                setPendingDesktopServerExposureMode(null);
+              if (open || isUpdatingDesktopServerExposure) return;
+              setPendingDesktopServerExposureMode(null);
+              cancelConnectFlowResume();
             }}
           >
             <AlertDialogPopup>
@@ -1113,7 +1107,7 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Let your other devices connect to GOAT over the network. Pair devices to give them access. GOAT will restart."
+                    ? "Let your other devices connect to GOAT over your local network or Tailscale. Pair each device to give it access. GOAT restarts to apply this, then brings you back here."
                     : isGoatConnectEnabled()
                       ? "Devices connected over your local network will disconnect. Existing tunnels, such as GOAT Connect or Tailscale HTTPS, keep working. GOAT will restart."
                       : "Devices connected over your local network will disconnect. Tailscale HTTPS keeps working. GOAT will restart."}
@@ -1266,7 +1260,7 @@ export function ConnectionsSettings() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Disable Tailscale HTTPS?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  GOAT will restart the local backend without Tailscale Serve.
+                  GOAT restarts without Tailscale Serve.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1296,16 +1290,17 @@ export function ConnectionsSettings() {
           <Dialog
             open={pendingTailscaleServeEndpoint !== null}
             onOpenChange={(open) => {
-              if (isUpdatingTailscaleServe) return;
-              if (!open) setPendingTailscaleServeEndpoint(null);
+              if (isUpdatingTailscaleServe || open) return;
+              setPendingTailscaleServeEndpoint(null);
+              cancelConnectFlowResume();
             }}
           >
             <DialogPopup className="max-w-md">
               <DialogHeader>
                 <DialogTitle>Set up Tailscale HTTPS?</DialogTitle>
                 <DialogDescription>
-                  GOAT will restart the local backend with Tailscale Serve enabled and ask Tailscale
-                  to proxy HTTPS traffic to this backend.
+                  GOAT restarts with Tailscale Serve on, asks Tailscale to proxy HTTPS traffic to
+                  this computer, then brings you back here.
                 </DialogDescription>
               </DialogHeader>
               <DialogPanel>
@@ -1393,8 +1388,10 @@ export function ConnectionsSettings() {
         canManageLocalBackend={canManageLocalBackend}
         delegatableScopes={currentSessionScopes ?? []}
         endpoints={visibleDesktopAdvertisedEndpoints}
-        tailscaleRow={canManageLocalBackend && desktopBridge ? renderTailscaleRow() : null}
+        exposureState={connectProps.state}
+        connectActions={connectProps.actions}
         isNetworkAccessPending={
+          (primarySessionState.isPending && primarySessionState.data === null) ||
           desktopNetworkAccess.isPending ||
           isUpdatingDesktopServerExposure ||
           isUpdatingTailscaleServe

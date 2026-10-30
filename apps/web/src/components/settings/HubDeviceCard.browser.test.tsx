@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   type AdvertisedEndpoint,
   type AuthPairingCredentialResult,
+  type DesktopServerExposureState,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { act, type ComponentProps, type ReactNode } from "react";
@@ -62,6 +63,18 @@ import { HubDeviceCard } from "./HubDeviceCard";
 
 type Props = ComponentProps<typeof HubDeviceCard>;
 const onCreated = vi.fn();
+const actions = {
+  onTurnOnNetworkAccess: vi.fn(),
+  onTurnOnTailscaleHttps: vi.fn(),
+  onTurnOffTailscaleHttps: vi.fn(),
+};
+const exposure = (mode: DesktopServerExposureState["mode"]): DesktopServerExposureState => ({
+  mode,
+  endpointUrl: null,
+  advertisedHost: null,
+  tailscaleServeEnabled: false,
+  tailscaleServePort: 443,
+});
 let root: Root;
 let props: Props;
 
@@ -110,6 +123,7 @@ beforeEach(() => {
   state.permitted = true;
   state.createCredential.mockReset().mockResolvedValue(created());
   onCreated.mockReset();
+  for (const action of Object.values(actions)) action.mockReset();
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -120,7 +134,8 @@ beforeEach(() => {
     canManageLocalBackend: true,
     delegatableScopes: [...AuthStandardClientScopes],
     endpoints: [lan, https],
-    tailscaleRow: null,
+    exposureState: exposure("network-accessible"),
+    connectActions: actions,
     isNetworkAccessPending: false,
     networkAccessError: null,
     onPairingLinkCreated: onCreated,
@@ -184,8 +199,7 @@ it("opens setup guidance without issuing a credential when no target exists", as
   await act(async () => button("Show phone QR").click());
   expect(state.createCredential).not.toHaveBeenCalled();
   expect(payload()).toBeNull();
-  await act(async () => button("Back to hub settings").click());
-  expect(state.createCredential).not.toHaveBeenCalled();
+  expect(document.body.textContent).toContain("Start Tailscale on this computer");
 });
 
 it("shows request failures and allows a settled retry", async () => {
@@ -277,7 +291,7 @@ it("does not show an expired credential as a scannable QR", async () => {
 });
 
 it("keeps web informational without issuing pairing credentials", async () => {
-  await render({ isDesktop: false });
+  await render({ isDesktop: false, exposureState: null });
   expect(document.querySelectorAll("button")).toHaveLength(0);
   expect(state.createCredential).not.toHaveBeenCalled();
   expect(payload()).toBeNull();

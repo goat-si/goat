@@ -20,6 +20,7 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
 import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import type { ConnectFlowSlot } from "./PairingLinkConnectFlow";
 import {
   canRevokeOtherClients,
   isQrShareableEndpoint,
@@ -31,6 +32,7 @@ import { Input } from "../ui/input";
 import { Checkbox } from "../ui/checkbox";
 import {
   Dialog,
+  DialogClose,
   DialogFooter,
   DialogDescription,
   DialogHeader,
@@ -586,6 +588,7 @@ type AuthorizedClientsHeaderActionProps = {
   isRevokingOtherClients: boolean;
   onRevokeOtherClients: () => void;
   delegatableScopes: ReadonlyArray<AuthEnvironmentScope>;
+  connectFlow?: ConnectFlowSlot | undefined;
 };
 
 export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderAction({
@@ -594,9 +597,10 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
   isRevokingOtherClients,
   onRevokeOtherClients,
   delegatableScopes,
+  connectFlow,
 }: AuthorizedClientsHeaderActionProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogOpen, setDialogOpen] = useState(connectFlow?.resume ?? false);
   const [pairingLabel, setPairingLabel] = useState("");
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthGrantScope>>([
     ...AuthStandardClientScopes,
@@ -658,6 +662,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
         onOpenChange={(open) => {
           setDialogOpen(open);
           if (!open) {
+            connectFlow?.onDone();
             setPairingLabel("");
             setPairingScopes(
               AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope)),
@@ -682,6 +687,7 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
+            {connectFlow?.notice(() => setDialogOpen(false))}
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
                 Client label (optional)
@@ -769,13 +775,12 @@ export const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHead
             </section>
           </DialogPanel>
           <DialogFooter variant="bare">
-            <Button
-              variant="outline"
+            <DialogClose
               disabled={isCreatingPairingLink}
-              onClick={() => setDialogOpen(false)}
+              render={<Button variant="outline" disabled={isCreatingPairingLink} />}
             >
               Cancel
-            </Button>
+            </DialogClose>
             <Button
               disabled={isCreatingPairingLink || selectedScopes.length === 0}
               onClick={() => void handleCreatePairingLink()}

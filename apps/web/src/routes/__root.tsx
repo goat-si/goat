@@ -42,6 +42,7 @@ import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
+import { ConnectFlowResumeCoordinator } from "../components/settings/ConnectFlowResumeCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useEnvironmentThemeSync } from "../hooks/useEnvironmentTheme";
@@ -259,6 +260,7 @@ function RootRouteBranch() {
         ) : null}
         {isElectron ? <DesktopTrayNewThread /> : null}
         {isElectron ? <RunningThreadKeepAlive /> : null}
+        {isElectron && primaryEnvironmentAuthenticated ? <ConnectFlowResumeCoordinator /> : null}
         {hasCloudPublicConfig() ? <RelayClientInstallDialog /> : null}
         <ConnectOnboardingDialog />
         <SshPasswordPromptDialog />
