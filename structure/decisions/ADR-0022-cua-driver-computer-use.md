@@ -61,9 +61,11 @@
   - **Identity.** macOS grants Accessibility and Screen Recording to the app at the top of the
     driver's launch chain. On a Mac the desktop host runs the driver through
     `GOAT Computer Use.app` (`<appUserModelId>.computer-use`, in `Contents/Helpers`), which
-    re-execs itself with responsibility disclaimed and spawns `cua-driver serve --embedded` as
-    its direct child, so the grants and the driver's `bundle_identity` check name the helper
-    (`apps/desktop/native/computer-use-helper`, epic #1140). A build without the helper falls
+    re-execs itself with responsibility disclaimed and spawns
+    `cua-driver mcp --direct --embedded` as its direct child, so the grants and the driver's
+    `bundle_identity` check name the helper (`apps/desktop/native/computer-use-helper`, epic
+    #1140). Each agent connection still starts a helper of its own; one shared service per
+    environment and channel is staged in ADR-0023 D3 amendment 3. A build without the helper falls
     back to the Electron host under the app's `appUserModelId`. A standalone server on a Mac
     reports `unavailable`: its launch chain ends at a terminal or launchd job (#1174). Elsewhere
     the standalone host identifies as `si.goat.server`.

@@ -44,6 +44,15 @@
   GOAT's rule against continuously repainting animation. The Screen code mode bullet below
   states the decision.
   BEH-29's yield-on-human-input rule was considered and rejected in favor of D7.
+- Amended 2026-10-30, D3 amendment 3 (maintainer request of 2026-10-30, A1): agent connections
+  stop starting a helper each. One helper service per environment and channel runs a driver per
+  agent session as its direct child, and each session keeps its own grants, reservations,
+  overlay, private scope and input receipts. Sessions reach the service over a per-user socket in
+  a 0700 directory, with a token minted per launch and per session and a peer code-signature
+  check; frames stay on that socket and are never relayed through the server. It lands in three
+  stages: (a) the desktop's service manager with its start, reuse and cleanup rules, (b) sessions
+  in the Swift service, (c) proxies connecting to it. The Engine and Channel bullets below state
+  the decision and what is in force.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -110,9 +119,18 @@
     principal whoever launched it, then spawns
     `cua-driver mcp --direct --embedded --host-bundle-id <helper bundle id>`: one stdio process per
     session that owns the driver runtime and listens on no socket, inherits the helper's grants and
-    passes the driver's identity check unpatched (D3 amendment, #1210). Each agent connection's
-    proxy starts its own helper with `--mcp` for that driver, and Stop ends the pair (D3 amendment
-    2); the desktop's readiness check starts its own helper with `--mcp` the same way. Direct mode has no driver cursor overlay, so the helper draws
+    passes the driver's identity check unpatched (D3 amendment, #1210). In force since
+    stage a of D3 amendment 3: each environment's desktop owns one helper service per channel
+    through `apps/desktop/src/cua/ComputerUseHelperService.ts`. It serializes the start, reuses
+    the running service while its pid answers, no exit has been reported and it was launched
+    from the same executable, and replaces it otherwise. A replaced service is never killed; it stops with
+    its last claim, as every service does, and stable, nightly and development never share one.
+    A desktop host owns its service's watch and captures, so two hosts never share one,
+    and no later claim gets a service whose host has left. Each agent connection's proxy
+    still starts its own helper with `--mcp` for its driver and Stop ends the pair (D3 amendment
+    2); the desktop's readiness check starts its own helper with `--mcp` the same way. Staged
+    for b and c: agent sessions claim the shared service, which runs a driver per session as its
+    direct child, so Stop or a pause ends that session's driver and no other. Direct mode has no driver cursor overlay, so the helper draws
     the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
     driver changes in the fork with recorded provenance, never in a rewritten driver.
   - **Driver fork (D15).** `goat-si/cua-driver` is a `git subtree split` of trycua/cua
@@ -129,7 +147,7 @@
     and bump GOAT's pin.
   - **Channel.** The desktop's helper talks to its launcher over line-delimited JSON on stdio for
     readiness, app listing and watches; an agent connection's helper passes MCP straight between
-    its launcher and the driver. A release helper serves only a parent
+    its launcher and the driver until stage c moves sessions onto the shared service's socket. A release helper serves only a parent
     signed by GOAT's team with the GOAT app identifier, and its service half only its own
     launcher; any socket, as in the fallback, adds a per-launch token and an audit-token peer
     check. The hello negotiates `clientApiVersion` and `serverApiVersion`, every request has a
@@ -267,6 +285,9 @@
     each rebuild. That is expected in development and documented, not worked around with
     `tccutil reset`.
   - Each platform helper is one more signed artifact to build, notarize and qualify.
+  - Once agent sessions share it (D3 amendment 3, stage c), one service per channel is one
+    point of failure: when it crashes, every session's driver ends with it, and the next claim
+    starts a replacement.
   - The helper trusts a parent that carries GOAT's signature, and GOAT's executable can run as
     plain Node, so a same-user process can pass that check until GOAT's run-as-Node fuses are off
     and its backend runs from a separately identified runtime (#1210). Signed helper builds stay

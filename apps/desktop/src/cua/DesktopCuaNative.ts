@@ -23,7 +23,9 @@ import {
   type HelperFeatures,
   type HelperHostOptions,
   type HelperSession,
+  makeHelperService,
 } from "./ComputerUseHelper.ts";
+import type { HelperServiceManager } from "./ComputerUseHelperService.ts";
 import { probeWindowsReadiness, windowsDriverPipe } from "./ComputerUseHelperWindows.ts";
 import { resolveHelperBundle } from "./ComputerUseHelperInstall.ts";
 import { prepareDesktopManifest } from "./DesktopCuaManifest.ts";
@@ -139,6 +141,8 @@ export interface DesktopCuaDriverDependencies {
   readonly helperBundlePath: typeof resolveHelperBundle;
   /** Starts the helper as agents do, from GOAT's own Node runtime, and runs its MCP handshake. */
   readonly agentRoute: (mcp: AgentRouteCommand) => Promise<AgentRouteOutcome>;
+  /** A new manager for one channel's macOS helper service; the driver keeps one per bundle id. */
+  readonly helperService: (bundle: HelperBundle) => HelperServiceManager;
   readonly helperHost: (
     options: Omit<HelperHostOptions, "spawn" | "readMetadata"> & {
       readonly platform: NodeJS.Platform;
@@ -223,6 +227,8 @@ export const dependencies: DesktopCuaDriverDependencies = {
     checkHelperCapture(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId, target),
   helperBundlePath: resolveHelperBundle,
   agentRoute: probeAgentRoute,
+  helperService: (bundle) =>
+    makeHelperService(bundle.bundleId, (executable) => spawnHelperProcess(executable, "darwin")),
   helperHost: ({ platform, verify, ...options }) =>
     platform === "darwin" && verify
       ? makeMcpHelperHost(options)

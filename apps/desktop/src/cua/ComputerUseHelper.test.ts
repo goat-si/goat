@@ -16,6 +16,7 @@ import {
   openHelperSession,
   type HelperProcess,
 } from "./ComputerUseHelper.ts";
+import { makeHelperServiceManager } from "./ComputerUseHelperService.ts";
 
 const BUNDLE_ID = "si.goat.desktop.dev.computer-use";
 
@@ -264,6 +265,69 @@ describe("ComputerUseHelper daemon admission", () => {
     expect(connection.socketPath).toBe("");
     expect(helper.received).toEqual([]);
     await host.stop();
+  });
+
+  it("opens one helper however many starts of a host race, and never shares one host's helper with another", async () => {
+    const spawned: Array<ReturnType<typeof fakeHelper>> = [];
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const options = {
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [],
+      spawn: (_executable: string) => {
+        const helper = fakeHelper({});
+        spawned.push(helper);
+        return helper.process;
+      },
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    };
+    const service = makeHelperServiceManager({
+      open: (executable) => openHelperSession(options.spawn(executable), BUNDLE_ID),
+      // The fake's pid names no real process.
+      alive: () => true,
+    });
+    const first = makeHelperHost({ ...options, service });
+    const second = makeHelperHost({ ...options, service });
+    await Promise.all([first.start(), first.start(), first.start()]);
+    assert.lengthOf(spawned, 1);
+    // Each host owns its helper's watch and captures, so the second gets one of its own.
+    await second.start();
+    assert.lengthOf(spawned, 2);
+    await first.stop();
+    assert.isTrue(spawned[0]?.stdinEnded());
+    assert.isFalse(spawned[1]?.stdinEnded());
+    await second.stop();
+    assert.isTrue(spawned[1]?.stdinEnded());
+  });
+
+  it("a stop that lands while the host is starting still releases the helper it opens", async () => {
+    const helper = fakeHelper({});
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    });
+    const started = host.start();
+    await Promise.all([started, host.stop()]);
+    assert.isTrue(helper.stdinEnded());
+    assert.isUndefined(host.servicePid());
   });
 
   const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: CUA_DRIVER_VERSION };
