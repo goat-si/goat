@@ -31,12 +31,13 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // that input's safety, and its nextStep names the input; read again in a new cell and never resend it.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
+// Diff text uses + added, ~ changed and - removed rows; unchanged numbers remain valid.
 interface Observation extends ReadTime { text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
   scope: string; complete: boolean; truncated: boolean; loading: boolean;
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
-  resetReason?: string; // a diff that could not be compared came back full, never as "no change"
+  resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
   title?: string; url?: string; image?: Shot } // image: with screenshot: true
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;

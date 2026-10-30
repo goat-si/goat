@@ -163,7 +163,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
   rows. After that, apply each diff and use the latest observation's numbers, or read the full list
   with `observe({diff:false})`. A driver fallback
   returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
-  computed by GOAT's observation tracker. Model-facing observations omit the element array.
+  computed by GOAT's observation tracker using role, accessible name and native main-frame ref
+  within a known document lineage. A frame ref or ambiguous row resets the diff to a full read.
+  Added, changed and removed rows use `+`, `~` and `-`; unchanged numbers stay valid in the new
+  observation. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
