@@ -198,3 +198,165 @@ it.live.each([true, false])(
     );
   },
 );
+
+it.effect("a diff after a cut read explains the cut", () =>
+  Effect.gen(function* () {
+    const elements = Array.from({ length: 80 }, (_, index) => ({
+      role: index === 0 ? "AXWindow" : "AXButton",
+      element_index: index,
+      element_token: `s1:${index}`,
+      label: `Button ${index} with a long name`,
+    }));
+    const { host, sent } = fixture({
+      get_window_state: {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: "s1",
+        elements_complete: false,
+        elements,
+        tree_markdown: elements
+          .map((e) => `- [${e.element_index}] ${e.role} "${e.label}"`)
+          .join("\n"),
+      },
+    });
+    const ref = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const small = { ...context, limits: { ...context.limits, treeBytes: 4096 } };
+    const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), small))
+      .value as Observed & { truncated: boolean };
+    expect(first.truncated).toBe(true);
+    const next = (yield* host.observe(
+      call("get_accessibility_tree", { mode: "diff", baseObservationId: first.observationId }, ref),
+      small,
+    )).value;
+    expect(sent.at(-1)?.args).not.toHaveProperty("since");
+    expect(next).toMatchObject({ mode: "full", resetReason: "full read: the last read was cut" });
+  }),
+);
+
+it.effect("a driver restart retries a diff as a full read", () =>
+  Effect.gen(function* () {
+    const connection = { id: "driver:1" };
+    const { host, sent } = fixture(
+      { get_window_state: (args: Record<string, unknown>) => goat2WindowState(args) },
+      connection,
+    );
+    const ref = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+      .value as Observed;
+    connection.id = "driver:2";
+    yield* host.observe(
+      call("get_accessibility_tree", { mode: "diff", baseObservationId: first.observationId }, ref),
+      context,
+    );
+    expect(sent.at(-1)?.args).not.toHaveProperty("since");
+  }),
+);
+
+it.live.each([
+  {
+    label: "unchanged",
+    old: ["A", "B", "C"],
+    current: ["A", "B", "C"],
+    diff: '~ [1] AXButton "A"',
+    clicks: [2],
+    tokens: ["s2:2"],
+    stale: [],
+  },
+  {
+    label: "reindexed",
+    old: ["A", "B", "C"],
+    current: ["New", "A", "B", "C"],
+    diff: '+ [1] AXButton "New"\nreindexed: [1-3] -> [2-4]',
+    clicks: [3, 2],
+    tokens: ["s2:3", "s2:2"],
+    stale: [],
+  },
+  {
+    label: "removed",
+    old: ["A", "B", "C"],
+    current: ["A", "B"],
+    diff: '- [3] AXButton "C"',
+    clicks: [3],
+    tokens: [],
+    stale: [3],
+  },
+  {
+    label: "removed and reused",
+    old: ["A", "B", "C"],
+    current: ["A", "B", "New"],
+    diff: '- [3] AXButton "C"\n+ [3] AXButton "New"',
+    clicks: [3],
+    tokens: ["s2:3"],
+    stale: [],
+  },
+])("number actions follow the new snapshot for $label rows", (scenario) => {
+  let reads = 0;
+  const { host, sent } = fixture({
+    get_window_state: (args: Record<string, unknown>) => {
+      const snapshot = `s${++reads}`;
+      const names = args.since === undefined ? scenario.old : scenario.current;
+      const elements = ["Document", ...names].map((label, index) => ({
+        element_index: index,
+        element_token: `${snapshot}:${index}`,
+        role: index === 0 ? "AXWindow" : "AXButton",
+        label,
+      }));
+      return {
+        pid: 42,
+        window_id: 7,
+        snapshot_id: snapshot,
+        elements_complete: false,
+        elements,
+        ...(args.since === undefined
+          ? {
+              tree_markdown: elements
+                .map((e) => `- [${e.element_index}] ${e.role} "${e.label}"`)
+                .join("\n"),
+            }
+          : { since_status: "diff", tree_diff: scenario.diff }),
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+        await app.observe(); await app.observe(); const stale = [];
+        for (const n of ${JSON.stringify(scenario.clicks)}) {
+          try { await app.click(n); } catch (e) { stale.push({number:n, code:e.code, nothingSent:e.nothingSent}); }
+        }
+        return stale;`,
+    });
+    expect(result.value).toEqual(
+      scenario.stale.map((number) => ({ number, code: "stale_reference", nothingSent: true })),
+    );
+    expect(sent.filter((entry) => entry.tool === "click").map((entry) => entry.args)).toEqual(
+      scenario.tokens.map((element_token) => expect.objectContaining({ element_token })),
+    );
+    expect(sent.filter((entry) => entry.tool === "get_window_state")[1]?.args).toMatchObject({
+      since: "s1",
+    });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
