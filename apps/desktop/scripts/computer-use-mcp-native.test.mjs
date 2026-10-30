@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
-import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vite-plus/test";
+import { afterAll, describe, expect, it, onTestFinished } from "vite-plus/test";
 
 import { buildHelperFixture } from "./computer-use-helper-fixture.mjs";
 
@@ -109,17 +109,18 @@ function syntaxCorpus() {
 }
 
 describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport", () => {
-  let directory;
-  let executable;
-  let manifest;
-  let framing;
-
-  beforeAll(() => {
-    directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-mcp-native-"));
-    ({ executable } = buildHelperFixture(directory));
-    manifest = NodePath.join(directory, "manifest.json");
+  // Built while the suite is collected: compiling the whole helper can outlast a hook's ceiling
+  // when other suites compile at the same time. A skipped suite is still collected, so only
+  // macOS builds it.
+  const directory =
+    platform === "darwin"
+      ? NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-mcp-native-"))
+      : "";
+  const executable = platform === "darwin" ? buildHelperFixture(directory).executable : "";
+  const manifest = NodePath.join(directory, "manifest.json");
+  const framing = NodePath.join(directory, "framing");
+  if (platform === "darwin") {
     NodeFS.writeFileSync(manifest, "{}");
-    framing = NodePath.join(directory, "framing");
     NodeChildProcess.execFileSync("xcrun", [
       "swiftc",
       "-o",
@@ -128,7 +129,7 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
       NodePath.join(source, "McpJsonSyntax.swift"),
       NodePath.join(source, "fixtures/McpFrameFixture.swift"),
     ]);
-  });
+  }
 
   afterAll(() => {
     if (directory) NodeFS.rmSync(directory, { recursive: true, force: true });
