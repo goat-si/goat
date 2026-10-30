@@ -477,11 +477,6 @@ it.effect("a host's unproven no-op is reported and stops the cell's later writes
       context(() => Effect.void),
     );
     expect(first).toMatchObject({ outcome: "ok", category: "suspected_noop" });
-    const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
-    expect(journal[0]?.receipt.safety).toMatchObject({
-      possibleCommit: true,
-      writeStatus: "may_have_applied",
-    });
     expect(
       (yield* bridge.handle(
         call(2),
@@ -489,6 +484,11 @@ it.effect("a host's unproven no-op is reported and stops the cell's later writes
       ))?.error?.code,
     ).toBe("not_run");
     expect(sent).toBe(1);
+    const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
+    expect(journal[0]?.receipt.safety).toMatchObject({
+      possibleCommit: true,
+      writeStatus: "may_have_applied",
+    });
   }),
 );
 
