@@ -98,12 +98,15 @@ it.effect("a blocked visit cuts an input already dispatching", () =>
       };
       yield* Effect.promise(() => fence.observe(tab, "https://example.com/")!);
       expect(cuts).toBe(1);
-      const result = yield* Effect.tryPromise({ try: () => action, catch: (error) => error }).pipe(
-        Effect.result,
+      const result = yield* Effect.promise(() =>
+        action.then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
       );
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({ reason: "blocked_url", beforeInput: false });
+      expect(result.ok).toBe(false);
+      if (!result.ok)
+        expect(result.error).toMatchObject({ reason: "blocked_url", beforeInput: false });
       release.resolve();
       yield* end;
     }),
