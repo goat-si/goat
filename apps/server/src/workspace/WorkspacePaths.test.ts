@@ -113,5 +113,25 @@ it.layer(layerTest)("WorkspacePathsLive", (it) => {
         );
       }),
     );
+
+    // On Windows `\` is a separator, so these names cannot exist there.
+    it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+      "keeps a backslash in a name as part of the name",
+      () =>
+        Effect.gen(function* () {
+          const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+          const path = yield* Path.Path;
+          const cwd = yield* makeTempDir();
+
+          for (const relativePath of ["weird\\name.txt", "..\\..\\etc"]) {
+            expect(
+              yield* workspacePaths.resolveRelativePathWithinRoot({
+                workspaceRoot: cwd,
+                relativePath,
+              }),
+            ).toEqual({ absolutePath: path.join(cwd, relativePath), relativePath });
+          }
+        }),
+    );
   });
 });

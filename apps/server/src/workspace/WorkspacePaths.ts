@@ -104,10 +104,6 @@ export class WorkspacePaths extends Context.Service<
   }
 >()("goat/workspace/WorkspacePaths") {}
 
-function toPosixRelativePath(input: string): string {
-  return input.replaceAll("\\", "/");
-}
-
 /**
  * A Windows GOAT driven over SSH from Git Bash or Cygwin can be sent the shell's `/c/…` or
  * `/cygdrive/c/…` form, which Node would resolve against the current drive as `C:\c\…`.
@@ -200,7 +196,10 @@ export const make = Effect.gen(function* () {
       }
 
       const absolutePath = path.resolve(input.workspaceRoot, normalizedInputPath);
-      const relativeToRoot = toPosixRelativePath(path.relative(input.workspaceRoot, absolutePath));
+      // Only the host separator becomes `/`: on POSIX `\` is a file name character.
+      const relativeToRoot = path
+        .relative(input.workspaceRoot, absolutePath)
+        .replaceAll(path.sep, "/");
       if (
         relativeToRoot.length === 0 ||
         relativeToRoot === "." ||
