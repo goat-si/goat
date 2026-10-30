@@ -177,10 +177,12 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
   };
-  // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.
+  // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast;
+  // every subscriber applies events through applyServerConfigProjection, which reads changes.
   const onDemandSnapshots = (input: ServerConfigSubscriptionInput) => ({
     ...input,
     workspaceSnapshotsOnDemand: true,
+    providerStatusChanges: true,
   });
 
   const connect = Effect.fnUntraced(function* (connection: PreparedConnection) {

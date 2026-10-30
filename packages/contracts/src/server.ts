@@ -727,6 +727,25 @@ export const ServerConfigProviderStatusesPayload = Schema.Struct({
 });
 export type ServerConfigProviderStatusesPayload = typeof ServerConfigProviderStatusesPayload.Type;
 
+/** A changed provider; models, skills and slash commands are left out when unchanged. */
+export const ServerProviderStatusChange = ServerProvider.mapFields(
+  ({ models, skills: _skills, slashCommands: _slashCommands, ...fields }) => ({
+    ...fields,
+    models: Schema.optionalKey(models),
+    skills: Schema.optionalKey(Schema.Array(ServerProviderSkill)),
+    slashCommands: Schema.optionalKey(Schema.Array(ServerProviderSlashCommand)),
+  }),
+);
+export type ServerProviderStatusChange = typeof ServerProviderStatusChange.Type;
+
+/** `instanceIds` is the whole list in order; `providers` holds only the ones that changed. */
+export const ServerConfigProviderStatusChangesPayload = Schema.Struct({
+  instanceIds: Schema.Array(ProviderInstanceId),
+  providers: ForwardCompatibleArray(ServerProviderStatusChange),
+});
+export type ServerConfigProviderStatusChangesPayload =
+  typeof ServerConfigProviderStatusChangesPayload.Type;
+
 export const ServerConfigSettingsUpdatedPayload = Schema.Struct({
   settings: ServerSettings,
 });
@@ -754,6 +773,12 @@ export const ServerConfigStreamProviderStatusesEvent = Schema.Struct({
 });
 export type ServerConfigStreamProviderStatusesEvent =
   typeof ServerConfigStreamProviderStatusesEvent.Type;
+
+export const ServerConfigStreamProviderStatusChangesEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("providerStatusChanges"),
+  payload: ServerConfigProviderStatusChangesPayload,
+});
 
 export const ServerConfigStreamSettingsUpdatedEvent = Schema.Struct({
   version: Schema.Literal(1),
@@ -795,6 +820,7 @@ export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
   ServerConfigStreamProviderStatusesEvent,
+  ServerConfigStreamProviderStatusChangesEvent,
   ServerConfigStreamSettingsUpdatedEvent,
   ServerConfigStreamEnvironmentThemesUpdatedEvent,
   ServerConfigStreamUsageLimitSourcesUpdatedEvent,
