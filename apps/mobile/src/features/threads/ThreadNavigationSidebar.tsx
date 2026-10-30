@@ -63,6 +63,7 @@ import {
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
 } from "./thread-list-v2-items";
+import { ThreadListV2PriorityHeader } from "./thread-list-v2-priority-header";
 import {
   ThreadListV2LaunchGroupRow,
   ThreadListV2LaunchMoreRow,
@@ -303,6 +304,7 @@ function ThreadNavigationSidebarPane(
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    priorityRead,
     launchGroups,
   } = useThreadListV2({
     threads,
@@ -662,6 +664,16 @@ function ThreadNavigationSidebarPane(
             depth={item.depth}
             hidden={item.hidden}
             onShowAll={launchGroups.showAll}
+          />
+        );
+      case "v2-priority-header":
+        return (
+          <ThreadListV2PriorityHeader
+            rows={item.rows}
+            foldedUnseen={item.foldedUnseen}
+            pane="sidebar"
+            onRelease={priorityRead.release}
+            onRestore={priorityRead.restore}
           />
         );
       case "v2-working-shelf":

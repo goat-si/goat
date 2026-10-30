@@ -1,5 +1,30 @@
-import { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
-export { hasUnseenCompletion } from "./sidebar/completionUnread.ts";
+import {
+  hasUnseenCompletion,
+  holdThreadPriorityRank as holdSidebarPriorityRank,
+  isThreadWoke as isSidebarThreadWoke,
+  resolveThreadLastVisitedAt,
+  resolveThreadListSection as resolveSidebarThreadSection,
+  resolveThreadListStatus as resolveSidebarThreadStatus,
+  resolveThreadPriorityRank as resolveSidebarPriorityRank,
+  selectPriorityMarkReadTargets as selectSidebarMarkReadTargets,
+  type ThreadListSection,
+  type ThreadListStatus,
+  type ThreadPriorityHolds,
+} from "@goat/client-runtime/state/thread-list-priority";
+export {
+  hasUnseenCompletion,
+  holdSidebarPriorityRank,
+  isSidebarThreadWoke,
+  resolveThreadLastVisitedAt,
+  resolveSidebarThreadSection,
+  resolveSidebarThreadStatus,
+  resolveSidebarPriorityRank,
+  selectSidebarMarkReadTargets,
+};
+export type SidebarSection = ThreadListSection;
+export type SidebarThreadStatus = ThreadListStatus;
+/** Settled state each Priority row had when Activity last showed it, by scoped thread key. */
+export type SidebarPriorityHolds = ThreadPriorityHolds;
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import { backgroundWorkHoldsCompletion } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { threadPullRequestSearchTerms } from "@goat/shared/threadPullRequests";
@@ -230,23 +255,6 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 // Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
-
-export type SidebarSection = "priority" | "pinned" | "active" | "working" | "snoozed" | "settled";
-
-/** Snooze wins until its wake boundary. Priority overlays lifecycle;
- * otherwise settlement wins over a stale pin. */
-export function resolveSidebarThreadSection(input: {
-  readonly snoozed: boolean;
-  readonly settled: boolean;
-  readonly pinned: boolean;
-  readonly priority?: boolean;
-}): SidebarSection {
-  if (input.snoozed) return "snoozed";
-  if (input.priority) return "priority";
-  if (input.settled) return "settled";
-  if (input.pinned) return "pinned";
-  return "active";
-}
 
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";
 
@@ -1025,90 +1033,6 @@ export function useThreadJumpHintsVisible(shouldShow: boolean): boolean {
   return useDeadlinePassed(showAt);
 }
 
-export function resolveThreadLastVisitedAt(
-  serverLastVisitedAt: string | null | undefined,
-  localLastVisitedAt: string | undefined,
-): string | undefined {
-  // Server visits override local watermarks, including mark-unread rewinds; use local values only on older
-  // servers.
-  if (serverLastVisitedAt === undefined) return localLastVisitedAt;
-  return serverLastVisitedAt ?? undefined;
-}
-
-/** Writable unread completions and woke-only rows are targets of Priority's bulk visit. */
-export function selectSidebarMarkReadTargets<
-  T extends ThreadStatusInput & Pick<SidebarThreadSummary, "environmentId" | "id">,
->(input: {
-  readonly threads: readonly T[];
-  readonly localLastVisitedAtByKey: Readonly<Record<string, string | undefined>>;
-  readonly wokeAtByKey?: ReadonlyMap<string, string | null>;
-  readonly canOperate: (thread: T) => boolean;
-}): T[] {
-  return input.threads.filter((thread) => {
-    if (!input.canOperate(thread)) return false;
-    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    const lastVisitedAt = resolveThreadLastVisitedAt(
-      thread.lastVisitedAt,
-      input.localLastVisitedAtByKey[key],
-    );
-    return (
-      hasUnseenCompletion({ ...thread, lastVisitedAt }) ||
-      isSidebarThreadWoke(input.wokeAtByKey?.get(key) ?? null, lastVisitedAt)
-    );
-  });
-}
-
-/** A visit acknowledges a wake without changing the thread's lifecycle. */
-export function isSidebarThreadWoke(
-  wokeAt: string | null,
-  lastVisitedAt: string | undefined,
-): boolean {
-  if (wokeAt === null || !Number.isFinite(Date.parse(wokeAt))) return false;
-  const visited = lastVisitedAt === undefined ? NaN : Date.parse(lastVisitedAt);
-  return !Number.isFinite(visited) || visited < Date.parse(wokeAt);
-}
-
-/** Priority is a display overlay; its rank never changes pinning or settlement. */
-export function resolveSidebarPriorityRank(input: {
-  readonly thread: ThreadStatusInput;
-  readonly localLastVisitedAt?: string | undefined;
-  readonly wokeAt: string | null;
-  readonly hasChildAttention: boolean;
-}): 0 | 1 | 2 | null {
-  const status = resolveSidebarThreadStatus(input.thread);
-  if (status === "approval" || status === "input" || input.hasChildAttention) return 0;
-  if (status === "working" || status === "waiting") return 1;
-  const lastVisitedAt = resolveThreadLastVisitedAt(
-    input.thread.lastVisitedAt,
-    input.localLastVisitedAt,
-  );
-  return hasUnseenCompletion({ ...input.thread, lastVisitedAt }) ||
-    isSidebarThreadWoke(input.wokeAt, lastVisitedAt)
-    ? 2
-    : null;
-}
-
-/** Settled state each Priority row had when Activity last showed it, by scoped thread key. */
-export type SidebarPriorityHolds = ReadonlyMap<string, SidebarThreadSummary["settledOverride"]>;
-
-/**
- * Reading a thread does not pull its row out of Priority while Activity stays open; it leaves
- * when Activity is shown again. Settling or unsettling the row is the user's own move, so a
- * changed settled state ends the hold.
- */
-export function holdSidebarPriorityRank(input: {
-  readonly rank: 0 | 1 | 2 | null;
-  readonly key: string;
-  readonly settledOverride: SidebarThreadSummary["settledOverride"];
-  readonly holds: SidebarPriorityHolds;
-  /** Mark all as read drops the row once it no longer qualifies, instead of holding it. */
-  readonly released?: boolean;
-}): 0 | 1 | 2 | null {
-  if (input.released) return input.rank;
-  if (input.rank !== null || !input.holds.has(input.key)) return input.rank;
-  return input.holds.get(input.key) === input.settledOverride ? 2 : null;
-}
-
 /**
  * Settling acknowledges a wake. The acknowledgement sticks until the shell stops
  * reporting one, so a later hold cannot put the Woke pill back. Un-settling restores it.
@@ -1370,16 +1294,6 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
-export type SidebarThreadStatus =
-  | "approval"
-  | "input"
-  | "request"
-  | "working"
-  | "waiting"
-  | "failed"
-  | "limited"
-  | "ready";
-
 export function shouldRecedeSidebarThread(input: {
   status: SidebarThreadStatus;
   isUnread: boolean;
@@ -1400,44 +1314,6 @@ export function shouldRecedeSidebarThread(input: {
     return !input.isUnread && !input.isWoke;
   }
   return false;
-}
-
-type SidebarThreadStatusInput = Pick<
-  SidebarThreadSummary,
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "pendingSubagentRequest"
-  | "pendingGuestMessageCount"
-  | "runtime"
-> & { blockedOnThreadWait?: boolean | undefined };
-
-export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): SidebarThreadStatus {
-  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
-    return "approval";
-  }
-  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
-    return "input";
-  }
-  // A guest is waiting on the owner; the agent's own requests come first.
-  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
-    return "request";
-  }
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
-    return "waiting";
-  }
-  if (
-    thread.runtime !== null &&
-    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
-  ) {
-    return "working";
-  }
-  if (thread.runtime?.status === "idle") {
-    return "waiting";
-  }
-  if (thread.runtime?.status === "failed") {
-    return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
-  }
-  return "ready";
 }
 
 export type SidebarV2TopStatusKind =

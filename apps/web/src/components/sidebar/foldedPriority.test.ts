@@ -6,13 +6,17 @@ import { describe, expect, it } from "vite-plus/test";
 import { makeThreadFixture, type ThreadFixtureOverrides } from "../../test-fixtures";
 import type { Thread } from "../../types";
 import { countVisibleSidebarPriorityThreads, resolveSidebarPriorityRank } from "../Sidebar.logic";
-import { foldedPriorityMember, wakesBeforeFold, withFoldedUnseen } from "./foldedPriority";
+import { foldedPriorityMember, wakesBeforeFold } from "./foldedPriority";
 import {
   foldLaunchedThreads,
   foldedUnseenUnder,
   liftedPriorityRank,
 } from "@goat/client-runtime/state/launch-fold";
-import { markSidebarPriorityRead, selectSidebarPriorityClear } from "./priorityRead";
+import {
+  markPriorityRead,
+  selectPriorityClear,
+  withFoldedUnseen,
+} from "@goat/client-runtime/state/thread-list-priority";
 
 const local = EnvironmentId.make("environment-local");
 const readOnly = EnvironmentId.make("environment-read-only");
@@ -225,7 +229,7 @@ describe("reading Priority with unread threads folded under its rows", () => {
     }) === null;
   const clear = () =>
     withFoldedUnseen(
-      selectSidebarPriorityClear({
+      selectPriorityClear({
         threads: rows,
         localLastVisitedAtByKey: {},
         wokeAtByKey: new Map(),
@@ -250,7 +254,7 @@ describe("reading Priority with unread threads folded under its rows", () => {
 
   it("returns the launcher when visiting one of its children fails", async () => {
     const released = new Set<string>();
-    await markSidebarPriorityRead({
+    await markPriorityRead({
       plan: clear(),
       release: (keys) => keys.forEach((key) => released.add(key)),
       restore: (key) => released.delete(key),

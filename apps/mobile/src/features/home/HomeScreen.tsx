@@ -63,6 +63,7 @@ import {
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
 } from "../threads/thread-list-v2-items";
+import { ThreadListV2PriorityHeader } from "../threads/thread-list-v2-priority-header";
 import {
   ThreadListV2LaunchGroupRow,
   ThreadListV2LaunchMoreRow,
@@ -459,6 +460,7 @@ export function HomeScreen(props: HomeScreenProps) {
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    priorityRead,
     launchGroups,
   } = useThreadListV2({
     threads: props.threads,
@@ -549,6 +551,17 @@ export function HomeScreen(props: HomeScreenProps) {
           onSwipeableWillOpen={handleSwipeableWillOpen}
           simultaneousSwipeGesture={homeScrollGesture}
           activationKey={item.key}
+        />
+      );
+    }
+    if (item.type === "v2-priority-header") {
+      return (
+        <ThreadListV2PriorityHeader
+          rows={item.rows}
+          foldedUnseen={item.foldedUnseen}
+          pane={primaryColumn ? "sidebar" : "screen"}
+          onRelease={priorityRead.release}
+          onRestore={priorityRead.restore}
         />
       );
     }

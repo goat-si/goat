@@ -27,7 +27,7 @@ import {
 import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@goat/contracts";
 import { canSnooze } from "@goat/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
-import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
+import { memo, useCallback, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
@@ -148,8 +148,9 @@ function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
   return ` ${formatWorkingDurationLabel(nowMs - startedAtMs)}`;
 }
 
-function ThreadListV2Section(props: {
+export function ThreadListV2Section(props: {
   readonly label: string;
+  readonly trailing?: ReactNode;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
   readonly disclosure?: {
@@ -201,6 +202,7 @@ function ThreadListV2Section(props: {
           style={{ transform: [{ rotate: props.disclosure.expanded ? "180deg" : "0deg" }] }}
         />
       ) : null}
+      {props.trailing}
     </>
   );
 
