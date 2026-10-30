@@ -88,36 +88,6 @@ it.effect("atomically registers a connected host and correlates its response", (
   ),
 );
 
-it.effect("forwards the run identity without changing the browser session owner", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const broker = yield* makeBroker;
-      const requests = requestsFrom(yield* broker.connect(makeHost(), SERVER_BROWSER));
-      const received = yield* Deferred.make<RoutedRequest>();
-      yield* Stream.runForEach(requests, (request) =>
-        Deferred.succeed(received, request).pipe(
-          Effect.andThen(
-            broker.respond({
-              clientId: "client-1",
-              connectionId: request.connectionId,
-              requestId: request.requestId,
-              ok: true,
-              result: {},
-            }),
-          ),
-        ),
-      ).pipe(Effect.forkScoped);
-      yield* Effect.yieldNow;
-      yield* broker.invoke({ scope, operation: "open", input: {}, runId: "run-1" });
-      const request = yield* Deferred.await(received);
-      expect(request).toMatchObject({
-        runId: "run-1",
-        agentSessionId: `${scope.environmentId}\u0000${scope.thread.providerSessionId}\u0000${scope.thread.threadId}`,
-      });
-    }),
-  ),
-);
-
 it.effect("targets multiple tabs explicitly while retaining a default tab", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -12,7 +12,6 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -345,10 +344,8 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
       const page = contexts.at(-1)!.page;
-      const entered = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const context = yield* Effect.context<never>();
-      const run = Effect.runPromiseWith(context);
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
       const handle = {
         ownerFrame: async () => null,
         dispose: async () => {},
@@ -358,8 +355,8 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
       const locator = {
         first: () => locator,
         elementHandle: async () => {
-          await run(Deferred.succeed(entered, undefined));
-          await run(Deferred.await(release));
+          entered.resolve();
+          await release.promise;
           return handle;
         },
         boundingBox: async () => ({ x: 1, y: 1, width: 20, height: 20 }),
@@ -369,10 +366,10 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
       const fiber = yield* broker
         .invoke({ scope, tabId, operation: "hover", input: { locator: "button" } })
         .pipe(Effect.result, Effect.forkChild);
-      yield* Deferred.await(entered);
+      yield* Effect.promise(() => entered.promise);
       yield* Effect.promise(() => page.goto("https://example.com/"));
       yield* Effect.promise(() => page.goto("https://safe.example/"));
-      yield* Deferred.succeed(release, undefined);
+      release.resolve();
       const result = yield* Fiber.join(fiber);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")

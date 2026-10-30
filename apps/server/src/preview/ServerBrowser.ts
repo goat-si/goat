@@ -1760,22 +1760,15 @@ const make = Effect.gen(function* () {
     }
     if (request.operation === "claim") {
       SessionControl.requireAgentSession(request);
-      const tab =
-        request.tabId === undefined
-          ? undefined
-          : await runPromise(findTab(request.threadId, request.tabId));
+      const tab = request.tabId && (await runPromise(findTab(request.threadId, request.tabId)));
       if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
-      await blockedTabs.assertTab(tab, request.runId);
-      return {};
+      return blockedTabs.assertTab(tab, request.runId).then(() => ({}));
     }
     const tab = await requireTab(request);
-    if (!READ_OPERATIONS.has(request.operation) && request.operation !== "close")
-      await blockedTabs.assertTab(tab, request.runId);
+    const mutating = !READ_OPERATIONS.has(request.operation);
+    if (mutating && request.operation !== "close") await blockedTabs.assertTab(tab, request.runId);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
-    if (
-      !READ_OPERATIONS.has(request.operation) &&
-      !tab.control.agentMayAct(request.agentSessionId ?? "")
-    )
+    if (mutating && !tab.control.agentMayAct(request.agentSessionId ?? ""))
       throw new BrowserControlInterrupted(
         "This tab belongs to another agent session. You can read it, but open your own tab to act.",
         "agentMismatch",
