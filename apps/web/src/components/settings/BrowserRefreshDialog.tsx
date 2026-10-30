@@ -7,6 +7,7 @@ import {
 import { useEffect, useState } from "react";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import {
   Dialog,
@@ -126,14 +127,11 @@ export function BrowserRefreshDialog({ profile, source, environmentId, bridge, o
             <div className="space-y-3">
               {[...new Set([...suggestions, ...selected])].map((site) => (
                 <label key={site} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     checked={selected.includes(site)}
-                    onChange={(event) =>
+                    onCheckedChange={(checked) =>
                       setSelected((current) =>
-                        event.target.checked
-                          ? [...current, site]
-                          : current.filter((value) => value !== site),
+                        checked ? [...current, site] : current.filter((value) => value !== site),
                       )
                     }
                   />

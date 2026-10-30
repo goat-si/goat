@@ -132,6 +132,17 @@ describe("BrowserImport.importCookies", () => {
 });
 
 describe("BrowserImport.writeCookies", () => {
+  it("blocks a refresh only when an unreadable cookie belongs to a chosen site", () => {
+    const read = {
+      cookies: [],
+      undecryptable: 2,
+      undecryptableHosts: ["other.test", "example.com"],
+    };
+    assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://a.example.com"]), true);
+    assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://b.test"]), false);
+    assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://other.test"]), true);
+  });
+
   it.effect("replaces all matching target cookies and reports shared domains", () =>
     Effect.gen(function* () {
       const existing = [

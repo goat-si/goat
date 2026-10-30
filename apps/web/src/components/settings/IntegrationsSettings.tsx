@@ -129,7 +129,6 @@ import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { BrowserRefreshDialog } from "./BrowserRefreshDialog";
 import { importBrowserCookiesIntoTarget } from "./browserProfileImport";
-export { importFailureReason } from "./browserProfileImport";
 import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
 import type { ImportOutcome } from "./browserImportWizard.logic";
 

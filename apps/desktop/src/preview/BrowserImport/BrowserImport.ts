@@ -173,6 +173,15 @@ const matchesOrigin = (host: string, hostOnly: boolean, secure: boolean, origin:
   );
 };
 
+/** Unreadable hosts are bare names, so a parent domain counts as a chosen site's cookie. */
+export const refreshHasUnreadableCookies = (
+  read: CookieReadResult,
+  origins: ReadonlyArray<string>,
+): boolean =>
+  read.undecryptableHosts.some((host) =>
+    origins.some((origin) => matchesOrigin(host, false, false, new URL(origin))),
+  );
+
 export const refreshCookies = Effect.fn("BrowserImport.refreshCookies")(function* (
   session: RefreshSession,
   read: CookieReadResult,
@@ -425,7 +434,7 @@ export const make = Effect.gen(function* BrowserImportMake() {
       );
 
     if (input.input.origins !== undefined) {
-      if (result.undecryptable > 0)
+      if (refreshHasUnreadableCookies(result, input.input.origins))
         return yield* new BrowserImportFailedError({
           sourceId: definition.id,
           reason: "readFailed",
