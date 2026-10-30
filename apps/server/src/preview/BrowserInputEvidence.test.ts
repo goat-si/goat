@@ -138,3 +138,25 @@ it.live("does not retain when another isolated world has an earlier capture list
     }
   }),
 );
+
+it.live("fails closed when an execution world appears during the dispatch", () =>
+  Effect.promise(async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await (await browser.newContext()).newPage();
+      const cdp = await page.context().newCDPSession(page);
+      await page.setContent('<input id="normal">');
+      await page.locator("#normal").focus();
+      const evidence = await startBrowserInputEvidence(page);
+      const tree = await cdp.send("Page.getFrameTree");
+      await cdp.send("Page.createIsolatedWorld", {
+        frameId: tree.frameTree.frame.id,
+        worldName: "new-world",
+      });
+      await page.keyboard.insertText("hello");
+      expect(await evidence.finish()).toBe(false);
+    } finally {
+      await browser.close();
+    }
+  }),
+);
