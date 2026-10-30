@@ -51,6 +51,7 @@ import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
 import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
 import { makeExpiryHolds } from "./expiryHolds.ts";
 import { targetKey } from "./targetKey.ts";
+import * as PersonStop from "./computerUsePersonStop.ts";
 
 export const SshProgressBinding = Schema.Struct({
   host: SshHostAlias,
@@ -474,14 +475,7 @@ const make = Effect.gen(function* () {
       sessionId: AuthSessionId | undefined,
       foregroundEpoch: number | undefined,
     ) {
-      const label =
-        sessionId === undefined ? "Person at this computer" : yield* clientLabel(input, sessionId);
-      const record = yield* read(input);
-      if (
-        sessionId === undefined &&
-        (input.action !== "cancelled" || record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH)
-      )
-        return yield* new HandoffError({ reason: "invalid_request" });
+      const { label, record } = yield* PersonStop.resolve({ input, sessionId, read, clientLabel });
       const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
       // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
       if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
@@ -514,19 +508,14 @@ const make = Effect.gen(function* () {
         const namespace = isProviderContinuationPath(record.target.path)
           ? { namespace: record.target.path }
           : {};
-        if (sessionId === undefined) return yield* new HandoffError({ reason: "invalid_request" });
+        const approvedBySessionId = yield* PersonStop.session(sessionId);
         yield* savePrivate(
           input.handoffId,
-          { ...payload, ...namespace, approvedBySessionId: sessionId },
+          { ...payload, ...namespace, approvedBySessionId },
           true,
         );
       }
-      const endsApproved =
-        isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
-      // Recorded before the transition commits, so the wake reactor never sees the end without
-      // it; a repeated cancel keeps it.
-      if (endsApproved)
-        yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
+      yield* PersonStop.markPersonStopped(input, record, savePrivate);
       const result = yield* transition(
         input,
         input.action,
