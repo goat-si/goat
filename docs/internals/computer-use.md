@@ -158,14 +158,10 @@ designated requirement, never a pid or path alone. The driver would remain the h
 
 - A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
   desktop, and its display. Any change of epoch invalidates every element ref issued under it.
-- The first observation of a window is full. Later ones are diffs against the latest observation
-  of the same lineage, with added, changed and removed refs; "removed" means not seen, because
-  accessibility reads can miss nodes. GOAT's observation tracker
-  (`packages/shared/src/computerUseObservation.ts`) assigns refs by tree position, so a ref keeps
-  naming the same control while the driver's own tokens rotate, and gives a position a ref only
-  when it is unambiguous all the way up. A full observation starts a new lineage and says why.
-- A ref from an older lineage or epoch is refused with `staleElement` or `epochChanged`. The
-  helper never guesses among several matches.
+- App observations start with a full tree. Later reads request a driver diff against the latest
+  snapshot and retain the new snapshot's element tokens and frames internally. A driver fallback
+  returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
+  computed by GOAT's observation tracker. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
@@ -214,6 +210,10 @@ without Node, filesystem, process, environment, arbitrary network or page-script
 turn can run later cells with computation values intact while its child remains live. An explicit
 reset clears those values, not a tab, app, grant or approval. Process and WASM limits bound
 accidental guest work, but are not an OS sandbox against same-user code.
+
+App click modifiers use `cmd`, `shift`, `alt`, and `ctrl`; tabs refuse them.
+App click named actions must be advertised by the latest observation.
+App `press` accepts `holdMs` from 0 to 30000 only with a supporting driver; tabs refuse it before input.
 
 Each Target call crosses `ScreenHostBridge`. The host resolves an exact tab or app window and
 checks the current run, turn, reference generation and caller's browser or computer-use authority
@@ -652,7 +652,7 @@ GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split 
 `cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
 GOAT pins the fork's release archives by name, size and SHA-256
 (`packages/shared/src/cuaDriverRelease.ts`); the archives are unsigned and carry build-provenance
-attestations. GOAT pins `0.38.0-goat.15`. `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
+attestations. GOAT pins `0.38.0-goat.16`. `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
 the server installer rejects (goat-si/cua-driver#16), and `0.38.0-goat.4` and `0.38.0-goat.12` are tags with no release.
 The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
 embedded allowlist rejects that name, so the in-process dev path omits it; the driver keeps

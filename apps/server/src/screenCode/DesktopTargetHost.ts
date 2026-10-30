@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -111,6 +112,8 @@ export interface BoundWindow {
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
+  diffBaseline?: boolean;
+  lastReadCut?: boolean;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
   pointsStale?: "input" | "restart";
   /** Input ran without a post-input 60 ms settle sleep; the next screenshot settles first. */
@@ -305,12 +308,22 @@ export const createDesktopTargetHost = (deps: {
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
+    delete bound.diffBaseline;
+    delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;
     bound.screenshots?.clear();
     delete bound.latestScreenshot;
     bound.pointsStale = "restart";
-    return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
+    const { since: _since, ...freshArgs } = args;
+    return yield* request(
+      tool,
+      tool === "get_window_state" ? freshArgs : args,
+      call,
+      context,
+      bound.connectionGeneration,
+      cursor,
+    );
   });
   /** The driver token behind an element ref of the bound window's latest observation. */
   const tokenOf = (element: Record<string, unknown>, bound: BoundWindow) => {
@@ -804,8 +817,8 @@ export const createDesktopTargetHost = (deps: {
     if (refused !== undefined) return refused;
     const first = calls[0];
     const firstBound = first && resolve(first, context);
-    if (first && firstBound)
-      yield* seedBatchBaseline({
+    if (first && firstBound) {
+      const baseline = yield* seedBatchBaseline({
         send,
         calls,
         context,
@@ -814,7 +827,9 @@ export const createDesktopTargetHost = (deps: {
         boundInCellId: firstBound.boundInCellId,
         boundWindows: firstBound.boundWindows,
         tracker: trackerFor(context, firstBound.connectionGeneration),
-      });
+      }).pipe(Effect.result);
+      if (baseline._tag === "Failure") return [Exit.fail(baseline.failure)];
+    }
     return yield* dispatchInTurn(
       calls,
       (each, index) =>

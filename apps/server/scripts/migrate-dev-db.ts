@@ -409,6 +409,18 @@ const CLEARED_TABLES: ReadonlyArray<string> = [
   "provider_session_runtime",
   "auth_sessions",
   "auth_pairing_links",
+  // The developer's machines: a dev server that read these would connect to them or resume
+  // work there. Listed one by one because most have no foreign key to follow.
+  "hub_node_registrations",
+  "hub_node_route_state",
+  "hub_provisioned_links",
+  "remote_dispatches",
+  "remote_relay_requests",
+  "fleet_goals",
+  "fleet_goal_workers",
+  "fleet_goal_events",
+  "fleet_goal_actions",
+  "fleet_reschedule_claims",
 ];
 
 const PROVIDER_SESSIONS_TABLE = "orchestration_v2_projection_provider_sessions";

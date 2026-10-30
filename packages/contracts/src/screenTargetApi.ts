@@ -31,26 +31,22 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // that input's safety, and its nextStep names the input; read again in a new cell and never resend it.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
-interface Observation extends ReadTime { text: string; observationId: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
+interface Observation extends ReadTime { text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
   scope: string; complete: boolean; truncated: boolean; loading: boolean;
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
   resetReason?: string; // a diff that could not be compared came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
-  elements: Element[]; title?: string; url?: string; image?: Shot } // image: with screenshot: true
-interface Element { index: number; role: string; name: string; text?: string; actions?: string[];
-  enabled?: boolean; selected?: boolean; frame?: { x: number; y: number; width: number; height: number };
-  range?: { min: number; max: number }; parent?: number; id?: string }
-// An app element's frame is in window points from its window's top-left; it is left out when the read could not place the element in that window.
+  title?: string; url?: string; image?: Shot } // image: with screenshot: true
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
-  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
+  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; diff: false reads the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui"; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and verify are apps only. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); an input that opens or closes a window may list windows up to four more times. observed: lines are evidence, not a verdict: only a window it proves opened or closed makes the verdict confirmed
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action, modifiers and verify are apps only; tabs refuse modifiers. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); an input that opens or closes a window may list windows up to four more times. observed: lines are evidence, not a verdict: only a window it proves opened or closed makes the verdict confirmed
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: apps only, as on click
-  press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
+  press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean; holdMs?: number }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first; holdMs 0..30000 needs a supporting app driver; tabs refuse it
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
   drag(from: Target, to: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>;

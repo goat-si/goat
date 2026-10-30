@@ -202,7 +202,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       );
     if (typeof target === 'number') {
       const found = observation.elements.find((item) => item.index === target);
-      if (!found) throw new ScreenError('stale_reference', 'No [' + target + '] in the latest observe; observe again.', true);
+      if (!found) throw new ScreenError('stale_reference', 'No [' + target + '] in the latest observe; observe() then use the new numbers.', true);
       return found;
     }
     // An accessibility id is exact and the same in every language.
@@ -297,7 +297,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const observe = async (arg = {}) => {
     if (__legacy(arg)) {
-      try { return remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); }
+      try { const { elements: _elements, ...value } = remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); return value; }
       catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
     }
     __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query']);
@@ -330,7 +330,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       }
       catch (raw) { seen.observation = undefined; throw __error(raw); }
     }
-    const { indexedText, ...rest } = observation;
+    const { indexedText, elements: _elements, ...rest } = observation;
     const shown = { text: indexedText, ...rest, ...(seen.image && arg.screenshot ? { image: seen.image } : {}) };
     // Cells written before text read indexedText; it is not enumerable, so results do not carry it twice.
     Object.defineProperty(shown, 'indexedText', { value: indexedText, enumerable: false });
@@ -385,11 +385,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
         return call('click', target);
       }
       // timeoutMs is a tab's wait for its target; action names an app's accessibility action.
-      options = __only('click options', options, ['button', 'count', 'send', ...(tab ? ['timeoutMs'] : ['action', 'verify'])]);
+      options = __only('click options', options, ['button', 'count', 'send', ...(tab ? ['timeoutMs'] : ['action', 'verify', 'modifiers'])]);
       if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
         throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);
       if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
         throw new ScreenError('invalid_argument', 'A tab click count is 1, 2 or 3.', true);
+      if (!tab && options.modifiers !== undefined && (!Array.isArray(options.modifiers) || !options.modifiers.every((m) => ['cmd', 'shift', 'alt', 'ctrl'].includes(m))))
+        throw new ScreenError('invalid_argument', 'modifiers must contain only cmd, shift, alt or ctrl; nothing was sent.', true);
       const run = () =>
         act('click', options.button === 'right' ? 'right_click' : 'click', {
           ...aim(target),
@@ -397,6 +399,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(tab && options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
+          ...(!tab && options.modifiers !== undefined ? { modifiers: options.modifiers } : {}),
           ...(!tab && options.verify === true ? { verify: true } : {}),
         });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
@@ -430,7 +433,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
         !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
-      const actualOpts = __only('press options', targetIsSendOpts ? target : options, tab ? ['send'] : ['send', 'verify']);
+      const actualOpts = __only('press options', targetIsSendOpts ? target : options, tab ? ['send', 'holdMs'] : ['send', 'verify', 'holdMs']);
+      if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))
+        throw new ScreenError('invalid_argument', 'holdMs must be an integer from 0 to 30000; nothing was sent.', true);
+      if (tab && actualOpts.holdMs !== undefined)
+        throw new ScreenError('unsupported', 'Held keys are unavailable for tabs; nothing was sent.', true, { nextStep: 'Use an app target for held keys.' });
       if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
         throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
       if (needsImplicitObserve(actualTarget)) await ensureObserved();
@@ -440,6 +447,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ...(!tab && actualTarget !== undefined ? aim(actualTarget) : {}),
         ...(!tab && actualOpts && actualOpts.send === true ? { send: true } : {}),
         ...(!tab && actualOpts && actualOpts.verify === true ? { verify: true } : {}),
+        ...(!tab && actualOpts.holdMs !== undefined ? { holdMs: actualOpts.holdMs } : {}),
       });
     },
     scroll: (target, direction, amount = 3) => {

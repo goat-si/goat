@@ -72,6 +72,27 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
   const said = refusalText(result, structured);
+  const driverCode = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  if (driverCode === "screen_locked")
+    return {
+      ...fail("screen_locked", "The screen is locked; stop until the person unlocks it."),
+      ...refusalOf(structured),
+    };
+  if (
+    driverCode === "user_interacting" &&
+    (structured?.effect === undefined || structured.effect === "refused")
+  ) {
+    const retry = object(structured?.refusal)?.retry_after_ms ?? structured?.retry_after_ms;
+    const delay =
+      typeof retry === "number" && Number.isSafeInteger(retry) && retry >= 0
+        ? `${retry} ms`
+        : "the suggested delay";
+    return {
+      ...fail("user_interacting", `Wait ${delay} then observe before acting.`),
+      ...refusalOf(structured),
+      refused: "targetRefused",
+    };
+  }
   // GOAT refused before the driver: keep its reason so the receipt says why.
   if (reply.status === "not_started")
     return { ...fail("unavailable", said), ...refusalOf(structured) };

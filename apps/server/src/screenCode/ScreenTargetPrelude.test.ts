@@ -241,16 +241,26 @@ it.live(
         environmentId: "env",
         invocation: desktopContext.invocation,
         source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
-        await app.observe();
-        await app.press('Enter', 'Apply');
+        const observation = await app.observe();
+        let stale;
+        try { await app.click(99); } catch (e) { stale = { code: e.code, nothingSent: e.nothingSent, message: e.message }; }
+        await app.press('Enter', 0);
         await app.press('Enter', 'Apply', { send: true });
-        return true;`,
+        return { hasElements: 'elements' in observation, stale };`,
       });
       expect(result).toMatchObject({
         status: "completed",
-        value: true,
+        value: {
+          hasElements: false,
+          stale: {
+            code: "stale_reference",
+            nothingSent: true,
+            message: "No [99] in the latest observe; observe() then use the new numbers.",
+          },
+        },
         contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
       });
+      expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(0);
       const presses = sent.filter((entry) => entry.tool === "press_key");
       expect(presses).toHaveLength(2);
       expect(presses[0]?.args).toMatchObject({ key: "Enter", element_token: "snapshot:1" });

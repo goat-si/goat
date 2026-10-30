@@ -4,6 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as BrowserSession from "../BrowserSession.ts";
 import * as BrowserImport from "./BrowserImport.ts";
@@ -35,7 +36,7 @@ const layerRejectedBeforeSession = Layer.succeed(
   }),
 );
 
-const withImporter = Effect.fnUntraced(function* () {
+const withImporter = Effect.fnUntraced(function* (platform: "darwin" | "win32" = "darwin") {
   const fileSystem = yield* FileSystem.FileSystem;
   const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-import-" });
   const layerEnvironment = Layer.succeed(HostProcess.Environment, { HOME: home });
@@ -53,7 +54,7 @@ const withImporter = Effect.fnUntraced(function* () {
       BrowserImport.layer.pipe(
         Layer.provide(layerRejectedBeforeSession),
         Layer.provide(layerEnvironment),
-        Layer.provide(Layer.succeed(HostProcess.Platform, "darwin")),
+        Layer.provide(Layer.succeed(HostProcess.Platform, platform)),
         Layer.provide(Layer.succeed(HostProcess.ExecutablePath, "/Applications/T3 Code.app")),
         Layer.provide(NodeServices.layer),
       ),
@@ -63,6 +64,24 @@ const withImporter = Effect.fnUntraced(function* () {
 });
 
 describe("BrowserImport.importCookies", () => {
+  it.effect("refuses Chromium refresh on Windows with an app-bound encryption reason", () =>
+    Effect.gen(function* () {
+      const { importer } = yield* withImporter("win32");
+      const error = yield* importer
+        .importCookies({
+          input: {
+            sourceId: "chrome",
+            sourceProfileDirectory: "Default",
+            targetProfileId: "default",
+            origins: ["https://example.com"],
+          },
+          scope: "fixture",
+          persistent: true,
+        })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "appBoundEncryption");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   it.effect("rejects a source profile the browser never reported", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -114,6 +133,195 @@ describe("BrowserImport.importCookies", () => {
 });
 
 describe("BrowserImport.writeCookies", () => {
+  it("blocks a refresh only when an unreadable cookie belongs to a chosen site", () => {
+    const read = {
+      cookies: [],
+      undecryptable: 2,
+      undecryptableHosts: ["other.test", "example.com"],
+    };
+    assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://a.example.com"]), true);
+    assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://b.test"]), false);
+    assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://other.test"]), true);
+  });
+
+  it.effect("skips an expired source cookie but still clears the stale target cookie", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(2_000_000_000_000);
+      const removed: Array<string> = [];
+      const written: Array<string> = [];
+      const result = yield* BrowserImport.refreshCookies(
+        {
+          cookies: {
+            get: () =>
+              Promise.resolve([
+                {
+                  domain: "a.example.com",
+                  hostOnly: true,
+                  name: "sid",
+                  path: "/",
+                  secure: true,
+                  httpOnly: true,
+                  sameSite: "lax" as const,
+                },
+              ]),
+            set: (details) => {
+              (details.expirationDate === 1 ? removed : written).push(details.name ?? "");
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        },
+        {
+          cookies: [
+            {
+              ...cookie,
+              url: "https://a.example.com/",
+              name: "sid",
+              expirationDate: 1_000_000_000,
+            },
+            {
+              ...cookie,
+              url: "https://a.example.com/",
+              name: "live",
+              expirationDate: 3_000_000_000,
+            },
+          ],
+          undecryptable: 0,
+          undecryptableHosts: [],
+        },
+        ["https://a.example.com"],
+      );
+      assert.deepEqual(removed, ["sid"]);
+      assert.deepEqual(written, ["live"]);
+      assert.equal(result.imported, 1);
+    }),
+  );
+
+  it.effect("replaces all matching target cookies and reports shared domains", () =>
+    Effect.gen(function* () {
+      const existing = [
+        {
+          domain: "a.example.com",
+          hostOnly: true,
+          name: "old",
+          path: "/",
+          secure: false,
+          httpOnly: true,
+          sameSite: "lax" as const,
+        },
+        {
+          domain: ".example.com",
+          hostOnly: false,
+          name: "stale",
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "lax" as const,
+        },
+        {
+          domain: "other.test",
+          hostOnly: true,
+          name: "keep",
+          path: "/",
+          secure: false,
+          httpOnly: true,
+          sameSite: "lax" as const,
+        },
+        {
+          domain: "b.example.com",
+          hostOnly: true,
+          name: "sibling",
+          path: "/",
+          secure: false,
+          httpOnly: true,
+          sameSite: "lax" as const,
+        },
+        {
+          domain: "a.example.com",
+          hostOnly: true,
+          name: "other-path",
+          path: "/other",
+          secure: false,
+          httpOnly: true,
+          sameSite: "lax" as const,
+        },
+      ];
+      const removed: Array<{
+        name?: string;
+        domain?: string;
+        path?: string;
+        expirationDate?: number;
+      }> = [];
+      const written: string[] = [];
+      const result = yield* BrowserImport.refreshCookies(
+        {
+          cookies: {
+            get: () => Promise.resolve(existing),
+            set: (details) => {
+              if (details.expirationDate === 1) removed.push(details);
+              else written.push(details.name ?? "");
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        },
+        {
+          cookies: [
+            { ...cookie, url: "https://a.example.com/", name: "new", domain: undefined },
+            { ...cookie, url: "https://example.com/", name: "shared", domain: ".example.com" },
+            { ...cookie, url: "https://other.test/", name: "outside" },
+          ],
+          undecryptable: 0,
+          undecryptableHosts: [],
+        },
+        ["https://a.example.com"],
+      );
+      assert.deepEqual(
+        removed.map(({ name, domain, path, expirationDate }) => ({
+          name,
+          domain,
+          path,
+          expirationDate,
+        })),
+        [
+          { name: "old", domain: undefined, path: "/", expirationDate: 1 },
+          { name: "stale", domain: ".example.com", path: "/", expirationDate: 1 },
+          { name: "other-path", domain: undefined, path: "/other", expirationDate: 1 },
+        ],
+      );
+      assert.deepEqual(written.sort(), ["new", "shared"]);
+      assert.deepEqual(result.sharedDomains, ["example.com"]);
+      assert.deepEqual(result.origins, [
+        { origin: "https://a.example.com", imported: 2, skipped: 0 },
+      ]);
+    }),
+  );
+
+  it.effect("does not refresh secure cookies for an http origin", () =>
+    Effect.gen(function* () {
+      const written: string[] = [];
+      const result = yield* BrowserImport.refreshCookies(
+        {
+          cookies: {
+            get: () => Promise.resolve([]),
+            set: (details) => {
+              written.push(details.name ?? "");
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        },
+        {
+          cookies: [{ ...cookie, url: "https://a.example.com/", name: "secure" }],
+          undecryptable: 0,
+          undecryptableHosts: [],
+        },
+        ["http://a.example.com"],
+      );
+      assert.deepEqual(written, []);
+      assert.equal(result.imported, 0);
+    }),
+  );
   it.effect("flushes the store after writing, and reports success if the flush fails", () =>
     Effect.gen(function* () {
       const events: Array<string> = [];
