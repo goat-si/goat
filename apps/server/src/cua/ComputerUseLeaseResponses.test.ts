@@ -47,4 +47,6 @@ it("person stop is terminal and preserves uncertainty for an interrupted write",
   const interrupted = parsed(cutOff(2, "click", cause)).result;
   assert.equal(interrupted.structuredContent.code, "stopped_by_person");
   assert.isTrue(interrupted.structuredContent.safety.possibleCommit);
+  const interruptedRead = parsed(cutOff(3, "list_windows", cause)).result;
+  assert.equal(interruptedRead.structuredContent.safety.retryClass, "never");
 });

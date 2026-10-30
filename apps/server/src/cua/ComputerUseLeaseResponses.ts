@@ -103,11 +103,15 @@ export const cutOff = (
   args?: unknown,
 ) => {
   const read = isReadOnlyCall(tool, args);
-  const safety = classifyActionOutcome({
+  const outcomeSafety = classifyActionOutcome({
     effect: read ? "read" : "write",
     status: "indeterminate",
     dispatched: true,
   });
+  const safety =
+    cause._tag === "end" && cause.reason === "stopped"
+      ? { ...outcomeSafety, retryClass: "never" as const }
+      : outcomeSafety;
   const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
   const detail = interruptionDetail(cause);
   const text =
