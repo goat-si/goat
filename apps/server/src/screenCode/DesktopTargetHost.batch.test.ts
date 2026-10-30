@@ -357,9 +357,13 @@ it.live("a user interacting refusal stops subsequent concurrent app inputs", () 
   });
   return Effect.gen(function* () {
     const result = yield* runCell(
-      `${BIND} const clicks = [app.click('Apply'), app.press('a'), app.click('Apply')]; ${SETTLED}`,
+      `${BIND} const clicks = [app.click('Apply'), app.press('a'), app.click('Apply')]; return (await Promise.allSettled(clicks)).map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code === 'user_interacting' ? [r.reason.code, r.reason.nothingSent, r.reason.nextStep] : r.reason.code + ':' + r.reason.nothingSent);`,
     );
-    expect(result.value).toEqual(["confirmed", "user_interacting:true", "not_run:true"]);
+    expect(result.value).toEqual([
+      "confirmed",
+      ["user_interacting", true, "Wait 750 ms then observe before acting."],
+      "not_run:true",
+    ]);
     expect(
       sent
         .filter((entry) => ["press_key", "click"].includes(entry.tool))
