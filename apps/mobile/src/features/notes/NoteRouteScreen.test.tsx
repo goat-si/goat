@@ -24,12 +24,42 @@ const { mocks, Children } = vi.hoisted(() => ({
     enqueue: vi.fn(),
     restore: vi.fn(),
     flush: vi.fn(),
+    // Most cases pin the markdown source path; live cases drive the live editor stand-in.
+    live: false,
+    liveNext: "",
+    liveCheckbox: false,
   },
 }));
 vi.mock("react-native", () => ({
   View: Children,
+  ScrollView: Children,
   Alert: { alert: mocks.alert },
   Platform: { OS: "ios" },
+}));
+vi.mock("./live-editor/note-editor-support", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./live-editor/note-editor-support")>();
+  return {
+    ...actual,
+    noteEditorSupport: (body: string) =>
+      mocks.live ? actual.noteEditorSupport(body) : { kind: "source", reason: "" },
+  };
+});
+vi.mock("./live-editor/NoteEditorToolbar", () => ({ NoteEditorToolbar: () => null }));
+vi.mock("./live-editor/NoteLiveEditor", () => ({
+  useNoteEditorTheme: () => ({}),
+  NoteLiveEditor: (props: {
+    value: string;
+    config: { editable: boolean; readOnly: boolean };
+    onChange: (value: string, checkbox: boolean) => void;
+    onFocusChange: (focused: boolean) => void;
+  }) => (
+    <div data-testid="live-editor" data-readonly={String(props.config.readOnly)}>
+      <output>{props.value}</output>
+      <button onClick={() => props.onFocusChange(true)}>Focus live editor</button>
+      <button onClick={() => props.onFocusChange(false)}>Blur live editor</button>
+      <button onClick={() => props.onChange(mocks.liveNext, mocks.liveCheckbox)}>Live edit</button>
+    </div>
+  ),
 }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({
   ScreenScrollView: ({ children }: { children?: ReactNode }) => (
@@ -165,6 +195,9 @@ beforeEach(() => {
   mocks.connected = false;
   mocks.taskIndex = 0;
   mocks.taskText = "task";
+  mocks.live = false;
+  mocks.liveNext = "";
+  mocks.liveCheckbox = false;
   mocks.read.mockReset().mockResolvedValue(AsyncResult.success(noteDocument()));
   mocks.remove.mockReset().mockResolvedValue(AsyncResult.success({ path: "note.md" }));
   mocks.alert.mockReset();
@@ -455,4 +488,61 @@ it("enqueues a checkbox only when its native text and source slot agree", async 
   expect(mocks.enqueue).toHaveBeenCalledWith(
     expect.objectContaining({ body: "- [x] **task**\n- [ ] other" }),
   );
+});
+
+describe("live note editor", () => {
+  const live = async (body: string) => {
+    mocks.live = true;
+    mocks.rows = [{ ...row(), body }];
+    await act(async () => render());
+  };
+  const editor = () => container.querySelector('[data-testid="live-editor"]');
+
+  it("saves exactly the text the editor reports and keeps editing while it has focus", async () => {
+    await live("# Plan\n\n- [ ] ship\n");
+    expect(editor()?.textContent).toContain("# Plan");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "# Plan\n\n- [ ] ship\n- [ ] 한글\n";
+    act(() => button("Live edit").click());
+    expect(container.textContent).toContain("Unsaved edits");
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "# Plan\n\n- [ ] ship\n- [ ] 한글\n" }),
+    );
+    expect(editor()).not.toBeNull();
+    expect(container.textContent).not.toContain("Unsaved edits");
+  });
+
+  it("saves a checkbox tap at once when the note is not being edited", async () => {
+    await live("- [ ] ship\n");
+    mocks.liveNext = "- [x] ship\n";
+    mocks.liveCheckbox = true;
+    await act(async () => button("Live edit").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "- [x] ship\n" }));
+    expect(container.textContent).not.toContain("Unsaved edits");
+  });
+
+  it("stops editing when the editor loses focus without changes", async () => {
+    mocks.connected = true;
+    await live("note\n");
+    act(() => button("Focus live editor").click());
+    await act(async () => {
+      mocks.rows = [];
+      render();
+    });
+    expect(mocks.read).not.toHaveBeenCalled();
+    act(() => button("Blur live editor").click());
+    await act(async () => render());
+    expect(mocks.read).toHaveBeenCalled();
+    expect(button("Delete note").disabled).toBe(false);
+  });
+
+  it("opens a note it cannot write back byte for byte as markdown source and says why", async () => {
+    await live("# Mixed\r\nline\nline\r\n");
+    expect(editor()).toBeNull();
+    expect(container.textContent).toContain("mixes Windows and Unix line breaks");
+    act(() => button("Edit markdown").click());
+    // jsdom normalizes textarea line breaks; the native TextInput receives the raw string.
+    expect(container.querySelector("textarea")).not.toBeNull();
+  });
 });

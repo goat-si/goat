@@ -221,7 +221,7 @@ export const continueMarkdownList: StateCommand = ({ state, dispatch }) => {
 };
 
 export const noteEditorCommands: Record<
-  Exclude<NoteEditorCommand, "toggleSource" | "blur">,
+  Exclude<NoteEditorCommand, "toggleSource" | "focus" | "blur">,
   StateCommand
 > = {
   bold: toggleInlineMark("**"),

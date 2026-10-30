@@ -1,7 +1,7 @@
 import { useNavigation, usePreventRemove, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, type NoteDocument, type NoteStatus } from "@goat/contracts";
 import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
-import { Alert, Platform, View } from "react-native";
+import { Alert, Platform, ScrollView as NativeScrollView, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Cause from "effect/Cause";
@@ -17,6 +17,13 @@ import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { Button } from "../../components/ui/Button";
 import { applyNoteCheckboxEvent, type NoteCheckboxEvent } from "./note-markdown";
 import { NoteLinkedThread } from "./NoteLinkedThread";
+import {
+  NoteLiveEditor,
+  useNoteEditorTheme,
+  type NoteLiveEditorHandle,
+} from "./live-editor/NoteLiveEditor";
+import { NoteEditorToolbar } from "./live-editor/NoteEditorToolbar";
+import { noteEditorSupport } from "./live-editor/note-editor-support";
 import { noteSyncLabel, noteSyncState } from "./notes-model";
 import { notesRpc } from "./rpc/notes";
 import { noteConflictCurrent } from "./rpc/delivery";
@@ -66,6 +73,14 @@ function NoteContent(props: NoteParams) {
   const [checkboxRender, setCheckboxRender] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [restored, setRestored] = useState(false);
+  // Which editor owns the current edit: the live editor, or the markdown source fallback.
+  const [surface, setSurface] = useState<"live" | "source">("live");
+  const [liveUnavailable, setLiveUnavailable] = useState<string | null>(null);
+  const [editorFocused, setEditorFocused] = useState(false);
+  const [showSource, setShowSource] = useState(false);
+  const editorFocusedRef = useRef(false);
+  const liveEditor = useRef<NoteLiveEditorHandle>(null);
+  const editorTheme = useNoteEditorTheme();
   const previousRow = useRef(row);
   const [reload, setReload] = useState(0);
   const readRequest = useMemo(
@@ -172,7 +187,8 @@ function NoteContent(props: NoteParams) {
         localUpdatedAt: Date.now(),
       });
       setDirty(false);
-      setEditing(false);
+      // A focused live editor keeps editing, so hub reads cannot replace text under the cursor.
+      setEditing(editorFocusedRef.current);
       setError(null);
       void flushNotes(environmentId).catch((error: unknown) => setError(notesError(error)));
     } catch (error) {
@@ -225,6 +241,256 @@ function NoteContent(props: NoteParams) {
   };
   const canDelete = canStart && restored && note !== null && !row && !editing && !dirty && !busy;
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
+  const beginEdit = (target: "live" | "source") => {
+    if (editing) return;
+    editBase.current = row?.baseRevision ?? note?.revision ?? null;
+    setSurface(target);
+    setEditing(true);
+  };
+  const support = noteEditorSupport(body);
+  const live =
+    bodyAvailable &&
+    support.kind === "live" &&
+    liveUnavailable === null &&
+    !(editing && surface === "source");
+  const sourceReason = liveUnavailable ?? (support.kind === "source" ? support.reason : null);
+  const canEditBody = canWrite && row?.state !== "conflict";
+  const syncText = saving
+    ? "Saving on phone…"
+    : dirty
+      ? "Unsaved edits"
+      : row
+        ? noteSyncLabel(noteSyncState(row))
+        : !restored
+          ? "Loading saved edits…"
+          : props.create && !note && !row
+            ? "New note · save on phone to create"
+            : !bodyAvailable
+              ? "Not loaded"
+              : !connected
+                ? "Offline · showing last loaded note"
+                : "Synced with hub";
+  const saveButton = (
+    <Button
+      fullWidth
+      tone="primary"
+      label={saving ? "Saving…" : "Save on phone"}
+      disabled={!canWrite || saving || !restored}
+      onPress={() => void save(localBody.current, localStatus.current)}
+    />
+  );
+  const header = (
+    <>
+      <Text accessibilityLiveRegion="polite" className="text-xs text-foreground-muted">
+        {syncText}
+      </Text>
+      <Text className="text-sm text-foreground-muted">{props.path}</Text>
+      {error ? (
+        <Text accessibilityRole="alert" className="text-danger-foreground">
+          {error}
+        </Text>
+      ) : null}
+      {notesOutbox.error(environmentId) ? (
+        <Text accessibilityRole="alert" className="text-danger-foreground">
+          {notesOutbox.error(environmentId)}
+        </Text>
+      ) : null}
+      {bodyAvailable && !live && sourceReason && !editing ? (
+        <Text className="text-sm text-foreground-muted">{sourceReason}</Text>
+      ) : null}
+      <View className="flex-row flex-wrap gap-2">
+        <Button
+          label="Refresh / sync"
+          tone="secondary"
+          disabled={busy || dirty}
+          onPress={() => {
+            setReload((value) => value + 1);
+            void flushNotes(environmentId).catch((error: unknown) => setError(notesError(error)));
+          }}
+        />
+        {row ? (
+          <Button
+            label="Discard saved edits"
+            tone="secondary"
+            disabled={busy || Boolean(row.inFlight)}
+            onPress={() => {
+              Alert.alert(
+                "Discard saved edits?",
+                "This removes this phone's draft. It does not delete a note already saved on the hub.",
+                [
+                  { text: "Cancel", style: "cancel" },
+                  {
+                    text: "Discard",
+                    style: "destructive",
+                    onPress: () => {
+                      void notesOutbox
+                        .discard(environmentId, props.path, row.localUpdatedAt)
+                        .then((removed) => {
+                          if (removed) navigation.goBack();
+                          else
+                            setError(
+                              "The draft changed or started syncing. Review it before discarding.",
+                            );
+                        })
+                        .catch((error: unknown) => setError(notesError(error)));
+                    },
+                  },
+                ],
+              );
+            }}
+          />
+        ) : null}
+        {row?.state === "conflict" ? (
+          <Button
+            tone="primary"
+            label="Compare versions"
+            onPress={() => navigation.navigate("NoteConflict", { environmentId, path: props.path })}
+          />
+        ) : null}
+      </View>
+      {dirty && !editing ? (
+        <Button
+          fullWidth
+          tone="primary"
+          label="Retry saving on phone"
+          disabled={saving || !canWrite}
+          onPress={() => void save(localBody.current, localStatus.current)}
+        />
+      ) : null}
+      {bodyAvailable ? (
+        <View className="flex-row gap-2">
+          {(["idea", "doing", "done"] as const).map((value) => (
+            <Button
+              key={value}
+              label={value}
+              tone={status === value ? "primary" : "secondary"}
+              disabled={!canWrite || busy || row?.state === "conflict"}
+              selected={status === value}
+              onPress={() => {
+                if (editing) {
+                  setStatus(value);
+                  localStatus.current = value;
+                  setDirty(true);
+                } else void save(localBody.current, value);
+              }}
+            />
+          ))}
+        </View>
+      ) : null}
+    </>
+  );
+  const footer = (
+    <>
+      <Button
+        fullWidth
+        tone="primary"
+        label="Start work from this note"
+        disabled={!canStart || !note || Boolean(row) || editing || busy || dirty}
+        onPress={() => navigation.navigate("NoteStartWork", { environmentId, path: props.path })}
+      />
+      <Button
+        fullWidth
+        tone="danger"
+        label={deleting ? "Deleting…" : "Delete note"}
+        disabled={!canDelete}
+        onPress={() => {
+          if (!note) return;
+          const target = note;
+          Alert.alert("Delete note?", `“${target.title}” will be removed from Notes on the hub.`, [
+            { text: "Cancel", style: "cancel" },
+            {
+              text: "Delete",
+              style: "destructive",
+              onPress: () => void deleteNote(target),
+            },
+          ]);
+        }}
+      />
+      {(note?.threads ?? row?.current?.threads ?? []).map((link) => (
+        <NoteLinkedThread
+          key={`${link.threadId}@${link.host ?? ""}`}
+          environmentId={environmentId}
+          link={link}
+        />
+      ))}
+    </>
+  );
+  if (live)
+    return (
+      <View className="flex-1 bg-sheet">
+        <AppBar
+          title={note?.title ?? props.path}
+          sidebar={false}
+          onBack={() => navigation.goBack()}
+        />
+        <KeyboardAvoidingView behavior="padding" className="flex-1">
+          {editorFocused ? (
+            <View className="flex-row items-center gap-3 border-b border-border px-4 py-2">
+              <Text
+                accessibilityLiveRegion="polite"
+                className="flex-1 text-xs text-foreground-muted"
+              >
+                {syncText}
+              </Text>
+              {dirty ? (
+                <Button
+                  tone="primary"
+                  label={saving ? "Saving…" : "Save on phone"}
+                  disabled={!canWrite || saving || !restored}
+                  onPress={() => void save(localBody.current, localStatus.current)}
+                />
+              ) : null}
+            </View>
+          ) : (
+            <NativeScrollView
+              style={{ flexGrow: 0, maxHeight: "45%" }}
+              keyboardShouldPersistTaps="handled"
+              contentContainerClassName="gap-3 p-4"
+            >
+              {header}
+              {dirty ? saveButton : null}
+              {footer}
+            </NativeScrollView>
+          )}
+          <NoteLiveEditor
+            key={support.kind === "live" ? support.lineBreak : "source"}
+            ref={liveEditor}
+            value={body}
+            lineBreak={support.kind === "live" ? support.lineBreak : "\n"}
+            autoFocus={props.create}
+            config={{ editable: canEditBody, readOnly: busy || !restored, theme: editorTheme }}
+            onChange={(next, checkbox) => {
+              if (checkbox && !editing) {
+                if (next !== localBody.current) void save(next, localStatus.current);
+                return;
+              }
+              beginEdit("live");
+              setBody(next);
+              localBody.current = next;
+              setDirty(true);
+            }}
+            onFocusChange={(focused) => {
+              editorFocusedRef.current = focused;
+              setEditorFocused(focused);
+              if (focused) beginEdit("live");
+              else if (!dirty && !saving && !props.create) setEditing(false);
+            }}
+            onSourceChange={setShowSource}
+            onLink={(href) => void tryOpenExternalUrl(href, "markdown-link")}
+            onUnavailable={setLiveUnavailable}
+          />
+          {editorFocused ? (
+            <NoteEditorToolbar
+              source={showSource}
+              disabled={!canEditBody || busy}
+              onCommand={(command) => liveEditor.current?.command(command)}
+            />
+          ) : (
+            <View style={{ height: insets.bottom }} />
+          )}
+        </KeyboardAvoidingView>
+      </View>
+    );
   return (
     <View className="flex-1 bg-sheet">
       <AppBar
@@ -240,115 +506,9 @@ function NoteContent(props: NoteParams) {
         contentContainerClassName="gap-4 p-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 24) }}
       >
-        <Text accessibilityLiveRegion="polite" className="text-xs text-foreground-muted">
-          {saving
-            ? "Saving on phone…"
-            : dirty
-              ? "Unsaved edits"
-              : row
-                ? noteSyncLabel(noteSyncState(row))
-                : !restored
-                  ? "Loading saved edits…"
-                  : props.create && !note && !row
-                    ? "New note · save on phone to create"
-                    : !bodyAvailable
-                      ? "Not loaded"
-                      : !connected
-                        ? "Offline · showing last loaded note"
-                        : "Synced with hub"}
-        </Text>
-        <Text className="text-sm text-foreground-muted">{props.path}</Text>
-        {error ? (
-          <Text accessibilityRole="alert" className="text-danger-foreground">
-            {error}
-          </Text>
-        ) : null}
-        {notesOutbox.error(environmentId) ? (
-          <Text accessibilityRole="alert" className="text-danger-foreground">
-            {notesOutbox.error(environmentId)}
-          </Text>
-        ) : null}
-        <View className="flex-row flex-wrap gap-2">
-          <Button
-            label="Refresh / sync"
-            tone="secondary"
-            disabled={busy || dirty}
-            onPress={() => {
-              setReload((value) => value + 1);
-              void flushNotes(environmentId).catch((error: unknown) => setError(notesError(error)));
-            }}
-          />
-          {row ? (
-            <Button
-              label="Discard saved edits"
-              tone="secondary"
-              disabled={busy || Boolean(row.inFlight)}
-              onPress={() => {
-                Alert.alert(
-                  "Discard saved edits?",
-                  "This removes this phone's draft. It does not delete a note already saved on the hub.",
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Discard",
-                      style: "destructive",
-                      onPress: () => {
-                        void notesOutbox
-                          .discard(environmentId, props.path, row.localUpdatedAt)
-                          .then((removed) => {
-                            if (removed) navigation.goBack();
-                            else
-                              setError(
-                                "The draft changed or started syncing. Review it before discarding.",
-                              );
-                          })
-                          .catch((error: unknown) => setError(notesError(error)));
-                      },
-                    },
-                  ],
-                );
-              }}
-            />
-          ) : null}
-          {row?.state === "conflict" ? (
-            <Button
-              tone="primary"
-              label="Compare versions"
-              onPress={() =>
-                navigation.navigate("NoteConflict", { environmentId, path: props.path })
-              }
-            />
-          ) : null}
-        </View>
-        {dirty && !editing ? (
-          <Button
-            fullWidth
-            tone="primary"
-            label="Retry saving on phone"
-            disabled={saving || !canWrite}
-            onPress={() => void save(localBody.current, localStatus.current)}
-          />
-        ) : null}
+        {header}
         {bodyAvailable ? (
           <>
-            <View className="flex-row gap-2">
-              {(["idea", "doing", "done"] as const).map((value) => (
-                <Button
-                  key={value}
-                  label={value}
-                  tone={status === value ? "primary" : "secondary"}
-                  disabled={!canWrite || busy || row?.state === "conflict"}
-                  selected={status === value}
-                  onPress={() => {
-                    if (editing) {
-                      setStatus(value);
-                      localStatus.current = value;
-                      setDirty(true);
-                    } else void save(localBody.current, value);
-                  }}
-                />
-              ))}
-            </View>
             {editing ? (
               <>
                 <TextInput
@@ -365,13 +525,7 @@ function NoteContent(props: NoteParams) {
                   }}
                   className="min-h-[320px] rounded-xl border border-input-border bg-input p-4 text-base text-foreground"
                 />
-                <Button
-                  fullWidth
-                  tone="primary"
-                  label={saving ? "Saving…" : "Save on phone"}
-                  disabled={!canWrite || saving || !restored}
-                  onPress={() => void save(localBody.current, localStatus.current)}
-                />
+                {saveButton}
               </>
             ) : (
               <>
@@ -393,51 +547,11 @@ function NoteContent(props: NoteParams) {
                   label="Edit markdown"
                   tone="secondary"
                   disabled={!canWrite || busy || row?.state === "conflict"}
-                  onPress={() => {
-                    editBase.current = row?.baseRevision ?? note?.revision ?? null;
-                    setEditing(true);
-                  }}
+                  onPress={() => beginEdit("source")}
                 />
               </>
             )}
-            <Button
-              fullWidth
-              tone="primary"
-              label="Start work from this note"
-              disabled={!canStart || !note || Boolean(row) || editing || busy || dirty}
-              onPress={() =>
-                navigation.navigate("NoteStartWork", { environmentId, path: props.path })
-              }
-            />
-            <Button
-              fullWidth
-              tone="danger"
-              label={deleting ? "Deleting…" : "Delete note"}
-              disabled={!canDelete}
-              onPress={() => {
-                if (!note) return;
-                const target = note;
-                Alert.alert(
-                  "Delete note?",
-                  `“${target.title}” will be removed from Notes on the hub.`,
-                  [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                      text: "Delete",
-                      style: "destructive",
-                      onPress: () => void deleteNote(target),
-                    },
-                  ],
-                );
-              }}
-            />
-            {(note?.threads ?? row?.current?.threads ?? []).map((link) => (
-              <NoteLinkedThread
-                key={`${link.threadId}@${link.host ?? ""}`}
-                environmentId={environmentId}
-                link={link}
-              />
-            ))}
+            {footer}
           </>
         ) : (
           <Text className="text-foreground-muted">Connect to the hub to open this note.</Text>

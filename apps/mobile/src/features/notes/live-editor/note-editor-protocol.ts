@@ -9,6 +9,7 @@ export type NoteEditorCommand =
   | "undo"
   | "redo"
   | "toggleSource"
+  | "focus"
   | "blur";
 
 export interface NoteEditorTheme {
