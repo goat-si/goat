@@ -470,3 +470,20 @@ it.effect("a queued app request cannot grant after computer use is switched off"
     ),
   ),
 );
+
+it.effect("a legacy approval remains time-limited without a standing choice", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+          sessionId,
+        );
+        yield* TestClock.adjust("31 minutes");
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
