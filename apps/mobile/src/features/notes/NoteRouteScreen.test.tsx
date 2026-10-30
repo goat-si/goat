@@ -561,12 +561,12 @@ describe("visual note editor", () => {
   });
 
   it("falls back to markdown when the native serializer would rewrite untouched text", async () => {
-    mocks.serialize = (markdown) => markdown.replace("\n  - ", "\n   - ");
-    mocks.rows = [{ ...row(), body: "- a\n  - b\n" }];
+    mocks.serialize = (markdown) => markdown.replace("* item", "- item");
+    mocks.rows = [{ ...row(), body: "* item\n" }];
     await act(async () => render());
     await edit();
     expect(container.textContent).toContain("the visual editor would rewrite parts of this note");
-    expect(container.querySelector("textarea")?.value).toBe("- a\n  - b\n");
+    expect(container.querySelector("textarea")?.value).toBe("* item\n");
   });
 
   it("a second Save tap while the editor is being read saves once, with the edit", async () => {
@@ -670,6 +670,45 @@ describe("visual note editor", () => {
     mocks.serialize = () => "- rewritten";
     await act(async () => button("Save on phone").click());
     expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "mine" }));
+  });
+
+  it("switching to markdown after a formatting-only change keeps it as an unsaved edit", async () => {
+    await act(async () => render());
+    await edit();
+    mocks.serialize = () => "**mine**";
+    await act(async () => button("Edit as markdown").click());
+    expect(container.querySelector("textarea")?.value).toBe("**mine**");
+    expect(container.textContent).toContain("Unsaved edits");
+    expect(mocks.preventRemove?.enabled).toBe(true);
+  });
+
+  it("typing during the leave check keeps the screen and asks", async () => {
+    await act(async () => render());
+    await edit();
+    const read = Promise.withResolvers<string>();
+    mocks.serialize = () => read.promise;
+    await act(async () => mocks.preventRemove?.callback({ data: { action: "back" } }));
+    act(() => type("typed while leaving"));
+    mocks.serialize = (markdown) => markdown;
+    await act(async () => read.resolve("mine"));
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(mocks.alert).toHaveBeenCalledWith("Unsaved note", expect.any(String), expect.any(Array));
+  });
+
+  it("a native read that never answers ends in a prompt instead of a stuck screen", async () => {
+    await act(async () => render());
+    await edit();
+    mocks.serialize = () => new Promise<string>(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => mocks.preventRemove?.callback({ data: { action: "back" } }));
+      await act(async () => vi.advanceTimersByTime(5000));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(container.textContent).toContain("The editor did not answer. Try again.");
+    expect(mocks.alert).toHaveBeenCalledWith("Unsaved note", expect.any(String), expect.any(Array));
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it("offers undo right after typing and restores the opened text", async () => {

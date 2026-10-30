@@ -20,8 +20,6 @@ import { openVisualNote, visualEditorBlocker, visualNoteBody } from "./note-wysi
 export interface NoteVisualEditorHandle {
   /** The note body to save: the original bytes when nothing changed or the check has not passed. */
   readonly body: () => Promise<string>;
-  /** Whether the editor still holds the note it opened with, formatting included. */
-  readonly unchanged: () => Promise<boolean>;
 }
 
 const HISTORY_LIMIT = 30;
@@ -30,6 +28,7 @@ const MIN_PAUSE_MS = 600;
 // M-series Mac), so the typing pause before a snapshot grows with what the last one cost.
 const PAUSE_PER_SNAPSHOT_MS = 20;
 const NO_STATE = "";
+const READ_TIMEOUT_MS = 5000;
 
 /** Loaded lazily from the note screen, so the rich input costs nothing until a note is edited. */
 export default function NoteVisualEditor(props: {
@@ -65,8 +64,7 @@ export default function NoteVisualEditor(props: {
     }
     let active = true;
     const started = Date.now();
-    void input.current
-      ?.getMarkdown()
+    void readWithTimeout(input.current)
       .then((markdown) => {
         if (!active) return;
         if (markdown === session.text) {
@@ -87,14 +85,15 @@ export default function NoteVisualEditor(props: {
     };
   }, [session]);
 
+  const readMarkdown = () => readWithTimeout(input.current);
   const snapshot = async () => {
     if (pending.current) clearTimeout(pending.current);
     pending.current = null;
     const started = Date.now();
-    const markdown = await input.current?.getMarkdown();
+    const markdown = await readMarkdown();
     pauseMs.current = Math.max(MIN_PAUSE_MS, (Date.now() - started) * PAUSE_PER_SNAPSHOT_MS);
     const stack = history.current;
-    if (markdown !== undefined && markdown !== stack.at(-1)) {
+    if (markdown !== stack.at(-1)) {
       stack.push(markdown);
       if (stack.length > HISTORY_LIMIT) stack.shift();
     }
@@ -118,10 +117,11 @@ export default function NoteVisualEditor(props: {
   const undo = () => {
     if (!canEdit || undoRun.current) return;
     setUndoing(true);
-    undoRun.current = restorePrevious().then(() => {
+    const release = () => {
       undoRun.current = null;
       setUndoing(false);
-    });
+    };
+    undoRun.current = restorePrevious().then(release, release);
   };
   const restorePrevious = async () => {
     const started = version.current;
@@ -144,14 +144,7 @@ export default function NoteVisualEditor(props: {
         // Before the open check passes nothing could be edited, and the serializer may rewrite.
         if (!ready) return session.source;
         await undoRun.current;
-        const markdown = await input.current?.getMarkdown();
-        if (markdown === undefined) throw new Error("The editor closed before the note was read.");
-        return visualNoteBody(session, markdown);
-      },
-      unchanged: async () => {
-        if (!ready) return true;
-        await undoRun.current;
-        return (await input.current?.getMarkdown()) === session.text;
+        return visualNoteBody(session, await readMarkdown());
       },
     }),
     [session, ready],
@@ -219,7 +212,7 @@ export default function NoteVisualEditor(props: {
           ref={input}
           accessibilityLabel="Note"
           defaultValue={session.text}
-          editable={props.editable && ready}
+          editable={canEdit}
           autoFocus={false}
           markdownShortcuts={{ heading: true, unorderedList: true }}
           // Typed URLs stay as typed; auto-linking would rewrite them into [text](url).
@@ -245,6 +238,27 @@ export default function NoteVisualEditor(props: {
       </View>
     </View>
   );
+}
+
+// The fork never times out a native read, so a lost response would hold every lock forever.
+function readWithTimeout(target: EnrichedMarkdownTextInputInstance | null): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!target) return reject(new Error("The editor closed before the note was read."));
+    const timer = setTimeout(
+      () => reject(new Error("The editor did not answer. Try again.")),
+      READ_TIMEOUT_MS,
+    );
+    target.getMarkdown().then(
+      (markdown) => {
+        clearTimeout(timer);
+        resolve(markdown);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function styleStateKey(state: StyleState): string {

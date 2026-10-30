@@ -92,29 +92,6 @@ function NoteContent(props: NoteParams) {
   const latest = Option.getOrNull(AsyncResult.value(feed))?.notes.find(
     (entry) => entry.path === props.path,
   );
-  // Formatting from the native menu can change the note without a text event, so an open
-  // visual editor is read once before leaving without a prompt.
-  usePreventRemove(dirty || saving || (editing && visual), ({ data }) => {
-    if (saving) return;
-    const leave = () => navigation.dispatch(data.action);
-    const ask = () =>
-      Alert.alert(
-        "Unsaved note",
-        "Save your edits on this phone before leaving, or discard them.",
-        [
-          { text: "Keep editing", style: "cancel" },
-          { text: "Discard edits", style: "destructive", onPress: leave },
-        ],
-      );
-    const editor = visualEditor.current;
-    if (dirty) ask();
-    else if (!editor) leave();
-    else
-      void editor
-        .unchanged()
-        .then((same) => (same ? leave() : ask()))
-        .catch(ask);
-  });
   useEffect(() => {
     let active = true;
     void notesOutbox
@@ -275,11 +252,32 @@ function NoteContent(props: NoteParams) {
   const showMarkdown = async () => {
     const next = await readEditor();
     if (next === null) return;
+    // Menu formatting changes the note without a text event; carry it over as an unsaved edit.
+    if (next !== localBody.current) setDirty(true);
     setBody(next);
     localBody.current = next;
     setFallback(null);
     setVisual(false);
   };
+  // Formatting from the native menu can change the note without a text event, so an open
+  // visual editor is read once, under the same lock as saving, before leaving without a prompt.
+  usePreventRemove(dirty || saving || (editing && visual), ({ data }) => {
+    if (saving) return;
+    const leave = () => navigation.dispatch(data.action);
+    const ask = () =>
+      Alert.alert(
+        "Unsaved note",
+        "Save your edits on this phone before leaving, or discard them.",
+        [
+          { text: "Keep editing", style: "cancel" },
+          { text: "Discard edits", style: "destructive", onPress: leave },
+        ],
+      );
+    const opened = localBody.current;
+    if (dirty) ask();
+    else if (!visualEditor.current) leave();
+    else void readEditor().then((next) => (next === opened ? leave() : ask()));
+  });
   return (
     <View className="flex-1 bg-sheet">
       <AppBar

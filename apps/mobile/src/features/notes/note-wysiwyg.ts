@@ -65,6 +65,8 @@ function blockBlocker(text: string, node: RootContent, inList: boolean): string 
     if (text.slice(first.position?.start.offset, first.position?.end.offset).includes("\n"))
       return "a list item with several lines";
     if (nested.some((child) => child.type !== "list")) return "a list item with several paragraphs";
+    // Deleting a parent item moves its children up a level, rewriting their untouched lines.
+    if (nested.length > 0) return "a nested list";
     for (const child of item.children) {
       const found = blockBlocker(text, child, true);
       if (found) return found;

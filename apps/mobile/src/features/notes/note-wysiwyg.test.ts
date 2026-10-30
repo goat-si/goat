@@ -5,11 +5,10 @@ import { openVisualNote, visualEditorBlocker, visualNoteBody } from "./note-wysi
 describe("visual note editor eligibility", () => {
   it.each([
     ["headings", null],
-    ["indentThree", null],
+    ["indentThree", "a nested list"],
     ["numbered", "a numbered list"],
-    // The AST allows these; the native round trip rewrites the indent, so they fall back on open.
-    ["indentTwo", null],
-    ["indentFour", null],
+    ["indentTwo", "a nested list"],
+    ["indentFour", "a nested list"],
     ["checklist", "a checklist"],
     ["codeFence", "a code block"],
     ["table", "a table"],
