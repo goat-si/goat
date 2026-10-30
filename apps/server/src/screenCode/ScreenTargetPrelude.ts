@@ -163,13 +163,18 @@ const __target = (binding, note, owner, extraProps = {}) => {
       !('coordinate_space' in arg)
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
-    return __inputs.has(method) ? act(method, method, withRegion) : __call(method, { ...withRegion, targetRef: ref });
+    const args = { ...withRegion, targetRef: ref };
+    return __inputs.has(method) ? __reply(method, [args]).then((reply) => done(reply, args)) : __call(method, args);
   };
   const act = async (name, method, arg, verify = false) => {
     if (tab && method !== 'click' && method !== 'right_click') retire();
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
+    return done(reply, arg, verify);
+  };
+  const done = (reply, arg, verify = false) => {
+    const verdict = __verdict(reply);
     const value = reply.v;
     const isObj = value !== null && typeof value === 'object' && !Array.isArray(value);
     const observed = [...(isObj && Array.isArray(value._observed) ? value._observed : []), ...(reply.e ?? [])];
@@ -534,7 +539,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     back: () => act('back', 'back_tab', {}),
     forward: () => act('forward', 'forward_tab', {}),
     close: () => call('close_tab'),
-    select: (arg = {}) => act('select', 'select', arg),
+    select: (arg = {}) => call('select', arg),
     // The same read as observe({screenshot:true}). Its element list never reaches the caller,
     // so numbers wait for the next observe() instead of silently meaning other elements.
     screenshot: async (arg) => {
