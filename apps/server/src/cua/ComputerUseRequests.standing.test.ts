@@ -374,3 +374,37 @@ it.effect(
       }),
     ),
 );
+
+it.effect("an automatic session admission can be ended from its resolved item", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        yield* TestClock.adjust("31 minutes");
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+        const automatic = records.turnItems.find(
+          (item) => item.type === "human_handoff" && item.handoff.computerUseScope === "standing",
+        );
+        if (automatic?.type !== "human_handoff")
+          return assert.fail("expected resolved automatic admission");
+        assert.include(automatic.handoff.reason, "standing choice");
+        yield* handoffs.respond(
+          { threadId, handoffId: automatic.handoff.handoffId, action: "cancelled" },
+          sessionId,
+        );
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
