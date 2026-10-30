@@ -746,7 +746,10 @@ export const make = Effect.gen(function* () {
       if (watch.recovery !== undefined || watch.detached) return;
       const running = followers.get(watch.id);
       if (running?.incarnation === watch.incarnation) {
-        if (running.idle !== undefined && watch.pendingRuns.length > 0)
+        if (
+          running.idle !== undefined &&
+          (watch.pendingRuns.length > 0 || watch.heldRuns.length > 0)
+        )
           yield* Deferred.succeed(running.idle, undefined);
         return;
       }

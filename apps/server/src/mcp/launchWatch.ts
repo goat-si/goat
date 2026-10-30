@@ -530,15 +530,17 @@ export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): 
       : [...watch.followAgain, runId];
     return { ...watch, followAgain, armedAt: now, updatedAt: now };
   }
-  // A run a look left unreported is looked at again: followed if it is the thread's own.
-  if (watch.skippedRuns.includes(runId))
-    return {
-      ...watch,
-      skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
-      heldRuns: [...watch.heldRuns, runId],
-      updatedAt: now,
-    };
-  if (!watch.reportedRuns.includes(runId)) return watch;
+  // Any other run, skipped or not looked at yet, is held: the next look follows it if it is the
+  // thread's own, so a look already under way cannot skip the retry.
+  if (!watch.reportedRuns.includes(runId))
+    return watch.heldRuns.includes(runId)
+      ? watch
+      : {
+          ...watch,
+          skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
+          heldRuns: [...watch.heldRuns, runId],
+          updatedAt: now,
+        };
   return {
     ...watch,
     pendingRuns: [...watch.pendingRuns, runId],
