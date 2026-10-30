@@ -91,7 +91,7 @@ export const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.
 export const isRpcRequest = Schema.is(RpcRequest);
 export const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 export const encodeServerConfig = Schema.encodeSync(ServerConfig);
-export const encodeServerConfigStreamEvent = Schema.encodeSync(ServerConfigStreamEvent);
+const encodeServerConfigStreamEvent = Schema.encodeSync(ServerConfigStreamEvent);
 export const encodeDefect = Schema.encodeSync(Schema.Defect());
 export const ENCODED_SERVER_CONFIG = encodeServerConfig(SERVER_CONFIG);
 
