@@ -547,6 +547,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       // the agent stored are gone; say so unless it asked for a reset.
       const contextReset = running.consumeLost(input.threadId) && input.resetValues !== true;
       const startedAt = yield* Clock.currentTimeMillis;
+      let cellDeadlineMillis: number | undefined;
       let failed: ScreenCellFailure | undefined;
       const cellContext = {
         runId: input.runId,
@@ -563,7 +564,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         return finish
           ? finish(cellContext, {
               skipEndRead,
-              cellDeadlineMillis: startedAt + cellLimits.cellWallMs,
+              cellDeadlineMillis: cellDeadlineMillis ?? startedAt + cellLimits.cellWallMs,
             })
           : Effect.succeed({});
       };
@@ -573,6 +574,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             runId: input.runId,
             turnId: input.turnId,
             context: cellContext,
+            onCellStart: (deadline) => {
+              cellDeadlineMillis = deadline;
+            },
           },
           input.source,
           input.resetValues === true || contextReset,
@@ -591,6 +595,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 };
                 return Effect.fail({
                   ...fail(cause.code),
+                  ...(cause.startupFailed
+                    ? { message: "The screen runtime did not start; nothing ran. Retry the cell." }
+                    : {}),
                   cellId,
                   ...cellErrorSafety(
                     { effectStarted: cause.effectStarted === true },
