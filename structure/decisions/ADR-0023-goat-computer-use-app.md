@@ -145,8 +145,11 @@
     one session's slow start never holds up another's Stop. An overlay command still queued when
     its channel ends is dropped, so nothing shows after the hide. `closeSession` also forgets the
     session and its token. Drivers are reaped by the one object that signals them, so no signal
-    reaches a reused pid, and when the service dies alone its launcher sends SIGKILL to every
-    other process of its group, drivers that ignore SIGTERM included. Until stage c, each agent connection's
+    reaches a reused pid, and a service that exits cleanly first waits for its drivers to be reaped.
+    When the service dies alone and anything of its group still runs, its launcher ends the whole
+    group with one SIGKILL, itself included, so drivers that ignore SIGTERM go too and no other
+    process is ever signalled; only a group with nothing left running keeps the service's exit
+    status. Until stage c, each agent connection's
     proxy still starts its own helper with `--mcp` for its driver and Stop ends the pair (D3
     amendment 2); the desktop's readiness check starts its own helper with `--mcp` the same
     way. Direct mode has no driver cursor overlay, so the helper draws

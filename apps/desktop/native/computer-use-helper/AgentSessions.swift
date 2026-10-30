@@ -85,6 +85,8 @@ final class AgentSessions {
 
   private let lock = NSLock()
   private var sessions: [String: Session] = [:]
+  /// Every driver started and not yet reaped.
+  private let drivers = DispatchGroup()
   /// The sequence number of the last connection the socket accepted, taking every connection
   /// already waiting to be accepted first. Set by the listener; nothing is accepted without it.
   var fenceAccepts: () -> UInt64 = { 0 }
@@ -140,6 +142,11 @@ final class AgentSessions {
     for id in ids { close(id: id) }
   }
 
+  /// Waits, at most two seconds, until every driver closeAll ended has been reaped.
+  func awaitDrivers() {
+    _ = drivers.wait(timeout: .now() + 2)
+  }
+
   // MARK: Socket side
 
   private func authorize(_ request: [String: Any], sequence: UInt64) -> Result<Session, Refusal> {
@@ -188,11 +195,13 @@ final class AgentSessions {
       lock.unlock()
       return .failure(.noDriver)
     }
-    driver.onExit { [weak self] code in
+    drivers.enter()
+    driver.onExit { [weak self, drivers] code in
       self?.report([
         "type": "sessionDriverExited", "sessionId": session.id,
         "generation": Int(attachment.generation), "driverPid": Int(driver.pid), "code": Int(code),
       ])
+      drivers.leave()
     }
     lock.lock()
     let overtaken = attachment.ended

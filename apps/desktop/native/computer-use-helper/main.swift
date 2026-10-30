@@ -177,15 +177,14 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
   exit(code)
 }
 
-/// SIGKILL to every other process in this launcher's group, so a driver that handles or ignores
-/// SIGTERM cannot outlive its service; killpg would end this launcher too, before it reports
-/// the service's exit status. A pid is signalled only while it is still in this group. It settles
-/// only on a complete listing whose every member but this launcher was already a zombie at the
-/// previous pass's check: a zombie cannot fork, so no living process can be missing from that
-/// listing, whatever forked while an earlier SIGKILL was pending. If the group cannot be listed
-/// or does not settle within about a second, the whole group, this launcher with it, is killed
-/// instead: cleanup matters more than the exit status.
-func killGroupMembers() {
+/// Ends whatever of this launcher's group outlived its service, a driver that ignores SIGTERM
+/// included. The only signal is killpg: it names the group, which no other process can take while
+/// this launcher leads it, so nothing outside the group is ever signalled. When a member still
+/// runs, the whole group goes with SIGKILL, this launcher included, since cleanup matters more
+/// than the exit status. The launcher returns to report that status only once a complete listing
+/// shows nothing but zombies already seen, with the same start times, by the previous pass: a
+/// zombie cannot fork, so nothing living can be missing from that listing.
+func endGroupRemains() {
   let group = getpgrp()
   /// Members seen as zombies by the previous pass's check, each with its start time. A pid the
   /// kernel reaps and hands to a new member in between starts later, so it never counts.
@@ -203,23 +202,20 @@ func killGroupMembers() {
     guard filled > 0 else { break }
     let count = Int(filled) / MemoryLayout<pid_t>.size
     let members = pids.prefix(count).filter { $0 > 0 && $0 != getpid() }
-    // A full buffer may have cut the listing short, so it never settles anything. Each member
-    // is read again: it must still be the zombie the previous check saw, not a pid reused since.
-    let settled = members.allSatisfy { pid in
-      if case .zombie(let start) = processState(pid) { return zombies[pid] == start }
-      return false
-    }
-    if count < capacity && settled { return }
-    zombies = [:]
+    var seen: [pid_t: ProcessStart] = [:]
+    var living = false
     for pid in members {
       switch processState(pid) {
-      case .zombie(let start): zombies[pid] = start
+      case .zombie(let start): seen[pid] = start
       case .gone: break
-      case .living: if getpgid(pid) == group { kill(pid, SIGKILL) }
+      case .living: living = true
       }
     }
-    // A SIGKILLed process takes a moment to become a zombie; this runs only after a crash.
-    usleep(10_000)
+    if living { break }
+    // A full buffer may have cut the listing short, so it never settles anything.
+    let settled = members.allSatisfy { pid in seen[pid] != nil && seen[pid] == zombies[pid] }
+    if count < capacity && settled { return }
+    zombies = seen
   }
   killpg(group, SIGKILL)
 }
@@ -323,7 +319,7 @@ func runLauncher() -> Never {
     // A service that died alone (a crash, a stray SIGKILL) leaves its drivers behind: one for an
     // agent connection, one per session for the shared service. This launcher still leads the
     // group and is alive, so the group id is still this group's.
-    if getpgrp() == getpid() { killGroupMembers() }
+    if getpgrp() == getpid() { endGroupRemains() }
     exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   dispatchMain()
@@ -618,6 +614,8 @@ final class DriverService {
       privateMode.end()
       frames.end()
       sessions.closeAll()
+      // Reaped here, so a clean exit leaves its launcher nothing to kill and its status stands.
+      sessions.awaitDrivers()
       listener?.remove()
     }
     exit(0)
