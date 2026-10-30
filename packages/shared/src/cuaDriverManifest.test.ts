@@ -313,6 +313,23 @@ describe("cuaDriverManifest", () => {
   });
 
   // A standalone server excludes only its own runtime; a GOAT app beside it shows approval cards.
+  it("excludes system security and screen time apps from requests and the manifest", () => {
+    const ids = [
+      "com.apple.systempreferences",
+      "com.apple.loginwindow",
+      "com.apple.SecurityAgent",
+      "com.apple.coreauthd",
+      "com.apple.keychainaccess",
+      "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeWidgetApplication",
+      "com.apple.ScreenTimeViewService",
+    ];
+    const listed = ids.map((bundle_id) => ({ bundle_id, name: "System app" }));
+    for (const id of ids) expect(isExcludedCuaApplication(id), id).toBe(true);
+    expect(admittedCuaApplications(listed, [])).toEqual([]);
+    expect(cuaRequestableApps(listed, [])).toEqual([]);
+  });
+
   it("never admits or offers any GOAT desktop channel or its computer use helper", () => {
     const listed = [
       { bundle_id: "si.goat.desktop", name: "GOAT" },

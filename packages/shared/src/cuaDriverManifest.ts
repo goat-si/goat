@@ -118,6 +118,15 @@ const EXCLUDED_BUNDLE_IDS = new Set([
   // Every released GOAT channel and its helper: any of them can show this host's approval cards.
   ...Object.values(DESKTOP_CHANNEL_APP_IDS).flatMap((id) => [id, computerUseHelperBundleId(id)]),
   "com.apple.keychainaccess",
+  "com.apple.systempreferences",
+  "com.apple.loginwindow",
+  "com.apple.securityagent",
+  "com.apple.coreauthd",
+  "com.apple.screentimeagent",
+  // macOS: /System/Library/CoreServices/Screen Time.app/Contents/Info.plist.
+  "com.apple.screentimewidgetapplication",
+  // macOS: ScreenTimeServiceUI.framework/XPCServices/ScreenTimeViewService.xpc/Contents/Info.plist.
+  "com.apple.screentimeviewservice",
   "com.apple.passwords",
   "com.1password.1password",
   "com.agilebits.onepassword7",
@@ -133,7 +142,7 @@ const EXCLUDED_BUNDLE_IDS = new Set([
 // Names cover Windows and Linux, where an app is listed by its executable path or desktop name.
 // Any non-alphanumeric character bounds a word: snap desktop ids and Windows AUMIDs use "_".
 const EXCLUDED_NAME =
-  /(?<![\p{L}\p{N}])(1password|bitwarden|keepass(xc)?|lastpass|dashlane|nordpass|proton[ ._-]?pass|keychain access|passwords)(?![\p{L}\p{N}])/iu;
+  /(?<![\p{L}\p{N}])(1password|bitwarden|keepass(xc)?|lastpass|dashlane|nordpass|proton[ ._-]?pass|keychain access|passwords|system settings|system preferences|loginwindow|securityagent|coreauthd|screen time)(?![\p{L}\p{N}])/iu;
 /** The driver, and GOAT's helper on Windows, named by their executables. */
 const EXCLUDED_EXECUTABLE = /(^|[\\/])((cua-driver|GOAT Computer Use)\.exe|cua-driver)$/iu;
 

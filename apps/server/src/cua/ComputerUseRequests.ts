@@ -132,7 +132,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         reason: "unknown_app",
         code: "app_not_allowed",
         unknownApps: excluded,
-        message: `Computer use never controls ${excluded.join(", ")}: password managers and other credential stores are always left out. Do not ask for them again; ask the person to do that step themselves.`,
+        message: `Computer use never controls ${excluded.join(", ")}: password managers, system security and Screen Time apps are always left out. Do not ask for them again; ask the person to do that step themselves.`,
       } satisfies ComputerUseRequestResult;
     const listed = yield* cua.value.listedApps;
     if (Option.isSome(listed)) {

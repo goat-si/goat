@@ -99,7 +99,19 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
         supported,
         ({ request }) =>
           Effect.gen(function* () {
-            for (const app of ["NordPass", "me.proton.pass.electron", "com.1password.safari"]) {
+            for (const app of [
+              "NordPass",
+              "me.proton.pass.electron",
+              "com.1password.safari",
+              "com.apple.systempreferences",
+              "com.apple.loginwindow",
+              "com.apple.SecurityAgent",
+              "com.apple.coreauthd",
+              "com.apple.keychainaccess",
+              "com.apple.ScreenTimeAgent",
+              "com.apple.ScreenTimeWidgetApplication",
+              "com.apple.ScreenTimeViewService",
+            ]) {
               const result = yield* request({ apps: ["com.example.Editor", app] });
               assert.equal(result.kind, "refused");
               if (result.kind !== "refused") return assert.fail(`${app} must not ask a person`);
