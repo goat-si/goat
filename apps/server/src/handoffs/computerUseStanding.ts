@@ -153,31 +153,32 @@ export const makeComputerUseStanding = (deps: {
     ).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(attempt) : attempt;
   });
-  const stopUnlocked = (threadId?: ThreadId) =>
-    Effect.gen(function* () {
-      const stopped = new Set(
-        Option.isNone(leases)
-          ? []
-          : threadId === undefined
-            ? yield* leases.value.stopAll
-            : (yield* leases.value.stop(threadId))
-              ? [threadId]
-              : [],
-      );
-      yield* clear(threadId);
-      if (Option.isSome(leases)) {
-        const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
-        for (const grant of grants) {
-          if (threadId !== undefined && grant.threadId !== threadId) continue;
-          const handoff = yield* deps.read(grant.threadId, grant.handoffId);
-          if (handoff.computerUseScope === undefined) continue;
-          yield* leases.value.release([grant.handoffId]);
-          yield* deps.revoke(handoff);
-          stopped.add(grant.threadId);
-        }
+  const stopUnlocked = Effect.fn("Handoffs.stopComputerUseSessionsUnlocked")(function* (
+    threadId?: ThreadId,
+  ) {
+    const stopped = new Set(
+      Option.isNone(leases)
+        ? []
+        : threadId === undefined
+          ? yield* leases.value.stopAll
+          : (yield* leases.value.stop(threadId))
+            ? [threadId]
+            : [],
+    );
+    yield* clear(threadId);
+    if (Option.isSome(leases)) {
+      const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
+      for (const grant of grants) {
+        if (threadId !== undefined && grant.threadId !== threadId) continue;
+        const handoff = yield* deps.read(grant.threadId, grant.handoffId);
+        if (handoff.computerUseScope === undefined) continue;
+        yield* leases.value.release([grant.handoffId]);
+        yield* deps.revoke(handoff);
+        stopped.add(grant.threadId);
       }
-      return [...stopped];
-    }).pipe(lock.withPermits(1));
+    }
+    return [...stopped];
+  }, lock.withPermits(1));
   const stop = Effect.fn("Handoffs.stopComputerUseSessions")((threadId?: ThreadId) => {
     const effect = stopUnlocked(threadId);
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
