@@ -22,6 +22,9 @@ export interface NoteMarkdownRange {
 }
 
 const MAX_INLINE_LINE = 2000;
+// Inline markers styled per parse. Each costs about a microsecond on Hermes, so a note made of
+// markers would stall typing; past this the rest of the note keeps only its block styles.
+const INLINE_MARKER_BUDGET = 25_000;
 
 function push(
   ranges: NoteMarkdownRange[],
@@ -118,16 +121,22 @@ function closingDelimiter(text: string, from: number, end: number, code: number,
   return -1;
 }
 
-/** Index of the bracket closing the one at `open`, honoring nesting and escapes, or -1. */
-function closingBracket(text: string, open: number, end: number, opener: number, closer: number) {
-  let depth = 0;
-  for (let index = open; index < end; index++) {
+/** Matching "]" and ")" for each "[" and "(" of a line, found once so unmatched ones cost nothing. */
+function bracketMatches(text: string, start: number, end: number) {
+  const matches = new Map<number, number>();
+  const squares: number[] = [];
+  const rounds: number[] = [];
+  for (let index = start; index < end; index++) {
     const code = text.charCodeAt(index);
     if (code === 92) index++;
-    else if (code === opener) depth++;
-    else if (code === closer && --depth === 0) return index;
+    else if (code === 91) squares.push(index);
+    else if (code === 40) rounds.push(index);
+    else if (code === 93 || code === 41) {
+      const open = (code === 93 ? squares : rounds).pop();
+      if (open !== undefined) matches.set(open, index);
+    }
   }
-  return -1;
+  return matches;
 }
 
 // The characters that can start inline markdown; ":" finds bare URLs from their "://".
@@ -149,6 +158,7 @@ function isInlineTrigger(code: number) {
 interface InlineScan {
   readonly regex: RegExp;
   next: number;
+  budget: number;
 }
 
 function isUrlTrailingPunctuation(code: number) {
@@ -178,10 +188,11 @@ function parseInline(
   table: boolean,
   scan: InlineScan,
 ) {
-  if (lineEnd - start > MAX_INLINE_LINE) return;
+  if (lineEnd - start > MAX_INLINE_LINE || scan.budget <= 0) return;
   // Open spans as [closer start, closer end] pairs, innermost last. Inner spans cannot cross the
   // closer of the span that contains them, and a closer's syntax is emitted when it is reached.
   const closers: number[] = [];
+  let brackets: Map<number, number> | null = null;
   let index = start;
   while (index < lineEnd || closers.length > 0) {
     const closeStart = closers[closers.length - 2] ?? -1;
@@ -207,6 +218,12 @@ function parseInline(
         continue;
       }
       code = text.charCodeAt(index);
+    }
+    if (--scan.budget < 0) {
+      // Close what is open, innermost (earliest) first, so the ranges stay in order.
+      for (let pair = closers.length - 2; pair >= 0; pair -= 2)
+        push(ranges, "syntax", closers[pair] ?? 0, closers[pair + 1] ?? 0);
+      return;
     }
     if (code === 92) {
       // A backslash escape dims the backslash and keeps the next character literal.
@@ -248,21 +265,17 @@ function parseInline(
     const image = code === 33 && text.charCodeAt(index + 1) === 91;
     if (code === 91 || image) {
       const open = image ? index + 1 : index;
-      const close = closingBracket(text, open, end, 91, 93);
+      brackets ??= bracketMatches(text, start, lineEnd);
+      const matched = brackets.get(open) ?? -1;
+      const close = matched < end ? matched : -1;
       if (close !== -1) {
         if (text.charCodeAt(open + 1) === 94) {
           push(ranges, "syntax", index, close + 1);
           index = close + 1;
           continue;
         }
-        const next = text.charCodeAt(close + 1);
-        const target =
-          next === 40
-            ? closingBracket(text, close + 1, end, 40, 41)
-            : next === 91
-              ? closingBracket(text, close + 1, end, 91, 93)
-              : -1;
-        if (target !== -1) {
+        const target = brackets.get(close + 1) ?? -1;
+        if (target !== -1 && target < end) {
           push(ranges, "syntax", index, open + 1);
           push(ranges, "link", open + 1, close);
           closers.push(close, target + 1);
@@ -330,7 +343,11 @@ function isTableDelimiterRow(line: string) {
 export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
   const ranges: NoteMarkdownRange[] = [];
   const length = text.length;
-  const scan: InlineScan = { regex: /[\\|`<![:*_~]/g, next: -1 };
+  const scan: InlineScan = {
+    regex: /[\\|`<![:*_~]/g,
+    next: -1,
+    budget: INLINE_MARKER_BUDGET,
+  };
   let position = 0;
   let fenceCode = 0;
   let fenceLength = 0;
@@ -364,7 +381,8 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
     // Inside a fence only its own quote levels are markers; a deeper ">" is code.
     let restStart = position;
     let depth = 0;
-    while (fenceCode === 0 || depth < fenceDepth) {
+    const maxDepth = fenceCode === 0 ? Number.POSITIVE_INFINITY : fenceDepth;
+    while (depth < maxDepth) {
       let marker = restStart;
       while (marker < end && marker - restStart < 3 && text.charCodeAt(marker) === 32) marker++;
       if (text.charCodeAt(marker) !== 62 || marker >= end) break;
@@ -390,9 +408,10 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
     // Code lines are styled one by one, so quote markers inside a fence keep their order.
     if (fenceCode !== 0) {
       if (text.charCodeAt(first) === fenceCode) {
-        const close = /^(`{3,}|~{3,})[ \t]*$/.exec(text.slice(first, end));
-        const marker = close?.[1] ?? "";
-        if (marker.charCodeAt(0) === fenceCode && marker.length >= fenceLength) {
+        const run = runLength(text, first, end, fenceCode);
+        let rest = first + run;
+        while (rest < end && isBlank(text.charCodeAt(rest))) rest++;
+        if (run >= fenceLength && rest === end) {
           push(ranges, "syntax", restStart, end);
           fenceCode = 0;
           position = next;
@@ -413,11 +432,13 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
     const indent = first - restStart;
 
     if (lead === 96 || lead === 126) {
-      const fence = /^(`{3,}|~{3,})(.*)$/.exec(text.slice(first, end));
-      if (fence && !(lead === 96 && (fence[2] ?? "").includes("`"))) {
+      // Runs and indexOf instead of a regex: a long run before an odd character must not backtrack.
+      const run = runLength(text, first, end, lead);
+      const tick = lead === 96 ? text.indexOf("`", first + run) : -1;
+      if (run >= 3 && (tick === -1 || tick >= end)) {
         push(ranges, "syntax", restStart, end);
         fenceCode = lead;
-        fenceLength = (fence[1] ?? "").length;
+        fenceLength = run;
         fenceDepth = depth;
         inTable = false;
         position = next;

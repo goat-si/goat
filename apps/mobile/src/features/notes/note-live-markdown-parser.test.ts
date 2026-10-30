@@ -137,7 +137,14 @@ describe("note live markdown parser", () => {
     expect(styled(noteSourceFixtures.crlf!, "bold")).toEqual(["bold"]);
   });
 
-  it("stays linear on adversarial lines", () => {
+  it("keeps block styles but stops inline styles once a note exceeds its marker budget", () => {
+    const text = "`c`\n".repeat(30_000) + "# Heading **b**\n";
+    expect(styled(text, "code")).toHaveLength(25_000);
+    expect(styled(text, "h1")).toEqual(["Heading **b**"]);
+    expect(styled(text, "bold")).toEqual([]);
+  });
+
+  it("keeps correct output on adversarial lines", () => {
     const stars = ("*a ".repeat(600) + "\n").repeat(50);
     const brackets = ("[".repeat(1500) + "\n").repeat(50);
     // Parsing finishes; long lines skip inline styles rather than rescanning.

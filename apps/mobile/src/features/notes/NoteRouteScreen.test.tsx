@@ -521,15 +521,24 @@ describe("formatted note editor", () => {
     expect(container.textContent).toContain("old Mac line endings");
   });
 
-  it("corrects a forward delete between mixed line endings once the selection arrives", async () => {
-    await editorFor("a\r\n\nb");
-    mocks.selection = { start: 2, end: 2 };
-    act(() => button("Report selection").click());
-    act(() => type("a\nb"));
-    act(() => button("Report selection").click());
-    await act(async () => button("Save on phone").click());
-    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("a\r\nb");
-  });
+  it.each([
+    ["forward delete, which reports no new selection", null, "a\r\nb"],
+    ["backspace, which moves the cursor back", { start: 1, end: 1 }, "a\nb"],
+  ] as const)(
+    "saves the deleted line break between mixed endings after %s",
+    async (_name, after, saved) => {
+      await editorFor("a\r\n\nb");
+      mocks.selection = { start: 2, end: 2 };
+      act(() => button("Report selection").click());
+      act(() => type("a\nb"));
+      if (after) {
+        mocks.selection = after;
+        act(() => button("Report selection").click());
+      }
+      await act(async () => button("Save on phone").click());
+      expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe(saved);
+    },
+  );
 
   it("opens a note it cannot round-trip in the plain editor and says why", async () => {
     await editorFor("old\rmac");

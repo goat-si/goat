@@ -69,15 +69,16 @@ function editSpan(
   if (selection) {
     const { start, end } = selection;
     // Only a placement that explains the change is used, so equal neighbors, such as two line
-    // breaks with different source endings, resolve to the one at the cursor. After a change the
-    // cursor sits where text was deleted, or just past what was typed.
+    // breaks with different source endings, resolve to the one at the cursor. A deletion reads as
+    // forward delete first: Android reports no selection when the cursor stays put, and backspace
+    // always moves it. After a change the cursor sits where text was deleted, or past what was typed.
     const candidates: Array<readonly [number, number]> = [];
     if (selectionAfterChange) {
       if (start === end)
         candidates.push(delta < 0 ? [start, start - delta] : [start - delta, start - delta]);
     } else {
       if (end > start) candidates.push([start, end]);
-      if (delta < 0) candidates.push([start + delta, start], [start, start - delta]);
+      if (delta < 0) candidates.push([start, start - delta], [start + delta, start]);
       else candidates.push([start, start], [start - delta, start - delta]);
     }
     for (const [from, to] of candidates)

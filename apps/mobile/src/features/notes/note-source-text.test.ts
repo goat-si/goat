@@ -112,10 +112,12 @@ describe("note source text", () => {
 
   it("uses the cursor to tell apart equal neighbors with different line endings", () => {
     const source = "a\r\n\nb";
-    // Deleting the first break, with the selection reported before or after the change.
-    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 2, end: 2 })).toBe("a\nb");
+    // With the cursor between the two breaks, the change reads as a forward delete until the
+    // selection after it shows the cursor moved back, as backspace does.
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 2, end: 2 })).toBe("a\r\nb");
+    // A selection already moved back is only explained by backspace.
     expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 1, end: 1 })).toBe("a\nb");
-    // Deleting the second break keeps the first one's CRLF.
+    // Backspace after the second break keeps the first one's CRLF.
     expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 3, end: 3 })).toBe("a\r\nb");
     // A replaced selection changes only the selected text.
     expect(applyNoteEditorChange("x\r\nx\r\nx", "x\nx\nx", "x\ny\nx", { start: 2, end: 3 })).toBe(
