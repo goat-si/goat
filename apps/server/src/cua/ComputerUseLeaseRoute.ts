@@ -48,6 +48,7 @@ import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
+import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -364,14 +365,22 @@ const callLayer = HttpRouter.add(
     if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     // Unreadable settings keep the default: the person's pointer stays still.
-    const movePointer = yield* ServerSettings.ServerSettingsService.pipe(
+    const settings = yield* ServerSettings.ServerSettingsService.pipe(
       Effect.flatMap((settings) => settings.getSettings),
-      Effect.map((settings) => settings.cuaMovePointer),
-      Effect.orElseSucceed(() => "never" as const),
+      Effect.option,
     );
+    if (Option.isNone(settings)) return HttpServerResponse.empty({ status: 503 });
+    if (call.value.action === "reserve") {
+      const app = deniedCallApp(call.value, settings.value.cuaDeniedApps);
+      if (app !== undefined)
+        return HttpServerResponse.text(
+          encodeAdmission({ status: "refused", detail: "app_not_allowed", app }),
+          { contentType: "application/json", headers: { "cache-control": "no-store" } },
+        );
+    }
     if (
       call.value.action === "reserve" &&
-      movePointer !== "allowed" &&
+      settings.value.cuaMovePointer !== "allowed" &&
       movesPersonPointer(call.value)
     )
       return HttpServerResponse.text(
