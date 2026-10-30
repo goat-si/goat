@@ -158,9 +158,9 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     return refusal(
       input.id,
       input.message.method,
-      "app_not_approved",
+      "app_not_allowed",
       scopeMessage(
-        "app_not_approved",
+        "app_not_allowed",
         input.listed.get(verdict.pid)?.id ?? `the app with pid ${verdict.pid}`,
       ),
     );

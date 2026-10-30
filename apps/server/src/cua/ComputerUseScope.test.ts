@@ -14,6 +14,17 @@ const verdict = (listed: Map<number, ListedApp>) =>
   });
 
 describe("learnApps", () => {
+  it("allows reads but refuses unidentified full-access input", () => {
+    const common = { apps: undefined, appOf: () => undefined, bundleIds: true };
+    assert.deepEqual(
+      scopeVerdict({ ...common, name: "get_window_state", args: { pid: 42, window_id: 1 } }),
+      { _tag: "allow" },
+    );
+    assert.deepInclude(scopeVerdict({ ...common, name: "press_key", args: { key: "return" } }), {
+      _tag: "refuse",
+      reason: "app_not_allowed",
+    });
+  });
   it("allows app discovery with a pid filter without resolving the target", () => {
     assert.deepEqual(
       scopeVerdict({

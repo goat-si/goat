@@ -90,7 +90,7 @@ describe("an app approved by its executable path", () => {
         approved: ["C:\\Good\\notes.exe"],
         listApps: Effect.void,
       });
-      assert.include(JSON.stringify(refused), "app_not_approved");
+      assert.include(JSON.stringify(refused), "app_not_allowed");
     }),
   );
 
@@ -154,7 +154,7 @@ describe("an app approved by its executable path", () => {
           executableOf,
           listApps: Effect.sync(() => learnApps(listing(undefined), listed, true, executableOf)),
         });
-        assert.include(JSON.stringify(refused), "app_not_approved");
+        assert.include(JSON.stringify(refused), "app_not_allowed");
         assert.deepEqual(reads, []);
       }),
   );

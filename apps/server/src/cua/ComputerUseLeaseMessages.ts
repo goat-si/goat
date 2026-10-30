@@ -212,7 +212,7 @@ export const scopeMessage = (
   launch?: "bundle_id" | "unverifiable",
 ) =>
   reason === "app_not_allowed"
-    ? `${app ?? "This app"} is protected and cannot be controlled. The call did not run; ask the person to do this step.`
+    ? `${app ?? "The target app"} is protected or could not be verified. The call did not run; ask the person to do this step.`
     : launch === "bundle_id"
       ? "Launch an approved app by its bundle_id alone, as list_apps reports it; a name can open another app than the one approved, so the call did not run."
       : launch === "unverifiable"
