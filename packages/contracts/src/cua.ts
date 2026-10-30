@@ -266,7 +266,13 @@ export const ComputerUseLeaseDriverEnded = Schema.Struct({
 });
 export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
 
+export const ComputerUseLeasePersonStop = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  personStop: Schema.Literal("person_esc"),
+});
+
 export const ComputerUseLeaseReport = Schema.Union([
+  ComputerUseLeasePersonStop,
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,

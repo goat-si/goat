@@ -400,6 +400,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             report: options.onHumanInput,
             current: () => active() && lifecycle.current === current,
           }).pipe(Effect.scoped, Effect.forkIn(current.scope));
+        if (driver.personStop !== undefined && options.onPersonStop !== undefined) {
+          const onPersonStop = options.onPersonStop;
+          yield* driver.personStop.pipe(
+            Stream.runForEach(() =>
+              active() && lifecycle.current === current ? onPersonStop() : Effect.void,
+            ),
+            Effect.forkIn(current.scope),
+          );
+        }
         if (lifecycle.current !== current) return;
         overlay.reset();
         // A fresh child hears the provider's handshake again; its answers are dropped.

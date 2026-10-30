@@ -51,6 +51,7 @@ export const refusal = (
   const refused = {
     refused: computerUseRefusalReason(detail),
     detail,
+    ...(detail === "stopped" ? { code: "stopped_by_person" } : {}),
     safety: refusalSafety(detail, call?.tool, call?.args),
   };
   return JSON.stringify(
@@ -121,8 +122,13 @@ export const cutOff = (
     result: {
       content: [{ type: "text", text }],
       structuredContent: read
-        ? { code: "interrupted", detail, safety }
-        : { effect: "unverifiable", code: "interrupted", detail, safety },
+        ? { code: detail === "stopped" ? "stopped_by_person" : "interrupted", detail, safety }
+        : {
+            effect: "unverifiable",
+            code: detail === "stopped" ? "stopped_by_person" : "interrupted",
+            detail,
+            safety,
+          },
       isError: true,
     },
   });

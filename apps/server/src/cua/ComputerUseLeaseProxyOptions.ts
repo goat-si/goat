@@ -337,6 +337,7 @@ export interface LeaseProxyDriver {
    * Keyboard and pointer events the macOS helper saw, each with when it happened on this
    * process's clock, every agent's own included (#1235). Absent where the child reports none.
    */
+  readonly personStop?: Stream.Stream<void>;
   readonly humanInput?: Stream.Stream<{
     readonly source: ComputerUseHumanInputSource;
     readonly at: number;
@@ -449,5 +450,6 @@ export interface LeaseProxyOptions<EU, ED> {
    * person. Reports go one at a time in order; a call reaches the driver only after its start
    * report has answered, so the server knows the call before any helper can see its events.
    */
+  readonly onPersonStop?: () => Effect.Effect<unknown>;
   readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
 }
