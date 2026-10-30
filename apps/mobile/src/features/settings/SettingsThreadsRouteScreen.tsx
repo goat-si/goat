@@ -261,9 +261,8 @@ function BetaSettingsSection() {
         />
       </SettingsSection>
       <Text className="px-2 text-sm text-foreground-muted">
-        Fold working and monitoring threads into a Working section. They return to the top of the
-        list when they need you. While this is on, active threads are ordered by time and cannot be
-        moved.
+        Order active threads by when each last came back to you. Running work stays in Priority at
+        the top of the list. While this is on, active threads cannot be moved.
       </Text>
     </View>
   );
