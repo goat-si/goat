@@ -21,14 +21,17 @@ const verdict = (listed: Map<number, ListedApp>) =>
 
 describe("learnApps", () => {
   it("forgets the pid when a call reports that its target is gone", () => {
-    const listed = new Map<number, ListedApp>();
-    learnApps({ apps: [KAKAO] }, listed, true);
-    forgetGoneApp(
-      { isError: true, structuredContent: { code: "process_not_found" } },
-      { pid: KAKAO.pid },
-      listed,
-    );
-    assert.equal(listed.has(KAKAO.pid), false);
+    for (const code of [
+      "process_not_found",
+      "target_missing",
+      "windowNotFound",
+      "px_window_not_found",
+    ]) {
+      const listed = new Map<number, ListedApp>();
+      learnApps({ apps: [KAKAO] }, listed, true);
+      forgetGoneApp({ isError: true, structuredContent: { code } }, { pid: KAKAO.pid }, listed);
+      assert.equal(listed.has(KAKAO.pid), false, code);
+    }
   });
   it("does not invalidate cached identity for text in a successful response", () => {
     const listed = new Map<number, ListedApp>();
