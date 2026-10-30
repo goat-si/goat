@@ -117,6 +117,82 @@ describe("tab observation elements", () => {
     ]);
   });
 
+  it("diffs changed values, additions and removals by role, name and ref", () => {
+    const observations = new ScreenObservations();
+    const first = observe(
+      observations,
+      [
+        '- textbox "Name" [ref=e1]: A',
+        '- button "Same" [ref=e2]',
+        '- button "Same" [ref=e3]',
+        '- button "Remove" [ref=e4]',
+      ].join("\n"),
+    );
+    const second = observe(
+      observations,
+      [
+        '- textbox "Name" [ref=e1]: AB',
+        '- button "Same" [ref=e3]',
+        '- button "Same" [ref=e2]',
+        '- button "Add" [ref=e5]',
+      ].join("\n"),
+      { base: first },
+    );
+    expect(second.mode).toBe("diff");
+    expect(second.indexedText.split("\n")).toEqual([
+      '- - button "Remove" [3]',
+      '~ - textbox "Name" [0]: AB',
+      '+ - button "Add" [4]',
+    ]);
+    for (const [number, token] of [
+      [0, "e1"],
+      [1, "e2"],
+      [2, "e3"],
+      [4, "e5"],
+    ] as const) {
+      const element = second.elements.find((entry) => entry.index === number);
+      expect(element && observations.index.resolveElement(element.ref)).toBe(`aria-ref=${token}`);
+    }
+  });
+
+  it("reports one changed row when a field receives one character", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- textbox "Name" [ref=e1]: A\n- button "Save" [ref=e2]');
+    const second = observe(
+      observations,
+      '- textbox "Name" [ref=e1]: AB\n- button "Save" [ref=e2]',
+      { base: first },
+    );
+    expect(second.mode).toBe("diff");
+    expect(second.indexedText).toBe('~ - textbox "Name" [0]: AB');
+  });
+
+  it("does not resend reordered siblings or duplicate names", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- button "Same" [ref=e1]\n- button "Same" [ref=e2]');
+    const second = observe(observations, '- button "Same" [ref=e2]\n- button "Same" [ref=e1]', {
+      base: first,
+    });
+    expect(second.mode).toBe("diff");
+    expect(second.indexedText).toBe(`no change since ${first.observationId}`);
+    expect(observations.index.resolveElement(second.elements.find((e) => e.index === 0)!.ref)).toBe(
+      "aria-ref=e1",
+    );
+  });
+
+  it("resets the diff after a document or completeness change", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, calculator, { documentGeneration: 1 });
+    const second = observe(observations, calculator, { base: first, documentGeneration: 2 });
+    expect(second).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
+    const third = observe(observations, calculator, {
+      base: second,
+      documentGeneration: 2,
+      overrides: { treeComplete: false },
+    });
+    expect(third).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
+  });
+
   it("every number shown in an over-budget tab observation has a ref, and the dropped ones are named", () => {
     const observations = new ScreenObservations();
     const tree = Array.from(
