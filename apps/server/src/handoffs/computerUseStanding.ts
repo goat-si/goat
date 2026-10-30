@@ -13,6 +13,7 @@ import {
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import type * as Semaphore from "effect/Semaphore";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
@@ -43,6 +44,7 @@ export type CreateInput = {
 };
 
 const unavailable = (cause: unknown) => new HandoffError({ reason: "unavailable", cause });
+const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export const makeComputerUseStanding = (deps: {
   sql: SqlClient.SqlClient;
@@ -166,7 +168,7 @@ export const makeComputerUseStanding = (deps: {
             Effect.mapError(unavailable),
           );
           if (approved.length > 0) {
-            const ids = JSON.stringify([
+            const ids = encodeIds([
               ...new Set(input.namedMessages.map((entry) => entry.messageId)),
             ]);
             const eligible = yield* sql<{
