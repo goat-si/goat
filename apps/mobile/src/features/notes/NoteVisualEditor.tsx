@@ -59,8 +59,10 @@ export default function NoteVisualEditor(props: {
       ?.getMarkdown()
       .then((markdown) => {
         if (!active) return;
-        if (markdown === session.text) setReady(true);
-        else
+        if (markdown === session.text) {
+          setReady(true);
+          input.current?.focus();
+        } else
           onFallback(
             "Opened as markdown because the visual editor would rewrite parts of this note.",
           );

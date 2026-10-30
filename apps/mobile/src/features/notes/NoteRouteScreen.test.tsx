@@ -124,6 +124,7 @@ vi.mock("react-native-enriched-markdown", () => ({
     }, [initial]);
     useImperativeHandle(props.ref, () => ({
       getMarkdown: async () => mocks.serialize(element.current?.value ?? ""),
+      focus: () => element.current?.focus(),
       setValue: (markdown: string) => {
         if (element.current) element.current.value = markdown;
       },
