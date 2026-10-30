@@ -6,6 +6,61 @@ import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
+import { BrowserClaimBind } from "./BrowserClaimBind.ts";
+
+it.effect("reports unsupported capability as unavailable and removes claims from snapshots", () =>
+  Effect.gen(function* () {
+    const service = yield* Grants.BrowserOriginGrants;
+    const input = {
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    };
+    yield* service.reportDriverCapability(true);
+    const pending = yield* service.request(input);
+    if (pending.status !== "pending") return assert.fail("expected pending");
+    yield* service.answer(pending.claimId, true);
+    assert.lengthOf(yield* service.claimsFor(input.threadId), 1);
+    yield* service.reportDriverCapability(false);
+    const result = yield* service.request(input);
+    assert.equal(result.status, "refused");
+    if (result.status === "refused") assert.equal(result.code, "unavailable");
+    assert.deepEqual(yield* service.claimsFor(input.threadId), []);
+    assert.deepEqual(yield* service.claimedPids(), []);
+  }).pipe(
+    Effect.provide(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                Schema.decodeSync(ExecutionEnvironmentDescriptor)({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, { publish: () => Effect.void }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: () =>
+                Effect.succeed({
+                  tabId: "tab",
+                  title: "Site",
+                  url: "https://example.test",
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
 
 it.effect("refuses an approved claim as unavailable when the bind service is absent", () =>
   Effect.gen(function* () {
