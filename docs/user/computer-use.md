@@ -130,7 +130,7 @@ pointer** under **Settings > Integrations > Computer use > Advanced**.
 action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
 automatically only on its next turn. On a Mac with Input Monitoring allowed for
-GOAT Computer Use, press **Esc** to stop the active agent instead.
+GOAT Computer Use, press **Esc** to stop all active computer-use sessions on that Mac.
 
 Full access skips app and foreground approvals. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
@@ -226,7 +226,7 @@ and then checks that they work: it restarts computer use, has it read and
 capture one of GOAT's own windows, and shows which check failed if one did. Keep
 a GOAT window visible and the Mac unlocked while it checks. **Input Monitoring**
 is optional: allow GOAT Computer Use in **System Settings → Privacy & Security →
-Input Monitoring** to stop the agent by pressing Esc. Without it, use **Stop**
+Input Monitoring** to stop active computer-use sessions by pressing Esc. Without it, use **Stop**
 in GOAT.
 After GOAT, its helper or the Mac restarts, updates or wakes, the check may need
 to run again. In the GOAT desktop app on that Mac, choose **Run check** when it is
