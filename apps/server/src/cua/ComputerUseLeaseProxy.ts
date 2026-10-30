@@ -43,6 +43,7 @@ import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
+import { refusesClaimedBrowserDesktopCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -119,6 +120,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let shared = false;
   // An older applied update cannot lift the latest receipt's restriction (sharedNow).
   let sharedTaken = false;
+  let claimedBrowserPids: ReadonlyArray<number> = [];
   const sharedNow = () => shared || sharedTaken;
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
@@ -564,8 +566,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     )
       return;
     // Another thread's grant only denies, so it counts as soon as it is taken.
-    if (update?.state === "active" && update.controlId === options.controlId)
+    if (update?.state === "active" && update.controlId === options.controlId) {
       sharedTaken = update.shared === true;
+      claimedBrowserPids = update.claimedBrowserPids ?? [];
+    }
     // The server's latest word, paused or idle too: a reused control lasts longer.
     const expiry = update !== undefined && "expiresAt" in update ? update.expiresAt : undefined;
     const at = expiry === undefined ? undefined : DateTime.make(expiry);
@@ -726,6 +730,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
       if (
+        refusesClaimedBrowserDesktopCall(
+          message.params?.name,
+          message.params?.arguments,
+          claimedBrowserPids,
+        )
+      )
+        return yield* sink.answer(
+          refusal(
+            id,
+            message.method,
+            "outside_manifest",
+            "Desktop access to a claimed browser is not permitted.",
+          ),
+        );
+      if (
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
@@ -813,6 +832,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       paused === undefined &&
       finished === undefined &&
       !held() &&
+      !refusesClaimedBrowserDesktopCall(
+        message?.params?.name,
+        message?.params?.arguments,
+        claimedBrowserPids,
+      ) &&
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     const name = message?.method === "tools/call" ? message.params?.name : undefined;
