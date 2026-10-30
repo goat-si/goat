@@ -801,16 +801,20 @@ it.live(
           () => app.click(undefined), () => app.click(null), () => app.click(NaN), () => app.click({}),
           () => app.click(Infinity), () => app.drag('Apply', {}), () => app.setValue({}, 'x'),
           () => app.type('x', null), () => app.press('Enter', null), () => app.scroll({}, 'down'),
+          () => app.drag('Apply', undefined),
         ]) {
           try { await attempt(); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
         }
         await app.observe();
+        for (const target of [undefined, null, NaN, {}]) {
+          try { await app.click(target); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+        }
         await app.click(0);
         return errors;`,
       });
       expect(result).toMatchObject({
         status: "completed",
-        value: Array.from({ length: 10 }, () => ["invalid_argument", true]),
+        value: Array.from({ length: 15 }, () => ["invalid_argument", true]),
       });
       expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
       expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(1);
@@ -863,10 +867,14 @@ it.live("tab rejects empty targets without input and accepts an observed number"
       () => tab.click(undefined), () => tab.click(null), () => tab.click(NaN), () => tab.click({}),
       () => tab.click(-Infinity), () => tab.hover({}), () => tab.drag('#go', {}),
       () => tab.setValue({}, 'x'), () => tab.type('x', null), () => tab.press('Enter', null),
+      () => tab.drag('#go', undefined),
     ]) {
       try { await attempt(); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
     }
     await tab.observe();
+    for (const target of [undefined, null, NaN, {}]) {
+      try { await tab.click(target); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    }
     await tab.click(0);
     return errors;`,
   ]).pipe(
@@ -874,7 +882,7 @@ it.live("tab rejects empty targets without input and accepts an observed number"
       expect(result).toMatchObject({
         success: {
           status: "completed",
-          value: Array.from({ length: 10 }, () => ["invalid_argument", true]),
+          value: Array.from({ length: 15 }, () => ["invalid_argument", true]),
         },
       });
       expect(operations.filter((operation) => operation === "snapshot")).toHaveLength(1);

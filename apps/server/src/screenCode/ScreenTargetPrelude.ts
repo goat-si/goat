@@ -459,7 +459,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       });
     },
     scroll: (target, direction, amount = 3) => {
-      if (typeof direction !== 'string') return call('scroll', target ?? {});
+      if (typeof direction !== 'string') { checkEmptyTarget(target); return call('scroll', target); }
       const sign = direction === 'up' || direction === 'left' ? -1 : 1;
       if (tab) {
         const delta = sign * amount * 100;
@@ -476,15 +476,16 @@ const __target = (binding, note, owner, extraProps = {}) => {
       return target !== null && target !== undefined && needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     setValue: (target, value) => {
-      if (value === undefined) return call('set_value', target ?? {});
+      if (value === undefined) { checkEmptyTarget(target); return call('set_value', target); }
       if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Name the field by number, selector or role and name; a point cannot hold a value.', true);
       const run = () =>
         act('setValue', 'set_value', tab ? { ...aim(target), text: value } : { ...aim(target), value });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
-    drag: (from, to, options = {}) => {
-      if (to === undefined) return call('drag', from ?? {});
+    drag: (...args) => {
+      let [from, to, options = {}] = args;
+      if (args.length < 2) { checkEmptyTarget(from); return call('drag', from); }
       options = __only('drag options', options, tab ? ['send'] : ['send', 'verify']);
       checkTarget(from);
       checkTarget(to);
