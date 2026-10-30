@@ -122,7 +122,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let shared = false;
   // An older applied update cannot lift the latest receipt's restriction (sharedNow).
   let sharedTaken = false;
-  const browserClaims = makeProxyBrowserClaims();
+  const claims = makeProxyBrowserClaims(options.onBrowserClaimReport);
   const sharedNow = () => shared || sharedTaken;
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
@@ -148,7 +148,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
-  const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current);
+  const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current, claims.report);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -307,8 +307,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           options.onCancelledRequestSettled?.(key);
           return;
         }
-        if (browserClaims.outside(message.result, request.browserClaim))
-          return yield* browserClaims.refuseReply(request, key, outstanding, gone, release);
+        if (claims.outside(message.result, request.browserClaim))
+          return yield* claims.refuseReply(request, key, outstanding, gone, release);
         const session = message.result?.structuredContent?.session;
         if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
         if (request.method === "tools/call") {
@@ -572,7 +572,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // Another thread's grant only denies, so it counts as soon as it is taken.
     if (update?.state === "active" && update.controlId === options.controlId) {
       sharedTaken = update.shared === true;
-      browserClaims.update(update);
+      claims.update(update);
     }
     // The server's latest word, paused or idle too: a reused control lasts longer.
     const expiry = update !== undefined && "expiresAt" in update ? update.expiresAt : undefined;
@@ -725,7 +725,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
-      const browser = browserClaims.gate(id, line, message);
+      const browser = claims.gate(id, line, message);
       if (browser.refused !== undefined) return yield* sink.answer(browser.refused);
       ({ line, message, selected: selectedClaim } = browser);
       if (
@@ -747,7 +747,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
-      const unsupported = yield* browserClaims.unsupported(
+      const unsupported = yield* claims.unsupported(
         selectedClaim,
         batches.browserSupported,
         id,
@@ -823,7 +823,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       paused === undefined &&
       finished === undefined &&
       !held() &&
-      browserClaims.allowed(selectedClaim, message) &&
+      claims.allowed(selectedClaim, message) &&
       fences.clear() &&
       (selectedForeground === undefined || fences.allowsForeground(selectedForeground));
     const name = message?.method === "tools/call" ? message.params?.name : undefined;
@@ -960,7 +960,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Effect.sync(() => {
         if (!isRequest) return;
         if (primitive !== undefined) dispatchedPrimitives.add(primitive);
-        const sent = browserClaims.attach(
+        const sent = claims.attach(
           outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive),
           selectedClaim,
         );

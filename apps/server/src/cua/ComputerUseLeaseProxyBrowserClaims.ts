@@ -40,6 +40,16 @@ export interface ProxyBrowserClaim {
   readonly origins: ReadonlyArray<string>;
 }
 
+export type BrowserClaimReport =
+  | { readonly browserClaimsSupported: boolean }
+  | {
+      readonly browserClaimEnded: {
+        readonly claimId: string;
+        readonly claimGeneration: number;
+        readonly reason: "origin_changed";
+      };
+    };
+
 export const browserReplyOutsideClaim = (result: unknown, claim: ProxyBrowserClaim): boolean => {
   const inspect = (value: unknown, depth: number): boolean => {
     if (depth > 12 || !isRecord(value)) return false;
@@ -158,7 +168,7 @@ export interface SelectedClaim {
   readonly origins: string;
 }
 
-export const makeProxyBrowserClaims = () => {
+export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => void) => {
   let pids: ReadonlyArray<number> = [];
   let claims: ReadonlyArray<ProxyBrowserClaim> = [];
   const invalid = new Set<string>();
@@ -234,6 +244,13 @@ export const makeProxyBrowserClaims = () => {
   const outside = (result: unknown, claim: ProxyBrowserClaim | undefined) => {
     if (claim === undefined || !browserReplyOutsideClaim(result, claim)) return false;
     invalid.add(key(claim));
+    report?.({
+      browserClaimEnded: {
+        claimId: claim.claimId,
+        claimGeneration: claim.claimGeneration,
+        reason: "origin_changed",
+      },
+    });
     return true;
   };
   const refuseReply = Effect.fn("ComputerUseLeaseProxyBrowserClaims.refuseReply")(function* (
@@ -272,5 +289,5 @@ export const makeProxyBrowserClaims = () => {
     if (selected === undefined || (yield* supported())) return undefined;
     return refusal(id, method, "outside_manifest", "This driver does not support browser claims.");
   });
-  return { update, gate, allowed, outside, refuseReply, attach, unsupported };
+  return { update, gate, allowed, outside, refuseReply, attach, unsupported, report };
 };

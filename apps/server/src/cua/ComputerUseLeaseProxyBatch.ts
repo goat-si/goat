@@ -7,7 +7,10 @@
  */
 import * as Effect from "effect/Effect";
 
-import { supportsBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
+import {
+  supportsBrowserClaims,
+  type BrowserClaimReport,
+} from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { isBatchTool, MAX_BATCH_SCOPE_APPS } from "./ComputerUseBatchScope.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
@@ -37,15 +40,26 @@ export const makeProxyBatchScope = (
     readonly remember: (method: string, message: Envelope) => void;
   },
   current: () => Running | undefined,
+  report?: (value: BrowserClaimReport) => void,
 ) => {
   /** The apps the control's grant names, as it spells them; undefined for the whole screen. */
   let grantApps: ReadonlyArray<string> | undefined;
   /** Each child's own tool list, once it gave one: to the provider's tools/list or a probe. */
   const listed = new WeakMap<Running, unknown>();
+  let lastCapability: boolean | undefined;
+  const rememberList = (child: Running, tools: unknown) => {
+    listed.set(child, tools);
+    const browserClaimsSupported = supportsBrowserClaims(tools);
+    if (lastCapability !== browserClaimsSupported) {
+      lastCapability = browserClaimsSupported;
+      report?.({ browserClaimsSupported });
+    }
+  };
   /** A handshake answer from a child, kept for the handshake and, for tools/list, for that child. */
   const remember = (child: Running, method: string, message: Envelope) => {
     handshake.remember(method, message);
-    if (method === "tools/list" && message.result !== undefined) listed.set(child, message.result);
+    if (method === "tools/list" && message.result !== undefined)
+      rememberList(child, message.result);
   };
   /** The call as the driver should get it, or the proxy's refusal (notSent while it has no child). */
   const scope = Effect.fn("ComputerUseLeaseProxy.scopeBatch")(function* (
@@ -69,7 +83,7 @@ export const makeProxyBatchScope = (
     // the scope once this child has listed it, and is refused as before until then.
     if (named && !listed.has(child)) {
       const tools = yield* handshake.listTools(child.driver.send);
-      if (tools !== undefined) listed.set(child, tools);
+      if (tools !== undefined) rememberList(child, tools);
       // The answer speaks for the child that gave it only.
       if (current() !== child) return { refused: notSent() };
     }
@@ -98,7 +112,7 @@ export const makeProxyBatchScope = (
     if (child === undefined) return false;
     if (!listed.has(child)) {
       const tools = yield* handshake.listTools(child.driver.send);
-      if (tools !== undefined) listed.set(child, tools);
+      if (tools !== undefined) rememberList(child, tools);
     }
     return current() === child && supportsBrowserClaims(listed.get(child));
   });

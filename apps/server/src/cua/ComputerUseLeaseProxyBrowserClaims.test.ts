@@ -370,3 +370,42 @@ effectIt.effect("the proxy refuses a claimed browser call when the driver lacks 
     assert.equal(result, "refused");
   }),
 );
+
+effectIt.effect(
+  "reports driver capability and an origin change when withholding a claim reply",
+  () =>
+    Effect.gen(function* () {
+      const reports: Array<unknown> = [];
+      const h = yield* harness({ onBrowserClaimReport: (report) => reports.push(report) });
+      yield* h.push({
+        ...active(),
+        browserClaims: [
+          {
+            claimId: "claim-1",
+            claimGeneration: 2,
+            pid: 42,
+            windowId: 7,
+            tabId: "tab-1",
+            origins: ["https://example.test"],
+          },
+        ],
+      });
+      yield* h.applied;
+      yield* supportedDriver(h);
+      assert.deepEqual(reports, [{ browserClaimsSupported: true }]);
+      yield* h.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          result: { structuredContent: { tab_id: "tab-1", url: "https://other.test/secret" } },
+        }),
+      );
+      yield* h.nextToProvider;
+      assert.deepEqual(reports, [
+        { browserClaimsSupported: true },
+        { browserClaimEnded: { claimId: "claim-1", claimGeneration: 2, reason: "origin_changed" } },
+      ]);
+    }),
+);

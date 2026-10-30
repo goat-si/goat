@@ -30,6 +30,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import type { AgentInputReport } from "./agentInputReports.ts";
+import type { BrowserClaimReport } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { SCREEN_CALL_EXPIRED } from "./ComputerUseLeaseMessages.ts";
 import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
@@ -423,6 +424,7 @@ export interface LeaseProxyOptions<EU, ED> {
    * true when the server took it. Reported only on a change, observations included.
    */
   readonly onTarget?: (target: ComputerUseCallTarget) => Effect.Effect<boolean>;
+  readonly onBrowserClaimReport?: (report: BrowserClaimReport) => void;
   /** Tells the server where the overlay draws the agent's cursor, or null when it draws none. */
   readonly onCursor?: (cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>;
   /** The macOS helper draws the agent cursor, so the proxy answers the cursor tools. */
