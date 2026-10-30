@@ -74,6 +74,7 @@ const methods = [
   "wait_for",
   "invoke_menu",
   "fetch_tab",
+  "tab_logs",
 ] as const;
 
 type ChildResult = Pick<

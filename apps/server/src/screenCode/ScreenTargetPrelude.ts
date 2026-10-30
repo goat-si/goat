@@ -1,3 +1,4 @@
+import { screenTabExtrasPrelude } from "./ScreenTabExtrasPrelude.ts";
 import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
 
 /**
@@ -140,6 +141,7 @@ const __legacy = (arg) =>
 const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
 const __inputs = new Set(['click', 'right_click', 'hover', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
   'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
+${screenTabExtrasPrelude}
 const __target = (binding, note, owner, extraProps = {}) => {
   let ref = binding.targetRef ?? binding;
   let currentWindowId = extraProps.windowId;
@@ -511,6 +513,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const surface = tab ? {
     ...common,
+    ...__tabExtras(tab, call),
     status: () => call('tab_status'),
     read: (arg = {}) => call('read_page', arg),
     fetch: async (url, options = {}) =>
@@ -535,6 +538,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
   } : {
     ...common,
+    ...__tabExtras(tab, call),
     ...extraProps,
     menu: (path, options = {}) =>
       act('menu', 'invoke_menu', {

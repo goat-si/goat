@@ -23,6 +23,7 @@ const reads = new Set<ScreenHostCall["method"]>([
   "verify_state",
   "screenshot",
   "fetch_tab",
+  "tab_logs",
 ]);
 
 /** A call that only reads, which may still run after an earlier call in its cell failed. */

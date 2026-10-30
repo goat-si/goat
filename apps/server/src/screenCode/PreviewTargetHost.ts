@@ -24,6 +24,7 @@ import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
+import { readTabLogs } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
@@ -384,10 +385,13 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         call.method === "observe" ||
           call.method === "tab_status" ||
           call.method === "read_page" ||
+          call.method === "tab_logs" ||
           call.method === "wait_for",
       );
       if (call.method === "tab_status")
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
+      if (call.method === "tab_logs")
+        return yield* readTabLogs(arg, (input) => invoke(bound, context, "logs", input));
       if (call.method === "read_page") {
         const scope = cellScope(arg.scope, observations);
         const read = cellReadInput(arg, observationReplyBudget(call, context.limits));

@@ -772,3 +772,58 @@ it.live("an app target with a stray key is refused before any read or click", ()
     ),
   );
 });
+
+it.live("tab logs forwards an inclusive since to the preview service", () => {
+  const calls: unknown[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "logs") {
+        calls.push(request.input);
+        return Effect.succeed({ entries: ["line"] } as A);
+      }
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "unclaimed", generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab('form'); return await tab.logs({since:'2026-01-01T00:00:00Z'});`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: { entries: ["line"] } },
+      });
+      expect(calls).toEqual([{ since: "2026-01-01T00:00:00Z" }]);
+    }),
+  );
+});
+
+it.live("tab logs refuses an invalid since before the logs request", () => {
+  const operations: string[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      operations.push(request.operation);
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "unclaimed", generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab('form'); try { await tab.logs({since:'bad'}); } catch (e) { return [e.code, e.nothingSent]; }`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: ["invalid_argument", true] },
+      });
+      expect(operations).not.toContain("logs");
+    }),
+  );
+});
