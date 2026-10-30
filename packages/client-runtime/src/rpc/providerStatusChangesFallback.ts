@@ -15,10 +15,9 @@ import * as Stream from "effect/Stream";
 import type * as Rpc from "effect/rpc/Rpc";
 import * as RpcClientError from "effect/rpc/RpcClientError";
 
-type ServerConfigSubscriptionPayload = Rpc.Payload<typeof WsSubscribeServerConfigRpc>;
+import { SYNCHRONIZATION_TIMEOUT } from "../connection/synchronization.ts";
 
-/** The supervisor's budget for a first config snapshot (synchronizationTimeout in supervisor.ts). */
-const FIRST_SNAPSHOT_TIMEOUT = Duration.seconds(75);
+type ServerConfigSubscriptionPayload = Rpc.Payload<typeof WsSubscribeServerConfigRpc>;
 
 /** Fails a subscription whose first event does not arrive in time, so the session reconnects. */
 const answeredInTime = <E, R>(stream: Stream.Stream<ServerConfigStreamEvent, E, R>) =>
@@ -28,12 +27,12 @@ const answeredInTime = <E, R>(stream: Stream.Stream<ServerConfigStreamEvent, E, 
       const deadline = Stream.fromEffect(
         Deferred.await(answered).pipe(
           Effect.timeoutOrElse({
-            duration: FIRST_SNAPSHOT_TIMEOUT,
+            duration: SYNCHRONIZATION_TIMEOUT,
             orElse: () =>
               Effect.fail(
                 new RpcClientError.RpcClientError({
                   reason: new RpcClientError.RpcClientDefect({
-                    message: `The config subscription did not answer within ${Duration.toSeconds(FIRST_SNAPSHOT_TIMEOUT)}s after switching to full provider lists.`,
+                    message: `The config subscription did not answer within ${Duration.toSeconds(SYNCHRONIZATION_TIMEOUT)}s after switching to full provider lists.`,
                     cause: undefined,
                   }),
                 }),
@@ -41,9 +40,10 @@ const answeredInTime = <E, R>(stream: Stream.Stream<ServerConfigStreamEvent, E, 
           }),
         ),
       ).pipe(Stream.drain);
+      // Ends with the subscription, so one that closes before answering is not reported as silent.
       return stream.pipe(
         Stream.tap(() => Deferred.succeed(answered, undefined)),
-        Stream.merge(deadline),
+        Stream.merge(deadline, { haltStrategy: "left" }),
       );
     }),
   );

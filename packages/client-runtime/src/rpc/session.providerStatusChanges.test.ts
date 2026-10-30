@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -223,4 +224,63 @@ it.effect(
         expect(error.message).toContain("full provider lists");
       }),
     ),
+);
+
+/** Keeps the socket inside its 15 s silence budget for `seconds`; only RPC answers stay quiet. */
+const keepAlive = (socket: TestWebSocket, seconds: number) =>
+  Effect.gen(function* () {
+    for (const _step of Array.from({ length: seconds / 10 })) {
+      yield* TestClock.adjust("10 seconds");
+      socket.serverMessage(encodeJson({ _tag: "Pong" }));
+    }
+  });
+
+it.effect("a full-list subscription that ends before its first event ends the stream at once", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, socket } = yield* connected;
+      const other = yield* session
+        .subscribeServerConfig({ environmentThemes: true })
+        .pipe(Stream.runDrain, Effect.exit, Effect.forkChild({ startImmediately: true }));
+      const changes = yield* awaitRequest(socket, 1);
+      send(socket, changes.id, [snapshot([codex, claude]), unreadableChange]);
+      const full = yield* awaitRequest(socket, 2);
+      socket.serverMessage(
+        encodeJson({ _tag: "Exit", requestId: full.id, exit: { _tag: "Success", value: null } }),
+      );
+      const ended = yield* Fiber.join(other).pipe(
+        Effect.timeoutOption("1 second"),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("1 second");
+      const exit = Option.getOrThrowWith(
+        yield* Fiber.join(ended),
+        () => new Error("the stream was still open after its full-list subscription ended"),
+      );
+      expect(Exit.isSuccess(exit)).toBe(true);
+    }),
+  ),
+);
+
+it.effect("a full-list subscription that answered can stay quiet past 75 seconds", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, socket } = yield* connected;
+      const closed = yield* session.closed.pipe(
+        Effect.exit,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const changes = yield* awaitRequest(socket, 0);
+      send(socket, changes.id, [unreadableChange]);
+      const full = yield* awaitRequest(socket, 1);
+      send(socket, full.id, [snapshot([codex, claude])]);
+      yield* keepAlive(socket, 80);
+      const outcome = yield* Fiber.join(closed).pipe(
+        Effect.timeoutOption("1 second"),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust("1 second");
+      expect(Option.isNone(yield* Fiber.join(outcome))).toBe(true);
+    }),
+  ),
 );
