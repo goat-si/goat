@@ -782,3 +782,111 @@ it.live("an app target with a stray key is refused before any read or click", ()
     ),
   );
 });
+
+it.live(
+  "app rejects empty targets before observation or input and accepts an observed number",
+  () => {
+    const { host, sent } = fixture();
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: desktopContext.invocation,
+        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+        const errors = [];
+        for (const attempt of [
+          () => app.click(undefined), () => app.click(null), () => app.click(NaN), () => app.click({}),
+          () => app.click(Infinity), () => app.drag('Apply', {}), () => app.setValue({}, 'x'),
+          () => app.type('x', null), () => app.press('Enter', null), () => app.scroll({}, 'down'),
+          () => app.drag('Apply', undefined),
+        ]) {
+          try { await attempt(); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+        }
+        await app.observe();
+        for (const target of [undefined, null, NaN, {}]) {
+          try { await app.click(target); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+        }
+        await app.click(0);
+        return errors;`,
+      });
+      expect(result).toMatchObject({
+        status: "completed",
+        value: Array.from({ length: 15 }, () => ["invalid_argument", true]),
+      });
+      expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
+      expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(1);
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ app: host }),
+          desktopHost: host,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
+);
+
+it.live("tab rejects empty targets without input and accepts an observed number", () => {
+  const operations: string[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      operations.push(request.operation);
+      if (request.operation === "snapshot")
+        return Effect.succeed({
+          url: formTab.url,
+          title: formTab.title,
+          loading: false,
+          accessibilityTree: "- button Go [ref=e1]",
+          treeComplete: true,
+          refGeneration: "1",
+        } as A);
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        title: formTab.title,
+        loading: false,
+        refGeneration: "1",
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab({tabId: 'form'});
+    await tab.claim();
+    const errors = [];
+    for (const attempt of [
+      () => tab.click(undefined), () => tab.click(null), () => tab.click(NaN), () => tab.click({}),
+      () => tab.click(-Infinity), () => tab.hover({}), () => tab.drag('#go', {}),
+      () => tab.setValue({}, 'x'), () => tab.type('x', null), () => tab.press('Enter', null),
+      () => tab.drag('#go', undefined),
+    ]) {
+      try { await attempt(); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    }
+    await tab.observe();
+    for (const target of [undefined, null, NaN, {}]) {
+      try { await tab.click(target); errors.push('sent'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    }
+    await tab.click(0);
+    return errors;`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        success: {
+          status: "completed",
+          value: Array.from({ length: 15 }, () => ["invalid_argument", true]),
+        },
+      });
+      expect(operations.filter((operation) => operation === "snapshot")).toHaveLength(1);
+      expect(operations.filter((operation) => operation === "click")).toHaveLength(1);
+    }),
+  );
+});
