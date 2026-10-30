@@ -50,7 +50,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
           since_status: status,
           tree_diff:
             status === "diff"
-              ? '+ [2] AXButton "New"\n- [2] AXButton "Old"\n~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nRows and indices are as before; use snapshot_id in element_tokens (s2:N).'
+              ? '+ [1] AXButton "New"\n- [2] AXButton "Old"\n~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nRows and indices are as before; use snapshot_id in element_tokens (s2:N).'
               : `no change since ${args.since}. Rows and indices are as before; use snapshot_id in element_tokens (s2:N).`,
         };
       },
@@ -71,7 +71,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     expect(sent.at(-1)?.args).toMatchObject({ since: "s1", tree_format: "both" });
     expect(diff).toMatchObject({
       mode: "diff",
-      indexedText: `+ [2] AXButton "New"\n- [2] AXButton "Old"\n~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged since ${full.observationId}; observe({diff:false}) lists every current number`,
+      indexedText: `+ [1] AXButton "New"\n- [2] AXButton "Old"\n~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged since ${full.observationId}; observe({diff:false}) lists every current number`,
     });
     yield* host.invoke(call("click", { elementRef: refAt(diff, 1) }, ref), context);
     expect(sent.at(-1)).toMatchObject({ tool: "click", args: { element_token: "s2:1" } });
