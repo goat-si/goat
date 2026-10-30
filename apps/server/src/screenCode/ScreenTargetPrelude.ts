@@ -234,7 +234,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       throw new ScreenError(
         'invalid_argument',
         tab
-          ? 'Points need a current screenshot: observe({screenshot:true}) first.'
+          ? 'Points need a current screenshot: tab.screenshot() first.'
           : '[x, y] are screenshot pixels and this cell has no screenshot; use { window: [x, y] } window points, or take a screenshot.',
         true,
       );
@@ -242,7 +242,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const point = (target) => {
     if (__winPt(target)) {
-      if (tab) throw new ScreenError('invalid_argument', 'Tabs use [x, y] viewport pixels.', true);
+      if (tab) throw new ScreenError('invalid_argument', 'Tabs take [x, y] pixels of their latest screenshot; { window: [x, y] } is for apps.', true);
       return { x: target.window[0], y: target.window[1], coordinate_space: 'window_points' };
     }
     const image = shot();
@@ -369,7 +369,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     generation: ref.generation,
     ...(owner === undefined ? {} : { owner }),
     capabilities: tab
-      ? ['observe', 'input', 'selectors', 'read', 'fetch', 'navigate', 'claim']
+      ? ['observe', 'input', 'points', 'screenshot', 'selectors', 'read', 'fetch', 'navigate', 'claim']
       : ['observe', 'input', 'points', 'menu', 'launch', 'screenshot'],
     targetRef: ref,
     ...(note === undefined ? {} : { note }),
@@ -519,6 +519,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
     forward: () => act('forward', 'forward_tab', {}),
     close: () => call('close_tab'),
     select: (arg = {}) => call('select', arg),
+    // The same read as observe({screenshot:true}), so element numbers and [x, y] points share it.
+    screenshot: async () => {
+      const { image, ms, phases } = await observe({ screenshot: true });
+      return { ...(ms === undefined ? {} : { ms, phases }), ...image };
+    },
   } : {
     ...common,
     ...extraProps,

@@ -136,6 +136,11 @@ export const observePreviewTarget = Effect.fn("PreviewTargetHost.observe")(funct
       : undefined;
   const imageRef = NodeCrypto.randomUUID();
   const regionId = NodeCrypto.randomUUID();
+  // A tree alone would read as a confirmed observe whose picture went missing.
+  if (arg.screenshot === true && !shot)
+    return yield* Effect.fail(
+      fail("downstream_failure", "The browser sent no screenshot; take the screenshot again."),
+    );
   const imageMetadata = (observationId: string): ScreenImageMetadata | undefined =>
     shot && {
       imageRef,
