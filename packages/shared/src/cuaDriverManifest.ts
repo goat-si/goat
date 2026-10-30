@@ -122,6 +122,8 @@ const EXCLUDED_BUNDLE_IDS = new Set([
   "com.apple.loginwindow",
   "com.apple.securityagent",
   "com.apple.coreauthd",
+  // macOS: LocalAuthentication.framework/Support/coreautha.bundle/Contents/Info.plist.
+  "com.apple.localauthentication.uiagent",
   "com.apple.screentimeagent",
   // macOS: /System/Library/CoreServices/Screen Time.app/Contents/Info.plist.
   "com.apple.screentimewidgetapplication",

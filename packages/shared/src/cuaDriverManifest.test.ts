@@ -319,6 +319,7 @@ describe("cuaDriverManifest", () => {
       "com.apple.loginwindow",
       "com.apple.SecurityAgent",
       "com.apple.coreauthd",
+      "com.apple.LocalAuthentication.UIAgent",
       "com.apple.keychainaccess",
       "com.apple.ScreenTimeAgent",
       "com.apple.ScreenTimeWidgetApplication",
