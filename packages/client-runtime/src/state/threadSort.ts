@@ -38,6 +38,29 @@ export function threadLastPromptAt(thread: ThreadLastPromptInput): number {
   );
 }
 
+/**
+ * Lowest rank first, then the thread the user prompted last, then key. Streamed events move
+ * updatedAt, never the prompt time, so rows hold their places while threads run.
+ */
+export function sortByRankThenPrompt<T extends ThreadLastPromptInput>(
+  threads: readonly T[],
+  rankOf: (thread: T) => number,
+  keyOf: (thread: T) => string,
+): T[] {
+  return threads
+    .map((thread) => ({
+      thread,
+      rank: rankOf(thread),
+      at: threadLastPromptAt(thread),
+      key: keyOf(thread),
+    }))
+    .sort(
+      (left, right) =>
+        left.rank - right.rank || right.at - left.at || left.key.localeCompare(right.key),
+    )
+    .map((entry) => entry.thread);
+}
+
 export type SettledThreadTimestampInput = Pick<
   EnvironmentThreadShell,
   "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"
