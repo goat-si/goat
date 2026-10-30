@@ -169,16 +169,23 @@ it.live("a tab click returns a compact Done", () => {
       } as A),
   };
   return runCells(broker, [
-    "const tab = await screen.tab('form'); await tab.claim(); return await tab.click('button');",
+    "const tab = await screen.tab('form'); await tab.claim(); const plain = await tab.click('button'); const verified = await tab.click('button', {verify: true}); return {plain, verified};",
   ]).pipe(
     Effect.map(([result]) => {
       expect(result).toMatchObject({
         _tag: "Success",
-        success: { status: "completed", value: { ok: true, verdict: "unverifiable" } },
+        success: {
+          status: "completed",
+          value: {
+            plain: { ok: true, verdict: "unverifiable" },
+            verified: { result: { debug: { evidence: expect.any(Array) } } },
+          },
+        },
       });
       if (result?._tag === "Success") {
-        expect(result.success.value).toEqual({ ok: true, verdict: "unverifiable" });
-        expect(Buffer.byteLength(JSON.stringify(result.success.value))).toBeLessThanOrEqual(200);
+        const value = result.success.value as { plain: unknown };
+        expect(value.plain).toEqual({ ok: true, verdict: "unverifiable" });
+        expect(Buffer.byteLength(JSON.stringify(value.plain))).toBeLessThanOrEqual(200);
       }
     }),
   );

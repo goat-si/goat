@@ -167,6 +167,19 @@ const FAR_DEADLINE = 10 ** 15;
 const BIND =
   "const app = await screen.app({ bundle_id: 'org.example.Editor', window_id: 72907 }); await app.observe();";
 
+it.live("a window-opening input names the window in a compact note", () => {
+  const { host } = finder();
+  return Effect.gen(function* () {
+    const result = yield* cell(BIND + "return await app.press('cmd+shift+g');");
+    expect(result.value).toEqual({
+      ok: true,
+      verdict: "confirmed",
+      note: "windows opened [82779]",
+    });
+    expect(Buffer.byteLength(JSON.stringify(result.value))).toBeLessThanOrEqual(200);
+  }).pipe(Effect.provide(service(host)));
+});
+
 it.live(
   "after cmd+shift+g opens Go to Folder as its own window, the input reports it, observe() moves onto it with its PathTextField named, and comes back once a fresh window list shows it closed",
   () => {

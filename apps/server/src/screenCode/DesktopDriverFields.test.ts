@@ -68,7 +68,9 @@ it.live("app clicks return a compact Done and expose details only on request", (
     );
     expect(res.value).toMatchObject({
       plain: { ok: true, verdict: "confirmed" },
-      verified: { result: { debug: { evidence: expect.arrayContaining(["driver:acted"]) } } },
+      verified: {
+        result: { debug: { evidence: expect.arrayContaining(["driver:effect=confirmed"]) } },
+      },
       debug: { result: { debug: expect.any(Object) } },
     });
     const value = res.value as { plain: unknown };
