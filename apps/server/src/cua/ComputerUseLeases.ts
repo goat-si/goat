@@ -104,12 +104,12 @@ export type {
 /** How long a control without a grant lasts after the turn that last used it. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
 /**
- * Rounded up to the minute, so the many calls of a turn move it once a minute and every move is
- * announced: a proxy following the control never holds an earlier expiry than the server's.
+ * Rounded down to the minute: never past an hour from the last use, and the many calls of a turn
+ * move it once a minute, every move announced, so a following proxy holds the server's expiry.
  */
 const controlExpiry = (now: DateTime.Utc) =>
   DateTime.makeUnsafe(
-    Math.ceil(
+    Math.floor(
       DateTime.toEpochMillis(DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES })) / 60_000,
     ) * 60_000,
   );
