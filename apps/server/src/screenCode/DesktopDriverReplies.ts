@@ -156,8 +156,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
 };
 
 const focusRestorationWarning = (value: unknown): string | undefined => {
-  const fields = object(value);
-  const focus = object(fields?.focus_restoration);
+  const focus = object(value);
   const pid =
     typeof focus?.prior_pid === "number" &&
     Number.isSafeInteger(focus.prior_pid) &&
@@ -183,15 +182,32 @@ export const driverWarnings = (
 ): readonly string[] => {
   const value = driverValue(reply);
   const fields = object(value);
-  const focusWarning = focusRestorationWarning(value);
-  const texts = (source === "input" ? array(object(reply.result)?.content) : [])
+  const texts = array(object(reply.result)?.content)
     .map(object)
     .map((part) => (part?.type === "text" ? string(part.text) : undefined));
-  const marked = texts.find((part) => part?.includes("Its effect is unverified."));
+  let focus = fields?.focus_restoration;
+  if (fields === undefined || !("focus_restoration" in fields)) {
+    for (const text of texts) {
+      const prefix = "focus_restoration: ";
+      if (!text?.startsWith(prefix)) continue;
+      try {
+        const parsed = object(JSON.parse(text.slice(prefix.length)));
+        if (parsed !== undefined) {
+          focus = parsed;
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  const focusWarning = focusRestorationWarning(focus);
+  const inputTexts = source === "input" ? texts : [];
+  const marked = inputTexts.find((part) => part?.includes("Its effect is unverified."));
   const after = marked?.split("Its effect is unverified.", 2)[1];
   const fallback =
     fields?.effect === "suspected_noop"
-      ? texts.find((part) => part?.includes("disabled"))
+      ? inputTexts.find((part) => part?.includes("disabled"))
       : undefined;
   const disabled = (after ?? fallback)
     ?.split(/(?<=[.!?])\s+/u)
