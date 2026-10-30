@@ -417,3 +417,36 @@ it("holds a run still under way whose start it cannot read yet, without stopping
   expect(discoverRuns(held, unread, 8)).toMatchObject({ heldRuns: [], skippedRuns: [run2] });
   expect(discoverRuns(held, [watchedRun(run3!, 3)], 8)).toMatchObject({ skippedRuns: [run2] });
 });
+
+it("looks again at a skipped run once it is retried, and counts any retry as arming", () => {
+  const [run1, run2, run3, run4] = ["run-1", "run-2", "run-3", "run-4"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  const send = "message:mcp:client%3Abot-b:thread-send:request-1";
+  // run-3 queued while run-2 ran, so run-2 is skipped; run-4 is bot-b's send.
+  const first = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 40 }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    watchedRun(run4!, 4, { requestedAt: 60, completedAt: 70, trigger: send }),
+  ];
+  const looked = discoverRuns(watch, first, 100);
+  expect(looked).toMatchObject({ pendingRuns: [run3], skippedRuns: [run2, run4] });
+  // Both are retried after run-3 ended; run-2 is the thread's own and is followed this time.
+  const retried = rearmRetriedRun(rearmRetriedRun(looked, run2!, 200), run4!, 200);
+  expect(retried).toMatchObject({ heldRuns: [run2, run4], skippedRuns: [] });
+  const again = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 240 }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    watchedRun(run4!, 4, { requestedAt: 60, completedAt: 250, trigger: send }),
+  ];
+  expect(discoverRuns(retried, again, 300)).toMatchObject({
+    pendingRuns: [run3, run2],
+    skippedRuns: [run4],
+    heldRuns: [],
+  });
+  // A retry of a run still owed is followed once more, keeps it reported, and re-arms.
+  const owed = rearmRetriedRun(looked, run3!, 6 * 24 * 60 * 60_000);
+  expect(owed).toMatchObject({ followAgain: [run3], armedAt: 6 * 24 * 60 * 60_000 });
+  expect(wentOnFrom(owed, run3!, [...first, watchedRun(run4!, 4, { requestedAt: 45 })])).toBe(
+    false,
+  );
+});
