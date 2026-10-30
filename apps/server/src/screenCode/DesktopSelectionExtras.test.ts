@@ -41,6 +41,7 @@ const run = (selectText: unknown, call: string) => {
       invocation: context.invocation,
       source: `const app = await screen.app({ bundle_id: 'org.example.Editor', window_id: 7 });
         await app.observe();
+        screen.debug = true;
         try { return { done: await ${call} }; }
         catch (e) { return { caught: { code: e.code, nothingSent: e.nothingSent, message: e.message, detail: e.detail, possibleCommit: e.safety?.possibleCommit } }; }`,
     });
@@ -82,7 +83,11 @@ it.live(
         },
       ]);
       expect(result.value).toMatchObject({
-        done: { ok: true, verdict: "confirmed" },
+        done: {
+          ok: true,
+          verdict: "confirmed",
+          result: { debug: { value: { selected_text: "world" } } },
+        },
       });
     }),
 );

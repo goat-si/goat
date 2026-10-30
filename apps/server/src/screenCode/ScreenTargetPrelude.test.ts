@@ -163,13 +163,13 @@ it.live("a tab click returns a compact Done", () => {
       Effect.succeed({
         tabId: formTab.tabId,
         url: formTab.url,
-        control: { owner: "unclaimed", generation: 0 },
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
         effect: "unverifiable",
         evidence: [],
       } as A),
   };
   return runCells(broker, [
-    "const tab = await screen.tab('form'); return await tab.click('button');",
+    "const tab = await screen.tab('form'); await tab.claim(); return await tab.click('button');",
   ]).pipe(
     Effect.map(([result]) => {
       expect(result).toMatchObject({
@@ -645,7 +645,7 @@ it.live(
             empty: {},
             none: false,
             noneMs: "number",
-            legacy: { ok: true },
+            legacy: { ok: true, verdict: "unverifiable" },
             refused: [
               ["invalid_argument", true],
               ["invalid_argument", true],

@@ -514,7 +514,7 @@ it.live(
       step = 0;
       const exactBudget = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10], {verify: true}); return Boolean(c.result.pad);",
+          "const c = await app.click([10, 10], {verify: true}); return Boolean(c.result.debug.value.pad);",
         { returnBytes: 540 },
       )) as ScreenRunResult;
       expect(exactBudget.value).toBe(true);

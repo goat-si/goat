@@ -181,13 +181,14 @@ it.live(
           "await app.setValue(field, '~/Developer/codex/computeruse');" +
           "await app.press('Enter');" +
           "const back = await app.observe();" +
-          "return { observed: done.result.debug.value._observed, opened: done.result.debug.value.windows.opened.map((w) => w.window_id), onSheet, text: sheet.text, backWindow: app.windowId, backTitle: back.title, scope: back.scope };",
+          "return { note: done.note, observed: done.result.debug.value._observed, opened: done.result.debug.value.windows.opened.map((w) => w.window_id), onSheet, text: sheet.text, backWindow: app.windowId, backTitle: back.title, scope: back.scope };",
       );
       expect(result.value).toMatchObject({
         observed: expect.arrayContaining([
           "observed:window_opened:82779",
           expect.stringContaining("observed:sheet_candidate:82779"),
         ]),
+        note: "windows opened [82779]",
         opened: [82779],
         onSheet: 82779,
         text: expect.stringContaining('[2] AXTextField "PathTextField" = "/Users/jun/Downloads"'),
@@ -247,11 +248,11 @@ it.live(
         const { host } = late();
         const result = yield* cell(
           BIND +
-            "const done = await " +
+            "screen.debug = true; const done = await " +
             press +
             ";" +
             "await app.observe();" +
-            "return { opened: (done.result ?? done).windows?.opened.map((w) => w.window_id), onSheet: app.windowId };",
+            "return { opened: done.result.debug.value.windows?.opened.map((w) => w.window_id), onSheet: app.windowId };",
         ).pipe(Effect.provide(service(host)));
         expect(result.value).toEqual({ opened: [82779], onSheet: 82779 });
       }

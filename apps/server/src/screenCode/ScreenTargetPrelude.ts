@@ -163,7 +163,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       !('coordinate_space' in arg)
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
-    return __call(method, { ...withRegion, targetRef: ref });
+    return __inputs.has(method) ? act(method, method, withRegion) : __call(method, { ...withRegion, targetRef: ref });
   };
   const act = async (name, method, arg) => {
     if (tab && method !== 'click' && method !== 'right_click') retire();
