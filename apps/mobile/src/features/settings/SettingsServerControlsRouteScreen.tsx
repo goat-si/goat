@@ -1,5 +1,6 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
+import { AllowedApps } from "./computerUse/AllowedApps";
 import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
@@ -52,37 +53,11 @@ import {
 } from "./settings-scoped-server";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
-
-type SettingsPage = "new-threads" | "source-control" | "agent-behavior" | "maintenance";
-
-const PAGE_TITLES: Record<SettingsPage, string> = {
-  "new-threads": "New threads",
-  "source-control": "Source control",
-  "agent-behavior": "Agent behavior",
-  maintenance: "Maintenance",
-};
-
-const MESSAGE_NAMED_SKILL_SETTINGS = [
-  {
-    name: "goat-discipline",
-    title: "Development discipline skill",
-    subtitle:
-      "Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns.",
-    projectDescription: "Load it in this project when a message names $goat-discipline.",
-  },
-  {
-    name: "goat-docs",
-    title: "GOAT Docs skill",
-    subtitle:
-      "Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns.",
-    projectDescription: "Load it in this project when a message names $goat-docs.",
-  },
-] as const satisfies ReadonlyArray<{
-  readonly name: BuiltInSkillName;
-  readonly title: string;
-  readonly subtitle: string;
-  readonly projectDescription: string;
-}>;
+import {
+  MESSAGE_NAMED_SKILL_SETTINGS,
+  PAGE_TITLES,
+  type SettingsPage,
+} from "./settingsServerControlConstants";
 
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
   "new-threads": ["defaultThreadEnvMode", "worktreeSubmodules", "defaultRuntimeMode"],
@@ -637,41 +612,12 @@ function ServerSettingsDetail(props: {
                       onValueChange={(value) => write({ enableCua: value })}
                     />
                     {!projectSelected ? (
-                      <Text className="px-4 py-2 text-sm text-foreground-muted">Allowed apps</Text>
+                      <AllowedApps
+                        targets={displayTargets}
+                        disabled={disabledFor("cuaAllowedApps")}
+                        onRemove={writeEach}
+                      />
                     ) : null}
-                    {!projectSelected &&
-                    displayTargets.every(
-                      (target) => target.settings.cuaAllowedApps.length === 0,
-                    ) ? (
-                      <Text className="px-4 py-2 text-sm text-foreground-muted">
-                        No apps always allowed.
-                      </Text>
-                    ) : null}
-                    {!projectSelected
-                      ? displayTargets.flatMap((target) =>
-                          target.settings.cuaAllowedApps.map((app) => (
-                            <SettingsRow
-                              key={`${target.environment.environmentId}:${app}`}
-                              icon="desktopcomputer"
-                              label={`Remove ${app}`}
-                              value={target.environment.label}
-                              disabled={disabledFor("cuaAllowedApps")}
-                              onPress={() =>
-                                writeEach([
-                                  {
-                                    environmentId: target.environment.environmentId,
-                                    patch: {
-                                      cuaAllowedApps: target.settings.cuaAllowedApps.filter(
-                                        (item) => item !== app,
-                                      ),
-                                    },
-                                  },
-                                ])
-                              }
-                            />
-                          )),
-                        )
-                      : null}
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
                     {computerUseAdvanced.expanded ? (
                       <>
