@@ -182,3 +182,19 @@ describe("ScreenCellRow", () => {
     expect(screenCellSummary(facts({ durationMs: 320 }))).toBe("320 ms");
   });
 });
+
+it("names tab operation receipts without exposing their arguments", () => {
+  const actions = [
+    ["tab_dialog", "dialog"],
+    ["tab_upload", "upload"],
+    ["tab_evaluate", "evaluate"],
+    ["tab_fill_secret", "fill secret"],
+    ["tab_logs", "observe"],
+  ] as const;
+  for (const [method, verb] of actions)
+    expect(
+      screenCellTitle(
+        facts({ subjects: ["site.test"], subjectCount: 1, receipts: [receipt(1, method)] }),
+      ),
+    ).toBe(`site.test · ${verb}`);
+});

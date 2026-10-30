@@ -152,7 +152,7 @@ it.live("fillSecret sends only a reference and selector and returns no secret", 
   );
 });
 
-it.live.each(["index", "ref"] as const)(
+it.live.each(["index", "ref", "name"] as const)(
   "an observed password %s is focused before the existing secret fill",
   (key) => {
     const operations: string[] = [];

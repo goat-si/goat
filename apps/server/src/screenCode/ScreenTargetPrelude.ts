@@ -513,7 +513,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const surface = tab ? {
     ...common,
-    ...__tabExtras(tab, call, aim, act),
+    ...__tabExtras(tab, call, aim, act, seen),
     status: () => call('tab_status'),
     read: (arg = {}) => call('read_page', arg),
     fetch: async (url, options = {}) =>
@@ -538,7 +538,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
   } : {
     ...common,
-    ...__tabExtras(tab, call, aim, act),
+    ...__tabExtras(tab, call, aim, act, seen),
     ...extraProps,
     menu: (path, options = {}) =>
       act('menu', 'invoke_menu', {

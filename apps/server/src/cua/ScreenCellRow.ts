@@ -165,6 +165,11 @@ const VERBS: Readonly<Record<ScreenMethod, Verb>> = {
   wait_for: "observe",
   invoke_menu: "menu",
   fetch_tab: "fetch",
+  tab_dialog: "dialog",
+  tab_upload: "upload",
+  tab_evaluate: "evaluate",
+  tab_fill_secret: "fill secret",
+  tab_logs: "observe",
 };
 
 const CATEGORIES: ReadonlyArray<readonly [ScreenEffectReceipt["category"], string]> = [
