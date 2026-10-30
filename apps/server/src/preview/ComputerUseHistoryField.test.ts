@@ -30,11 +30,8 @@ it.live("inspects the focused field in an isolated browser world", () =>
         );
         await page.locator("#normal").focus();
         expect(await fill.historyField(tab, thread)).toBeDefined();
-        await page.evaluate(() =>
-          Object.defineProperty(HTMLInputElement.prototype, "type", {
-            configurable: true,
-            get: () => "text",
-          }),
+        await page.evaluate(
+          'Object.defineProperty(HTMLInputElement.prototype, "type", { configurable: true, get: () => "text" })',
         );
         await page.locator("#password").focus();
         expect(await fill.historyField(tab, thread)).toBeUndefined();
