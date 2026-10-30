@@ -213,6 +213,11 @@ The machine count includes only GOAT servers that answer. Machines the page show
 counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
 reported, are listed behind the **+N** beside the count.
 
+On mobile, **Fleet** is the first tab of **Usage**, and Usage opens on it, once the phone reaches
+more than one machine or is connected to a hub. It shows the same counts and lists the running
+threads by machine; tap a thread to open it, or a machine that is not connected to open
+Connections.
+
 A machine in the graph turns amber, orange, or red as it gets busier, and a machine near its
 limit catches fire. Heat comes from the same reading as **Settings → Connections → Hosts**: CPU
 use, load per core, memory, and the fullest provider quota window; hover a machine to see which
