@@ -165,6 +165,19 @@ describe("ComputerUsePrimitiveChannel caps each driver call", () => {
     }),
   );
 
+  it.effect("a call GOAT settles itself in the grace past the cap still fails at the cap", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      const waiter = yield* f.call("list_apps", {});
+      yield* f.delivered;
+      yield* TestClock.adjust(2_500);
+      yield* f.channel.cancel("run:one", "cell:one");
+      const result = yield* Fiber.join(waiter);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") assert.equal(result.failure.code, "deadline");
+    }),
+  );
+
   it.effect("a call the driver never took fails at its cap as nothing sent", () =>
     Effect.gen(function* () {
       const f = yield* bound();

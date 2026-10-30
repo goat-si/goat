@@ -368,11 +368,17 @@ export const make = Effect.gen(function* () {
       }),
       // The grace is only for the proxy to say it never sent the call; an answer the driver
       // gave past the deadline is still a call that missed it.
+      // GOAT's own settlement (a cutoff, a cancel) records no arrival; it counts when seen.
+      Effect.flatMap((answered) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((resumed) => ({ answered, at: pending.answeredAt ?? resumed })),
+        ),
+      ),
       Effect.filterOrFail(
-        (answered) =>
-          (pending.answeredAt ?? 0) <= deadlineMillis || answered.status === "not_started",
+        ({ answered, at }) => at <= deadlineMillis || answered.status === "not_started",
         deadlineFailure,
       ),
+      Effect.map(({ answered }) => answered),
       Effect.ensuring(
         Effect.sync(() => {
           if (!record.pending.delete(request.requestId)) return;
