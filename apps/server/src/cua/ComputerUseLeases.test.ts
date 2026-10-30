@@ -34,6 +34,22 @@ const layer = it.layer(
   ),
 );
 layer("ComputerUseLeases controls", (it) => {
+  it.effect("an Escape report for an expired control cannot stop a later session", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-expired-escape");
+      const control = yield* leases.control(owner, Option.none());
+      const stopIfCurrent = leases.stopIfCurrent;
+      if (stopIfCurrent === undefined) return yield* Effect.die("missing stopIfCurrent");
+      yield* TestClock.adjust("61 minutes");
+      assert.isFalse(yield* stopIfCurrent(owner, control.controlId));
+      const replacement = yield* leases.control(owner, Option.none());
+      assert.isFalse(yield* stopIfCurrent(owner, control.controlId));
+      assert.equal((yield* leases.controlState(owner, replacement.controlId))._tag, "active");
+      yield* leases.stop(owner);
+    }),
+  );
   it.effect("reading the current control never mints or revives a stopped control", () =>
     Effect.gen(function* () {
       yield* runMigrations();
