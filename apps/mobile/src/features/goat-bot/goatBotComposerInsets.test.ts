@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { COMPACT_WORKSPACE_DOCK_HEIGHT } from "../workspace/workspace-tabs-state";
-import { GOAT_BOT_COMPOSER_GAP, goatBotComposerBottomPadding } from "./goatBotComposerInsets";
+import {
+  GOAT_BOT_COMPOSER_GAP,
+  goatBotComposerBottomPadding,
+  goatBotInputMaxHeight,
+} from "./goatBotComposerInsets";
 
 describe("GOAT Bot composer bottom padding", () => {
   it.each([0, 34])("rests above the floating tabs over a %s-point safe area", (bottomSafeArea) => {
@@ -24,4 +28,14 @@ describe("GOAT Bot composer bottom padding", () => {
       expect(goatBotComposerBottomPadding(input).open).toBe(GOAT_BOT_COMPOSER_GAP);
     },
   );
+});
+
+describe("GOAT Bot message field height", () => {
+  it.each([
+    { windowHeight: 852, maxHeight: 160 },
+    { windowHeight: 393, maxHeight: 98 },
+    { windowHeight: 120, maxHeight: 44 },
+  ])("leaves room for the header and keyboard in a %j window", ({ windowHeight, maxHeight }) => {
+    expect(goatBotInputMaxHeight(windowHeight)).toBe(maxHeight);
+  });
 });

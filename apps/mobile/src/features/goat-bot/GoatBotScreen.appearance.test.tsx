@@ -62,6 +62,7 @@ vi.mock("react-native", () => ({
     <input aria-label="Message GOAT Bot" data-style={JSON.stringify(style)} />
   ),
   Platform: { OS: "ios" },
+  useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 // The native Markdown renderer cannot load under Vitest.

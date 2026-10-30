@@ -9,7 +9,7 @@ import {
 import type { EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { memo, useCallback, useContext, useState } from "react";
-import { Platform, Pressable, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 import {
   KeyboardAvoidingView,
   useReanimatedKeyboardAnimation,
@@ -29,7 +29,7 @@ import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
-import { goatBotComposerBottomPadding } from "./goatBotComposerInsets";
+import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 
@@ -373,6 +373,7 @@ export function GoatBotScreen(props: {
   const listTopInset = hasBanner || homeError ? 0 : topInset;
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(44);
+  const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
     ({ item }: { item: GoatBotRow }) => (
       <GoatBotTimelineRow
@@ -486,7 +487,7 @@ export function GoatBotScreen(props: {
           }
           className="flex-1 px-3 py-2 text-foreground"
           style={{
-            height: inputHeight,
+            height: Math.min(inputHeight, inputMaxHeight),
             minHeight: 44,
             borderRadius: 22,
             borderWidth: 0.5,

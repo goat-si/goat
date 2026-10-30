@@ -131,7 +131,10 @@ function WorkspaceRootContent() {
             : keyboardHeight > 0 && tab.searchMode !== "resting"
               ? keyboardHeight + 64
               : Math.max(insets.bottom, 12) + workspaceToolbarHeight(tab.searchMode) + 16;
-  const context = useMemo(() => ({ ...workspace, bottomClearance }), [workspace, bottomClearance]);
+  const context = useMemo(
+    () => ({ ...workspace, bottomClearance, bottomSafeArea: insets.bottom }),
+    [workspace, bottomClearance, insets.bottom],
+  );
 
   return (
     <WorkspaceTabsContext value={context}>

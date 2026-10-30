@@ -25,6 +25,8 @@ export const WorkspaceTabsContext = createContext<{
   readonly dispatch: Dispatch<WorkspaceTabsAction>;
   readonly isTabActive: (tab: WorkspaceTab) => boolean;
   readonly bottomClearance: number;
+  /** The window's bottom safe area, which the workspace zeroes for content under floating tabs. */
+  readonly bottomSafeArea?: number;
   readonly settingsOpen: boolean;
   readonly getScrollOffset: (tab: WorkspaceSearchTab) => number;
   readonly recordScrollOffset: (tab: WorkspaceSearchTab, offset: number) => void;

@@ -11,7 +11,6 @@ import * as Order from "effect/Order";
 import { useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
-import { initialWindowMetrics } from "react-native-safe-area-context";
 
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { resolveScratchProjectScopeKey } from "@goat/client-runtime/state/project-grouping";
@@ -23,11 +22,7 @@ import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
-import {
-  useDeviceType,
-  useNativeColumnLayoutMetrics,
-  useNativeLayoutMetrics,
-} from "../../native/native-layout-metrics";
+import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
 import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
@@ -54,7 +49,6 @@ export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
   const columnMetrics = useNativeColumnLayoutMetrics();
-  const windowMetrics = useNativeLayoutMetrics();
   const deviceType = useDeviceType();
   const compactTabs = useCompactWorkspaceTabs();
   const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
@@ -82,13 +76,9 @@ export function HomeRouteScreen() {
   const navigation = useNavigation();
   const selectTab = useSelectWorkspaceTab();
   const workspace = useWorkspaceTabs();
-  // The workspace zeroes the bottom safe area under its floating tabs; read the window's instead.
   const floatingTabs =
     Platform.OS === "ios" && workspace !== null && (compactTabs || deviceType === "pad")
-      ? {
-          bottomSafeArea:
-            windowMetrics?.safeArea.bottom ?? initialWindowMetrics?.insets.bottom ?? 0,
-        }
+      ? { bottomSafeArea: workspace.bottomSafeArea ?? 0 }
       : undefined;
   const [localSearchQuery, setLocalSearchQuery] = useState("");
   const searchQuery =
