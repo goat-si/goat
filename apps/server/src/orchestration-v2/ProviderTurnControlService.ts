@@ -18,7 +18,6 @@ import * as Stream from "effect/Stream";
 
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { builtInSkillProviderText } from "./BuiltInSkillText.ts";
 import * as EventSink from "./EventSink.ts";
@@ -89,16 +88,11 @@ export const layer: Layer.Layer<
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const eventSink = yield* EventSink.EventSinkV2;
     const computerUse = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
-    const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
     // Optional so test assemblies without settings still build; then no built-in skill is sent.
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     // Stop reaches the screen first: the driver transport dies before the provider is asked.
     const stopComputerUse = (threadId: ThreadId) =>
       Option.isSome(computerUse) ? computerUse.value.stop(threadId) : Effect.void;
-    const stopComputerUseSession = (threadId: ThreadId) =>
-      Option.isSome(handoffs)
-        ? handoffs.value.stopComputerUseSessions(threadId)
-        : stopComputerUse(threadId);
 
     const load = Effect.fn("ProviderTurnControlService.load")(function* (input: {
       readonly threadId: ThreadId;
@@ -200,7 +194,7 @@ export const layer: Layer.Layer<
     return ProviderTurnControlServiceV2.of({
       interrupt: Effect.fn("ProviderTurnControlService.interrupt")(
         function* (input) {
-          if (input.subagent === undefined) yield* stopComputerUseSession(input.threadId);
+          if (input.subagent === undefined) yield* stopComputerUse(input.threadId);
           const loaded = yield* load({ ...input, operation: "interrupt" });
           const session = Option.isSome(loaded.session)
             ? loaded.session

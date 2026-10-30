@@ -4,15 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
-import * as Layer from "effect/Layer";
-import * as Context from "effect/Context";
-import { ProviderSessionId, ProviderThreadId, ProviderTurnId } from "@goat/contracts";
-import * as ProviderTurnControl from "../orchestration-v2/ProviderTurnControlService.ts";
-import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
-import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
-import * as EventSink from "../orchestration-v2/EventSink.ts";
-import * as Handoffs from "../handoffs/Handoffs.ts";
-import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -63,67 +54,50 @@ it.effect.each(["session", "named"] as const)("organization denial precedes %s a
   ),
 );
 
-const interruptThread = (
-  handoffs: Handoffs.Handoffs["Service"],
-  leases: ComputerUseLeases.ComputerUseLeases["Service"],
-) =>
-  Effect.gen(function* () {
-    const context = yield* Layer.build(
-      Layer.fresh(ProviderTurnControl.layer).pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            Layer.mock(ProjectionStore.ProjectionStoreV2)({
-              getProviderControlContext: () =>
-                Effect.succeed({
-                  providerThread: undefined,
-                  providerTurn: undefined,
-                  attempt: undefined,
-                  message: undefined,
-                  run: undefined,
-                }),
-            }),
-            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
-            Layer.mock(EventSink.EventSinkV2)({}),
-            Layer.succeed(Handoffs.Handoffs, handoffs),
-            Layer.succeed(ComputerUseLeases.ComputerUseLeases, leases),
-          ),
-        ),
-      ),
-    );
-    const control = Context.get(context, ProviderTurnControl.ProviderTurnControlServiceV2);
-    yield* control
-      .interrupt({
-        threadId,
-        providerSessionId: ProviderSessionId.make("session:test"),
-        providerThreadId: ProviderThreadId.make("thread:test"),
-        providerTurnId: ProviderTurnId.make("turn:test"),
-      })
-      .pipe(Effect.result);
-  });
-
-it.effect("thread interrupt revokes a session approval", () =>
+it.effect.each([
+  { original: "Please help", edit: "Use com.example.Editor", expected: "needs_human" },
+  { original: "Use com.example.Editor", edit: "Please help", expected: "available" },
+] as const)("only the person's original queued text names an app: $expected", (scenario) =>
   withHarness(({ orchestrator }) =>
-    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
-      Effect.gen(function* () {
-        const first = yield* request({ apps: ["com.example.Editor"] });
-        if (first.kind !== "needs_human") return assert.fail("expected approval");
-        yield* handoffs.respond(
-          {
-            threadId,
-            handoffId: first.handoff.handoffId,
-            action: "completed",
-            computerUseScope: "session",
-          },
-          sessionId,
-        );
-        yield* interruptThread(handoffs, leases);
-        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
-      }),
-    ),
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("person-queue"),
+        threadId,
+        messageId: MessageId.make("message:person-queue"),
+        text: scenario.original,
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+        (run) => run.status === "queued",
+      );
+      if (queued === undefined) return assert.fail("expected queued run");
+      yield* orchestrator.dispatch({
+        type: "queued-run.edit",
+        commandId: CommandId.make("agent-edit"),
+        threadId,
+        runId: queued.id,
+        text: scenario.edit,
+      });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Other"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, scenario.expected);
+        }),
+      );
+    }),
   ),
 );
 
-it.effect.each(["end", "stop all", "thread stop", "disable"] as const)(
+it.effect.each(["end", "stop all", "disable"] as const)(
   "old mention cannot restore an approval after %s",
   (termination) =>
     withHarness(({ orchestrator }) =>
@@ -159,7 +133,6 @@ it.effect.each(["end", "stop all", "thread stop", "disable"] as const)(
               );
             if (termination === "stop all")
               yield* stopAllComputerUse(Option.some(leases), handoffs, sessionId);
-            if (termination === "thread stop") yield* interruptThread(handoffs, leases);
             if (termination === "disable") {
               const settings = yield* ServerSettings.ServerSettingsService;
               yield* handoffs.withComputerUseToggle(

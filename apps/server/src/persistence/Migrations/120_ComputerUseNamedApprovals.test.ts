@@ -28,3 +28,19 @@ it.effect.each(["client", "server"] as const)(
       );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect(
+  "first message revisions can be looked up by thread and message id through the index",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 120 });
+      const plan = yield* sql<{ detail: string }>`EXPLAIN QUERY PLAN
+      SELECT sequence FROM orchestration_events
+      WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+        AND stream_id = 'thread:test' AND event_type = 'message.updated'
+        AND json_extract(payload_json, '$.id') = 'message:test'
+      ORDER BY sequence LIMIT 1`;
+      assert.isTrue(plan.some((row) => row.detail.includes("computer_use_first_message_event")));
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);

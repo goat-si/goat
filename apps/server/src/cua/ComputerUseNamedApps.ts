@@ -1,7 +1,7 @@
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 import type { ComputerUseApp, OrchestrationV2ConversationMessage } from "@goat/contracts";
 
-const mentions = (text: string, name: string) => {
+export const mentions = (text: string, name: string) => {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
     `(?<![\\p{L}\\p{M}\\p{N}_])(?<![\\p{L}\\p{M}\\p{N}][.-])${escaped}(?![\\p{L}\\p{M}\\p{N}_]|[.-][\\p{L}\\p{M}\\p{N}_])`,
@@ -23,9 +23,8 @@ export const namedAppMessages = (
       message.scheduledTaskId === undefined &&
       message.senderThreadId === undefined &&
       message.channel === undefined &&
-      message.workflowScript !== true &&
-      (mentions(message.text, app) || (name !== undefined && mentions(message.text, name)))
-        ? [{ app, messageId: message.id }]
+      message.workflowScript !== true
+        ? [{ app, messageId: message.id, ...(name === undefined ? {} : { name }) }]
         : [],
     );
   });

@@ -151,6 +151,7 @@ import {
   withServerAttribution,
 } from "./GuestShareDecider.ts";
 import { makeGuestShare } from "./goat/GuestShare.ts";
+import { computerUseStopEffect, delegatedTasksStopEffect } from "./goat/ThreadStopEffects.ts";
 import { makeReviewContinuation } from "./goat/ReviewContinuation.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
@@ -677,24 +678,6 @@ function pendingThreadTitleGenerationEffect(
     commandId,
     threadId,
     request: { type: "thread-title.generate", kind },
-  };
-}
-
-function delegatedTasksStopEffect(command: {
-  readonly commandId: CommandId;
-  readonly threadId: ThreadId;
-  readonly reason?: string | undefined;
-  readonly childThreadIds?: ReadonlyArray<ThreadId>;
-}): PendingOrchestrationEffectV2 {
-  return {
-    id: `effect:${command.commandId}:delegated-tasks.stop`,
-    commandId: command.commandId,
-    threadId: command.threadId,
-    request: {
-      type: "delegated-tasks.stop",
-      ...(command.childThreadIds === undefined ? {} : { childThreadIds: command.childThreadIds }),
-      ...(command.reason === undefined ? {} : { reason: command.reason }),
-    },
   };
 }
 
@@ -11175,6 +11158,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ) {
       return undefined;
     }
+    yield* Ref.update(effects, (existing) => [...existing, computerUseStopEffect(command)]);
     // Queued after the interrupt, since a thread's effects run in order.
     const stopDelegatedTasks =
       command.stopDelegatedTasks === false || !projection.subagents.some(isOwnedDelegatedTask)

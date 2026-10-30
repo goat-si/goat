@@ -19,6 +19,7 @@ export const EFFECT_LANES = {
   "attachment.cleanup": "cleanup",
   "thread-title.generate": "general",
   "delegated-tasks.stop": "control",
+  "computer-use.stop": "control",
 } as const satisfies Record<OrchestrationEffectRequestV2["type"], EffectLane>;
 
 export const effectTypesForLane = (lane: EffectLane) =>
