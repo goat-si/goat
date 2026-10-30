@@ -1,4 +1,10 @@
-import { describe, lastText } from "./launchWatchText.ts";
+import { describe } from "./launchWatchText.ts";
+import {
+  LauncherGone,
+  type Look,
+  makeLaunchWatchReads,
+  REMOTE_READ_TIMEOUT_MS,
+} from "./launchWatchReads.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as PressureNudger from "../fleet/pressure/PressureNudger.ts";
 import { admitLaunch } from "./pressureAdmission.ts";
@@ -14,7 +20,6 @@ import {
   MessageId,
   type EnvironmentId,
   ModelSelection,
-  OrchestratorMcpThreadReadResult,
   OrchestratorMcpThreadInterruptResult,
   OrchestratorMcpThreadWaitResult,
   type ProjectId,
@@ -28,8 +33,8 @@ import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
-import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -50,10 +55,9 @@ import * as CompletionWebhook from "./completionWebhook.ts";
 import {
   addPendingRun,
   clearAttempts,
+  discoverRuns,
   dormantExpired,
   endReported,
-  EXCERPT_MAX_CHARS,
-  failureFromRemoteStatus,
   finishedWake,
   goneWake,
   isTerminalStatus,
@@ -76,13 +80,13 @@ import {
   recordQuestion,
   recordFailedAttempt,
   rearmRetriedRun,
-  RemoteRunFailureStatus,
   settleEnd,
   settleRun,
+  skipRun,
   wakeAttempt,
+  wentOnFrom,
   watchExpired as expired,
 } from "./launchWatch.ts";
-import { runFailure } from "./threadStatus.ts";
 import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
 
 /**
@@ -99,11 +103,16 @@ import { isPermanentDispatchFailure, wakeThread } from "./threadWake.ts";
  * followed the same way, at the runtime mode its caller was approved for, but
  * its reports go only to the completion webhook. It belongs to the outside
  * caller that launched (its MCP request namespace), and only that caller sees
- * it in goat_thread_status. Once its run is reported it stays dormant, like a
+ * it in goat_thread_status. Once its run is reported it stays, like a
  * launcher's watch, so a later goat_thread_send from the same caller re-arms
  * it and that run reaches the webhook too.
  *
- * Dormant watches expire: a launcher's after a week without changes, a
+ * While nothing is owed, a kept watch looks at its thread's runs since its
+ * last look, and follows each the thread started on its own (a wake from a
+ * child, a review or a pull request watch) like an armed one, so each time the
+ * thread goes idle is reported; discoverRuns says which runs it leaves out.
+ *
+ * Idle watches expire: a launcher's after a week without changes, a
  * launcherless one a week after it was last armed. An expired watch is treated
  * as gone, and a periodic sweep drops it and releases any inline secret.
  */
@@ -116,14 +125,15 @@ const REMOTE_TICK_MS = 2 * 60_000;
 const REMOTE_ANSWER_MARGIN_MS = 60_000;
 /** Bound on one whole remote step, including SSH setup. */
 const REMOTE_STEP_LIMIT_MS = REMOTE_TICK_MS + 3 * 60_000;
-const REMOTE_READ_TIMEOUT_MS = 60_000;
 /** How often dormant watches past their retention are dropped while the server runs. */
 const SWEEP_MS = 60 * 60_000;
+/** How an idle follower waits before its next look; tests step looks with it instead of a clock. */
+export const IdleLookWait = Context.Reference<(ms: number) => Effect.Effect<void>>(
+  "goat/mcp/LaunchWatchService/IdleLookWait",
+  { defaultValue: () => (ms) => Effect.sleep(ms) },
+);
 /** Pause before retrying after a changed caller, an unqueued wake or an unsaved state. */
 const RETRY_MS = 30_000;
-const TAIL_WINDOW = 40;
-const TAIL_PAGE = 20;
-const TAIL_PAGES = 3;
 
 export { LaunchWatchStoreError } from "./launchWatchOrigin.ts";
 import { LaunchWatchStoreError, originFor, makeReplicationChoice } from "./launchWatchOrigin.ts";
@@ -250,6 +260,8 @@ type StepResult =
   | {
       readonly _tag: "Running";
       readonly questions: ReadonlyArray<{ readonly id: string; readonly kind: string | null }>;
+      /** The run that asks them: a continuation or joined run of the followed one, else it. */
+      readonly askedRunId?: RunId;
       readonly escalatesUserInput?: boolean;
       readonly retryIfNoNewQuestions?: boolean;
     }
@@ -258,8 +270,6 @@ type StepResult =
   | { readonly _tag: "LauncherGone" }
   | { readonly _tag: "CallerChanged" }
   | { readonly _tag: "Unreachable"; readonly error: string };
-
-class LauncherGone extends Data.TaggedError("LauncherGone")<{}> {}
 
 const decodeDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(LaunchWatchDocument));
 const encodeDocument = Schema.encodeEffect(Schema.fromJsonString(LaunchWatchDocument));
@@ -273,15 +283,11 @@ const encodeReplicaModel = Schema.encodeEffect(
 );
 const isMcpFailure = Schema.is(OrchestratorMcpFailure);
 const decodeWait = Schema.decodeUnknownEffect(OrchestratorMcpThreadWaitResult);
-const decodeRead = Schema.decodeUnknownEffect(OrchestratorMcpThreadReadResult);
-const decodeRequestIds = Schema.decodeUnknownEffect(
-  Schema.Struct({ requestIds: Schema.Array(Schema.String) }),
-);
-const decodeFailureStatus = Schema.decodeUnknownEffect(RemoteRunFailureStatus);
 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const hold = yield* AutomationHold.AutomationHold;
+  const idleWait = yield* IdleLookWait;
   const threads = yield* ThreadManagementService.ThreadManagementService;
   const ssh = yield* SshRemoteDispatch.SshRemoteDispatch;
   const config = yield* ServerConfig.ServerConfig;
@@ -308,10 +314,17 @@ export const make = Effect.gen(function* () {
   const onDisk = new Map<string, string>();
   /** First sightings of local questions whose escalation message has not landed yet. */
   const missingEscalations = new Map<string, Map<string, number>>();
-  /** One follower per watch with runs to report; only touched while holding the lock. */
+  /**
+   * One follower per kept watch; only touched while holding the lock. `idle` is set while it
+   * waits to look at its thread again, so a newly armed run is followed at once.
+   */
   const followers = new Map<
     string,
-    { readonly incarnation: string; fiber: Fiber.Fiber<void> | undefined }
+    {
+      readonly incarnation: string;
+      fiber: Fiber.Fiber<void> | undefined;
+      idle?: Deferred.Deferred<void>;
+    }
   >();
 
   const locked = lock.withPermits(1);
@@ -516,12 +529,33 @@ export const make = Effect.gen(function* () {
           end: completedAt == null ? null : DateTime.formatIso(completedAt),
         } satisfies StepResult;
       }
-      const records = yield* threads.getThreadRecords(watch.threadId, ["runtimeRequests"]);
+      // Requests name no run; the turn items that show them do. A request another run left
+      // pending, or the active run's when this one is queued behind it, is not this run's.
+      const asked = waited.result.run?.id ?? runId;
+      const records = yield* threads.getThreadRecords(
+        watch.threadId,
+        ["runtimeRequests", "turnItems"],
+        { turnItemRunIds: [asked], turnItemTypes: ["user_input_request", "approval_request"] },
+      );
+      const ownRequests = new Set(
+        records.turnItems.flatMap((item) =>
+          (item.type === "user_input_request" || item.type === "approval_request") &&
+          item.runId === asked
+            ? [item.requestId as string]
+            : [],
+        ),
+      );
       const questions = records.runtimeRequests
-        .filter((request) => request.status === "pending" && request.kind !== "dynamic_tool_call")
+        .filter(
+          (request) =>
+            request.status === "pending" &&
+            request.kind !== "dynamic_tool_call" &&
+            ownRequests.has(request.id),
+        )
         .map((request) => ({ id: request.id as string, kind: request.kind as string }));
       const launcherThreadId = watch.launcherThreadId;
-      if (launcherThreadId === null) return { _tag: "Running", questions } satisfies StepResult;
+      if (launcherThreadId === null)
+        return { _tag: "Running", questions, askedRunId: asked } satisfies StepResult;
       const subagents =
         shell.launchedBy === undefined &&
         shell.lineage.parentThreadId === launcherThreadId &&
@@ -531,6 +565,7 @@ export const make = Effect.gen(function* () {
       return {
         _tag: "Running",
         questions,
+        askedRunId: asked,
         escalatesUserInput: localQuestionLauncher(shell, subagents) === launcherThreadId,
       } satisfies StepResult;
     }).pipe(
@@ -609,36 +644,15 @@ export const make = Effect.gen(function* () {
           end: waited.completedAt ?? null,
         } satisfies StepResult;
       }
-      // Only user questions are listed remotely; approvals show up when the run ends.
-      const listedQuestions = yield* callHost(
-        watch,
-        host,
-        "goat_pending_request_list",
-        { threadId: watch.threadId },
-        REMOTE_READ_TIMEOUT_MS,
-      ).pipe(
-        Effect.flatMap(decodeRequestIds),
-        Effect.map((listed) => listed.requestIds.map((id) => ({ id, kind: "user_input" }))),
-        Effect.catch((error) =>
-          error instanceof LauncherGone
-            ? Effect.fail(error)
-            : Effect.logDebug("launch watch: pending requests unreadable", {
-                host,
-                cause: error,
-              }).pipe(Effect.as([])),
-        ),
-      );
-      const questions = [...listedQuestions];
-      if (!waited.timedOut) {
-        for (const id of waited.pendingRequestIds ?? []) {
-          if (!questions.some((question) => question.id === id)) {
-            questions.push({ id, kind: "user_input" });
-          }
-        }
-      }
+      // The wait lists the questions of the run it reports; a host too old to list them reports
+      // none early, since a thread-wide list would mix in other runs' questions.
+      const questions = waited.timedOut
+        ? []
+        : (waited.pendingRequestIds ?? []).map((id) => ({ id, kind: "user_input" }));
       return {
         _tag: "Running",
         questions,
+        ...(waited.runId === null ? {} : { askedRunId: waited.runId }),
         retryIfNoNewQuestions: !waited.timedOut,
       } satisfies StepResult;
     }).pipe(
@@ -652,124 +666,7 @@ export const make = Effect.gen(function* () {
       Effect.catch((error) => Effect.succeed(remoteFailure(error))),
     );
 
-  const localDetails = (watch: LaunchWatch, runId: RunId) =>
-    Effect.gen(function* () {
-      const shell = yield* threads.getThreadShell(watch.threadId);
-      const records = yield* threads.getThreadRecords(
-        watch.threadId,
-        ["messages", "providerThreads", "runs", "turnItems"],
-        {
-          messageRoles: ["assistant"],
-          messageRunIds: [runId],
-          runIds: [runId],
-          turnItemRunIds: [runId],
-          turnItemTypes: ["assistant_message", "error"],
-        },
-      );
-      return {
-        title: shell?.title ?? null,
-        branch: shell?.branch ?? null,
-        worktreePath: shell?.worktreePath ?? null,
-        excerpt: lastText(records.messages.map((message) => message.text)),
-        prUrl: shell?.linkedPullRequest?.url ?? null,
-        linkOnlyRegistration: (records.providerThreads ?? []).some(
-          (thread) =>
-            thread.cloudTask?.attach === "registered" && thread.cloudTask.tracking === "link-only",
-        ),
-        failure: runFailure(
-          records.runs.find((run) => run.id === runId) ?? null,
-          records.turnItems,
-        ),
-      } satisfies LaunchWatchRunDetails;
-    });
-
-  /**
-   * Reads the end of a remote transcript for the followed run's last answer.
-   * Positions count every visible item while the messages view only filters,
-   * so the read starts a fixed window before the end.
-   */
-  const remoteDetails = (
-    watch: LaunchWatch,
-    host: string,
-    runId: RunId,
-    status: LaunchWatchTerminalStatus,
-  ) =>
-    Effect.gen(function* () {
-      const read = (args: Record<string, unknown>) =>
-        callHost(
-          watch,
-          host,
-          "goat_thread_read",
-          { threadId: watch.threadId, ...args },
-          REMOTE_READ_TIMEOUT_MS,
-        ).pipe(Effect.flatMap(decodeRead));
-      const head = yield* read({ view: "messages", limit: 1, runLimit: 1 });
-      const start = head.thread.itemCount - TAIL_WINDOW - 1;
-      let afterPosition: number | undefined = start < 0 ? undefined : start;
-      const texts: Array<string | null> = [];
-      for (let page = 0; page < TAIL_PAGES; page++) {
-        const result = yield* read({
-          view: "messages",
-          limit: TAIL_PAGE,
-          maxCharsPerItem: EXCERPT_MAX_CHARS,
-          ...(afterPosition === undefined ? {} : { afterPosition }),
-        });
-        for (const item of result.items) {
-          if (item.type === "assistant_message" && item.runId === runId) texts.push(item.text);
-        }
-        if (!result.hasMore || result.nextPosition === null) break;
-        afterPosition = result.nextPosition;
-      }
-      const excerpt = lastText(texts);
-      // A run that failed before its agent spoke has nothing to quote; its status says why.
-      const failure =
-        status === "failed" && excerpt === null
-          ? yield* callHost(
-              watch,
-              host,
-              "goat_thread_status",
-              { threadId: watch.threadId },
-              REMOTE_READ_TIMEOUT_MS,
-            ).pipe(
-              Effect.flatMap(decodeFailureStatus),
-              Effect.map((remote) => failureFromRemoteStatus(remote, runId)),
-              Effect.catch((error) =>
-                error instanceof LauncherGone
-                  ? Effect.fail(error)
-                  : Effect.logDebug("launch watch: failure status unreadable", {
-                      host,
-                      cause: error,
-                    }).pipe(Effect.as(null)),
-              ),
-            )
-          : null;
-      return {
-        title: head.thread.title,
-        branch: head.thread.branch,
-        worktreePath: head.thread.worktreePath,
-        excerpt,
-        prUrl: head.thread.linkedPullRequest?.url ?? null,
-        // Registered runs live on their holder, whose own watch reads them locally.
-        linkOnlyRegistration: false,
-        failure,
-      } satisfies LaunchWatchRunDetails;
-    });
-
-  /** Details make a wake more useful but never hold it back. */
-  const detailsFor = (watch: LaunchWatch, runId: RunId, status: LaunchWatchTerminalStatus) =>
-    (watch.host === null
-      ? localDetails(watch, runId)
-      : remoteDetails(watch, watch.host, runId, status)
-    ).pipe(
-      Effect.timeoutOption(REMOTE_READ_TIMEOUT_MS * 2),
-      Effect.map(Option.getOrElse(() => noRunDetails)),
-      Effect.catch((error) =>
-        Effect.logDebug("launch watch: details unavailable", {
-          watchId: watch.id,
-          cause: error,
-        }).pipe(Effect.as(noRunDetails)),
-      ),
-    );
+  const reads = makeLaunchWatchReads({ threads, launcherCeiling, callHost });
 
   const wake = (launcherThreadId: ThreadId, message: LaunchWatchWake) =>
     wakeThread(threads, launcherThreadId, message);
@@ -843,10 +740,21 @@ export const make = Effect.gen(function* () {
     }
   };
 
-  /** Starts a follower when a watch has runs to report and none is running. Call with the lock held. */
+  /** Starts a kept watch's follower, or wakes an idle one for a newly armed run. Call with the lock held. */
   const ensureFollower = (watch: LaunchWatch) =>
     Effect.gen(function* () {
-      if (watch.pendingRuns.length === 0 || followers.has(watch.id)) return;
+      if (watch.recovery !== undefined || watch.detached) return;
+      const running = followers.get(watch.id);
+      if (running?.incarnation === watch.incarnation) {
+        if (
+          running.idle !== undefined &&
+          (watch.pendingRuns.length > 0 || watch.heldRuns.length > 0)
+        )
+          yield* Deferred.succeed(running.idle, undefined);
+        return;
+      }
+      // A follower of a pruned earlier incarnation exits at its next step; wake it so it does.
+      if (running?.idle !== undefined) yield* Deferred.succeed(running.idle, undefined);
       const slot: { readonly incarnation: string; fiber: Fiber.Fiber<void> | undefined } = {
         incarnation: watch.incarnation,
         fiber: undefined,
@@ -861,6 +769,7 @@ export const make = Effect.gen(function* () {
   type Plan =
     | { readonly _tag: "Exit" }
     | { readonly _tag: "Sleep"; readonly ms: number }
+    | { readonly _tag: "Look"; readonly watch: LaunchWatch }
     | { readonly _tag: "Follow"; readonly watch: LaunchWatch; readonly runId: RunId };
 
   const current = (watchId: string, incarnation: string) => {
@@ -939,6 +848,11 @@ export const make = Effect.gen(function* () {
                 return 0;
               }
               const title = details.title ?? watch.title;
+              // The thread went straight on to its own next run; that run's end reports it.
+              if (endedRunId === runId && wentOnFrom(watch, runId, details.runs)) {
+                yield* keep(skipRun(recordContact(watch, now), runId, now));
+                return 0;
+              }
               const wake = { watch, runId: endedRunId, status: result.status, ...details, end };
               const sent = yield* deliver(
                 watch,
@@ -1023,16 +937,17 @@ export const make = Effect.gen(function* () {
                 }
                 const sent = yield* deliver(
                   next,
+                  // Keys stay under the followed run; the report names the run that asks.
                   questionWake({
                     watch: next,
-                    runId,
+                    runId: result.askedRunId ?? runId,
                     requestId: question.id,
                     kind: question.kind,
                     title: null,
                   }),
                   {
                     event: "question",
-                    runId,
+                    runId: result.askedRunId ?? runId,
                     requestId: question.id,
                     status: "waiting",
                     title: next.title,
@@ -1103,9 +1018,9 @@ export const make = Effect.gen(function* () {
     locked(
       Effect.gen(function* () {
         const watch = current(watchId, incarnation);
-        const runId =
-          watch?.recovery !== undefined || watch?.detached ? undefined : watch?.pendingRuns[0];
-        if (watch === undefined || runId === undefined) {
+        const slot = followers.get(watchId);
+        if (slot?.incarnation === incarnation) delete slot.idle;
+        if (watch === undefined || watch.recovery !== undefined || watch.detached) {
           releaseSlot(watchId, incarnation);
           return { _tag: "Exit" } satisfies Plan;
         }
@@ -1132,10 +1047,49 @@ export const make = Effect.gen(function* () {
           }
           return { _tag: "Sleep", ms: RETRY_MS } satisfies Plan;
         }
+        const runId = watch.pendingRuns[0];
+        if (runId === undefined) {
+          if (!expired(watch, now)) return { _tag: "Look", watch } satisfies Plan;
+          releaseSlot(watchId, incarnation);
+          return { _tag: "Exit" } satisfies Plan;
+        }
         if (watch.outage !== null && watch.outage.nextRetryAt > now) {
           return { _tag: "Sleep", ms: watch.outage.nextRetryAt - now } satisfies Plan;
         }
         return { _tag: "Follow", watch, runId } satisfies Plan;
+      }),
+    );
+
+  /**
+   * Applies a look at an idle watch's thread. Returns how long to wait before the next look, and
+   * what ends that wait early, or nothing when the follower should plan again at once.
+   */
+  const applyLook = (watchId: string, incarnation: string, look: Look) =>
+    locked(
+      Effect.gen(function* () {
+        const watch = current(watchId, incarnation);
+        if (watch === undefined || watch.recovery !== undefined || watch.detached) return;
+        const now = yield* Clock.currentTimeMillis;
+        // A look that outlived the watch's retention must not re-arm it; plan drops it.
+        if (watch.pendingRuns.length > 0 || expired(watch, now)) return;
+        if (look._tag === "Gone" || look._tag === "LauncherGone") {
+          // Nothing is owed, so the watch ends without a report.
+          yield* save((map) => map.delete(watchId));
+          return;
+        }
+        if (look._tag === "Runs") {
+          const next = discoverRuns(watch, look.runs, now);
+          if (next !== watch) {
+            yield* save((map) => map.set(watchId, next));
+            return;
+          }
+        }
+        if (look._tag === "Unreachable")
+          yield* Effect.logDebug("launch watch: thread not readable", { watchId, ...look });
+        const idle = yield* Deferred.make<void>();
+        const slot = followers.get(watchId);
+        if (slot?.incarnation === incarnation) slot.idle = idle;
+        return { ms: watch.host === null ? LOCAL_TICK_MS : REMOTE_TICK_MS, idle };
       }),
     );
 
@@ -1688,6 +1642,19 @@ export const make = Effect.gen(function* () {
           yield* Effect.sleep(next.ms);
           continue;
         }
+        if (next._tag === "Look") {
+          const wait = yield* applyLook(watchId, incarnation, yield* reads.look(next.watch)).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("launch watch: state not saved, will retry", {
+                watchId,
+                cause: error,
+              }).pipe(Effect.andThen(Effect.sleep(RETRY_MS)), Effect.as(undefined)),
+            ),
+          );
+          if (wait !== undefined)
+            yield* Effect.raceFirst(idleWait(wait.ms), Deferred.await(wait.idle));
+          continue;
+        }
         const { watch, runId } = next;
         const result =
           watch.host === null
@@ -1697,7 +1664,7 @@ export const make = Effect.gen(function* () {
           yield* capture(watch, result.runId);
         const details =
           result._tag === "Terminal"
-            ? yield* detailsFor(watch, result.runId, result.status)
+            ? yield* reads.detailsFor(watch, result.runId, result.status)
             : noRunDetails;
         const pause = yield* apply(watchId, incarnation, runId, result, details).pipe(
           Effect.catch((error) =>

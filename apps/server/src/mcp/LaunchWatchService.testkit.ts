@@ -15,6 +15,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -67,7 +68,8 @@ export interface World {
   runs: Array<Record<string, unknown>>;
   turnItems: Array<Record<string, unknown>>;
   providerThreads: Array<{ cloudTask?: { attach?: string; tracking: string } }>;
-  requests: Array<{ id: string; status: string; kind: string }>;
+  /** Runtime requests; each belongs to `runId`, by default the run a read asks about. */
+  requests: Array<{ id: string; status: string; kind: string; runId?: RunId }>;
   subagents: Array<{ origin: string; childThreadId: ThreadId }>;
   /** Failures for the next dispatches, used up in order. */
   readonly dispatchFailures: Array<"transient" | "refused">;
@@ -104,6 +106,10 @@ export interface World {
   webhookRelease?: Effect.Effect<void>;
   /** One entry per time the service asked whether the webhook still posts a watch's reports. */
   readonly wantsAsked: Queue.Queue<void>;
+  /** One entry per time an idle follower waits for its next look, with the wait it asked for. */
+  readonly idleWaits: Queue.Queue<number>;
+  /** Each entry ends one idle wait, so the follower looks at its thread again. */
+  readonly lookTicks: Queue.Queue<void>;
 }
 
 export const makeWorld = Effect.gen(function* () {
@@ -159,6 +165,8 @@ export const makeWorld = Effect.gen(function* () {
     webhookWants: true,
     releasedTargets: [],
     wantsAsked: yield* Queue.unbounded<void>(),
+    idleWaits: yield* Queue.unbounded<number>(),
+    lookTicks: yield* Queue.unbounded<void>(),
   };
   return world;
 });
@@ -200,6 +208,9 @@ const layerFor = (world: World, baseDir: string) =>
   LaunchWatchService.layerWithoutDependencies.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.succeed(LaunchWatchService.IdleLookWait, (ms: number) =>
+          Queue.offer(world.idleWaits, ms).pipe(Effect.andThen(Queue.take(world.lookTicks))),
+        ),
         ServerSettings.layerTest({
           fleet: {
             hosts: {
@@ -261,8 +272,22 @@ const layerFor = (world: World, baseDir: string) =>
                 runtimeRequests: world.requests,
                 subagents: world.subagents,
                 providerThreads: world.providerThreads,
-                runs: world.runs,
-                turnItems: world.turnItems,
+                // Fixtures name only what a test needs; a stored run always has the rest.
+                runs: world.runs.map((run, index) => ({
+                  ordinal: index + 1,
+                  requestedAt: DateTime.makeUnsafe(0),
+                  completedAt: null,
+                  userMessageId: `message:${String(run.id)}`,
+                  ...run,
+                })),
+                turnItems: [
+                  ...world.turnItems,
+                  ...world.requests.map((request) => ({
+                    type: request.kind === "user_input" ? "user_input_request" : "approval_request",
+                    requestId: request.id,
+                    runId: request.runId ?? filter?.turnItemRunIds?.[0] ?? run1,
+                  })),
+                ],
               } as never;
             }),
           dispatch: (command) => dispatchIn(world, command),

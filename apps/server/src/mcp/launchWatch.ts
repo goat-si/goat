@@ -115,6 +115,25 @@ export const LaunchWatch = Schema.Struct({
   ),
   /** Runs retried while their end was still owed, followed once more after it is reported. */
   followAgain: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
+   * Pending runs the thread started on its own (a wake, a pull request watch, a message typed
+   * there), found by looking at the thread rather than armed by a launch, send or retry.
+   */
+  discoveredRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /**
+   * Runs a look saw and left unreported: another caller's send, an echo of the launcher's own
+   * report, a run it could not attribute, or one the thread went straight on from. Unlike a
+   * reported run, a send that re-arms one still gets it reported.
+   */
+  skippedRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Runs under way whose start a look could not read yet; each later look reads them again. */
+  heldRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** When a retry was last held; until a look attributes it, retention counts from here too. */
+  heldSince: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** The newest run a look has seen; later runs are new to the watch. */
+  seen: Schema.NullOr(Schema.Struct({ runId: RunId, ordinal: Schema.Number })).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   /** The most recently reported pending requests, keyed by questionKey. */
   reportedQuestions: Schema.Array(Schema.String),
   /** Number of the last outage episode that ended; the next one counts from it. */
@@ -189,6 +208,19 @@ export interface LaunchWatchRunDetails {
   readonly linkOnlyRegistration: boolean;
   /** Why the run failed before its agent's first message, when it did. */
   readonly failure: OrchestratorMcpRunFailure | null;
+  /** The thread's recent runs when the end was read; empty when they could not be read. */
+  readonly runs: ReadonlyArray<WatchedRun>;
+}
+
+/** A run of the watched thread, as a look or a report reads it. */
+export interface WatchedRun {
+  readonly runId: RunId;
+  readonly ordinal: number;
+  readonly terminal: boolean;
+  readonly requestedAt: number;
+  readonly completedAt: number | null;
+  /** The id of the message that started it; undefined when it could not be read. */
+  readonly trigger: string | undefined;
 }
 
 export const noRunDetails: LaunchWatchRunDetails = {
@@ -199,6 +231,7 @@ export const noRunDetails: LaunchWatchRunDetails = {
   prUrl: null,
   linkOnlyRegistration: false,
   failure: null,
+  runs: [],
 };
 
 const REPORTED_LIMIT = 20;
@@ -278,6 +311,11 @@ export function newLaunchWatch(input: {
     reportedRuns: [],
     reportedEnds: {},
     followAgain: [],
+    discoveredRuns: [],
+    skippedRuns: [],
+    heldRuns: [],
+    heldSince: null,
+    seen: null,
     reportedQuestions: [],
     lastEpisode: 0,
     outage: null,
@@ -322,10 +360,157 @@ export function clearAttempts(watch: LaunchWatch, wake: LaunchWatchWake): Launch
 const keepRecent = <A>(values: ReadonlyArray<A>, value: A) =>
   [...values.filter((existing) => existing !== value), value].slice(-REPORTED_LIMIT);
 
-/** Adds a run to report; a run already pending or reported is left alone. */
+/**
+ * Adds a run to report; a run already pending or reported is left alone. A run found by looking
+ * at the thread is owed from then on like any armed run.
+ */
 export function addPendingRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  if (watch.discoveredRuns.includes(runId))
+    return {
+      ...watch,
+      discoveredRuns: watch.discoveredRuns.filter((found) => found !== runId),
+      armedAt: now,
+      updatedAt: now,
+    };
   if (watch.pendingRuns.includes(runId) || watch.reportedRuns.includes(runId)) return watch;
-  return { ...watch, pendingRuns: [...watch.pendingRuns, runId], armedAt: now, updatedAt: now };
+  return {
+    ...watch,
+    pendingRuns: [...watch.pendingRuns, runId],
+    skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
+    heldRuns: watch.heldRuns.filter((held) => held !== runId),
+    armedAt: now,
+    updatedAt: now,
+  };
+}
+
+const SEND_MESSAGE = /^message:mcp:[^:]*:thread-send:/u;
+
+const decodePart = (part: string | undefined) => {
+  try {
+    return part === undefined ? null : decodeURIComponent(part);
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Whether a run is this watch's to report. A goat_thread_send's run reports through its sender's
+ * own re-arm. A wake from the reverse watch reporting on this watch's launcher would make two
+ * threads that watch each other wake each other forever. A run nobody can attribute is left out.
+ */
+export function ownRun(watch: LaunchWatch, trigger: string | undefined): boolean {
+  if (trigger === undefined || SEND_MESSAGE.test(trigger)) return false;
+  if (watch.launcherThreadId === null || !trigger.startsWith(LAUNCH_WATCH_MESSAGE_PREFIX))
+    return true;
+  const [from, , about] = trigger.slice(LAUNCH_WATCH_MESSAGE_PREFIX.length).split(":");
+  return !(decodePart(from) === watch.threadId && decodePart(about) === watch.launcherThreadId);
+}
+
+/** Whether the thread went from this run straight into a later run of its own, never idle between. */
+const wentOn = (watch: LaunchWatch, run: WatchedRun, runs: ReadonlyArray<WatchedRun>) => {
+  const end = run.completedAt;
+  return (
+    end !== null &&
+    runs.some(
+      (later) =>
+        later.ordinal > run.ordinal && later.requestedAt <= end && ownRun(watch, later.trigger),
+    )
+  );
+};
+
+/**
+ * Takes in the runs a look found. Each run past the last look that the watch does not know is
+ * followed when it is the thread's own and the thread did not go straight on from it, and skipped
+ * otherwise, so the thread is reported each time it goes idle. A run still under way whose start
+ * cannot be read yet (queued before its message lands) is held and read again by later looks,
+ * which go on past it; held, it is skipped once it ends or leaves the runs a look can see. A
+ * watch that never looked starts after the newest run it knows, else the newest run.
+ */
+export function discoverRuns(
+  watch: LaunchWatch,
+  runs: ReadonlyArray<WatchedRun>,
+  now: number,
+): LaunchWatch {
+  const sorted = runs.toSorted((left, right) => left.ordinal - right.ordinal);
+  const newest = sorted.at(-1);
+  if (newest === undefined) return watch;
+  const known = (run: WatchedRun) =>
+    watch.pendingRuns.includes(run.runId) ||
+    watch.reportedRuns.includes(run.runId) ||
+    watch.skippedRuns.includes(run.runId);
+  const from =
+    watch.seen?.ordinal ?? sorted.findLast(known)?.ordinal ?? Math.max(0, newest.ordinal - 1);
+  const visible = new Set(sorted.map((run) => run.runId));
+  const pending: Array<RunId> = [];
+  const found: Array<RunId> = [];
+  const held: Array<RunId> = [];
+  let skipped = watch.heldRuns
+    .filter((id) => !visible.has(id))
+    .reduce(keepRecent, watch.skippedRuns);
+  for (const run of sorted) {
+    const wasHeld = watch.heldRuns.includes(run.runId);
+    if (!wasHeld && (run.ordinal <= from || known(run))) continue;
+    if (run.trigger === undefined && !run.terminal) held.push(run.runId);
+    else if (!ownRun(watch, run.trigger)) skipped = keepRecent(skipped, run.runId);
+    // A held run (a retry, or one whose start was unread) is reported however the thread went
+    // on, so it is owed like an armed run rather than found.
+    else if (wasHeld) pending.push(run.runId);
+    else if (run.terminal && wentOn(watch, run, sorted)) skipped = keepRecent(skipped, run.runId);
+    else {
+      pending.push(run.runId);
+      found.push(run.runId);
+    }
+  }
+  const seen =
+    newest.ordinal > (watch.seen?.ordinal ?? 0)
+      ? { runId: newest.runId, ordinal: newest.ordinal }
+      : watch.seen;
+  if (
+    seen?.runId === watch.seen?.runId &&
+    pending.length === 0 &&
+    skipped === watch.skippedRuns &&
+    held.join() === watch.heldRuns.join()
+  )
+    return watch;
+  return {
+    ...watch,
+    seen,
+    heldRuns: held,
+    heldSince: held.length === 0 ? null : watch.heldSince,
+    skippedRuns: skipped,
+    ...(pending.length === 0
+      ? {}
+      : {
+          pendingRuns: [...watch.pendingRuns, ...pending],
+          discoveredRuns: [...watch.discoveredRuns, ...found],
+          armedAt: now,
+          updatedAt: now,
+        }),
+  };
+}
+
+/** Whether a found run's end goes unreported because the thread went straight on to its own next run. */
+export const wentOnFrom = (watch: LaunchWatch, runId: RunId, runs: ReadonlyArray<WatchedRun>) => {
+  const run = runs.find((candidate) => candidate.runId === runId);
+  // A retry owed after this end is followed to its own end, so this one is reported as usual.
+  return (
+    watch.discoveredRuns.includes(runId) &&
+    !watch.followAgain.includes(runId) &&
+    run !== undefined &&
+    wentOn(watch, run, runs)
+  );
+};
+
+/** Settles a found run without a report, remembering no end, so a send re-arming it still reports. */
+export function skipRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
+  return {
+    ...watch,
+    pendingRuns: watch.pendingRuns.filter((pending) => pending !== runId),
+    discoveredRuns: watch.discoveredRuns.filter((found) => found !== runId),
+    followAgain: watch.followAgain.filter((again) => again !== runId),
+    skippedRuns: keepRecent(watch.skippedRuns, runId),
+    updatedAt: now,
+  };
 }
 
 /** Moves a run from pending to reported, whether or not a wake went out for it. */
@@ -335,6 +520,7 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
     pendingRuns: watch.pendingRuns.filter((pending) => pending !== runId),
     reportedRuns: keepRecent(watch.reportedRuns, runId),
     followAgain: watch.followAgain.filter((again) => again !== runId),
+    discoveredRuns: watch.discoveredRuns.filter((found) => found !== runId),
     updatedAt: now,
   };
 }
@@ -347,11 +533,23 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
  */
 export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
   if (watch.pendingRuns.includes(runId)) {
-    return watch.followAgain.includes(runId)
-      ? watch
-      : { ...watch, followAgain: [...watch.followAgain, runId], updatedAt: now };
+    const followAgain = watch.followAgain.includes(runId)
+      ? watch.followAgain
+      : [...watch.followAgain, runId];
+    return { ...watch, followAgain, armedAt: now, updatedAt: now };
   }
-  if (!watch.reportedRuns.includes(runId)) return watch;
+  // Any other run, skipped or not looked at yet, is held: the next look follows it if it is the
+  // thread's own, so a look already under way cannot skip the retry.
+  if (!watch.reportedRuns.includes(runId))
+    return watch.heldRuns.includes(runId)
+      ? watch
+      : {
+          ...watch,
+          skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
+          heldRuns: [...watch.heldRuns, runId],
+          heldSince: now,
+          updatedAt: now,
+        };
   return {
     ...watch,
     pendingRuns: [...watch.pendingRuns, runId],
@@ -411,7 +609,9 @@ const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 
 export const launcherlessExpired = (watch: LaunchWatch, now: number) =>
   watch.launcherThreadId === null &&
-  now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
+  // A retry awaiting its look keeps the watch until that look decides whose it is.
+  now - Math.max(watch.armedAt ?? watch.createdAt, watch.heldSince ?? 0) >=
+    LAUNCHERLESS_RETENTION_MS;
 
 /** A watch past its retention, which every operation treats as gone. */
 export const watchExpired = (watch: LaunchWatch, now: number) =>

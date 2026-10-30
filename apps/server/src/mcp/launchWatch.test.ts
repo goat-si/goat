@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 
 import {
   addPendingRun,
+  discoverRuns,
   endReported,
   finishedWake,
   LaunchWatchDocument,
@@ -13,12 +14,33 @@ import {
   normalizeHost,
   outageWake,
   questionWake,
+  ownRun,
   rearmRetriedRun,
   recordContact,
   recordFailure,
   settleEnd,
   settleRun,
+  skipRun,
+  type WatchedRun,
+  watchExpired,
+  wentOnFrom,
 } from "./launchWatch.ts";
+
+const watchedRun = (
+  runId: RunId,
+  ordinal: number,
+  input: { requestedAt?: number; completedAt?: number | null; trigger?: string | undefined } = {},
+): WatchedRun => {
+  const completedAt = input.completedAt === undefined ? ordinal * 10 + 5 : input.completedAt;
+  return {
+    runId,
+    ordinal,
+    terminal: completedAt !== null,
+    requestedAt: input.requestedAt ?? ordinal * 10,
+    completedAt,
+    trigger: "trigger" in input ? input.trigger : `message:wake:${runId}`,
+  };
+};
 
 const makeWatch = (host: string | null = "box") =>
   newLaunchWatch({
@@ -284,3 +306,197 @@ it.effect("normalizes blank hosts and distinguishes local watches from remote wa
     );
   }),
 );
+
+it("follows each run the thread started itself, once, and skips one it went straight on from", () => {
+  const [run1, run2, run3, run4] = ["run-1", "run-2", "run-3", "run-4"].map((id) => RunId.make(id));
+  const reported = settleEnd(addPendingRun(makeWatch(), run1!, 0), run1!, "end-1", 5);
+  const runs: ReadonlyArray<WatchedRun> = [
+    watchedRun(run1!, 1, { requestedAt: 0, completedAt: 5 }),
+    // Idle after run-2, so it is reported though run-3 followed within one look.
+    watchedRun(run2!, 2, { requestedAt: 10, completedAt: 20 }),
+    // run-4 was queued while run-3 ran: the thread went straight on.
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    watchedRun(run4!, 4, { requestedAt: 40, completedAt: null }),
+  ];
+  const found = discoverRuns(reported, runs, 500);
+  expect(found).toMatchObject({
+    pendingRuns: [run2, run4],
+    discoveredRuns: [run2, run4],
+    skippedRuns: [run3],
+    seen: { runId: run4, ordinal: 4 },
+    armedAt: 500,
+  });
+  // The same runs seen again, or after they were reported, add nothing.
+  expect(discoverRuns(found, runs, 900)).toBe(found);
+  const ended = settleEnd(settleEnd(found, run2!, "end-2", 600), run4!, "end-4", 600);
+  expect(discoverRuns(ended, runs, 900)).toBe(ended);
+  expect(ended.reportedRuns).toEqual([run1, run2, run4]);
+});
+
+it("leaves sends and echoes to their own watch, yet reports a skipped send its sender re-arms", () => {
+  const [run1, run2, run3, run4, run5] = ["run-1", "run-2", "run-3", "run-4", "run-5"].map((id) =>
+    RunId.make(id),
+  );
+  const watch = settleEnd(addPendingRun(makeWatch(null), run1!, 0), run1!, "end-1", 5);
+  // The reverse watch's report on this watch's launcher woke the thread.
+  const echo = launchWatchId({ launcherThreadId: watch.threadId, host: "mac", threadId: "caller" });
+  const other = launchWatchId({ launcherThreadId: watch.threadId, host: null, threadId: "child" });
+  const found = discoverRuns(
+    watch,
+    [
+      watchedRun(run1!, 1, { requestedAt: 0, completedAt: 5 }),
+      watchedRun(run2!, 2, { trigger: "message:mcp:client%3Abot-b:thread-send:request-1" }),
+      watchedRun(run3!, 3, { trigger: `message:launch-watch:${echo}:run:run-9` }),
+      watchedRun(run4!, 4, { trigger: undefined }),
+      watchedRun(run5!, 5, { trigger: `message:launch-watch:${other}:run:run-9` }),
+    ],
+    50,
+  );
+  expect(found).toMatchObject({ pendingRuns: [run5], skippedRuns: [run2, run3, run4] });
+  // A send whose re-arm arrives after a look skipped its run is still reported to its sender.
+  const rearmed = addPendingRun(found, run2!, 60);
+  expect(rearmed).toMatchObject({ pendingRuns: [run5, run2], skippedRuns: [run3, run4] });
+  expect(rearmed.reportedEnds[run2!]).toBeUndefined();
+  expect(ownRun(makeWatch(null), `message:launch-watch:${echo}:run:run-9`)).toBe(false);
+  expect(
+    ownRun({ ...makeWatch(null), launcherThreadId: null }, `message:launch-watch:${echo}:x`),
+  ).toBe(true);
+});
+
+it("starts a watch that never looked from the newest run it knows, else the newest run", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const runs = [watchedRun(run1!, 1), watchedRun(run2!, 2), watchedRun(run3!, 3)];
+  const known = settleRun(makeWatch(), run1!, 0);
+  expect(discoverRuns(known, runs, 9).pendingRuns).toEqual([run2, run3]);
+  // A watch saved before looks whose reported runs fell out of view reports only the newest.
+  expect(discoverRuns(makeWatch(), runs, 9).pendingRuns).toEqual([run3]);
+});
+
+it("skips a found run's end when the thread went straight on, and a sender can still re-arm it", () => {
+  const [run2, run3] = ["run-2", "run-3"].map((id) => RunId.make(id));
+  const runs = [
+    watchedRun(run2!, 2, { requestedAt: 0, completedAt: 20 }),
+    watchedRun(run3!, 3, { requestedAt: 10 }),
+  ];
+  const found = discoverRuns(
+    { ...makeWatch(), seen: { runId: RunId.make("run-1"), ordinal: 1 } },
+    [watchedRun(run2!, 2, { requestedAt: 0 })],
+    0,
+  );
+  expect(wentOnFrom(found, run2!, runs)).toBe(true);
+  // Another caller's send next does not count as the thread going on.
+  const sent = [
+    runs[0]!,
+    watchedRun(run3!, 3, { requestedAt: 10, trigger: "message:mcp:b:thread-send:1" }),
+  ];
+  expect(wentOnFrom(found, run2!, sent)).toBe(false);
+  // An armed run is always reported.
+  expect(wentOnFrom(addPendingRun(makeWatch(), run2!, 0), run2!, runs)).toBe(false);
+  const skipped = skipRun(found, run2!, 30);
+  expect(skipped).toMatchObject({ pendingRuns: [], discoveredRuns: [], skippedRuns: [run2] });
+  expect(skipped.reportedEnds).toEqual({});
+  expect(addPendingRun(skipped, run2!, 40).pendingRuns).toEqual([run2]);
+});
+
+it("holds a run still under way whose start it cannot read yet, without stopping at it", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  // run-2 is queued before its message lands; run-3, after it, is followed meanwhile.
+  const queued = [
+    watchedRun(run1!, 1),
+    watchedRun(run2!, 2, { completedAt: null, trigger: undefined }),
+    watchedRun(run3!, 3),
+  ];
+  const held = discoverRuns(watch, queued, 5);
+  expect(held).toMatchObject({ pendingRuns: [run3], heldRuns: [run2], seen: { ordinal: 3 } });
+  expect(discoverRuns(held, queued, 6)).toBe(held);
+  // Once its start can be read it is followed too.
+  const started = [watchedRun(run1!, 1), watchedRun(run2!, 2), watchedRun(run3!, 3)];
+  expect(discoverRuns(held, started, 7)).toMatchObject({ pendingRuns: [run3, run2], heldRuns: [] });
+  // Ended with no readable start, or gone from view, it is left out for good.
+  const unread = [watchedRun(run2!, 2, { trigger: undefined }), watchedRun(run3!, 3)];
+  expect(discoverRuns(held, unread, 8)).toMatchObject({ heldRuns: [], skippedRuns: [run2] });
+  expect(discoverRuns(held, [watchedRun(run3!, 3)], 8)).toMatchObject({ skippedRuns: [run2] });
+});
+
+it("looks again at a skipped run once it is retried, and counts any retry as arming", () => {
+  const [run1, run2, run3, run4] = ["run-1", "run-2", "run-3", "run-4"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  const send = "message:mcp:client%3Abot-b:thread-send:request-1";
+  // run-3 queued while run-2 ran, so run-2 is skipped; run-4 is bot-b's send.
+  const first = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 40 }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    watchedRun(run4!, 4, { requestedAt: 60, completedAt: 70, trigger: send }),
+  ];
+  const looked = discoverRuns(watch, first, 100);
+  expect(looked).toMatchObject({ pendingRuns: [run3], skippedRuns: [run2, run4] });
+  // Both are retried after run-3 ended; run-2 is the thread's own and is followed this time.
+  const retried = rearmRetriedRun(rearmRetriedRun(looked, run2!, 200), run4!, 200);
+  expect(retried).toMatchObject({ heldRuns: [run2, run4], skippedRuns: [] });
+  const again = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 240 }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    watchedRun(run4!, 4, { requestedAt: 60, completedAt: 250, trigger: send }),
+  ];
+  expect(discoverRuns(retried, again, 300)).toMatchObject({
+    pendingRuns: [run3, run2],
+    skippedRuns: [run4],
+    heldRuns: [],
+  });
+  // A retry of a run still owed is followed once more, keeps it reported, and re-arms.
+  const owed = rearmRetriedRun(looked, run3!, 6 * 24 * 60 * 60_000);
+  expect(owed).toMatchObject({ followAgain: [run3], armedAt: 6 * 24 * 60 * 60_000 });
+  expect(wentOnFrom(owed, run3!, [...first, watchedRun(run4!, 4, { requestedAt: 45 })])).toBe(
+    false,
+  );
+});
+
+it("holds a retry that lands before a look attributed its run, so a stale look cannot skip it", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  const retried = rearmRetriedRun(watch, run2!, 50);
+  expect(retried.heldRuns).toEqual([run2]);
+  expect(rearmRetriedRun(retried, run2!, 60)).toBe(retried);
+  // The look read run-2 ended with run-3 queued behind it before the retry landed.
+  const stale = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 40 }),
+    watchedRun(run3!, 3, { requestedAt: 30 }),
+  ];
+  expect(discoverRuns(retried, stale, 70)).toMatchObject({
+    pendingRuns: [run2, run3],
+    heldRuns: [],
+    armedAt: 70,
+  });
+});
+
+it("reports a retried run however the thread went on, and keeps the watch while it awaits a look", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  // run-2 failed with run-3 queued behind it, so it was skipped; retried, it ends after run-3.
+  const looked = discoverRuns(
+    watch,
+    [
+      watchedRun(run2!, 2, { requestedAt: 20, completedAt: 40 }),
+      watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    ],
+    100,
+  );
+  const retried = rearmRetriedRun(settleEnd(looked, run3!, "end-3", 110), run2!, 200);
+  const again = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 260 }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+  ];
+  const followed = discoverRuns(retried, again, 300);
+  expect(followed).toMatchObject({ pendingRuns: [run2], discoveredRuns: [] });
+  expect(wentOnFrom(followed, run2!, again)).toBe(false);
+  // A launcherless watch is kept past its deadline until a look decides whose the retry is.
+  const day = 24 * 60 * 60_000;
+  const outside = { ...watch, launcherThreadId: null, armedAt: 0, updatedAt: 0 };
+  const held = rearmRetriedRun(outside, run2!, 7 * day - 60_000);
+  expect(watchExpired(held, 7 * day + 60_000)).toBe(false);
+  const send = "message:mcp:client%3Abot-b:thread-send:request-1";
+  const decided = discoverRuns(held, [watchedRun(run2!, 2, { trigger: send })], 7 * day + 60_000);
+  expect(decided).toMatchObject({ heldRuns: [], heldSince: null, skippedRuns: [run2] });
+  expect(watchExpired(decided, 7 * day + 60_000)).toBe(true);
+});

@@ -164,7 +164,7 @@ export const ThreadLaunchParameters = Schema.Struct({
   notifyOnCompletion: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        'Default true for a calling GOAT thread: it is woken with a message when the new thread\'s run ends, waits on a question, or later runs you start with goat_thread_send end. Pass false to stop run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting.',
+        'Default true for a calling GOAT thread: it is woken with a message when the new thread\'s run ends, waits on a question, or a later run ends, one you start with goat_thread_send or one the thread starts itself. Pass false to stop run-end and host-outage reports. Only local user-input questions still arrive. SSH-host questions then need goat_thread_wait({host}) or goat_pending_request_list({scope:"launched", hosts}). Approvals are no longer reported; check goat_thread_read or tell the user the thread may be waiting.',
     }),
   ),
   notifyWebhook: Schema.optional(
