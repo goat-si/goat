@@ -429,3 +429,55 @@ it.live("an invalid selection and a guarded menu refuse their whole groups", () 
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live("app group inputs use the pinned driver schemas", () => {
+  const allowed: Record<string, ReadonlySet<string>> = {
+    press_key: new Set(["key", "modifiers", "scope", "session", "target"]),
+    scroll: new Set(["amount", "by", "direction", "scope", "session", "target", "x", "y"]),
+    click: new Set([
+      "button",
+      "capture_id",
+      "count",
+      "delivery_mode",
+      "element_token",
+      "session",
+      "target",
+      "x",
+      "y",
+    ]),
+  };
+  const rejected: string[] = [];
+  const checked = (tool: string) => (args: Record<string, unknown>) => {
+    const unknown = Object.keys(args).filter((key) => !allowed[tool]?.has(key));
+    rejected.push(...unknown.map((key) => `${tool}.${key}`));
+    return unknown.length
+      ? new DriverError(
+          { effect: "refused", code: "invalid_arguments" },
+          `Unsupported ${tool} arguments: ${unknown.join(", ")}`,
+        )
+      : { effect: "confirmed" };
+  };
+  const { host } = fixture({
+    list_windows: {
+      windows: [
+        {
+          pid: 42,
+          window_id: 7,
+          title: "Document",
+          bounds: { x: 10, y: 20, width: 100, height: 100 },
+        },
+      ],
+    },
+    press_key: checked("press_key"),
+    scroll: checked("scroll"),
+    click: checked("click"),
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} const clicks = [app.press('a'), app.scroll(null, 'down'), app.click('Apply')]; ${SETTLED}`,
+    );
+    expect(rejected).toEqual([]);
+    expect(result.value).toEqual(["confirmed", "confirmed", "confirmed"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
