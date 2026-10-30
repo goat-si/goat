@@ -74,7 +74,7 @@ it.effect("observe passes interactive-only and scope narrowing to the snapshot",
 
 it.effect("in-page actions keep refs and the last complete tree for a diff", () =>
   Effect.gen(function* () {
-    const fixture = yield* browserFixture();
+    const fixture = yield* browserFixture(false, true);
     yield* fixture.dispatch("claim_tab");
     const first = yield* fixture.observe();
     const ref = first.elements[0]!.ref;

@@ -155,7 +155,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   return undefined;
 };
 
-const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): readonly string[] => {
+export const focusRestorationWarning = (value: unknown): string | undefined => {
   const fields = object(value);
   const focus = object(fields?.focus_restoration);
   const pid =
@@ -164,13 +164,20 @@ const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): reado
     focus.prior_pid > 0
       ? focus.prior_pid
       : undefined;
-  const reason = string(focus?.reason);
-  const focusWarning =
-    focus?.status === "abandoned"
-      ? `focus restoration abandoned${reason ? `: ${reason}` : ""}${pid ? ` (prior app pid ${pid})` : ""}`
-      : focus?.status === "restored"
-        ? `focus restored to the prior app${pid ? ` (pid ${pid})` : ""}`
-        : undefined;
+  const reason = string(focus?.reason)?.replace(/\s+/gu, " ").slice(0, 100);
+  return;
+  focus?.status === "abandoned"
+    ? reason === "panic"
+      ? `focus restoration failed (panic): the prior app${pid ? ` (pid ${pid})` : ""} may not have been restored`
+      : `focus restoration abandoned${reason ? `: ${reason}` : ""}${pid ? ` (prior app pid ${pid})` : ""}`
+    : focus?.status === "restored"
+      ? `focus restored to the prior app${pid ? ` (pid ${pid})` : ""}`
+      : undefined;
+};
+
+const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): readonly string[] => {
+  const fields = object(value);
+  const focusWarning = focusRestorationWarning(value);
   const texts = array(object(reply.result)?.content)
     .map(object)
     .map((part) => (part?.type === "text" ? string(part.text) : undefined));

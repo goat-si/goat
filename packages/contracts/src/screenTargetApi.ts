@@ -41,6 +41,7 @@ interface Observation extends ReadTime { text: string; observationId: string; sn
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
   resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
+  warnings?: string[]; // app focus restoration notices
   title?: string; url?: string; image?: Shot } // image: with screenshot: true
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
