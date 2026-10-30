@@ -191,6 +191,7 @@ import {
   THREAD_COMPOSER_BOTTOM_GUTTER,
   ThreadComposer,
 } from "./ThreadComposer";
+import { ComposerSlot } from "./ComposerSlot";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHandle, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
@@ -1544,7 +1545,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                   ) : null}
                 </View>
 
-                <View style={composerSlotHidden ? { display: "none" } : undefined}>
+                <ComposerSlot hidden={composerSlotHidden} onHeight={handleComposerHeightChange}>
                   {isProviderSubagent ? (
                     <View
                       className="self-center px-3 pt-1.5"
@@ -1672,12 +1673,11 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                         onUpdateModelSelection={props.onUpdateThreadModelSelection}
                         onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
                         onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
-                        onHeightChange={handleComposerHeightChange}
                         onEditorFocusChange={handleOwnedInputFocusChange}
                       />
                     </>
                   )}
-                </View>
+                </ComposerSlot>
               </View>
             </Animated.View>
           </ComposerPopoverHost>

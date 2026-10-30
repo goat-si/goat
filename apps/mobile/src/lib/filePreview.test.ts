@@ -122,10 +122,7 @@ vi.mock("expo", () => ({
     return player;
   },
 }));
-vi.mock("expo-video", () => ({
-  useVideoPlayer: () => audio.video,
-  VideoView: () => null,
-}));
+vi.mock("expo-video", () => ({ useVideoPlayer: () => audio.video, VideoView: () => null }));
 vi.mock("../components/VideoThumbnailImage", () => ({ VideoThumbnailImage: () => null }));
 vi.mock("../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("../components/MediaActionsMenu", () => ({
@@ -205,6 +202,7 @@ vi.mock("@legendapp/list/keyboard", () => ({
       createElement("div", { key: item.id }, props.renderItem({ item, index })),
     ),
 }));
+vi.mock("react-native-keyboard-controller", () => ({ useKeyboardState: () => 0 }));
 vi.mock("@legendapp/list/react-native", () => ({
   useViewabilityAmount: (callback: (token: { sizeVisible: number }) => void) =>
     useEffect(() => callback({ sizeVisible: 1 }), [callback]),
