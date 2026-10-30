@@ -19,6 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { MAC_STANDALONE_REASON } from "./CuaDisplayCapability.ts";
 
 import {
@@ -29,6 +30,26 @@ import {
   type Signals,
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
+
+it.effect("an organization denial refuses before approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request }) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({
+          cuaDeniedApps: ["com.example.Editor"],
+          cuaAllowedApps: ["com.example.Editor"],
+        });
+        const result = yield* request({ apps: ["com.example.Editor"] });
+        assert.deepInclude(result, {
+          kind: "refused",
+          reason: "unknown_app",
+          code: "app_not_allowed",
+        });
+      }),
+    ),
+  ),
+);
 
 it.effect(
   "refuses a window title absent from the host app listing without creating an approval (#1536)",

@@ -19,6 +19,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
+import * as ServerSettings from "../serverSettings.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -82,6 +83,19 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
 }) {
   const foreground = input.request.foreground === true;
   const wanted = input.request.apps;
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  if (wanted !== undefined && Option.isSome(settings)) {
+    const denied = new Set((yield* settings.value.getSettings).cuaDeniedApps.map(cuaAppKey));
+    const blocked = wanted.filter((app) => denied.has(cuaAppKey(app)));
+    if (blocked.length > 0)
+      return {
+        kind: "refused",
+        reason: "unknown_app",
+        code: "app_not_allowed",
+        unknownApps: blocked,
+        message: `Computer use cannot control ${blocked.join(", ")}: this organization blocks it. Ask the person to do this step.`,
+      } satisfies ComputerUseRequestResult;
+  }
   if (foreground && wanted !== undefined)
     return {
       kind: "refused",

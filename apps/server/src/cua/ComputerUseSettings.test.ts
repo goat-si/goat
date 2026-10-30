@@ -99,6 +99,14 @@ it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
   }).pipe(Effect.provide(base)),
 );
 
+it.effect("retains an organization app deny list in settings", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Blocked"] });
+    expect((yield* settings.getSettings).cuaDeniedApps).toEqual(["com.example.Blocked"]);
+  }).pipe(Effect.provide(base)),
+);
+
 it.effect("persists allowed apps and rejects protected apps without changing the file", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
