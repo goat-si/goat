@@ -191,7 +191,7 @@ describe("tab observation elements", () => {
       overrides: { refGeneration: "2" },
     });
     expect(second.surfaceGeneration).not.toBe(first.surfaceGeneration);
-    expect(second).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
+    expect(second).toMatchObject({ mode: "full", resetReason: "surface_generation_changed" });
     expect(second.indexedText).toBe('- button "Save" [0]');
     expect(observations.index.resolveElement(first.elements[0]!.ref)).toBeUndefined();
     expect(observations.index.resolveElement(second.elements[0]!.ref)).toBe("aria-ref=e1");

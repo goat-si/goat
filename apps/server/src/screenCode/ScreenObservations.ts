@@ -496,7 +496,19 @@ export class ScreenObservations {
           renderedText = diff.text;
           selected = diff.elements;
         } else resetReason = "ambiguous_rows";
-      } else resetReason = "lineage_or_completeness_changed";
+      } else if (
+        old &&
+        old.observation.observationId === input.baseObservationId &&
+        old.observation.complete &&
+        !old.observation.truncated &&
+        draft.complete &&
+        !draft.truncated &&
+        old.draft.lineage === draft.lineage &&
+        old.draft.targetGeneration === draft.targetGeneration &&
+        old.draft.surfaceGeneration !== draft.surfaceGeneration
+      )
+        resetReason = "surface_generation_changed";
+      else resetReason = "lineage_or_completeness_changed";
       if (resetReason) mode = "full";
     }
     const observationId = NodeCrypto.randomUUID();
