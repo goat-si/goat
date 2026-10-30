@@ -8,7 +8,7 @@ export const browserSiteSeeds: Readonly<Record<string, string>> = {
   "https://docs.google.com":
     "The Docs home page lists documents; docs.google.com/create opens a new document. https://support.google.com/docs/answer/7068618",
   "https://www.amazon.com":
-    "Your Orders provides order details and tracking. https://digprjsurvey.amazon.com/csad/help/node/GSD587LKW72HKU2V",
+    "Your Orders (https://www.amazon.com/gp/css/order-history) lists orders with details and tracking. https://www.amazon.com/gp/help/customer/display.html?nodeId=GSD587LKW72HKU2V",
   "https://www.naver.com":
     "Use search tabs and options to narrow results by type. https://help.naver.com/service/5626/contents/19010?osType=COMMONOS",
   "https://www.coupang.com":
