@@ -1,33 +1,40 @@
 import type { ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
+import { RegistryContext } from "@effect/atom-react";
 import { EnvironmentId } from "@goat/contracts";
+import { AtomRegistry } from "effect/reactivity";
 import { render } from "../../../test/render";
-import { useAtomValue } from "@effect/atom-react";
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 
-vi.mock("@effect/atom-react", async (original) => ({
-  ...(await original<typeof import("@effect/atom-react")>()),
-  useAtomValue: vi.fn(),
-}));
+const fixture = vi.hoisted(() => ({ siteNotes: false }));
+
 vi.mock("../../hooks/useSettings", async (original) => ({
   ...(await original<typeof import("../../hooks/useSettings")>()),
   useEnvironmentSettings: () => true,
 }));
-vi.mock("../../state/server", async (original) => ({
-  ...(await original<typeof import("../../state/server")>()),
-  serverEnvironment: { updateSettings: { permissionAtom: () => "update" } },
-}));
+vi.mock("../../state/server", async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  const allowed = Atom.make(true);
+  return {
+    ...(await original<typeof import("../../state/server")>()),
+    serverEnvironment: { updateSettings: { permissionAtom: () => allowed } },
+  };
+});
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
-vi.mock("../../state/memory", async (original) => ({
-  ...(await original<typeof import("../../state/memory")>()),
-  memoryEnvironment: {
-    siteNotesList: {
-      permissionAtom: () => "siteNotes",
-      run: () => Promise.resolve({ _tag: "Success", value: [] }),
+vi.mock("../../state/memory", async (original) => {
+  const { Atom } = await import("effect/reactivity");
+  const siteNotes = Atom.make(() => fixture.siteNotes);
+  return {
+    ...(await original<typeof import("../../state/memory")>()),
+    memoryEnvironment: {
+      siteNotesList: {
+        permissionAtom: () => siteNotes,
+        run: () => Promise.resolve({ _tag: "Success", value: [] }),
+      },
+      siteNotesWrite: { permissionAtom: () => siteNotes },
     },
-    siteNotesWrite: { permissionAtom: () => "siteNotes" },
-  },
-}));
+  };
+});
 
 vi.mock("./settingsLayout", async (original) => ({
   ...(await original<typeof import("./settingsLayout")>()),
@@ -54,19 +61,18 @@ vi.mock("./settingsLayout", async (original) => ({
   ),
 }));
 
-function setup(available: boolean) {
-  vi.mocked(useAtomValue).mockReset();
-  vi.mocked(useAtomValue).mockImplementation(
-    (atom) => ((atom as unknown) === "siteNotes" ? available : true) as never,
-  );
+function setup(siteNotes: boolean) {
+  fixture.siteNotes = siteNotes;
 }
 
 it.each([false, true])(
-  "renders agent access with site notes availability %s",
+  "keeps agent access usable and shows site notes only when the environment offers them (%s)",
   async (available) => {
     setup(available);
     await using screen = await render(
-      <MemoryAgentAccessSettings environmentId={EnvironmentId.make("test")} />,
+      <RegistryContext value={AtomRegistry.make()}>
+        <MemoryAgentAccessSettings environmentId={EnvironmentId.make("test")} />
+      </RegistryContext>,
     );
     await expect
       .element(screen.getByRole("switch", { name: "Allow agent memory access" }))
