@@ -118,7 +118,7 @@ it.effect("an unattributed blocked popup fences all active tabs in its context",
       yield* Deferred.await(f.slowStarted);
       const first = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
       const second = yield* f.call(other, "press", { key: "Enter" }).pipe(Effect.result);
-      f.slowRelease.resolve();
+      yield* Deferred.succeed(f.slowGate, undefined);
       yield* Fiber.join(opening);
       blocked(first);
       blocked(second);
@@ -129,13 +129,19 @@ it.effect("an unattributed blocked popup fences all active tabs in its context",
 const fixture = Effect.gen(function* () {
   const hits: string[] = [];
   const slowStarted = yield* Deferred.make<void>();
+  const slowGate = yield* Deferred.make<void>();
   const slowRelease = Promise.withResolvers<void>();
+  yield* Deferred.await(slowGate).pipe(
+    Effect.andThen(Effect.sync(() => slowRelease.resolve())),
+    Effect.forkScoped,
+  );
+  let serverPort = 0;
   const server = yield* Effect.acquireRelease(
     Effect.promise(
       () =>
         new Promise<NodeHttp.Server>((resolve) => {
           const server = NodeHttp.createServer((req, res) => {
-            const port = (server.address() as { port: number }).port;
+            const port = serverPort;
             const blocked = `http://localhost:${port}`;
             const allowed = `http://127.0.0.1:${port}`;
             hits.push(`${req.headers.host}${req.url}`);
@@ -162,7 +168,10 @@ const fixture = Effect.gen(function* () {
               `<a id="link" href="${blocked}/blocked">go</a><button id="popup" onclick="window.open('${blocked}/blocked')">popup</button><button id="slowPopup" onclick="window.open('${blocked}/slow')">slow popup</button><button id="popupRedirect" onclick="window.open('${allowed}/redirect')">redirect popup</button><form action="${blocked}/blocked"><button id="form">submit</button></form><button id="script" onclick="location.href='${blocked}/blocked'">script</button><button id="popupBlank" onclick="const p=window.open('about:blank');p.location.href='${blocked}/blocked'">blank popup</button><button id="next">next</button>`,
             );
           });
-          server.listen(0, () => resolve(server));
+          server.listen(0, () => {
+            serverPort = (server.address() as { port: number }).port;
+            resolve(server);
+          });
         }),
     ),
     (server) =>
@@ -209,7 +218,7 @@ const fixture = Effect.gen(function* () {
     call,
     settings,
     slowStarted,
-    slowRelease,
+    slowGate,
   };
 });
 const blocked = (result: { readonly _tag: string; readonly failure?: unknown }) => {
@@ -486,7 +495,7 @@ it.effect("a slow blocked popup fences active context tabs before the response a
       ).pipe(Effect.forkChild);
       yield* Deferred.await(f.slowStarted);
       const result = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
-      f.slowRelease.resolve();
+      yield* Deferred.succeed(f.slowGate, undefined);
       yield* Fiber.join(opening);
       blocked(result);
     }),
