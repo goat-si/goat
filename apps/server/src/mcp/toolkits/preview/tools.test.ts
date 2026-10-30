@@ -18,7 +18,7 @@ const schemaHasMultipleAllOfDescriptions = (schema: unknown): boolean => {
 
 it("exports provider-compatible object schemas", () => {
   // Site notes are keyed by origin, not by a tab, so they take no tab target.
-  const originScoped = new Set(["browser_site_note_read", "browser_site_note_write"]);
+  const originScoped = new Set(["goat_browser_site_note_read", "goat_browser_site_note_write"]);
   for (const tool of Object.values(PreviewToolkit.tools)) {
     const schema = Tool.getJsonSchema(tool) as {
       readonly type?: unknown;

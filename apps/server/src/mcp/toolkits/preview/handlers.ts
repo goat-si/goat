@@ -284,7 +284,7 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
 });
 
 const handlers = {
-  browser_site_note_read: McpToolAccess.readsAsCaller((input) =>
+  goat_browser_site_note_read: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
       const notes = yield* requireSiteNotes;
@@ -296,7 +296,7 @@ const handlers = {
       return { note: notes.noteFor(input.origin) ?? null };
     }),
   ),
-  browser_site_note_write: McpToolAccess.actsAsCaller((input) =>
+  goat_browser_site_note_write: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
       const notes = yield* requireSiteNotes;
