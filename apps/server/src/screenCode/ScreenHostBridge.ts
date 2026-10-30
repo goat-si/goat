@@ -27,6 +27,7 @@ import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
+import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
@@ -49,6 +50,7 @@ export interface ScreenHostDispatchResult {
   readonly image?: ScreenImage;
   readonly imageMetadata?: ScreenImageMetadata;
   readonly category: ScreenEffectReceipt["category"];
+  readonly observedWindow?: string;
   readonly evidence?: readonly string[];
   readonly warnings?: readonly string[];
   readonly outcome?: ScreenActionOutcome;
@@ -83,6 +85,7 @@ interface CellState {
   pending: number;
   lastCallId: number;
   journal: ScreenJournalEntry[];
+  pendingObserved: Map<string, Array<{ index: number; window: string }>>;
   images: ScreenImage[];
   metadata: ScreenImageMetadata[];
   truncated: string[];
@@ -209,6 +212,7 @@ export class ScreenHostBridge {
         pending: 0,
         lastCallId: 0,
         journal: [],
+        pendingObserved: new Map(),
         images: [],
         metadata: [],
         truncated: [],
@@ -746,6 +750,7 @@ export class ScreenHostBridge {
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
     const evidence = result.success.evidence ?? [];
+    value = applyObservedEffect(state, call, result.success, admittedIndex, value);
     settle(
       result.success.category,
       "settled",

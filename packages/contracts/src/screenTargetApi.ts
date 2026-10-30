@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/20";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/21";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -34,7 +34,8 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 // Diff text uses + added, ~ changed and - removed rows; unchanged rows keep the numbers they had in the previous observation.
-interface Observation extends ReadTime { text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
+interface Observation extends ReadTime { effect?: string; // first post-input diff: window evidence, not proof of the intended effect
+  text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
   scope: string; complete: boolean; truncated: boolean; loading: boolean;

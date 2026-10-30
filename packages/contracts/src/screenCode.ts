@@ -333,6 +333,12 @@ export const ScreenEffectReceipt = Schema.Struct({
   targetId: Schema.optionalKey(id),
   method: ScreenMethod,
   journalState: Schema.Literals(["admitted", "dispatched", "settled", "unknown"]),
+  observedEffect: Schema.optionalKey(
+    Schema.Struct({
+      state: Schema.Literals(["change_seen", "no_change_seen"]),
+      rows: Schema.Array(text(200)).check(Schema.isMaxLength(16)),
+    }),
+  ),
   category: Schema.Literals([
     "confirmed",
     "partial",

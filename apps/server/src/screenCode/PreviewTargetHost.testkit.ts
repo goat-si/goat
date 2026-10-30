@@ -180,7 +180,7 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
     if (!reply || reply.outcome !== "ok") throw new Error("Expected the tab to bind again");
     return (reply.value as { targetRef: ScreenTargetRef }).targetRef;
   });
-  return { state, requests, dispatch, observe, bridge, ref, rebind, tab };
+  return { state, requests, dispatch, observe, bridge, ref, rebind, tab, host };
 });
 
 export const actionErrorContext = {
