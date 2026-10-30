@@ -87,6 +87,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
             <BrandChannelPill channel={channel} />
           </div>
         ) : null}
+        <DevSshBadge />
       </div>
       {!isOnSettings ? <SidebarViewToggles /> : null}
     </div>
