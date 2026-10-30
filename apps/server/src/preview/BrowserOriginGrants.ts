@@ -1,0 +1,186 @@
+import type { BrowserOriginGrant, EnvironmentId, LiveTabClaim, ThreadId } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Semaphore from "effect/Semaphore";
+
+interface Request {
+  readonly threadId: ThreadId;
+  readonly pid: number;
+  readonly windowId: number;
+  readonly origin: string;
+  readonly windowTitle: string;
+}
+
+interface Pending extends Request {
+  readonly claimId: string;
+  granted: boolean;
+}
+
+interface Union {
+  readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+  readonly origins: ReadonlyArray<string>;
+}
+
+interface Dependencies {
+  readonly environmentId: EnvironmentId;
+  readonly supported: () => boolean;
+  readonly publish: (union: Union) => Effect.Effect<void, Error>;
+  readonly bind: (input: Request) => Effect.Effect<
+    {
+      readonly tabId: string;
+      readonly title: string;
+      readonly url: string;
+      readonly driverGeneration: number;
+    },
+    Error
+  >;
+}
+
+const decline = {
+  status: "refused",
+  code: "declined",
+  message: "The person did not approve this request.",
+} as const;
+const unavailable = {
+  status: "refused",
+  code: "unavailable",
+  message: "Needs a newer GOAT Computer Use.",
+} as const;
+
+export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(function* (
+  deps: Dependencies,
+) {
+  const lock = yield* Semaphore.make(1);
+  const pending = new Map<string, Pending>();
+  const claims = new Map<string, LiveTabClaim>();
+  const grants = new Map<string, BrowserOriginGrant>();
+  let sequence = 0;
+  const key = (threadId: ThreadId, origin: string) => JSON.stringify([threadId, origin]);
+  const union = (): Union => {
+    const live = [...claims.values()].map((claim) => ({
+      threadId: claim.threadId,
+      pid: claim.tab.pid,
+      windowId: claim.tab.windowId,
+    }));
+    live.push(
+      ...[...pending.values()]
+        .filter((entry) => entry.granted)
+        .map((entry) => ({ threadId: entry.threadId, pid: entry.pid, windowId: entry.windowId })),
+    );
+    const pairs = new Map(
+      live.map(({ pid, windowId }) => [JSON.stringify([pid, windowId]), { pid, windowId }]),
+    );
+    const threads = new Set(live.map((entry) => entry.threadId));
+    return {
+      existingProfiles: [...pairs.values()],
+      origins: [
+        ...new Set(
+          [...grants.values()]
+            .filter((grant) => threads.has(grant.threadId))
+            .map((grant) => grant.origin),
+        ),
+      ],
+    };
+  };
+  const request = Effect.fn("BrowserOriginGrants.request")((input: Request) =>
+    lock.withPermits(1)(
+      Effect.sync(() => {
+        if (!deps.supported()) return unavailable;
+        const claimId = `browser-claim:${++sequence}`;
+        pending.set(claimId, { ...input, claimId, granted: false });
+        return { status: "pending" as const, claimId };
+      }),
+    ),
+  );
+  const answer = Effect.fn("BrowserOriginGrants.answer")((claimId: string, approved: boolean) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        const entry = pending.get(claimId);
+        if (entry === undefined || !approved || !deps.supported()) {
+          pending.delete(claimId);
+          return { agentResult: decline };
+        }
+        const grantKey = key(entry.threadId, entry.origin);
+        const existed = grants.has(grantKey);
+        grants.set(grantKey, {
+          environmentId: deps.environmentId,
+          threadId: entry.threadId,
+          origin: entry.origin,
+        });
+        entry.granted = true;
+        const rollback = Effect.gen(function* () {
+          pending.delete(claimId);
+          claims.delete(claimId);
+          if (!existed) grants.delete(grantKey);
+          yield* deps.publish(union());
+        });
+        const result = yield* Effect.gen(function* () {
+          yield* deps.publish(union());
+          const tab = yield* deps.bind(entry);
+          let origin = "";
+          try {
+            origin = new URL(tab.url).origin;
+          } catch {
+            /* The tab is not on the approved site. */
+          }
+          if (origin !== entry.origin) {
+            yield* rollback;
+            return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
+          }
+          const claim: LiveTabClaim = {
+            claimId,
+            environmentId: deps.environmentId,
+            threadId: entry.threadId,
+            tab: { pid: entry.pid, windowId: entry.windowId, tabId: tab.tabId },
+            title: tab.title,
+            origin: entry.origin,
+            driverGeneration: tab.driverGeneration,
+            claimGeneration: ++sequence,
+            status: "attached",
+          };
+          claims.set(claimId, claim);
+          pending.delete(claimId);
+          yield* deps.publish(union());
+          return { agentResult: { status: "attached" as const, claim } };
+        }).pipe(Effect.catch((error) => rollback.pipe(Effect.andThen(Effect.fail(error)))));
+        return result;
+      }),
+    ),
+  );
+  const list = Effect.fn("BrowserOriginGrants.list")((threadId: ThreadId) =>
+    lock.withPermits(1)(
+      Effect.sync(() => ({
+        claims: [...claims.values()].filter((claim) => claim.threadId === threadId),
+        grants: [...grants.values()].filter((grant) => grant.threadId === threadId),
+      })),
+    ),
+  );
+  const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        grants.delete(key(threadId, origin));
+        for (const [id, entry] of pending)
+          if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
+        for (const [id, claim] of claims)
+          if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
+        yield* deps.publish(union());
+      }),
+    ),
+  );
+  const stop = Effect.fn("BrowserOriginGrants.stop")((threadId: ThreadId) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        for (const [id, entry] of pending) if (entry.threadId === threadId) pending.delete(id);
+        for (const [id, claim] of claims) if (claim.threadId === threadId) claims.delete(id);
+        yield* deps.publish(union());
+      }),
+    ),
+  );
+  const driverRestarted = lock.withPermits(1)(
+    Effect.gen(function* () {
+      pending.clear();
+      claims.clear();
+      yield* deps.publish(union());
+    }),
+  );
+  return { request, answer, list, revoke, stop, driverRestarted };
+});

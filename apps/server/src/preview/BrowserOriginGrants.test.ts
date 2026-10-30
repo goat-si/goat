@@ -45,3 +45,58 @@ it.effect("does not bind before approval and hides a mismatch as a decline", () 
     assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
   }),
 );
+
+it.effect("keeps grants per thread and shrinks the exact window union on revoke and stop", () =>
+  Effect.gen(function* () {
+    const manifests: Array<{
+      readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+      readonly origins: ReadonlyArray<string>;
+    }> = [];
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (value) => Effect.sync(() => void manifests.push(value)),
+      bind: (input) =>
+        Effect.succeed({
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const a = ThreadId.make("thread:a");
+    const b = ThreadId.make("thread:b");
+    for (const [threadId, windowId, origin] of [
+      [a, 7, "https://one.test"],
+      [b, 8, "https://two.test"],
+    ] as const) {
+      const request = yield* service.request({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return assert.fail("expected pending request");
+      yield* service.answer(request.claimId, true);
+    }
+    assert.deepEqual(manifests.at(-1), {
+      existingProfiles: [
+        { pid: 42, windowId: 7 },
+        { pid: 42, windowId: 8 },
+      ],
+      origins: ["https://one.test", "https://two.test"],
+    });
+    assert.deepEqual(
+      (yield* service.list(a)).grants.map((grant) => grant.origin),
+      ["https://one.test"],
+    );
+    yield* service.revoke(a, "https://one.test");
+    assert.deepEqual(manifests.at(-1), {
+      existingProfiles: [{ pid: 42, windowId: 8 }],
+      origins: ["https://two.test"],
+    });
+    yield* service.stop(b);
+    assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
+  }),
+);
