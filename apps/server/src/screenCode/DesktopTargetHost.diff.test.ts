@@ -779,21 +779,22 @@ it.live.each([
     diff: '~ AXStaticText = "8"',
     count: 1,
     expected: 'after click: changed (~ AXStaticText = "8")',
-    category: "effect_seen",
+    observed: "change_seen",
   },
   {
     label: "no change",
     diff: "no change since s1",
     count: 1,
-    expected: "after click: no change seen; check before resending",
-    category: "suspected_noop",
+    expected:
+      "after click: no change seen in this window; effect may be elsewhere, check before resending",
+    observed: "no_change_seen",
   },
   {
     label: "two inputs",
     diff: '~ AXStaticText = "8"',
     count: 2,
     expected: 'after 2 inputs: changed (~ AXStaticText = "8")',
-    category: "effect_seen",
+    observed: "change_seen",
   },
 ])("first app observation records $label after input", (scenario) => {
   let reads = 0;
@@ -847,9 +848,9 @@ it.live.each([
     const clicks = result.journal.filter((entry) => entry.receipt.method === "click");
     expect(clicks).toHaveLength(scenario.count + 1);
     expect(clicks.slice(0, scenario.count).map((entry) => entry.receipt.category)).toEqual(
-      Array(scenario.count).fill(scenario.category),
+      Array(scenario.count).fill("unverifiable"),
     );
-    expect(clicks[0]?.receipt.evidence).toContain(scenario.expected);
+    expect(clicks[0]?.receipt.observedEffect).toMatchObject({ state: scenario.observed });
     expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(3);
   }).pipe(
     Effect.provide(
