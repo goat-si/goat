@@ -5,6 +5,7 @@ import { vi } from "vite-plus/test";
 
 const native = vi.hoisted(() => {
   type Listener = (payload: Record<string, unknown>) => void;
+  // The wrapper attaches one native listener per event for the app's lifetime, so setup() keeps them.
   const listeners = new Map<string, Listener>();
   const calls: Array<{ readonly method: string; readonly args: ReadonlyArray<unknown> }> = [];
   let onConnect: ((id: number) => void) | undefined;
@@ -15,6 +16,10 @@ const native = vi.hoisted(() => {
     };
   return {
     calls,
+    setup: () => {
+      calls.length = 0;
+      onConnect = undefined;
+    },
     emit: (event: string, payload: Record<string, unknown>) => listeners.get(event)?.(payload),
     lastId: () => calls.findLast((call) => call.method === "connect")?.args[0] as number,
     whenConnected: (script: (id: number) => void) => {
@@ -41,15 +46,13 @@ vi.mock("expo", () => ({ requireOptionalNativeModule: () => native.module }));
 import { layerWebSocketConstructor } from "./webSocketConstructor.ios";
 
 const testEffect = <A, E>(effect: Effect.Effect<A, E, Socket.WebSocketConstructor>) =>
-  Effect.sync(() => native.whenConnected(() => {})).pipe(
-    Effect.andThen(effect),
-    Effect.provide(layerWebSocketConstructor),
-  );
+  effect.pipe(Effect.provide(layerWebSocketConstructor));
 
 describe("iOS URLSession WebSocket constructor", () => {
   it.effect("carries an Effect socket from open through messages to the server's close code", () =>
     testEffect(
       Effect.gen(function* () {
+        native.setup();
         // Native events arrive after the constructor returns, as they do from URLSession.
         native.whenConnected((id) =>
           queueMicrotask(() => {
@@ -80,6 +83,7 @@ describe("iOS URLSession WebSocket constructor", () => {
   it.effect("routes native events by connection and reports each close once", () =>
     testEffect(
       Effect.gen(function* () {
+        native.setup();
         const construct = yield* Socket.WebSocketConstructor;
         const first = construct("wss://host.test/ws");
         const firstId = native.lastId();
@@ -101,6 +105,7 @@ describe("iOS URLSession WebSocket constructor", () => {
   it.effect("ignores a native open that lands after the caller closed a connecting socket", () =>
     testEffect(
       Effect.gen(function* () {
+        native.setup();
         const socket = (yield* Socket.WebSocketConstructor)("wss://host.test/ws");
         const id = native.lastId();
         const opened = vi.fn();
@@ -119,15 +124,20 @@ describe("iOS URLSession WebSocket constructor", () => {
     ),
   );
 
-  it.effect("sends binary frames to native as base64", () =>
+  it.effect("refuses to send while connecting and sends binary as base64 once open", () =>
     testEffect(
       Effect.gen(function* () {
+        native.setup();
         const socket = (yield* Socket.WebSocketConstructor)("wss://host.test/ws");
+        const id = native.lastId();
+
+        expect(() => socket.send("early")).toThrow("INVALID_STATE_ERR");
+        native.emit("onOpen", { id });
         socket.send(new Uint8Array([1, 2, 255]));
-        expect(native.calls.at(-1)).toEqual({
-          method: "sendBinary",
-          args: [native.lastId(), btoa("\x01\x02\xff")],
-        });
+
+        expect(native.calls.filter((call) => call.method.startsWith("send"))).toEqual([
+          { method: "sendBinary", args: [id, btoa("\x01\x02\xff")] },
+        ]);
       }),
     ),
   );

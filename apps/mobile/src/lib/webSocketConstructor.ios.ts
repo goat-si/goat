@@ -118,6 +118,8 @@ class GoatWebSocket implements Socket.WebSocketLike {
   }
 
   send(data: string | Uint8Array<ArrayBuffer>): void {
+    // React Native's WebSocket throws the same error before open.
+    if (this.readyState === CONNECTING) throw new Error("INVALID_STATE_ERR");
     if (typeof data === "string") this.native.sendText(this.id, data);
     else this.native.sendBinary(this.id, bytesToBase64(data));
   }
