@@ -1,3 +1,5 @@
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
+import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -172,6 +174,7 @@ export const createDesktopTargetHost = (deps: {
   readonly leases: ComputerUseLeases["Service"];
   readonly observations?: ScreenObservations;
   readonly platform?: NodeJS.Platform;
+  readonly driverVersion?: string;
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
   readonly cursorGeneration?: (ref: ScreenTargetRef, callKey?: string) => number;
@@ -578,6 +581,10 @@ export const createDesktopTargetHost = (deps: {
     listWindows: (bound: BoundWindow, call: ScreenHostCall, context: ScreenHostContext) =>
       request("list_windows", { pid: bound.pid }, call, context),
     jpegScreenshots: isMac,
+    modelFit:
+      isMac &&
+      parseSemver(deps.driverVersion ?? CUA_DRIVER_VERSION) !== null &&
+      compareSemverVersions(deps.driverVersion ?? CUA_DRIVER_VERSION, "0.38.0-goat.16") >= 0,
     epoch: () => epoch,
     setEpoch: (next: number) => void (epoch = next),
   };
