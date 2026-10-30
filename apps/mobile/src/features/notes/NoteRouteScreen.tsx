@@ -77,6 +77,8 @@ function NoteContent(props: NoteParams) {
   // Which editor owns the current edit: the live editor, or the markdown source fallback.
   const [surface, setSurface] = useState<"live" | "source">("live");
   const [liveUnavailable, setLiveUnavailable] = useState<string | null>(null);
+  // The live editor is re-reading its own text; its latest edits may not be in body yet.
+  const [editorPending, setEditorPending] = useState(false);
   const [editorFocused, setEditorFocused] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const editorFocusedRef = useRef(false);
@@ -99,7 +101,8 @@ function NoteContent(props: NoteParams) {
   const latest = Option.getOrNull(AsyncResult.value(feed))?.notes.find(
     (entry) => entry.path === props.path,
   );
-  usePreventRemove(dirty || saving, ({ data }) => {
+  const editorHolding = editorPending && liveUnavailable === null;
+  usePreventRemove(dirty || saving || editorHolding, ({ data }) => {
     if (saving) return;
     Alert.alert("Unsaved note", "Save your edits on this phone before leaving, or discard them.", [
       { text: "Keep editing", style: "cancel" },
@@ -175,20 +178,6 @@ function NoteContent(props: NoteParams) {
 
   const save = async (nextBody: string, nextStatus: NoteStatus) => {
     if (!canWrite || deletingRef.current) return;
-    // A focused editor skips the read after an acknowledged save, so take the base from the
-    // outbox's copy of what the hub stored, when it is exactly this phone's last save.
-    const saved = savedSnapshot.current;
-    const acknowledged = notesOutbox.acknowledged(environmentId, props.path);
-    const queued = notesOutbox
-      .getSnapshot()
-      .some((entry) => entry.environmentId === environmentId && entry.path === props.path);
-    if (
-      !queued &&
-      saved &&
-      acknowledged?.body === saved.body &&
-      acknowledged.status === saved.status
-    )
-      editBase.current = acknowledged.revision;
     setSaving(true);
     pendingSaves.current++;
     setBody(nextBody);
@@ -197,14 +186,20 @@ function NoteContent(props: NoteParams) {
     localStatus.current = nextStatus;
     let stored = false;
     try {
-      await notesOutbox.enqueue({
+      // A focused editor skips the read after an acknowledged save; the outbox then bases this
+      // save on the hub's revision of the previous one.
+      const edit = {
         environmentId,
         path: props.path,
         body: nextBody,
         status: nextStatus,
         baseRevision: editBase.current,
         localUpdatedAt: Date.now(),
-      });
+      };
+      const continues = savedSnapshot.current;
+      editBase.current = await (continues
+        ? notesOutbox.enqueue(edit, continues)
+        : notesOutbox.enqueue(edit));
       stored = true;
     } catch (error) {
       setDirty(true);
@@ -307,7 +302,7 @@ function NoteContent(props: NoteParams) {
       fullWidth
       tone="primary"
       label={saving ? "Saving…" : "Save on phone"}
-      disabled={!canWrite || saving || !restored}
+      disabled={!canWrite || saving || !restored || editorHolding}
       onPress={() => void save(localBody.current, localStatus.current)}
     />
   );
@@ -468,7 +463,7 @@ function NoteContent(props: NoteParams) {
                 <Button
                   tone="primary"
                   label={saving ? "Saving…" : "Save on phone"}
-                  disabled={!canWrite || saving || !restored}
+                  disabled={!canWrite || saving || !restored || editorHolding}
                   onPress={() => void save(localBody.current, localStatus.current)}
                 />
               ) : null}
@@ -480,7 +475,7 @@ function NoteContent(props: NoteParams) {
               contentContainerClassName="gap-3 p-4"
             >
               {header}
-              {dirty ? saveButton : null}
+              {dirty || (props.create && !note && !row) ? saveButton : null}
               {footer}
             </NativeScrollView>
           )}
@@ -506,11 +501,12 @@ function NoteContent(props: NoteParams) {
               editorFocusedRef.current = focused;
               setEditorFocused(focused);
               if (focused) beginEdit("live");
-              else if (!dirty && !saving && !props.create) setEditing(false);
+              else if (!dirty && !saving) setEditing(false);
             }}
             onSourceChange={setShowSource}
             onLink={(href) => void tryOpenExternalUrl(href, "markdown-link")}
             onUnavailable={setLiveUnavailable}
+            onPendingChange={setEditorPending}
           />
           {editorFocused ? (
             <NoteEditorToolbar

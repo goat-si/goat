@@ -17,6 +17,8 @@ import {
 import { NoteEditorBridge } from "./note-editor-bridge";
 
 const READY_TIMEOUT_MS = 10_000;
+// How often to ask again for the page's text while React Native's copy may be stale.
+const RESYNC_RETRY_MS = 1_000;
 let editorUri: Promise<string> | null = null;
 /** Copies the bundled editor page to a readable file the first time a note opens. */
 function loadEditorUri() {
@@ -70,6 +72,8 @@ interface NoteLiveEditorProps {
   readonly onLink: (href: string) => void;
   /** The editor page could not load; the screen shows markdown source instead. */
   readonly onUnavailable: (reason: string) => void;
+  /** True while React Native's copy may lag the page; saving and leaving must wait. */
+  readonly onPendingChange: (pending: boolean) => void;
 }
 
 export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
@@ -103,6 +107,7 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
           onTerminated={() => {
             // The fresh page starts unfocused; the screen must not keep editing chrome for it.
             props.onFocusChange(false);
+            props.onPendingChange(false);
             setAttempt((value) => value + 1);
           }}
         />
@@ -123,6 +128,12 @@ function NoteEditorPage({
 }: NoteLiveEditorProps & { readonly uri: string; readonly onTerminated: () => void }) {
   const webView = useRef<WebView<object>>(null);
   const [ready, setReady] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
+  const notePending = () => {
+    if (bridge.pending === resyncing) return;
+    setResyncing(bridge.pending);
+    props.onPendingChange(bridge.pending);
+  };
   const [bridge] = useState(() => new NoteEditorBridge(props.value));
   const sentConfig = useRef(JSON.stringify(props.config));
   const [openedAt] = useState(() => performance.now());
@@ -149,6 +160,13 @@ function NoteEditorPage({
     [],
   );
   const giveUp = useEffectEvent(() => fail("no ready signal"));
+  const askAgain = useEffectEvent(() => send({ type: "requestDoc" }));
+  // oxlint-disable-next-line goat/react-effect-budget -- a lost snapshot reply must not wait for more typing
+  useEffect(() => {
+    if (!resyncing) return;
+    const timer = setInterval(askAgain, RESYNC_RETRY_MS);
+    return () => clearInterval(timer);
+  }, [resyncing]);
   // oxlint-disable-next-line goat/react-effect-budget -- a page that never boots must fall back to source
   useEffect(() => {
     if (ready) return;
@@ -159,7 +177,10 @@ function NoteEditorPage({
   useEffect(() => {
     if (!ready) return;
     const replacement = bridge.sync(props.value);
-    if (replacement) send(replacement);
+    if (replacement) {
+      send(replacement);
+      notePending();
+    }
     const config = JSON.stringify(props.config);
     if (config !== sentConfig.current) {
       sentConfig.current = config;
@@ -187,6 +208,7 @@ function NoteEditorPage({
         const receipt = bridge.receive(message);
         if (receipt.value) props.onChange(receipt.value.text, receipt.value.checkbox);
         if (receipt.send) send(receipt.send);
+        notePending();
         return;
       }
       case "focus":

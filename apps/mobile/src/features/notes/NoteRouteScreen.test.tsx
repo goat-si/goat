@@ -28,7 +28,8 @@ const { mocks, Children } = vi.hoisted(() => ({
     live: false,
     liveNext: "",
     liveCheckbox: false,
-    acknowledged: undefined as ReturnType<typeof noteDocument> | undefined,
+    preventRemove: false,
+    feedNotes: [] as ReadonlyArray<{ path: string }>,
   },
 }));
 vi.mock("react-native", () => ({
@@ -54,6 +55,7 @@ vi.mock("./live-editor/NoteLiveEditor", () => ({
     config: { editable: boolean; readOnly: boolean };
     onChange: (value: string, checkbox: boolean) => void;
     onFocusChange: (focused: boolean) => void;
+    onPendingChange: (pending: boolean) => void;
   }) => (
     <div
       data-testid="live-editor"
@@ -64,6 +66,8 @@ vi.mock("./live-editor/NoteLiveEditor", () => ({
       <button onClick={() => props.onFocusChange(true)}>Focus live editor</button>
       <button onClick={() => props.onFocusChange(false)}>Blur live editor</button>
       <button onClick={() => props.onChange(mocks.liveNext, mocks.liveCheckbox)}>Live edit</button>
+      <button onClick={() => props.onPendingChange(true)}>Editor resyncing</button>
+      <button onClick={() => props.onPendingChange(false)}>Editor resynced</button>
     </div>
   ),
 }));
@@ -76,7 +80,9 @@ vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: Child
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ goBack: mocks.goBack, dispatch: vi.fn(), navigate: vi.fn() }),
-  usePreventRemove: () => undefined,
+  usePreventRemove: (prevent: boolean) => {
+    mocks.preventRemove = prevent;
+  },
 }));
 vi.mock("../../components/ui/AppBar", () => ({ AppBar: () => null }));
 vi.mock("../../components/ui/AppText", () => ({
@@ -142,7 +148,7 @@ vi.mock("./rpc/notes", () => ({
 vi.mock("./notes-state", () => ({
   notesCommandOptions: {},
   notesError: String,
-  useNotesFeed: () => AsyncResult.success({ notes: [] }),
+  useNotesFeed: () => AsyncResult.success({ notes: mocks.feedNotes }),
   useNotesOutbox: () => {
     useSyncExternalStore(
       (listener) => {
@@ -164,7 +170,6 @@ vi.mock("./notes-state", () => ({
     getSnapshot: () => mocks.rows,
     enqueue: mocks.enqueue,
     error: () => undefined,
-    acknowledged: () => mocks.acknowledged,
   },
 }));
 
@@ -205,12 +210,14 @@ beforeEach(() => {
   mocks.live = false;
   mocks.liveNext = "";
   mocks.liveCheckbox = false;
-  mocks.acknowledged = undefined;
+  mocks.feedNotes = [];
   mocks.read.mockReset().mockResolvedValue(AsyncResult.success(noteDocument()));
   mocks.remove.mockReset().mockResolvedValue(AsyncResult.success({ path: "note.md" }));
   mocks.alert.mockReset();
   mocks.goBack.mockReset();
-  mocks.enqueue.mockReset().mockResolvedValue(undefined);
+  mocks.enqueue
+    .mockReset()
+    .mockImplementation(async (edit: { baseRevision: string | null }) => edit.baseRevision);
   mocks.restore.mockReset().mockResolvedValue(undefined);
   mocks.flush.mockReset().mockResolvedValue(undefined);
 });
@@ -545,7 +552,7 @@ describe("live note editor", () => {
     expect(button("Delete note").disabled).toBe(false);
   });
 
-  it("bases a second save on the hub revision of the first, without waiting for a read", async () => {
+  it("hands the outbox its last save so a continuing save can take the hub's revision", async () => {
     await live("v0\n");
     act(() => button("Focus live editor").click());
     mocks.liveNext = "v1\n";
@@ -554,39 +561,75 @@ describe("live note editor", () => {
     expect(mocks.enqueue).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "v1\n", baseRevision: "a".repeat(64) }),
     );
-    // The flush acknowledged the save and emptied the row; no read has run.
-    mocks.read.mockReturnValue(new Promise(() => {}));
-    mocks.acknowledged = noteDocument("v1\n", "c".repeat(64));
-    await act(async () => {
-      mocks.connected = true;
-      mocks.rows = [];
-      render();
-    });
-    mocks.liveNext = "v2\n";
-    act(() => button("Live edit").click());
-    await act(async () => button("Save on phone").click());
-    expect(mocks.enqueue).toHaveBeenLastCalledWith(
-      expect.objectContaining({ body: "v2\n", baseRevision: "c".repeat(64) }),
-    );
-  });
-
-  it("keeps its base when the acknowledged copy is not this phone's last save", async () => {
-    await live("v0\n");
-    act(() => button("Focus live editor").click());
-    mocks.liveNext = "v1\n";
-    act(() => button("Live edit").click());
-    await act(async () => button("Save on phone").click());
-    mocks.acknowledged = noteDocument("older\n", "c".repeat(64));
-    await act(async () => {
-      mocks.rows = [];
-      render();
-    });
+    mocks.enqueue.mockResolvedValueOnce("c".repeat(64));
     mocks.liveNext = "v2\n";
     act(() => button("Live edit").click());
     await act(async () => button("Save on phone").click());
     expect(mocks.enqueue).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "v2\n", baseRevision: "a".repeat(64) }),
+      { body: "v1\n", status: "idea" },
     );
+    // The base the outbox chose is the base of the next save.
+    mocks.liveNext = "v3\n";
+    act(() => button("Live edit").click());
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: "v3\n", baseRevision: "c".repeat(64) }),
+      { body: "v2\n", status: "idea" },
+    );
+  });
+
+  it("holds saving and leaving while the editor re-reads its own text", async () => {
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    act(() => button("Editor resyncing").click());
+    expect(button("Save on phone").disabled).toBe(true);
+    expect(mocks.preventRemove).toBe(true);
+    act(() => button("Editor resynced").click());
+    expect(button("Save on phone").disabled).toBe(false);
+  });
+
+  it("ends editing for a saved new note on blur, so the hub read resumes", async () => {
+    mocks.live = true;
+    mocks.rows = [];
+    mocks.feedNotes = [{ path: "new.md" }];
+    await act(async () =>
+      root.render(
+        <NoteRouteScreen
+          route={{ params: { environmentId: "hub", path: "new.md", create: true } }}
+        />,
+      ),
+    );
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "# New\n";
+    act(() => button("Live edit").click());
+    await act(async () => button("Save on phone").click());
+    act(() => button("Blur live editor").click());
+    mocks.read.mockResolvedValue(
+      AsyncResult.success({ ...noteDocument("# New\n"), path: "new.md" }),
+    );
+    await act(async () => {
+      mocks.connected = true;
+      mocks.revision++;
+      for (const listener of mocks.listeners) listener();
+    });
+    expect(mocks.read).toHaveBeenCalled();
+    expect(button("Delete note").disabled).toBe(false);
+  });
+
+  it("keeps Save for an empty new note while the keyboard is hidden", async () => {
+    mocks.live = true;
+    mocks.rows = [];
+    await act(async () =>
+      root.render(
+        <NoteRouteScreen
+          route={{ params: { environmentId: "hub", path: "new.md", create: true } }}
+        />,
+      ),
+    );
+    expect(button("Save on phone").disabled).toBe(false);
   });
 
   it("keeps the editor mounted when the last Windows line break is deleted", async () => {
@@ -613,7 +656,7 @@ describe("live note editor", () => {
     await act(async () => pending.resolve());
     expect(container.textContent).toContain("Unsaved edits");
     await act(async () => button("Save on phone").click());
-    expect(mocks.enqueue).toHaveBeenLastCalledWith(expect.objectContaining({ body: "v2\n" }));
+    expect(mocks.enqueue.mock.lastCall?.[0]).toMatchObject({ body: "v2\n" });
   });
 
   it("offers Save for a new empty note while the editor has focus", async () => {

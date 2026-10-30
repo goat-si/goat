@@ -33,8 +33,11 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
   const errors = new Map<string, string>();
   const changedDuringFlush = new Set<string>();
   const requestedDuringFlush = new Map<string, number>();
-  // The hub's copy of each note whose last edit was acknowledged and left the outbox.
-  const acknowledged = new Map<string, NoteDocument>();
+  // The last acknowledged save of each note that left the outbox, and the base it was sent on.
+  const acknowledged = new Map<
+    string,
+    { readonly base: string | null; readonly note: NoteDocument }
+  >();
   const emit = () => {
     for (const listener of listeners) listener();
   };
@@ -79,13 +82,30 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
       };
     },
     error: (environmentId: string) => errors.get(environmentId),
-    /** The hub document from the save that emptied this note's outbox row, if any. */
-    acknowledged: (environmentId: string, path: string) =>
-      acknowledged.get(noteOutboxKey(environmentId, path)),
-    async enqueue(edit: NoteEdit) {
+    /**
+     * `continues` names this phone's previous save in the same edit session. When that save was
+     * acknowledged on this edit's base and left the outbox, the hub's revision of it becomes the
+     * base, decided in the same serialized step that observes the row's removal.
+     */
+    async enqueue(
+      edit: NoteEdit,
+      continues?: { readonly body: string; readonly status: NoteEdit["status"] },
+    ) {
       await restore();
-      await serialize(async () => {
-        const merged = enqueueNote(rows, edit);
+      /** Returns the base the outbox will send this edit on. */
+      return serialize(async () => {
+        const key = noteOutboxKey(edit.environmentId, edit.path);
+        const previous = acknowledged.get(key);
+        const rebased =
+          continues &&
+          previous &&
+          !rows.some((row) => noteOutboxKey(row.environmentId, row.path) === key) &&
+          previous.base === edit.baseRevision &&
+          previous.note.body === continues.body &&
+          previous.note.status === continues.status
+            ? { ...edit, baseRevision: previous.note.revision }
+            : edit;
+        const merged = enqueueNote(rows, rebased);
         const next = merged.find(
           (row) =>
             noteOutboxKey(row.environmentId, row.path) ===
@@ -95,6 +115,7 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
         rows = merged;
         if (flushing.has(edit.environmentId)) changedDuringFlush.add(edit.environmentId);
         emit();
+        return next.baseRevision;
       });
     },
     async discard(environmentId: string, path: string, version: number) {
@@ -184,7 +205,10 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
                 delivery.note.revision,
               );
               if (!next)
-                acknowledged.set(noteOutboxKey(row.environmentId, row.path), delivery.note);
+                acknowledged.set(noteOutboxKey(row.environmentId, row.path), {
+                  base: sent.inFlight!.baseRevision,
+                  note: delivery.note,
+                });
               await replace(row, next);
             } else if (delivery.type === "conflict")
               await replace(row, conflictNote(row, delivery.current));

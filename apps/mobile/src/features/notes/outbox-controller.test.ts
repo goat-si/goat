@@ -74,26 +74,71 @@ describe("durable notes delivery", () => {
         expect(controller.getSnapshot()).toEqual([]);
       }),
   );
+  const pausedRemoval = () => {
+    const memory = memoryStorage();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const storage: NotesOutboxStorage = {
+      ...memory.storage,
+      remove: async (row) => {
+        started.resolve();
+        await release.promise;
+        await memory.storage.remove(row);
+      },
+    };
+    return { storage, started: started.promise, release: () => release.resolve() };
+  };
+  const savedAs = (revision: string) => async (input: { body: string }) =>
+    ({ type: "saved", note: document(input.body, revision) }) satisfies NoteDelivery;
+
   it.effect(
-    "remembers the hub document of the save that emptied a row, for the next edit's base",
+    "bases a continuing edit on the hub revision even while the acknowledged row is being removed",
     () =>
       Effect.gen(function* () {
-        const controller = createNotesOutboxController(memoryStorage().storage);
+        const paused = pausedRemoval();
+        const controller = createNotesOutboxController(paused.storage);
         yield* Effect.promise(() => controller.enqueue(edit));
-        expect(controller.acknowledged("hub", "note.md")).toBeUndefined();
-        yield* Effect.promise(() =>
-          controller.flush(
-            "hub",
-            async (input) => ({ type: "saved", note: document(input.body, "c".repeat(64)) }),
-            () => true,
-          ),
+        const sent: Array<{ body: string; baseRevision: string | null }> = [];
+        const flush = controller.flush(
+          "hub",
+          async (input) => {
+            sent.push({ body: input.body, baseRevision: input.baseRevision });
+            return savedAs("c".repeat(64))(input);
+          },
+          () => true,
         );
-        expect(controller.getSnapshot()).toEqual([]);
-        expect(controller.acknowledged("hub", "note.md")).toMatchObject({
-          body: "mine",
-          revision: "c".repeat(64),
-        });
+        yield* Effect.promise(() => paused.started);
+        const second = controller.enqueue(
+          { ...edit, body: "second", localUpdatedAt: 5 },
+          { body: edit.body, status: edit.status },
+        );
+        paused.release();
+        yield* Effect.promise(() => Promise.all([flush, second]));
+        expect(sent).toEqual([
+          { body: edit.body, baseRevision: edit.baseRevision },
+          { body: "second", baseRevision: "c".repeat(64) },
+        ]);
       }),
+  );
+
+  it.effect("keeps the base when the acknowledged save is not the one this edit continues", () =>
+    Effect.gen(function* () {
+      const controller = createNotesOutboxController(memoryStorage().storage);
+      yield* Effect.promise(() => controller.enqueue(edit));
+      let sends = 0;
+      yield* Effect.promise(() =>
+        controller.flush("hub", savedAs("c".repeat(64)), () => sends++ < 1),
+      );
+      yield* Effect.promise(() =>
+        controller.enqueue(
+          { ...edit, body: "second", localUpdatedAt: 5 },
+          { body: "something else", status: edit.status },
+        ),
+      );
+      expect(controller.getSnapshot()).toMatchObject([
+        { body: "second", baseRevision: edit.baseRevision },
+      ]);
+    }),
   );
   it.effect("does not send or publish an edit whose durable write failed", () =>
     Effect.gen(function* () {

@@ -34,6 +34,11 @@ export class NoteEditorBridge {
     this.known = value;
   }
 
+  /** True while React Native's copy may be behind the page and a snapshot is outstanding. */
+  get pending() {
+    return this.awaitingDoc;
+  }
+
   /** Reconciles a rendered value; anything not an echo of the page replaces its text. */
   sync(value: string): NoteEditorInbound | null {
     if (value === this.known) {

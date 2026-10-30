@@ -32,9 +32,11 @@ describe("note editor bridge keeps React Native's copy equal to the page", () =>
   it("replays edits the page made after its snapshot", () => {
     const bridge = new NoteEditorBridge("abc");
     expect(bridge.receive(change(2, [[0, 0, "?"]], 4))).toEqual(requestDoc);
+    expect(bridge.pending).toBe(true);
     // The page snapshots at seq 3, then edits again (seq 4) before the snapshot arrives.
     expect(bridge.receive(change(4, [[3, 3, "!"]], 4))).toEqual({});
     expect(bridge.receive(doc(3, "XYZ")).value?.text).toBe("XYZ!");
+    expect(bridge.pending).toBe(false);
     expect(bridge.receive(change(5, [[4, 4, "."]], 5)).value?.text).toBe("XYZ!.");
   });
 
