@@ -324,10 +324,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                         },
                         release: (tabId) => forgetTab(tabId, context),
                       }).pipe(Effect.flatMap(Effect.fail))
-                    : Effect.fail({
-                        ...fail("unknown_outcome", "Check live tabs before opening again."),
-                        effectStarted: true,
-                      }),
+                    : previewTargetFailure(error, "open").code === "blocked_url"
+                      ? Effect.fail(previewTargetFailure(error, "open"))
+                      : Effect.fail({
+                          ...fail("unknown_outcome", "Check live tabs before opening again."),
+                          effectStarted: true,
+                        }),
                 ),
               );
             const abandon = (nextStep: string) =>
