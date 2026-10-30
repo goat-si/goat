@@ -32,7 +32,9 @@ export const WRONG_DISPLAY =
 
 export const REQUEST_ID_BUSY =
   "This request id still has work in progress. Use a new request id after observing its result.";
-export const SCREEN_CALL_EXPIRED = "This screen call ended before dispatch.";
+/** A screen call still waiting in GOAT, often behind slow checks on a loaded host. */
+export const SCREEN_CALL_EXPIRED =
+  "This screen call was still waiting in GOAT when its cell stopped waiting for it, often because this computer is busy, so nothing was sent. Try it again.";
 export const SCREEN_SHARED =
   "Another thread is using other apps on this screen, so a script, a batch or a call that brings a window forward, moves the pointer or sends foreground input did not run: it would take the screen from that thread. Make single calls that act on this window in the background or through an element, or end your turn and ask the person.";
 

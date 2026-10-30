@@ -26,10 +26,12 @@ const listApps = (requestId: string, connectionGeneration: string, deadlineMilli
   tool: "list_apps",
   args: {},
 });
+/** How long a call stays unanswered before its driver is judged stuck. */
+const STUCK_MS = 20_000;
 const sentListApps = (log: ReadonlyArray<string>) =>
   log.filter((entry) => entry === "send list_apps").length;
 
-/** A first call the driver leaves unanswered past its 2 s deadline, and a second call after it. */
+/** A first call the driver leaves unanswered until it is judged stuck, and a second call then. */
 const overdue = Effect.fn(function* (
   options: Parameters<typeof harness>[0] = {},
   secondDeadline = 60_000,
@@ -39,7 +41,7 @@ const overdue = Effect.fn(function* (
   const first = yield* h.driverStarted;
   yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
   const stuck = yield* h.nextToDriver;
-  yield* TestClock.adjust(2_000);
+  yield* TestClock.adjust(STUCK_MS);
   yield* h.sendPrimitive(listApps("request:next", first.connectionId, secondDeadline));
   /** Replies by request id, as they settle. */
   const replies = (count: number) =>
@@ -53,6 +55,124 @@ const overdue = Effect.fn(function* (
 });
 
 describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
+  it.effect(
+    "a click past its 3 s cap keeps a slow driver: its late answer lands and the next call goes to the same driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        yield* h.sendPrimitive({
+          ...listApps("click:slow", first.connectionId, 3_000),
+          tool: "click",
+          args: { pid: 42, window_id: 7 },
+        });
+        const slow = yield* h.nextToDriver;
+        yield* TestClock.adjust(10_000);
+        assert.isFalse(yield* h.isKilled);
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: slow.id, result: { content: [] } }));
+        assert.equal((yield* h.primitiveReply).status, "settled");
+        yield* h.sendPrimitive(listApps("request:next", first.connectionId, 60_000));
+        assert.deepEqual((yield* h.nextToDriver).params, { name: "list_apps", arguments: {} });
+        assert.equal(h.drivers.length, 1);
+      }),
+  );
+
+  it.effect(
+    "a click left unanswered for 20 s is a stuck driver: it is replaced and the click may have acted",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        yield* h.sendPrimitive({
+          ...listApps("click:stuck", first.connectionId, 3_000),
+          tool: "click",
+          args: { pid: 42, window_id: 7 },
+        });
+        yield* h.nextToDriver;
+        yield* TestClock.adjust(20_000);
+        assert.isFalse(yield* h.isKilled);
+        yield* TestClock.adjust(1_000);
+        const reply = yield* h.primitiveReply;
+        assert.equal(reply.status, "unknown_outcome");
+        const structured = (reply.result as { structuredContent: Record<string, unknown> })
+          .structuredContent;
+        assert.equal(structured.detail, "helper_restarted");
+        assert.include(structured.safety as object, { possibleCommit: true });
+        assert.isTrue(yield* h.isKilled);
+        yield* h.driverStarted;
+      }),
+  );
+
+  it.effect(
+    "a click its cell gave up on is replaced when the cell ends, so the next cell reaches a fresh driver",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        yield* h.sendPrimitive({
+          ...listApps("click:abandoned", first.connectionId, 3_000),
+          tool: "click",
+          args: { pid: 42, window_id: 7 },
+        });
+        yield* h.nextToDriver;
+        yield* TestClock.adjust(5_000);
+        assert.isFalse(yield* h.isKilled);
+        yield* h.cancelPrimitive("click:abandoned");
+        yield* TestClock.adjust(1_000);
+        const reply = yield* h.primitiveReply;
+        assert.equal(reply.status, "unknown_outcome");
+        assert.isTrue(yield* h.isKilled);
+        const second = yield* h.driverStarted;
+        yield* h.sendPrimitive(listApps("request:next", second.connectionId, 60_000));
+        assert.deepEqual((yield* h.nextToDriver).params, { name: "list_apps", arguments: {} });
+      }),
+  );
+
+  it.effect(
+    "a call queued behind one still being admitted is answered at its own deadline as never sent",
+    () =>
+      Effect.gen(function* () {
+        const reserving = yield* Deferred.make<void>();
+        const gate = yield* Deferred.make<void>();
+        let reserves = 0;
+        const h = yield* harness({
+          reservation: (request) =>
+            request.action === "reserve" && ++reserves === 1
+              ? Deferred.succeed(reserving, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.as({ status: "admitted" as const, reservationId: null }),
+                )
+              : Effect.succeed(
+                  request.action === "reserve"
+                    ? { status: "admitted" as const, reservationId: null }
+                    : { status: "released" as const },
+                ),
+        });
+        yield* h.push(active());
+        const first = yield* h.driverStarted;
+        yield* h.sendPrimitive(listApps("request:slow", first.connectionId, 60_000));
+        yield* Deferred.await(reserving);
+        yield* h.sendPrimitive(listApps("request:queued", first.connectionId, 4_000));
+        yield* TestClock.adjust(4_000);
+        const reply = yield* h.primitiveReply;
+        assert.equal(reply.requestId, "request:queued");
+        assert.equal(reply.status, "not_started");
+        const structured = (reply.result as { structuredContent: Record<string, unknown> })
+          .structuredContent;
+        assert.equal(structured.detail, "expired");
+        assert.include(
+          (reply.result as { content: Array<{ text: string }> }).content[0]?.text ?? "",
+          "nothing was sent",
+        );
+        yield* Deferred.succeed(gate, undefined);
+        assert.deepEqual((yield* h.nextToDriver).params, { name: "list_apps", arguments: {} });
+        assert.equal(sentListApps(h.log), 1);
+      }),
+  );
+
   it.effect("a call made while an earlier call is overdue never reaches the stuck child", () =>
     Effect.gen(function* () {
       const { h, replies } = yield* overdue();
@@ -87,7 +207,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
 
   it.effect("a held call that reaches its own deadline first is refused, nothing sent", () =>
     Effect.gen(function* () {
-      const { h } = yield* overdue({}, 2_500);
+      const { h } = yield* overdue({}, STUCK_MS + 500);
       yield* TestClock.adjust(500);
       const reply = yield* h.primitiveReply;
       assert.equal(reply.requestId, "request:next");
@@ -128,7 +248,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         yield* h.nextToDriver;
         yield* h.sendPrimitive(listApps("request:next", first.connectionId, 60_000));
         yield* Deferred.await(reserving);
-        yield* TestClock.adjust(2_000);
+        yield* TestClock.adjust(STUCK_MS);
         yield* Deferred.succeed(gate, undefined);
         const reply = yield* h.primitiveReply;
         assert.equal(reply.requestId, "request:next");
@@ -144,7 +264,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       const first = yield* h.driverStarted;
       yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
       yield* h.nextToDriver;
-      yield* TestClock.adjust(2_000);
+      yield* TestClock.adjust(STUCK_MS);
       yield* h.send(call(7, "list_apps"));
       yield* TestClock.adjust(1_000);
       yield* h.driverStarted;
@@ -165,7 +285,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       const first = yield* h.driverStarted;
       yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
       yield* h.nextToDriver;
-      yield* TestClock.adjust(2_000);
+      yield* TestClock.adjust(STUCK_MS);
       yield* h.send(call(7, "list_apps"));
       yield* TestClock.adjust(1_000);
       assert.equal(((yield* h.nextToProvider) as unknown as ToolAnswer).id, 7);
@@ -182,7 +302,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       const first = yield* h.driverStarted;
       yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
       const stuck = yield* h.nextToDriver;
-      yield* TestClock.adjust(2_000);
+      yield* TestClock.adjust(STUCK_MS);
       yield* h.send(call(7, "list_apps"));
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: stuck.id, result: { content: [] } }));
       assert.equal((yield* h.nextToDriver).id, 7);
@@ -210,7 +330,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         yield* h.push(active());
         yield* Deferred.await(holding);
         // Past the deadline and its grace: the replacement now waits for the lock.
-        yield* TestClock.adjust(3_000);
+        yield* TestClock.adjust(STUCK_MS + 1_000);
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: stuck.id, result: { content: [] } }));
         assert.equal((yield* h.primitiveReply).status, "settled");
         yield* Deferred.succeed(lockGate, undefined);
@@ -228,7 +348,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
       const first = yield* h.driverStarted;
       yield* h.sendPrimitive(listApps("request:stuck", first.connectionId, 2_000));
       yield* h.nextToDriver;
-      yield* TestClock.adjust(2_000);
+      yield* TestClock.adjust(STUCK_MS);
       yield* h.send(call(7, "list_apps"));
       yield* TestClock.adjust(1_000);
       assert.equal(
@@ -389,9 +509,10 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         );
         assert.equal((yield* h.primitiveReply).status, "settled");
 
-        // verify_state(timeout_ms: 0) gets the 11 s sample bound (2 s list_windows + 9 s walk);
-        // a first watcher's reply keeps the second's overdue fence up, and a second watcher's
-        // reply under the lifecycle lock stops replacement even while the head is unanswered.
+        // verify_state(timeout_ms: 0) has an 11 s sample bound (2 s list_windows + 9 s walk), so
+        // the 20 s floor judges it stuck; a first watcher's reply keeps the second's overdue fence
+        // up, and a second watcher's reply under the lifecycle lock stops replacement even while
+        // the head is unanswered.
         yield* h.send(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -437,10 +558,10 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           args: { pid: 42 },
         });
         const auxConcurrent2 = yield* h.nextToDriver;
-        // At +8.4 s (1.5 s list_windows + 6.9 s walk), the child is still alive (not cut off at 8 s).
-        yield* TestClock.adjust("8400 millis");
+        // At +17.4 s, past its 11 s sample bound, the child is still alive.
+        yield* TestClock.adjust("17400 millis");
         assert.isFalse(yield* h.isKilled);
-        // At +2.8 s (11.2 s total, 200 ms into verifyDefault's 1 s grace after its 11 s bound), auxConcurrent1 answers first.
+        // At +2.8 s (20.2 s total, 200 ms into verifyDefault's 1 s grace after the 20 s floor), auxConcurrent1 answers first.
         yield* TestClock.adjust("2800 millis");
         assert.isFalse(yield* h.isKilled);
         yield* h.reply(
@@ -500,7 +621,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 1,
-          deadlineMillis: 335_600,
+          deadlineMillis: 344_600,
           tool: "list_windows",
           args: { pid: 42 },
         });
@@ -550,7 +671,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         );
         assert.equal((yield* h.primitiveReply).status, "settled");
 
-        // (a3) A short run_script (timeout_ms: 5000, cap 6.5 s) that wedges the child is replaced after 6.5 s + 1 s grace (7.5 s), not 120 s.
+        // (a3) A short run_script (timeout_ms: 5000, cap 6.5 s) that wedges the child is replaced after the 20 s floor + 1 s grace (21 s), not 120 s.
         yield* h.send(
           JSON.stringify({
             jsonrpc: "2.0",
@@ -572,12 +693,12 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 2,
-          deadlineMillis: 409_200,
+          deadlineMillis: 418_200,
           tool: "list_windows",
           args: { pid: 42 },
         });
         yield* h.nextToDriver;
-        yield* TestClock.adjust("6 seconds");
+        yield* TestClock.adjust("20 seconds");
         assert.isFalse(yield* h.isKilled);
         yield* TestClock.adjust("1600 millis");
         assert.isTrue(yield* h.isKilled);
@@ -585,7 +706,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         const second = yield* h.driverStarted;
 
         // (b) Three provider scroll calls (each 10 s cap) are queued and the first is wedged, followed by a 1.5 s auxiliary read
-        // arriving 8 s after prov:s1 was sent: the child is replaced 3 s later (2 s remaining cap + 1 s grace), not after 10 s or 30 s.
+        // arriving 8 s after prov:s1 was sent: the child is replaced 13 s later (12 s left of the 20 s floor + 1 s grace), not after 30 s.
         for (const id of ["prov:s1", "prov:s2", "prov:s3"]) {
           yield* h.send(
             JSON.stringify({
@@ -607,14 +728,14 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           runId: "run:one",
           turnId: "cell:one",
           callId: 3,
-          deadlineMillis: 424_800,
+          deadlineMillis: 447_800,
           tool: "list_windows",
           args: { pid: 42 },
         });
         yield* h.nextToDriver;
-        yield* TestClock.adjust("1500 millis");
+        yield* TestClock.adjust("12500 millis");
         assert.equal(h.drivers.length, 2);
-        yield* TestClock.adjust("1600 millis");
+        yield* TestClock.adjust("600 millis");
         assert.equal(h.drivers.length, 3);
       }),
   );

@@ -66,25 +66,57 @@ const bound = Effect.fn("PrimitiveChannelCapsTest.bound")(function* (ready = tru
       ),
     ),
   ).pipe(Effect.map(Option.getOrThrow));
-  return { call, delivered };
+  /** The next line the proxy reads, cancellations included. */
+  const next = Stream.runHead(registered.requests).pipe(Effect.map(Option.getOrThrow));
+  return { call, delivered, next, channel };
 });
 
 describe("ComputerUsePrimitiveChannel caps each driver call", () => {
   it.effect(
-    "a list_apps the driver never answers fails at its own cap and leaves the cell its time",
+    "a list_apps the driver never answers fails at its own cap, and only its cell's end cancels it",
     () =>
       Effect.gen(function* () {
         const f = yield* bound();
         const waiter = yield* f.call("list_apps", {});
-        assert.equal((yield* f.delivered).deadlineMillis, 2_000);
-        yield* TestClock.adjust(2_000);
+        const request = yield* f.delivered;
+        assert.equal(request.deadlineMillis, 2_000);
+        yield* TestClock.adjust(2_000 + PrimitiveChannel.PROXY_ANSWER_GRACE_MS);
         const result = yield* Fiber.join(waiter);
         assert.equal(result._tag, "Failure");
         if (result._tag !== "Failure") return;
         assert.equal(result.failure.code, "deadline");
         assert.isTrue(result.failure.effectStarted);
-        assert.include(result.failure.nextStep, "GOAT is restarting it");
-        assert.include(result.failure.nextStep, "do not resend input");
+        assert.equal(
+          result.failure.nextStep,
+          "The driver did not answer within 2 s and may still be working on it. Observe before acting again; do not resend input.",
+        );
+        const marker = yield* f.next.pipe(Effect.forkChild);
+        yield* f.channel.cancel("run:one", "cell:one");
+        assert.deepEqual(yield* Fiber.join(marker), {
+          state: "primitive-cancel",
+          requestId: request.requestId,
+        });
+      }),
+  );
+
+  it.effect(
+    "a call the proxy says it never sent, within the grace past its cap, fails as nothing sent",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* bound();
+        const waiter = yield* f.call("list_apps", {});
+        const request = yield* f.delivered;
+        yield* TestClock.adjust(2_000);
+        assert.isTrue(
+          yield* f.channel.reply({
+            ...authority,
+            registrationId: request.registrationId,
+            reply: { ...request, status: "not_started" },
+          }),
+        );
+        const result = yield* Fiber.join(waiter);
+        assert.equal(result._tag, "Success");
+        if (result._tag === "Success") assert.equal(result.success.status, "not_started");
       }),
   );
 
@@ -92,7 +124,7 @@ describe("ComputerUsePrimitiveChannel caps each driver call", () => {
     Effect.gen(function* () {
       const f = yield* bound();
       const waiter = yield* f.call("click", { pid: 4, window_id: 9, x: 1, y: 1 });
-      yield* TestClock.adjust(3_000);
+      yield* TestClock.adjust(3_000 + PrimitiveChannel.PROXY_ANSWER_GRACE_MS);
       const result = yield* Fiber.join(waiter);
       assert.equal(result._tag, "Failure");
       if (result._tag !== "Failure") return;

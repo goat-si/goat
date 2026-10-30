@@ -85,7 +85,7 @@ const primitive = (
 });
 const WINDOW = { pid: 42, window_id: 7 };
 
-/** A click the first driver never answers, past its 3 s cap: GOAT replaces that driver. */
+/** A click the first driver never answers: once it is judged stuck, GOAT replaces that driver. */
 const replaced = Effect.fn(function* () {
   const goat = yield* server();
   const h = yield* harness({
@@ -96,7 +96,7 @@ const replaced = Effect.fn(function* () {
   const first = yield* h.driverStarted;
   yield* h.sendPrimitive(primitive("click:stuck", first.connectionId, 3_000, "click", WINDOW));
   yield* h.nextToDriver;
-  yield* TestClock.adjust(4_000);
+  yield* TestClock.adjust(21_000);
   const cutOff = yield* h.primitiveReply;
   const second = yield* h.driverStarted;
   goat.state.slow = true;

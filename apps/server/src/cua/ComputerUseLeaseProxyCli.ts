@@ -508,7 +508,9 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     const cancelledPrimitives = new Set<string>();
     const earlyCancels = new Set<string>();
     const settledPrimitives = new Set<string>();
+    const cancelListeners = new Set<(requestId: string) => void>();
     const takeCancel = (requestId: string) => {
+      for (const listener of cancelListeners) listener(requestId);
       if (settledPrimitives.has(requestId)) return;
       if (pendingPrimitives.has(requestId)) cancelledPrimitives.add(requestId);
       else {
@@ -670,6 +672,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     yield* following.pipe(Effect.ignoreCause, Effect.ensuring(closeQueues), Effect.forkScoped);
     const common = {
       primitiveCancelled: (requestId: string) => cancelledPrimitives.has(requestId),
+      subscribePrimitiveCancels: (listener: (requestId: string) => void) => {
+        cancelListeners.add(listener);
+        return () => void cancelListeners.delete(listener);
+      },
       onPrimitiveSettled: (requestId: string) => {
         pendingPrimitives.delete(requestId);
         cancelledPrimitives.delete(requestId);

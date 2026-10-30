@@ -675,6 +675,11 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
               if (activeCells.get(id) === cellId) activeCells.delete(id);
             }),
           ),
+          // A driver call the cell gave up on is cancelled now, so its proxy replaces a driver
+          // still busy with it instead of making the next cell queue behind it.
+          Effect.ensuring(
+            options.primitiveChannel?.cancel(input.runId, input.turnId) ?? Effect.void,
+          ),
         );
     }),
     cutCell: Effect.fn("ScreenRunService.cutCell")(function* (input: {
