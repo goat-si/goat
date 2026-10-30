@@ -6,6 +6,35 @@ import { isLocalLoopbackHost } from "./hostClassification.ts";
 const TAB_ID_PREFIX = "tab_";
 let nextPreviewTabSequence = 0;
 
+export function normalizeBlockedBrowserHost(value: string): string | null {
+  const input = value.trim();
+  if (!input || /[\s/@?#\\]/u.test(input)) return null;
+  if (input.startsWith("[") ? !/^\[[\da-f:.]+\]$/i.test(input) : input.includes(":")) return null;
+  try {
+    const host = new URL(`http://${input}/`).hostname.replace(/\.$/, "");
+    return host || null;
+  } catch {
+    return null;
+  }
+}
+
+export function isBlockedBrowserUrl(url: string, hosts: readonly string[]): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.replace(/\.$/, "");
+    return hosts.some((entry) => {
+      const blocked = normalizeBlockedBrowserHost(entry);
+      if (blocked === null) return false;
+      if (host === blocked) return true;
+      if (blocked.startsWith("[") || /^\d+(?:\.\d+){3}$/.test(blocked)) return false;
+      return host.endsWith(`.${blocked}`);
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function previewPdfAssetUrl(rawUrl: string, httpBaseUrl: string | null): string | null {
   if (httpBaseUrl === null) return null;
   try {
