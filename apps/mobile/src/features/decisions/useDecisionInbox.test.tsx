@@ -24,6 +24,7 @@ type Snapshot = {
   loadingRefs: readonly ScopedThreadRef[];
   errors: readonly { ref: ScopedThreadRef; message: string }[];
   isLoading: boolean;
+  feedEnvironments?: readonly EnvironmentId[];
 };
 type Run = (...args: unknown[]) => Promise<AtomCommandResult<void, Error>>;
 const fixture = vi.hoisted<{
@@ -273,56 +274,15 @@ import {
   togglePendingUserInputOptionSelection,
 } from "../../lib/threadActivity";
 import { makeThreadShellFixture } from "../../test-fixtures";
-const envA = EnvironmentId.make("A");
-const envB = EnvironmentId.make("B");
-const requestId = RuntimeRequestId.make("same-request");
-const question: ThreadUserInputQuestion = {
-  id: "q",
-  header: "Choice",
-  question: "Choose an answer",
-  multiSelect: true,
-  allowCustomAnswer: true,
-  options: [
-    { value: "one", label: "One", description: "First" },
-    { value: "two", label: "Two", description: "Second" },
-  ],
-};
-function approval(
-  environmentId = envA,
-  threadId = ThreadId.make("thread"),
-  date = "2026-10-01T00:00:00.000Z",
-): Extract<DecisionItem, { kind: "approval" }> {
-  return {
-    id: JSON.stringify([environmentId, threadId, requestId]),
-    ref: { environmentId, threadId },
-    createdAt: date,
-    routing: { routedTo: "person" },
-    kind: "approval",
-    request: { requestId, createdAt: date, requestKind: "command", responseCapability: "live" },
-  };
-}
-function userInput(
-  environmentId = envA,
-  questions: readonly ThreadUserInputQuestion[] = [question],
-  threadId = ThreadId.make("thread"),
-): Extract<DecisionItem, { kind: "user_input" }> {
-  const base = approval(
-    environmentId,
-    threadId,
-    environmentId === envA ? "2026-10-01T00:00:00.000Z" : "2026-10-02T00:00:00.000Z",
-  );
-  return {
-    ...base,
-    kind: "user_input",
-    request: {
-      requestId,
-      createdAt: base.createdAt,
-      questions,
-      dismissible: true,
-      responseCapability: "message",
-    },
-  };
-}
+import {
+  approval,
+  durable,
+  envA,
+  envB,
+  question,
+  requestId,
+  userInput,
+} from "./decisionInboxFixtures";
 const a = approval();
 const b = approval(envB, ThreadId.make("thread"), "2026-10-02T00:00:00.000Z");
 let registry: AtomRegistry.AtomRegistry;
@@ -825,6 +785,28 @@ it("answers through mounted body option and text interactions without selection"
   expect(fixture.userInput.mock.calls[0]?.[0]).toMatchObject({
     input: { answers: { q: "Typed reply" } },
   });
+});
+
+it("sends a durable decision from the route screen and drops a choice the live decision no longer offers", async () => {
+  const item = durable();
+  write([item], { feedEnvironments: [envA] });
+  await render(<DecisionsRouteScreen />);
+  await click("Submit decision");
+  expect(fixture.userInput).toHaveBeenCalledExactlyOnceWith({
+    environmentId: envA,
+    input: { id: "decision:1", optionId: "sqlite", reason: "Chose SQLite." },
+  });
+  await act(async () => write([{ ...item, id: "second" }], { feedEnvironments: [envA] }));
+  await click("Postgres");
+  const stale = button("Submit decision");
+  const options = item.decision.options.filter((option) => option.id !== "pg");
+  await act(async () => {
+    write([{ ...item, id: "second", decision: { ...item.decision, options } }], {
+      feedEnvironments: [envA],
+    });
+    stale.click();
+  });
+  expect(fixture.userInput).toHaveBeenCalledTimes(1);
 });
 
 it("renders recovery and honest empty states then allows a recovered answer", async () => {

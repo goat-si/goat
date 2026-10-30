@@ -172,6 +172,32 @@ it("answers a projected question using its provider option value", async () => {
   });
 });
 
+it("answers a projected question and an approval with a blank reason", async () => {
+  const approvalItem: DecisionItem = {
+    ...projected,
+    id: "approval-1",
+    title: "Run the migration?",
+    pending: { ...projected.pending!, questions: [], approval: { kind: "command" } },
+  };
+  using fixture = setup(projected, [projected, approvalItem]);
+  // Keep both rows open so each answer goes through its own button.
+  state.run.mockResolvedValue({ _tag: "Success", value: projected });
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DecisionInboxSettings />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Canary host" }));
+  await userEvent.click(screen.getByRole("button", { name: "Accept" }));
+  expect(state.run.mock.calls.map((call) => call[1])).toEqual([
+    {
+      environmentId,
+      input: { id: "pending-1", answers: { scope: "canary" }, reason: "Chose Canary host." },
+    },
+    { environmentId, input: { id: "approval-1", decision: "accept", reason: "Chose Accept." } },
+  ]);
+});
+
 it("baseline-failing: revalidates and answers on the asking host, reporting when the host refuses", async () => {
   using fixture = setup({ ...decision, from: { host: "build-host" } });
   state.run.mockResolvedValue({
