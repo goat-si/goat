@@ -109,6 +109,18 @@ it.live.each([
   }),
 );
 
+it.live("app.selectText called with one object refuses a misspelled option and sends nothing", () =>
+  Effect.gen(function* () {
+    const { result, sent } = yield* run(
+      { effect: "confirmed" },
+      "app.selectText({ elementRef: {}, text: 'world', selecton: 'cursor_after' })",
+    );
+    expect(result.value).toMatchObject({ caught: { code: "invalid_argument", nothingSent: true } });
+    expect((result.value as { caught: { message: string } }).caught.message).toContain("selecton");
+    expect(sent).toEqual([]);
+  }),
+);
+
 const unavailable = {
   "goat.10 (no reviewed risk class)": new DriverError(
     { code: "permission_denied", safety: { possibleCommit: false } },

@@ -113,6 +113,14 @@ const driverFailure = (
 };
 
 const SELECTION = new Set(["text", "cursor_before", "cursor_after"]);
+const SELECT_TEXT_KEYS = new Set([
+  "elementRef",
+  "text",
+  "occurrence",
+  "prefix",
+  "suffix",
+  "selection",
+]);
 
 /** select_text's arguments for the bound window, or why there are none. */
 const selectTextArgs = (
@@ -120,6 +128,15 @@ const selectTextArgs = (
   bound: BoundWindow,
   tokenOf: (element: Record<string, unknown>, bound: BoundWindow) => string | undefined,
 ): { readonly forwarded: Record<string, unknown> } | { readonly error: ScreenRunError } => {
+  // A dropped misspelling would leave the driver's default, selecting the whole match.
+  const unknown = Object.keys(args).find((key) => !SELECT_TEXT_KEYS.has(key));
+  if (unknown !== undefined)
+    return {
+      error: fail(
+        "invalid_argument",
+        `selectText does not take ${unknown}. It takes occurrence, prefix, suffix, selection; nothing was sent.`,
+      ),
+    };
   const element = object(args.elementRef);
   if (element === undefined)
     return { error: fail("invalid_argument", "Name the text field: selectText(target, text).") };
