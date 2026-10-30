@@ -59,7 +59,9 @@ export function ThreadSettingsReasoning(props: {
     const model = props.session.displayedModel;
     const reason =
       model === null
-        ? "Choose a model to see its reasoning levels."
+        ? props.session.displayedModelSelection
+          ? "Reasoning levels for this model are not available right now."
+          : "Choose a model to see its reasoning levels."
         : model.capabilities === null
           ? `${model.label} has not reported its reasoning levels.`
           : `${model.label} doesn't offer reasoning levels.`;

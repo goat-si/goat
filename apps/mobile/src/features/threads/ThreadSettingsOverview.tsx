@@ -182,7 +182,7 @@ export function ThreadSettingsOverview(props: {
           <Text className="min-w-0 flex-1 text-xs text-foreground-muted">
             {`Save to switch from ${
               session.appliedModel?.label ??
-              session.reportedModelSelection?.model ??
+              session.appliedModelSelection?.model ??
               "the current model"
             }.`}
           </Text>

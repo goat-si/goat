@@ -84,6 +84,7 @@ export type ThreadSettingsSessionValue = {
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   /** The thread's model, even when the catalog hides it; null only when no provider lists it. */
   readonly appliedModel: ModelOption | null;
+  readonly appliedModelSelection: ModelSelection | null;
   /** The pending model, else the applied one. */
   readonly displayedModel: ModelOption | null;
   readonly recentModelKeys: ReadonlyArray<string>;
@@ -433,6 +434,7 @@ export function ThreadSettingsSessionProvider(
     providerInstanceId: props.providerInstanceId,
     providerGroups,
     appliedModel,
+    appliedModelSelection: props.selectedModel,
     displayedModel,
     recentModelKeys: recents.keys,
     keepAppliedModel: () => {
