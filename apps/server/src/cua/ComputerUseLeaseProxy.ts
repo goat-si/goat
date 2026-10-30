@@ -253,7 +253,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
-    // Runs for every driver line, so it opens no span of its own.
     const handle = Effect.fnUntraced(function* (line: string) {
       if (finished !== undefined || lifecycle.current !== current) return;
       const message = parse(line);
@@ -869,6 +868,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         foreground,
         scope: { listed, apps, labels },
       });
+      sink.captureTarget?.();
       selectedForeground = admission.selectedForeground;
       reservationId = admission.reservationId;
       permissionDeadline = admission.deadline;

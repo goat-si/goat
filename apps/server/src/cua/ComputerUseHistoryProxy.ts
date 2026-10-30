@@ -83,19 +83,27 @@ export const historySink = (
     message.method === "tools/call" && typeof message.params?.name === "string"
       ? message.params.name
       : undefined;
-  const label = callApp(tool, message.params?.arguments, listed);
-  const call = {
-    ...(tool === undefined ? {} : { tool }),
-    args: message.params?.arguments,
-    ...(label?.bundleId === undefined || label.name === undefined
-      ? {}
-      : { app: { id: label.bundleId, name: label.name } }),
+  let app: { readonly id: string; readonly name: string } | undefined;
+  let captured = false;
+  const captureTarget = () => {
+    if (captured) return;
+    captured = true;
+    const label = callApp(tool, message.params?.arguments, listed);
+    if (app === undefined && label?.bundleId !== undefined && label.name !== undefined)
+      app = { id: label.bundleId, name: label.name };
   };
+  const call = { ...(tool === undefined ? {} : { tool }), args: message.params?.arguments };
   let recorded = false;
   const recordOutcome = (line: string, status?: string) => {
     if (recorded) return Effect.void;
     recorded = true;
-    const outcome = callOutcome(options.controlId, call, line, status);
+    captureTarget();
+    const outcome = callOutcome(
+      options.controlId,
+      { ...call, ...(app === undefined ? {} : { app }) },
+      line,
+      status,
+    );
     return outcome === undefined || options.onCallOutcome === undefined
       ? Effect.void
       : Effect.forkIn(Effect.ignoreCause(options.onCallOutcome(outcome)), scope).pipe(
@@ -103,6 +111,7 @@ export const historySink = (
         );
   };
   return {
+    captureTarget,
     recordOutcome,
     answer: (line, status, context) =>
       recordOutcome(line, status).pipe(Effect.andThen(sink.answer(line, status, context))),

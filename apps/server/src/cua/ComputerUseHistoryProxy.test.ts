@@ -139,3 +139,32 @@ it.effect("records the outcome of a cancelled call after the driver answers", ()
     assert.equal((yield* Queue.take(reports)).verdict, "sent");
   }),
 );
+
+it.effect("uses the app resolved during admission for the outcome", () =>
+  Effect.gen(function* () {
+    const reports = yield* Queue.unbounded<ComputerUseLeaseCallOutcome>();
+    const h = yield* harness({ onCallOutcome: (report) => Queue.offer(reports, report) });
+    yield* h.push(active(undefined, ["fixture.app"]));
+    yield* h.send(call(1, "click", { target: { kind: "window", pid: 42, window_id: 1 } }));
+    const lookup = yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: lookup.id,
+        result: {
+          structuredContent: { apps: [{ pid: 42, bundle_id: "fixture.app", name: "Fixture" }] },
+        },
+      }),
+    );
+    assert.equal((yield* h.nextToDriver).id, 1);
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { structuredContent: { effect: "confirmed" } },
+      }),
+    );
+    yield* h.nextToProvider;
+    assert.deepEqual((yield* Queue.take(reports)).app, { id: "fixture.app", name: "Fixture" });
+  }),
+);
