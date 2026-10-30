@@ -182,6 +182,7 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
               "com.apple.LocalAuthentication.UIAgent",
               "com.apple.keychainaccess",
               "com.apple.ScreenTimeAgent",
+              "com.apple.ScreenTimeSettingsAgent",
               "com.apple.ScreenTimeWidgetApplication",
               "com.apple.ScreenTimeViewService",
             ]) {

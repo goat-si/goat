@@ -125,6 +125,8 @@ const EXCLUDED_BUNDLE_IDS = new Set([
   // macOS: LocalAuthentication.framework/Support/coreautha.bundle/Contents/Info.plist.
   "com.apple.localauthentication.uiagent",
   "com.apple.screentimeagent",
+  // macOS: /System/Library/LaunchAgents/com.apple.ScreenTimeSettingsAgent.plist.
+  "com.apple.screentimesettingsagent",
   // macOS: /System/Library/CoreServices/Screen Time.app/Contents/Info.plist.
   "com.apple.screentimewidgetapplication",
   // macOS: ScreenTimeServiceUI.framework/XPCServices/ScreenTimeViewService.xpc/Contents/Info.plist.

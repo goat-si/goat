@@ -88,6 +88,7 @@ it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
       "com.apple.LocalAuthentication.UIAgent",
       "com.apple.keychainaccess",
       "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeSettingsAgent",
       "com.apple.ScreenTimeWidgetApplication",
       "com.apple.ScreenTimeViewService",
     ]) {

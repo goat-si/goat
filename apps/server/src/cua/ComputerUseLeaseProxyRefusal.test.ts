@@ -75,6 +75,7 @@ describe("an app approved by its executable path", () => {
         "com.apple.LocalAuthentication.UIAgent",
         "com.apple.keychainaccess",
         "com.apple.ScreenTimeAgent",
+        "com.apple.ScreenTimeSettingsAgent",
         "com.apple.ScreenTimeWidgetApplication",
         "com.apple.ScreenTimeViewService",
       ]) {
