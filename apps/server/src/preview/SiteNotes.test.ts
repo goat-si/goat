@@ -60,6 +60,14 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     }),
   );
   it.effect.each([
+    "authorization: Bearer abc123",
+    "Authorization is Bearer abc",
+    "credential is abc123",
+    "cookie=abc123",
+    "set-cookie: sid=1",
+    "session_token: abc",
+    "client_secret = abc",
+    "refresh token is abc",
     "password is hunter",
     "password is hunter.",
     "password is under123",
@@ -99,6 +107,8 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     }),
   );
   it.effect.each([
+    "The cookie banner is at the bottom",
+    "Authorization is required for this page",
     "password: under Settings",
     "The token is shown once after you create it",
     "Your PIN is required at checkout",

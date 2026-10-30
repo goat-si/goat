@@ -11,7 +11,7 @@ import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 export const MASK = "***";
 
 // A field name whose value is a credential, in snake, kebab or camel case.
-const CREDENTIAL_KEY = String.raw`(?:(?:access|refresh|id|session|auth|bearer|csrf|xsrf|api|client)[_-]?)?token|(?:x[_-])?api[_-]?key|client[_-]?secret|secret|password|passwd|authorization|(?:set[_-]?)?cookie`;
+export const CREDENTIAL_KEY = String.raw`(?:(?:access|refresh|id|session|auth|bearer|csrf|xsrf|api|client)[_-]?)?token|(?:x[_-])?api[_-]?key|client[_-]?secret|secret|password|passwd|authorization|(?:set[_-]?)?cookie`;
 export const isCredentialKey = new RegExp(`^(?:${CREDENTIAL_KEY})$`, "i");
 
 /**

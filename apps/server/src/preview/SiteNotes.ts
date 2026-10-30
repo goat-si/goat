@@ -10,7 +10,7 @@ import type { SqlError } from "effect/sql/SqlError";
 import { scanMemoryValue } from "../memory/MemorySecretScanner.ts";
 import type { MemoryAccessError } from "../memory/MemoryService.ts";
 import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
-import { containsJoseToken } from "../observability/LogTextRedaction.ts";
+import { CREDENTIAL_KEY, containsJoseToken } from "../observability/LogTextRedaction.ts";
 
 type Note = {
   readonly origin: string;
@@ -113,12 +113,13 @@ const proseAfterCredential = new Set([
   "changed",
 ]);
 
+const credentialLabel = CREDENTIAL_KEY.replaceAll("[_-]?", "[_ -]?");
+const credentialValue = new RegExp(
+  String.raw`\b(?:${credentialLabel}|passcode|pin|access[ -]key|private[ -]key|credential)\b\s*(?:[:=]|\s+is\b)\s*(\S+)`,
+  "gi",
+);
 const hasCredentialValue = (text: string) =>
-  Array.from(
-    text.matchAll(
-      /\b(?:password|passwd|passcode|pin|token|secret|api[_ -]?key|access[ -]key|private[ -]key)\b\s*(?:[:=]|\s+is\b)\s*(\S+)/gi,
-    ),
-  ).some(
+  Array.from(text.matchAll(credentialValue)).some(
     ([, value]) =>
       value !== undefined &&
       !proseAfterCredential.has(value.replace(/[.,;:!?)\]]+$/, "").toLowerCase()),
