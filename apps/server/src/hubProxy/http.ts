@@ -517,8 +517,10 @@ const handler = Effect.gen(function* () {
     const state = yield* serverAuth.getSessionState(request);
     // What this client may do on the node: its own rights, within what the node granted the hub.
     const allowed = yield* sessions.limit(target.nodeId, scopes);
+    // Granting hub access is the hub owner's; it never describes a node.
+    const { canDelegateHubProxy: _hubOnly, ...hubState } = state;
     const narrowed = state.authenticated
-      ? { ...state, ...authScopeResponse(allowed), proxiedByHub: true }
+      ? { ...hubState, ...authScopeResponse(allowed), proxiedByHub: true }
       : state;
     return HttpServerResponse.jsonUnsafe(yield* encodeSessionState(narrowed).pipe(Effect.orDie));
   }
