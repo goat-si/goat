@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@goat/contracts";
+import { ComputerUsePauseReason, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -8,6 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
@@ -34,6 +35,22 @@ const layer = it.layer(
   ),
 );
 layer("ComputerUseLeases controls", (it) => {
+  it.effect("screen lock pauses the live session with its own reason", () =>
+    Effect.gen(function* () {
+      assert.isTrue(Schema.is(ComputerUsePauseReason)("screen_locked"));
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-screen-locked");
+      const control = yield* leases.control(owner, Option.none());
+      yield* leases.pause("screen_locked");
+      assert.deepInclude(yield* leases.controlState(owner, control.controlId), {
+        _tag: "paused",
+        reason: "screen_locked",
+      });
+      yield* leases.resume;
+      yield* leases.stop(owner);
+    }),
+  );
   it.effect("an Escape report for an expired control cannot stop a later session", () =>
     Effect.gen(function* () {
       yield* runMigrations();

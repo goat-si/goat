@@ -33,6 +33,7 @@ export const ComputerUseOverlayHideReason = Schema.Literals([
   "human_input",
   "takeover",
   "private",
+  "screen_locked",
   "ended",
 ]);
 export type ComputerUseOverlayHideReason = typeof ComputerUseOverlayHideReason.Type;

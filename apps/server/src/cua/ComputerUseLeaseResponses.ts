@@ -75,7 +75,11 @@ export const refusal = (
 };
 
 export const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
-  reason === "private" ? "private_mode" : "waiting_for_human";
+  reason === "private"
+    ? "private_mode"
+    : reason === "screen_locked"
+      ? "screen_locked"
+      : "waiting_for_human";
 
 export const interruptionDetail = (cause: Interruption): ComputerUseRefusalDetail =>
   cause._tag === "end"

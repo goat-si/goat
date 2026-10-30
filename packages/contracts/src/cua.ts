@@ -548,7 +548,12 @@ export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
  * Why the agent waits: a person's own input reached the shared desktop, they took over, or a
  * secret field has focus (private) until it loses it.
  */
-export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
+export const ComputerUsePauseReason = Schema.Literals([
+  "human_input",
+  "takeover",
+  "private",
+  "screen_locked",
+]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
 export const ComputerUseForegroundGrant = Schema.Struct({
@@ -649,6 +654,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "desktop_capture_off",
   "waiting_for_human",
   "private_mode",
+  "screen_locked",
   ...ComputerUseControlEnd.literals,
   "lost",
   /**
@@ -706,6 +712,8 @@ export const computerUseRefusalReason = (
       return "userStoppedSession";
     case "waiting_for_human":
       return "userIntervened";
+    case "screen_locked":
+      return "screenLocked";
     case "automation_not_allowed":
       return "permissionsNotGranted";
     case "automation_pending":

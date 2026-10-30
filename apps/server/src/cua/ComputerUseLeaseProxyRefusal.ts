@@ -79,7 +79,7 @@ interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
   readonly finished: () => LeaseEnd | undefined;
-  readonly paused: () => "human_input" | "takeover" | "private" | undefined;
+  readonly paused: () => import("@goat/contracts").ComputerUsePauseReason | undefined;
   readonly idle: () => boolean;
   readonly apps: () => ReadonlySet<string> | undefined;
   readonly listed: ReadonlyMap<number, ListedApp>;
