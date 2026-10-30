@@ -5,6 +5,7 @@ import {
   ThreadId,
   type PreviewAutomationRequest,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { CDPSession, Page } from "playwright-core";
@@ -692,3 +693,46 @@ it.effect("refuses a blocked password destination before consuming or filling", 
     expect(field.value).toBe("");
   });
 });
+
+it.effect("a blocked cut while resolving a secret target stops further CDP commands", () =>
+  Effect.gen(function* () {
+    const { tab, field } = makeTab();
+    const entered = yield* Deferred.make<void>();
+    const resume = yield* Deferred.make<void>();
+    const latch = Promise.withResolvers<void>();
+    const methods: Array<string> = [];
+    const original = tab.cdp.send.bind(tab.cdp);
+    const delayed = new Proxy(tab.cdp, {
+      get(target, property, receiver) {
+        if (property !== "send") return Reflect.get(target, property, receiver);
+        return async (...args: Parameters<typeof tab.cdp.send>) => {
+          methods.push(String(args[0]));
+          const reply = await Reflect.apply(original, target, args);
+          if (args[0] === "Page.getFrameTree") {
+            Deferred.doneUnsafe(entered, Effect.void);
+            await latch.promise;
+          }
+          return reply;
+        };
+      },
+    });
+    tab.cdp = delayed;
+    yield* Effect.forkChild(
+      Effect.gen(function* () {
+        yield* Deferred.await(entered);
+        tab.control.cutBlockedUrl();
+        yield* Deferred.succeed(resume, undefined);
+        latch.resolve();
+      }),
+    );
+    yield* withFill(async (fill) => {
+      const error = await fill.fill(tab, fillRequest, later(), record, checkBlocked).then(
+        () => null,
+        (cause: unknown) => cause,
+      );
+      expect(methods).toEqual(["Page.getFrameTree"]);
+      expect(error).toMatchObject({ reason: "blocked_url" });
+      expect(field.value).toBe("");
+    });
+  }),
+);
