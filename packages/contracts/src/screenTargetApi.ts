@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/15";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/16";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -42,7 +42,7 @@ interface Observation extends ReadTime { text: string; observationId: string; sn
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
-  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; diff: false reads the whole tree
+  observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app diffs reuse unchanged numbers from the named latest full observation, subject to reindexed lines; diff: false reads the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
   click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action, modifiers and verify are apps only; tabs refuse modifiers. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); an input that opens or closes a window may list windows up to four more times. observed: lines are evidence, not a verdict: only a window it proves opened or closed makes the verdict confirmed
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: apps only, as on click

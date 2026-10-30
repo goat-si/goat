@@ -48,7 +48,10 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
         return {
           ...diff,
           since_status: status,
-          tree_diff: status === "diff" ? '~ [1] AXButton "Apply"' : `no change since ${args.since}`,
+          tree_diff:
+            status === "diff"
+              ? '~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nRows and indices are as before; use snapshot_id in element_tokens (s2:N).'
+              : `no change since ${args.since}. Rows and indices are as before; use snapshot_id in element_tokens (s2:N).`,
         };
       },
     });
@@ -66,20 +69,54 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     expect(full.snapshot).toBe("s1");
     const diff = yield* observe({ mode: "diff", baseObservationId: full.observationId });
     expect(sent.at(-1)?.args).toMatchObject({ since: "s1", tree_format: "both" });
-    expect(diff).toMatchObject({ mode: "diff", indexedText: '~ [1] AXButton "Apply"' });
+    expect(diff).toMatchObject({
+      mode: "diff",
+      indexedText: `~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged; latest full observation is ${full.observationId}`,
+    });
     yield* host.invoke(call("click", { elementRef: refAt(diff, 1) }, ref), context);
     expect(sent.at(-1)).toMatchObject({ tool: "click", args: { element_token: "s2:1" } });
     status = "no_change";
     const unchanged = yield* observe({ mode: "diff", baseObservationId: diff.observationId });
-    expect(unchanged).toMatchObject({ mode: "diff", indexedText: "no change since s2" });
+    expect(unchanged).toMatchObject({
+      mode: "diff",
+      indexedText: `no change; numbers unchanged; latest full observation is ${full.observationId}`,
+    });
     status = "unknown_snapshot";
     const before = reads;
     const fallback = yield* observe({ mode: "diff", baseObservationId: unchanged.observationId });
     expect(reads).toBe(before + 1);
     expect(fallback).toMatchObject({ mode: "full", resetReason: "full read: snapshot expired" });
+    status = "no_change";
+    const afterFallback = yield* observe({
+      mode: "diff",
+      baseObservationId: fallback.observationId,
+    });
+    expect(afterFallback.indexedText).toBe(
+      `no change; numbers unchanged; latest full observation is ${fallback.observationId}`,
+    );
     const nextCell = { ...context, cellId: "next" };
-    yield* host.observe({ ...call("get_accessibility_tree", {}, ref), cellId: "next" }, nextCell);
+    const nextFull = (yield* host.observe(
+      { ...call("get_accessibility_tree", {}, ref), cellId: "next" },
+      nextCell,
+    )).value as Observed;
+    expect(nextFull.mode).toBe("full");
     expect(sent.at(-1)?.args).not.toHaveProperty("since");
+    const nextDiff = (yield* host.observe(
+      {
+        ...call(
+          "get_accessibility_tree",
+          { mode: "diff", baseObservationId: nextFull.observationId },
+          ref,
+        ),
+        cellId: "next",
+      },
+      nextCell,
+    )).value as Observed;
+    expect(nextDiff.indexedText).toBe(
+      `no change; numbers unchanged; latest full observation is ${nextFull.observationId}`,
+    );
+    for (const observation of [diff, unchanged, afterFallback, nextDiff])
+      expect(observation.indexedText).not.toContain("element_tokens");
     const retired = yield* host
       .invoke(call("click", { elementRef: refAt(full, 1) }, ref), context)
       .pipe(Effect.result);

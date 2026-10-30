@@ -337,6 +337,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     args.interactiveOnly !== true &&
     args.mode === "diff" &&
     bound.diffBaseline === true &&
+    bound.fullObservationId !== undefined &&
     baseObservationId === bound.observationId
       ? bound.snapshotId
       : undefined;
@@ -382,6 +383,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     delete bound.observationId;
     delete bound.snapshotId;
     delete bound.diffBaseline;
+    delete bound.fullObservationId;
     delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;
@@ -545,7 +547,16 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               filtered,
               limit,
               shown: placed.rows,
-              shownText: isDiff ? diffText : tree.shownText,
+              shownText: isDiff
+                ? currentStatus === "no_change"
+                  ? `no change; numbers unchanged; latest full observation is ${bound.fullObservationId}`
+                  : `${diffText
+                      .split("\n")
+                      .filter((line) => /^[+~-] \[\d+\]|^reindexed:/.test(line))
+                      .join(
+                        "\n",
+                      )}\nother numbers unchanged; latest full observation is ${bound.fullObservationId}`
+                : tree.shownText,
               omitted,
               screen,
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
@@ -576,6 +587,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         !interactive &&
         !observation.truncated &&
         !tree.shown.some((row) => row.lifted === true);
+      if (!bound.diffBaseline) delete bound.fullObservationId;
+      else if (!isDiff) bound.fullObservationId = observationId;
       // A read its budget cut keeps the rest for observe({after}) until the next read.
       if (observation.elements.length < tree.shown.length)
         bound.pages = {
@@ -606,6 +619,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         category: "unverifiable",
       };
     }
+  }
+  if (kept === undefined) {
+    delete bound.diffBaseline;
+    delete bound.fullObservationId;
   }
   if (observationId === undefined) return yield* Effect.fail(fail("downstream_failure"));
   const width = integer(state.screenshot_width);
