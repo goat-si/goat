@@ -19,6 +19,17 @@ export const previewTargetFailure = (
   error: PreviewAutomationError,
   operation: PreviewAutomationOperation,
 ): ScreenRunError => {
+  if (
+    error._tag === "PreviewAutomationControlInterruptedError" &&
+    error.reason === "blocked_url" &&
+    error.dispatched !== true
+  ) {
+    return {
+      code: "blocked_url",
+      effectStarted: false,
+      nextStep: "This tab is blocked for the rest of this turn.",
+    };
+  }
   const effectStarted =
     operation !== "snapshot" &&
     operation !== "status" &&

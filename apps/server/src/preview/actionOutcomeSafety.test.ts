@@ -10,6 +10,16 @@ import {
 import { classifyBrowserActionOutcome } from "./actionOutcomeSafety.ts";
 
 describe("actionOutcomeSafety", () => {
+  it("reports a blocked host as a terminal refusal before input", () => {
+    expect(
+      classifyBrowserActionOutcome({
+        operation: "navigate",
+        status: "failed",
+        errorTag: "PreviewAutomationControlInterruptedError",
+        controlReason: "blocked_url",
+      }),
+    ).toMatchObject({ possibleCommit: false, retryClass: "never" });
+  });
   it("keeps possibleCommit false across all read outcomes and allows auto-retry only on transient read failures", () => {
     const completed = classifyActionOutcome({ effect: "read", status: "completed" });
     expect(completed).toEqual({
