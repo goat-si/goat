@@ -155,7 +155,7 @@ describe("Codex orchestration context", () => {
     );
     NodeAssert.ok(
       orchestration.includes(
-        "Each review round needs a new task with the brief, prior findings, and open objections",
+        "Each review round is a new task with the brief, prior findings, and open objections",
       ),
     );
     NodeAssert.ok(!orchestration.includes("inheritedOptions"));

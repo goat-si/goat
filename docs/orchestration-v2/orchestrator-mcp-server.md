@@ -271,14 +271,30 @@ the parent when it finishes. A local `mode: "wait"` child stops with the turn wh
 blocking call it answers, unless that wait already timed out. `goat_task_cancel` stops
 either kind.
 
-Each independent delegated review round uses a new `goat_task_create` call with top-level
+Each delegated review round uses a new `goat_task_create` call with top-level
 `role: "review"`, which `goat_review_findings_record` requires, and the original brief,
 prior findings, responses, and unresolved objections. Track each round by its own `taskId`
 and use a distinct `clientRequestId` per round, stable across retries of that round.
-A follow-up that needs the same child's conversation goes through `goat_thread_send`
-on its `childThreadId`. After the original task completes, that follow-up runs as a
-fresh task in the child thread; it does not reopen the completed task or change its
-published result.
+`goat_thread_send` refuses a finished review child, so a reviewer's rounds cannot blur
+into one task.
+
+An intermediate round can keep its reviewer with `continueFrom`: the server command
+`delegated_task.review-continue` starts a new review task in the earlier round's child
+thread, with a fresh ledger and `continuedFrom` recorded. It takes the parent then the child
+lock and refuses unless the earlier task is this thread's latest finished review round in
+that child, nothing in the child is running, no rollback was ever requested there, the
+provider is local with follow-ups, the model is unchanged, and the brief completed in a
+native conversation that is still the child's active one. The final approval before a
+merge uses a fresh reviewer so that one approval is independent.
+
+`reviewRound.conversation` is read from records the provider boundary writes: each attempt's
+`nativeThreadId` and the provider turns tied to it by `runAttemptId`. Only the brief's own
+attempt counts (not steering restarts, restart continuations or slash commands, which can
+complete a turn without the provider reading the brief), and only a completed provider turn
+counts as processed. A resume that fails falls back to a fresh native session, so it shows as
+`recovered`. GOAT cannot see whether a provider kept a resumed transcript internally;
+`continued` means the provider completed the brief on the same native conversation id.
+Remote tasks and cloud providers cannot continue a review.
 
 Delegation requires an active parent run owned by the MCP credential's
 provider session. The request becomes the V2 command

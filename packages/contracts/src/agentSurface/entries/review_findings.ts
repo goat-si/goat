@@ -69,7 +69,7 @@ export const reviewFindingsEntries = {
     description:
       "Export review ledger entries as JSONL for [from,to) in this environment, including archived parents. Reads current projections; each decision includes its latest outcome. Pages can change as the ledger changes.",
     guide:
-      "Each line includes taskId, parent threadId, role, reviewerModel and authorModel selections. Decision lines include the latest outcome. Like goat_thread_read, this requires orchestration read access.\n\nPass nextCursor unchanged with the same date range to continue. Pages use current projections, including archived parents.",
+      "Each line includes taskId, parent threadId, role, reviewerModel and authorModel selections, and continuedFrom: the earlier round's taskId when the reviewer continued one, else null. Decision lines include the latest outcome. Like goat_thread_read, this requires orchestration read access.\n\nPass nextCursor unchanged with the same date range to continue. Pages use current projections, including archived parents.",
     effect: "read",
     hostRoutable: false,
     requires: "either",

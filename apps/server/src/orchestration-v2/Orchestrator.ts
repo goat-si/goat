@@ -151,6 +151,7 @@ import {
   withServerAttribution,
 } from "./GuestShareDecider.ts";
 import { makeGuestShare } from "./goat/GuestShare.ts";
+import { makeReviewContinuation } from "./goat/ReviewContinuation.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import { withCommandMetrics } from "../observability/Metrics.ts";
 import type { OrchestrationEffectRequestV2, PendingOrchestrationEffectV2 } from "./EffectOutbox.ts";
@@ -2942,6 +2943,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const { releaseGuestAttachments, dispatchGuestShare, emitGuestMessageSent } = makeGuestShare({
     projectionStore,
     emit,
+    OrchestratorDispatchError,
+    OrchestratorProjectionError,
+  });
+  const { withReviewChildLock, dispatchReviewContinue } = makeReviewContinuation({
+    projectionStore,
+    idAllocator,
+    getAdapter: (command, instanceId) =>
+      providerAdapters.get(instanceId).pipe(mapDispatchError(command)),
+    emit,
+    dispatchMessage: (command, events, effects) => dispatchMessage(command, events, effects),
+    nextTurnItemOrdinal,
+    stopReachedRun: (command, threadId, runId) => stopReachedRun(command, threadId, runId),
+    refuseAboveDispatchModeLimit: (command, threadId, modes) =>
+      refuseAboveDispatchModeLimit(command, threadId, modes),
+    withThreadLock: (threadId, effect) => threadDispatch.withLock(threadId, effect),
+    isBlockingRun,
+    providerTurnForRun,
     OrchestratorDispatchError,
     OrchestratorProjectionError,
   });
@@ -12732,6 +12750,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "delegated_task.review-ledger.append":
         yield* dispatchReviewLedgerAppend(command, events);
         break;
+      case "delegated_task.review-continue":
+        yield* dispatchReviewContinue(command, events, effects);
+        break;
       case "delegated_task.completion-delivery.acknowledge":
       case "delegated_task.completion-delivery.dispose":
         updateDelegatedCompletionOnlyRunId =
@@ -13012,7 +13033,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const dispatchWithReceipt = Effect.fnUntraced(function* (command: OrchestrationV2ServerCommand) {
     const dispatch = threadDispatch.withLock(
       commandThreadId(command),
-      Effect.suspend(() => admitDispatch(command, dispatchWithReceiptEffect(command))),
+      Effect.suspend(() =>
+        admitDispatch(command, withReviewChildLock(command, dispatchWithReceiptEffect(command))),
+      ),
     );
     const serializesOnParent =
       command.type === "thread.promote" ||

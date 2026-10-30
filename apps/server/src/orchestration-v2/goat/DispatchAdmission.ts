@@ -39,6 +39,7 @@ export const makeDispatchAdmission = (deps: DispatchAdmissionDeps) => {
     // Resuming a held queue starts its next run, so it is new work like a message.
     if (
       command.type === "delegated_task.request" ||
+      command.type === "delegated_task.review-continue" ||
       command.type === "prepared-run.retry" ||
       command.type === "queue.resume" ||
       command.type === "queued-run.start"

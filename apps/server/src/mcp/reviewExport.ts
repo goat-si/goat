@@ -33,6 +33,7 @@ const ReviewExportFields = {
   role: Schema.optional(OrchestrationV2TaskRole),
   reviewerModel: Schema.NullOr(ModelSelection),
   authorModel: Schema.NullOr(ModelSelection),
+  continuedFrom: Schema.NullOr(NodeId),
 };
 export const encodeReviewExportEntry = Schema.encodeEffect(
   Schema.fromJsonString(
