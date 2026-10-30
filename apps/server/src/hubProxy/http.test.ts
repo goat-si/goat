@@ -227,6 +227,14 @@ it.effect(
         permissions: ["orchestration:read", "orchestration:operate"],
         proxiedByHub: true,
       });
+      // The owner's right to grant hub access (hubProxyDelegation.test.ts) is the hub's alone.
+      const owner = yield* hub.auth.issueSession({
+        subject: "administrative-bootstrap",
+        scopes: ["hub:proxy", "orchestration:read", "access:write", "environment:maintain"],
+      });
+      const ownerNode = yield* fetchResponse(`${path}api/auth/session`, owner.token);
+      expect(JSON.parse(ownerNode.text)).toMatchObject({ proxiedByHub: true });
+      expect(JSON.parse(ownerNode.text)).not.toHaveProperty("canDelegateHubProxy");
       const ticket = yield* fetchResponse(
         `${path}api/auth/websocket-ticket`,
         session.token,

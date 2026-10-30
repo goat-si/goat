@@ -14,7 +14,6 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 import { useEnvironments } from "../../state/environments";
 import { environmentSession } from "../../state/session";
-import { useStoredHubEnvironment } from "../connection/useStoredHubEnvironment";
 
 /** Null until the hub's config and this phone's session there are known. */
 export function useHubDeviceAccess(environmentId: EnvironmentId): HubDeviceAccess | null {
@@ -44,7 +43,6 @@ export function HubAccessNotice({
 }) {
   const access = useHubDeviceAccess(environmentId);
   const navigation = useNavigation();
-  const savedHub = useStoredHubEnvironment();
   const notice =
     access === null || (only !== undefined && access !== only)
       ? null
@@ -57,15 +55,8 @@ export function HubAccessNotice({
       {notice.repairs ? (
         <Button
           label="Scan new QR"
-          onPress={() =>
-            navigation.navigate(
-              "SettingsEnvironmentNew",
-              // Pairing the saved hub again keeps it the hub; any other server is added again.
-              savedHub.storedHubId === environmentId
-                ? { intent: "change-hub", replaceEnvironmentId: environmentId }
-                : { intent: "add-server" },
-            )
-          }
+          // Pairs this same environment again, so a QR for another address of it is accepted.
+          onPress={() => navigation.navigate("SettingsEnvironmentNew", { routeFor: environmentId })}
         />
       ) : null}
     </View>

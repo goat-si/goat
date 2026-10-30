@@ -31,7 +31,6 @@ const state = vi.hoisted(() => ({
   selectedTargets: [] as Target[],
   selectedIds: null as Set<string> | null,
   sessionPermissions: null as string[] | null,
-  storedHubId: null as string | null,
   navigate: vi.fn(),
   hosts: [] as HostStatusEntry[],
   hostsError: null as string | null,
@@ -153,9 +152,6 @@ vi.mock("../../state/session", async () => {
 vi.mock("@react-navigation/native", () => ({
   useNavigation: () => ({ navigate: state.navigate }),
 }));
-vi.mock("../connection/useStoredHubEnvironment", () => ({
-  useStoredHubEnvironment: () => ({ storedHubId: state.storedHubId, loaded: true, error: null }),
-}));
 
 import { SettingsHubNodesRouteScreen } from "./SettingsHubNodesRouteScreen";
 
@@ -189,7 +185,6 @@ beforeEach(() => {
   state.selectedTargets = [first, second];
   state.selectedIds = null;
   state.sessionPermissions = null;
-  state.storedHubId = null;
   state.navigate.mockReset();
   state.hosts = [];
   state.hostsError = null;
@@ -573,16 +568,12 @@ it("explains why a pairing without hub access shows no hub devices, and opens th
   };
   state.environments = [hub];
   state.selectedTargets = [hub];
-  state.storedHubId = "hub-a";
   state.sessionPermissions = ["orchestration:read"];
   await render();
   expect(container.textContent).toContain("These devices do not open on this phone");
   expect(container.textContent).toContain("Also open hub devices");
   await act(async () => button("Scan new QR").click());
-  expect(state.navigate).toHaveBeenCalledWith("SettingsEnvironmentNew", {
-    intent: "change-hub",
-    replaceEnvironmentId: "hub-a",
-  });
+  expect(state.navigate).toHaveBeenCalledWith("SettingsEnvironmentNew", { routeFor: "hub-a" });
 
   state.sessionPermissions = ["orchestration:read", "hub:proxy"];
   act(() => root.unmount());

@@ -22,11 +22,15 @@ function useHubAccessGrantable(): boolean {
   );
 }
 
-/** What this session may put on a pairing: its own scopes, plus hub access when it may grant it. */
+/**
+ * What this session may put on a pairing: its own scopes, with hub access only when it may grant
+ * it. Holding hub access is not enough; the server refuses a paired device that passes it on.
+ */
 export function useDelegatableScopes(
   session: AuthSessionState | null,
 ): ReadonlyArray<AuthEnvironmentScope> {
   const grantable = useHubAccessGrantable();
   const held = session?.authenticated ? (session.permissions ?? session.scopes ?? []) : [];
-  return grantable && !held.includes(AuthHubProxyScope) ? [...held, AuthHubProxyScope] : held;
+  const own = held.filter((scope) => scope !== AuthHubProxyScope);
+  return grantable ? [...own, AuthHubProxyScope] : own;
 }

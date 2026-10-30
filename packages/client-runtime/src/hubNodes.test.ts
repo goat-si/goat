@@ -21,8 +21,12 @@ describe("hubDeviceAccess", () => {
       "no-access",
     );
     expect(hubDeviceAccess({ ...base, session: session(["hub:proxy"]) })).toBe("ready");
+    expect(
+      hubDeviceAccess({ ...base, hubEnabled: false, session: session(["orchestration:read"]) }),
+    ).toBe("hub-off");
+    // Turning the hub off leaves existing hub pairings working, so there is nothing to fix.
     expect(hubDeviceAccess({ ...base, hubEnabled: false, session: session(["hub:proxy"]) })).toBe(
-      "hub-off",
+      "ready",
     );
     expect(
       hubDeviceAccess({ ...base, hubProxySupported: false, session: session(["hub:proxy"]) }),

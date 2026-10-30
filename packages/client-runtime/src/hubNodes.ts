@@ -81,10 +81,11 @@ export function hubDeviceAccess(input: {
   readonly session: AuthSessionState;
 }): HubDeviceAccess {
   if (!input.hubProxySupported) return "update-hub";
+  // A pairing that already has hub access keeps it while the hub is off.
+  if (input.session.authenticated && sessionGrantsScope(input.session, AuthHubProxyScope))
+    return "ready";
   if (!input.hubEnabled) return "hub-off";
-  return input.session.authenticated && sessionGrantsScope(input.session, AuthHubProxyScope)
-    ? "ready"
-    : "no-access";
+  return "no-access";
 }
 
 /** What to tell the person, naming the hub; null when nothing needs explaining. */
