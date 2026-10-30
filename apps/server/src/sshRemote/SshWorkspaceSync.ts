@@ -164,30 +164,27 @@ const make = Effect.gen(function* () {
     target: DesktopSshEnvironmentTarget,
     operationId?: string,
   ) =>
-    resolveSshCommand
-      .pipe(
-        Effect.flatMap((ssh) =>
-          git.execute({
-            operation: `SshWorkspaceSync.${stage}`,
-            cwd,
-            args,
-            env: sshEnvironment(target, ssh),
-            timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
-            maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
+    resolveSshCommand.pipe(
+      Effect.flatMap((ssh) =>
+        git.execute({
+          operation: `SshWorkspaceSync.${stage}`,
+          cwd,
+          args,
+          env: sshEnvironment(target, ssh),
+          timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
+          maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
+        }),
+      ),
+      Effect.mapError(
+        () =>
+          new SshWorkspaceError({
+            stage,
+            code,
+            host: target.alias,
+            ...(operationId === undefined ? {} : { operationId }),
           }),
-        ),
-      )
-      .pipe(
-        Effect.mapError(
-          () =>
-            new SshWorkspaceError({
-              stage,
-              code,
-              host: target.alias,
-              ...(operationId === undefined ? {} : { operationId }),
-            }),
-        ),
-      );
+      ),
+    );
 
   const initScript = (name: string) => `set -eu
 umask 077
