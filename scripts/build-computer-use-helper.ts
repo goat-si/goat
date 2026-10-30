@@ -306,6 +306,12 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
   }
 
   const sourceDir = path.join(input.repoRoot, "apps/desktop/native/computer-use-helper");
+  // The helper is every Swift file at the top of its folder; tests/ and fixtures/ hold the rest.
+  // The session suite's fixture (apps/desktop/scripts/computer-use-helper-fixture.mjs) compiles the same set.
+  const swiftSources = (yield* fs.readDirectory(sourceDir))
+    .filter((name) => name.endsWith(".swift"))
+    .toSorted()
+    .map((name) => path.join(sourceDir, name));
   const executable = path.join(contents, "MacOS", COMPUTER_USE_HELPER_NAME);
   const slices: string[] = [];
   for (const arch of ["arm64", "x86_64"]) {
@@ -319,35 +325,7 @@ export const buildComputerUseHelper = Effect.fn("buildComputerUseHelper")(functi
       "-lbsm",
       "-o",
       slice,
-      path.join(sourceDir, "main.swift"),
-      path.join(sourceDir, "DriverEnvironment.swift"),
-      path.join(sourceDir, "McpRelay.swift"),
-      path.join(sourceDir, "McpFraming.swift"),
-      path.join(sourceDir, "McpJsonSyntax.swift"),
-      path.join(sourceDir, "McpObject.swift"),
-      path.join(sourceDir, "McpWire.swift"),
-      path.join(sourceDir, "McpNativeToolContract.swift"),
-      path.join(sourceDir, "McpNativeSession.swift"),
-      path.join(sourceDir, "NativeManifest.swift"),
-      path.join(sourceDir, "WindowSettle.swift"),
-      path.join(sourceDir, "WindowAXObserver.swift"),
-      path.join(sourceDir, "WindowAXSystem.swift"),
-      // The agent cursor overlay (#1214); main.swift runs it in agent connection mode.
-      path.join(sourceDir, "Overlay.swift"),
-      // Where the overlay sits relative to the target window (covered windows hide it).
-      path.join(sourceDir, "OverlayOrder.swift"),
-      // A person's input while an agent connection runs (#1235); the overlay channel carries it.
-      path.join(sourceDir, "HumanInput.swift"),
-      // Single-window live pictures (#1370), requested with the frames method.
-      path.join(sourceDir, "Frames.swift"),
-      // GOAT's own windows, which the live picture never shows (#1321).
-      path.join(sourceDir, "HostIdentity.swift"),
-      // Fail-closed private mode, capture refusals and off-screen targets (pure decisions).
-      path.join(sourceDir, "HelperSafety.swift"),
-      // Opens the window server connection captures need before AppKit would.
-      path.join(sourceDir, "WindowServer.swift"),
-      // Grants read again for a moment before they count as missing (#1597).
-      path.join(sourceDir, "PermissionSettle.swift"),
+      ...swiftSources,
     ]);
     slices.push(slice);
   }
