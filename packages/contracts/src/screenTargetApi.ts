@@ -65,6 +65,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls; a selector matching several hovers the first
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>;
+  evaluate(expression: string): Promise<unknown>;
   logs(o?: { since?: string }): Promise<object> } // since is an inclusive ISO 8601 instant`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }. "gone" is met, and bound "closed", only when the driver proves the window closed.

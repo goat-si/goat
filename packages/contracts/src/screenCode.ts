@@ -85,6 +85,7 @@ export const ScreenMethod = Schema.Literals([
   "invoke_menu",
   "fetch_tab",
   "tab_logs",
+  "tab_evaluate",
   "list_menu_bar_extras",
 ]);
 export type ScreenMethod = typeof ScreenMethod.Type;

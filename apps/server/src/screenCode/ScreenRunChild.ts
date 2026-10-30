@@ -75,6 +75,7 @@ const methods = [
   "invoke_menu",
   "fetch_tab",
   "tab_logs",
+  "tab_evaluate",
 ] as const;
 
 type ChildResult = Pick<

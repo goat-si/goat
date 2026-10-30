@@ -793,3 +793,4 @@ thread at a time drives a machine's real GUI, assigned by the epic's lead.
 | P6    | WS11 #1139 qualification and visual verification | runs throughout | hard gates met on a signed packaged build per platform; latency within budget                                      |
 
 - `tab.logs({ since? })` reads diagnostics from an inclusive ISO 8601 instant.
+- `tab.evaluate(expression)` uses the browser evaluation guard.
