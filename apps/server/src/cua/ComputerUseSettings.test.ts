@@ -6,6 +6,7 @@ import * as Ref from "effect/Ref";
 
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { layerServerSettings } from "../serverSettingsLayers.testkit.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import * as ComputerUseSettings from "./ComputerUseSettings.ts";
 
@@ -52,4 +53,28 @@ it.effect("keeps computer use off and explains a failed driver installation", ()
     const settings = yield* ServerSettings.ServerSettingsService;
     expect((yield* settings.getSettings).enableCua).toBe(false);
   }).pipe(Effect.provide(base)),
+);
+
+it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const result = yield* Effect.result(
+      settings.updateSettings({ cuaAllowedApps: ["com.1password.1password"] }),
+    );
+    expect(result._tag).toBe("Failure");
+    expect((yield* settings.getSettings).cuaAllowedApps).toEqual([]);
+  }).pipe(Effect.provide(base)),
+);
+
+it.effect("persists allowed apps and rejects protected apps without changing the file", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.start;
+    yield* settings.updateSettings({ cuaAllowedApps: ["com.example.Editor"] });
+    const result = yield* Effect.result(
+      settings.updateSettings({ cuaAllowedApps: ["COM.1PASSWORD.1PASSWORD"] }),
+    );
+    expect(result._tag).toBe("Failure");
+    expect((yield* settings.getSettings).cuaAllowedApps).toEqual(["com.example.Editor"]);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );

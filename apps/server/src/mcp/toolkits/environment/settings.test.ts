@@ -130,6 +130,16 @@ it.effect("writes nothing when any key belongs to a person or another path", () 
   }),
 );
 
+it.effect("does not let an agent change allowed computer use apps", () =>
+  Effect.gen(function* () {
+    const { result, settings } = yield* call(threadScope, "goat_environment_settings_update", {
+      patch: { cuaAllowedApps: ["com.example.Editor"] },
+    });
+    expect(result).toMatchObject({ code: "capability_denied" });
+    expect(settings.cuaAllowedApps).toEqual([]);
+  }),
+);
+
 it.effect("holds an outside client to its live settings:write grant through the commit", () =>
   Effect.gen(function* () {
     const ungranted = yield* call(

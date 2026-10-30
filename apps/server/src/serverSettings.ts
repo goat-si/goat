@@ -39,6 +39,7 @@ import {
   withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
+import { isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -179,10 +180,19 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-  encodeServerSettings({
-    ...settings,
-    memoryHubProvenance: settings.memoryHubProvenance ?? null,
-  }).pipe(
+  (settings.cuaAllowedApps.some(isExcludedCuaApplication)
+    ? Effect.fail(
+        new ServerSettingsError({
+          settingsPath: "<memory>",
+          operation: "normalize",
+          cause: "A protected app cannot be always allowed.",
+        }),
+      )
+    : encodeServerSettings({
+        ...settings,
+        memoryHubProvenance: settings.memoryHubProvenance ?? null,
+      })
+  ).pipe(
     Effect.flatMap(decodeServerSettings),
     Effect.map(foldProviderInstanceEnabledFlags),
     Effect.map((next) => ({ ...next, defaultTheme: normalizeThemePreference(next.defaultTheme) })),
