@@ -61,6 +61,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
   );
   it.effect.each([
     "password is hunter",
+    "password is hunter.",
     "password is under123",
     "password is shown but token is hunter",
     "my password is hunter",
@@ -101,6 +102,8 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     "password: under Settings",
     "The token is shown once after you create it",
     "Your PIN is required at checkout",
+    "Your PIN is required.",
+    "The token is shown, then hidden",
     "The password is not stored by the site",
     "The API key is under Settings > Developer",
     "Password reset lives at /account/reset",

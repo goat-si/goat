@@ -118,7 +118,11 @@ const hasCredentialValue = (text: string) =>
     text.matchAll(
       /\b(?:password|passwd|passcode|pin|token|secret|api[_ -]?key|access[ -]key|private[ -]key)\b\s*(?:[:=]|\s+is\b)\s*(\S+)/gi,
     ),
-  ).some(([, value]) => value !== undefined && !proseAfterCredential.has(value.toLowerCase()));
+  ).some(
+    ([, value]) =>
+      value !== undefined &&
+      !proseAfterCredential.has(value.replace(/[.,;:!?)\]]+$/, "").toLowerCase()),
+  );
 
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
