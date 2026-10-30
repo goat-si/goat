@@ -140,7 +140,7 @@ it.effect(
 
 it.effect("a failed drag cancellation still sends the accepted start-point release", () =>
   Effect.gen(function* () {
-    const calls: Array<{ method: string; params?: object }> = [];
+    const calls: Array<{ method: string; params?: object | undefined }> = [];
     const session = {
       send: async (method: string, params?: object) => {
         calls.push({ method, params });
