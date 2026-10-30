@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
 
 it.effect("includes a known pid's app when a desktop-wide call reserves", () =>
   Effect.gen(function* () {
@@ -17,13 +18,16 @@ it.effect("includes a known pid's app when a desktop-wide call reserves", () =>
       },
       {
         id: 1,
-        message: {
-          method: "tools/call",
-          params: {
-            name: "click",
-            arguments: { pid: 42, window_id: 1, delivery_mode: "foreground" },
-          },
-        },
+        message:
+          parse(
+            JSON.stringify({
+              method: "tools/call",
+              params: {
+                name: "click",
+                arguments: { pid: 42, window_id: 1, delivery_mode: "foreground" },
+              },
+            }),
+          ) ?? {},
         connectionId: "driver",
         callId: "one",
         interruptions: 0,
@@ -54,10 +58,13 @@ it.effect("carries the bundle identity when a grant names the executable", () =>
       },
       {
         id: 1,
-        message: {
-          method: "tools/call",
-          params: { name: "click", arguments: { pid: 42, window_id: 1 } },
-        },
+        message:
+          parse(
+            JSON.stringify({
+              method: "tools/call",
+              params: { name: "click", arguments: { pid: 42, window_id: 1 } },
+            }),
+          ) ?? {},
         connectionId: "driver",
         callId: "one",
         interruptions: 0,
