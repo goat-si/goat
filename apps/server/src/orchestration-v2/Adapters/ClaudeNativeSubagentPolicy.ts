@@ -12,15 +12,11 @@ export const claudeIgnoresSubagentCap = (version: string | undefined) =>
 
 /**
  * How a Claude process holds native subagents to the thread's goatclaw limit. Claude Code counts
- * running subagents itself; zero, or a cap on a CLI that ignores it, removes the Agent tool,
- * which also covers internal launches. Fixed at open, so `key` joins the query policy key.
+ * running subagents itself; zero removes the Agent tool, which also covers internal launches.
+ * Fixed at open, so `key` joins the query policy key.
  */
-export function claudeNativeSubagentPolicy(
-  limit: number | undefined,
-  goatBotSession: boolean,
-  capSupported: boolean,
-) {
-  if (goatBotSession || limit === 0 || (limit !== undefined && !capSupported))
+export function claudeNativeSubagentPolicy(limit: number | undefined, goatBotSession: boolean) {
+  if (goatBotSession || limit === 0)
     return { key: "off", disallowedTools: ["Agent", "Task"], environment: {} } as const;
   if (limit === undefined) return { key: "", environment: {} } as const;
   return {

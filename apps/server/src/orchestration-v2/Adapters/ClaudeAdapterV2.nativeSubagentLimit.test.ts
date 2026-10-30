@@ -43,7 +43,7 @@ const subagentPolicy = (options: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions) => 
   };
 };
 
-const limitHarness = (claudeCliVersion: string | undefined) =>
+const limitHarness = (claudeCliVersion: () => string | undefined) =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread-claude-native-subagent-limit");
     const nativeSessionId = "native-subagent-limit-native";
@@ -78,7 +78,7 @@ const limitHarness = (claudeCliVersion: string | undefined) =>
       instanceId: modelSelection.instanceId,
       settings,
       environment: {},
-      claudeCliVersion: Effect.succeed(claudeCliVersion),
+      claudeCliVersion: Effect.sync(claudeCliVersion),
       attachmentsDir,
       fileSystem,
       path: yield* Path.Path,
@@ -224,7 +224,7 @@ it.effect(
   () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { opened, runTurn } = yield* limitHarness("2.1.304");
+        const { opened, runTurn } = yield* limitHarness(() => "2.1.304");
         yield* runTurn(1, 3);
         yield* runTurn(2, 3);
         yield* runTurn(3, 0);
@@ -243,7 +243,7 @@ it.effect.each(["2.1.200", undefined])(
   (claudeCliVersion) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const { opened, runTurn } = yield* limitHarness(claudeCliVersion);
+        const { opened, runTurn } = yield* limitHarness(() => claudeCliVersion);
         yield* runTurn(1, 2);
         yield* runTurn(2, undefined);
         expect(opened).toEqual([
@@ -252,4 +252,22 @@ it.effect.each(["2.1.200", undefined])(
         ]);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.effect("checks the Claude CLI again for each capped process it opens", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let version = "2.1.304";
+      const { opened, runTurn } = yield* limitHarness(() => version);
+      yield* runTurn(1, 3);
+      // The live process keeps the binary it started with; the next one opens from the new one.
+      version = "2.1.200";
+      yield* runTurn(2, 3);
+      yield* runTurn(3, 2);
+      expect(opened).toEqual([
+        { disallowedTools: undefined, flagCap: "3", processCap: "3" },
+        { disallowedTools: ["Agent", "Task"], flagCap: undefined, processCap: undefined },
+      ]);
+    }),
+  ).pipe(Effect.provide(layer)),
 );
