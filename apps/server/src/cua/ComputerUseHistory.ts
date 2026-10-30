@@ -4,7 +4,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { historyTypedText } from "./ComputerUseHistoryText.ts";
 
 type Target =
-  | { readonly kind: "app"; readonly id: string; readonly name: string }
+  | { readonly kind: "app"; readonly id?: string; readonly name?: string }
   | { readonly kind: "tab"; readonly host: string };
 
 type HistoryInput = {
@@ -15,7 +15,8 @@ type HistoryInput = {
   readonly verdict: "sent" | "refused" | "unknown_outcome";
   readonly refusalCode?: string;
   readonly typed?: {
-    readonly value: string;
+    readonly value?: string;
+    readonly length?: number;
     readonly field: "normal" | "secure" | "unknown";
     readonly keep: boolean;
   };
@@ -43,15 +44,20 @@ export const makeComputerUseHistory = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const record = Effect.fn("ComputerUseHistory.record")(function* (entry: HistoryInput) {
     const now = yield* Clock.currentTimeMillis;
+    const input = entry.typed;
     const typed =
-      entry.typed === undefined
+      input === undefined
         ? undefined
-        : historyTypedText(entry.typed.value, entry.typed.keep, entry.typed.field);
+        : input.value === undefined
+          ? { length: input.length ?? 0 }
+          : historyTypedText(input.value, input.keep, input.field);
+    const typedLength = input?.length ?? typed?.length ?? null;
+    const typedText = typed?.length === typedLength ? (typed?.text ?? null) : null;
     yield* sql`INSERT INTO computer_use_input_history
       (thread_id, recorded_at, target_kind, app_id, app_name, tab_host, method, target_label, verdict, refusal_code, typed_length, typed_text)
-      VALUES (${entry.threadId}, ${now}, ${entry.target.kind}, ${entry.target.kind === "app" ? entry.target.id : null},
-        ${entry.target.kind === "app" ? entry.target.name : null}, ${entry.target.kind === "tab" ? entry.target.host : null},
-        ${entry.method}, ${entry.targetLabel ?? null}, ${entry.verdict}, ${entry.refusalCode ?? null}, ${typed?.length ?? null}, ${typed?.text ?? null})`;
+      VALUES (${entry.threadId}, ${now}, ${entry.target.kind}, ${entry.target.kind === "app" ? (entry.target.id ?? null) : null},
+        ${entry.target.kind === "app" ? (entry.target.name ?? null) : null}, ${entry.target.kind === "tab" ? entry.target.host : null},
+        ${entry.method}, ${entry.targetLabel ?? null}, ${entry.verdict}, ${entry.refusalCode ?? null}, ${typedLength}, ${typedText})`;
   });
   const listForThread = Effect.fn("ComputerUseHistory.listForThread")(function* (threadId: string) {
     return yield* sql<HistoryEntry>`SELECT id, thread_id AS threadId, recorded_at AS recordedAt,

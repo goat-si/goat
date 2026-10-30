@@ -46,6 +46,22 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history
       assert.equal(entries[0]?.targetLabel, "textbox");
     }),
   );
+  it.effect("records a redacted length even when the proxy does not send text", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const history = yield* makeComputerUseHistory;
+      yield* history.record({
+        threadId: "thread:a",
+        target: { kind: "app" },
+        method: "type_text",
+        verdict: "sent",
+        typed: { length: 6, field: "unknown", keep: true },
+      });
+      const entries = yield* history.listForThread("thread:a");
+      assert.equal(entries[0]?.typedLength, 6);
+      assert.isNull(entries[0]?.typedText);
+    }),
+  );
   it.effect("prunes entries older than 30 days without deleting newer entries", () =>
     Effect.gen(function* () {
       yield* runMigrations();
