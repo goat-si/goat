@@ -31,6 +31,10 @@
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"
     },
+    "./computer-use-history": {
+      "types": "./src/computerUseHistory.ts",
+      "default": "./src/computerUseHistory.ts"
+    },
     "./computer-use-linux-setup": {
       "types": "./src/computerUseLinuxSetup.ts",
       "default": "./src/computerUseLinuxSetup.ts"
