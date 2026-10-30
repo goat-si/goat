@@ -36,6 +36,26 @@ export interface ProxyBrowserClaim {
   readonly origins: ReadonlyArray<string>;
 }
 
+export const browserReplyOutsideClaim = (result: unknown, claim: ProxyBrowserClaim): boolean => {
+  const inspect = (value: unknown, depth: number): boolean => {
+    if (depth > 12 || !isRecord(value)) return false;
+    if (value.code === "browser_origin_outside_scope") return true;
+    if (value.tab_id === claim.tabId && typeof value.url === "string") {
+      try {
+        if (!claim.origins.includes(new URL(value.url).origin)) return true;
+      } catch {
+        return true;
+      }
+    }
+    return Object.values(value).some((entry) =>
+      Array.isArray(entry)
+        ? entry.some((item) => inspect(item, depth + 1))
+        : inspect(entry, depth + 1),
+    );
+  };
+  return inspect(result, 0);
+};
+
 const scopedBrowserTools = new Set([
   "get_browser_state",
   "browser_navigate",
