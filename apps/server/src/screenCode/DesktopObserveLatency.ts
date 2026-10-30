@@ -129,6 +129,7 @@ const buildDesktopReadArgs = (input: {
   readonly capture: boolean;
   /** The macOS driver's JPEG is under half the PNG's bytes and takes a pixel click all the same. */
   readonly jpeg: boolean;
+  readonly modelFit: boolean;
   readonly limit: number;
   readonly filter?: string | undefined;
   readonly since?: string | undefined;
@@ -137,7 +138,8 @@ const buildDesktopReadArgs = (input: {
   window_id: input.windowId,
   include_accessibility_tree: !input.capture,
   include_screenshot: input.capture,
-  ...(input.capture && input.jpeg ? { screenshot_format: "jpeg" } : {}),
+  ...(input.capture && input.jpeg && !input.modelFit ? { screenshot_format: "jpeg" } : {}),
+  ...(input.capture && input.modelFit ? { screenshot_fit: "model" } : {}),
   max_elements: input.limit,
   ...(input.capture ? {} : { tree_format: "both" }),
   ...(input.filter === undefined ? {} : { query: input.filter }),
@@ -317,6 +319,7 @@ export interface DesktopObserveDeps {
     context: ScreenHostContext,
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
   readonly jpegScreenshots: boolean;
+  readonly modelFit: boolean;
   /** The host's latest target generation, and its update when a sheet's parent takes over. */
   readonly epoch: () => number;
   readonly setEpoch: (epoch: number) => void;
@@ -484,6 +487,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         windowId,
         capture,
         jpeg: deps.jpegScreenshots,
+        modelFit: deps.modelFit,
         limit,
         filter,
         since:
