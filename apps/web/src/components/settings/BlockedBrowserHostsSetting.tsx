@@ -40,7 +40,7 @@ export function BlockedBrowserHostsSetting() {
         <div className="flex w-full flex-col gap-2">
           {(hosts ?? []).map((host) => (
             <div key={host} className="flex items-center justify-between gap-2">
-              <span>{host}</span>
+              <span className="text-sm">{host}</span>
               <Button
                 variant="outline"
                 size="sm"
