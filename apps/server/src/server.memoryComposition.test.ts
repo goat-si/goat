@@ -31,7 +31,7 @@ const servedMemoryToolkits = (sync: Layer.Layer<Sync.MemorySyncService>) =>
   );
 
 it.effect(
-  "the application registers the nine core tools and three administration tools on one MCP server",
+  "the application registers the core and administration memory tools on one MCP server",
   () =>
     Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
@@ -41,7 +41,7 @@ it.effect(
           .map((name) => listedToolName(resolveAgentSurfaceEntry(name)!))
           .sort(),
       );
-      expect(new Set(names).size).toBe(12);
+      expect(new Set(names).size).toBe(16);
       const result = yield* Fixture.call(
         "memory_hub_disable",
         { requestId: M.MemoryOperationId.make(Fixture.id(30)), expectedVersion: 3 },

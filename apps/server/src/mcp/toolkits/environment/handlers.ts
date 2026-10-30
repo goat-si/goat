@@ -94,7 +94,12 @@ const decodePatch = Schema.decodeUnknownEffect(ServerSettingsPatch);
 /** The JSON schema of one setting's value, as goat_environment_settings_update decodes it. */
 function settingSchema(key: SettingsKey): unknown {
   const document = Schema.toJsonSchemaDocument(
-    Schema.Struct({ [key]: ServerSettingsPatch.fields[key] }),
+    Schema.Struct({
+      [key]:
+        key === "memoryOwnerSourceReadPolicy"
+          ? ServerSettingsSchema.fields.memoryOwnerSourceReadPolicy
+          : ServerSettingsPatch.fields[key],
+    }),
   );
   const properties = (document.schema as { readonly properties?: Record<string, unknown> })
     .properties;

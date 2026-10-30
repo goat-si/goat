@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Service from "./MemoryService.ts";
 
 export type MemoryPermit = Effect.Effect<void, Service.MemoryAccessError>;
-export type MemoryAccessRequirement = "read" | "write" | "source";
+export type MemoryAccessRequirement = "read" | "write" | "source" | "binding-read";
 
 /** All callbacks must read live, committed SQL-free authority; the Effect is repeatable. */
 export function memoryAccessPermit(
@@ -18,7 +18,11 @@ export function memoryAccessPermit(
   const scopes: ReadonlyArray<M.AuthEnvironmentScope> =
     requirement === "source"
       ? ["memory:read", "orchestration:read"]
-      : [requirement === "write" ? "memory:write" : "memory:read"];
+      : [
+          requirement === "write" || requirement === "binding-read"
+            ? "memory:write"
+            : "memory:read",
+        ];
   return Effect.suspend(() => {
     const reauthorize = input.reauthorize;
     if (
