@@ -104,6 +104,7 @@ export interface PrimitiveChannelRequest {
   readonly callId: number;
   readonly deadlineMillis: number;
   readonly tool: string;
+  readonly authority?: "claimBind";
   readonly args: ComputerUsePrimitiveRequest["args"];
   readonly cursor?: ComputerUsePrimitiveRequest["cursor"];
 }
@@ -340,6 +341,7 @@ export const make = Effect.gen(function* () {
       callId: input.callId,
       deadlineMillis,
       tool: input.tool,
+      ...(input.authority === undefined ? {} : { authority: input.authority }),
       args: input.args,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
     };
