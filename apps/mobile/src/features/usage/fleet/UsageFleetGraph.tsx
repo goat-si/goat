@@ -15,7 +15,7 @@ import {
 import { fleetMachineWork } from "@goat/client-runtime/state/fleet-machine-description";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useState } from "react";
-import { Pressable, View } from "react-native";
+import { Pressable, useWindowDimensions, View } from "react-native";
 import Svg, { Ellipse, Path } from "react-native-svg";
 import { useResolveClassNames } from "uniwind";
 
@@ -24,7 +24,7 @@ import { GoatWordmark } from "../../../components/GoatWordmark";
 import { ProviderIcon } from "../../../components/ProviderIcon";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
-import { FLEET_GRAPH_LABEL_MAX_SCALE, fleetGraphLabelStyle } from "./fleetGraphText";
+import { fleetGraphLabelStyle } from "./fleetGraphText";
 import { FleetMachineDot } from "./usageFleetRows";
 
 type Work = Pick<FleetMachine, "running" | "attention" | "reported">;
@@ -77,7 +77,10 @@ export function UsageFleetGraph(props: {
 }) {
   const [width, setWidth] = useState(0);
   const colors = useToneColors();
-  const labelStyle = fleetGraphLabelStyle(useAppearancePreferences().appearance.baseFontSize);
+  const labelStyle = fleetGraphLabelStyle({
+    baseFontSize: useAppearancePreferences().appearance.baseFontSize,
+    fontScale: useWindowDimensions().fontScale,
+  });
   const border = useResolveClassNames("border-border").borderColor;
   const orbitColor = typeof border === "string" ? border : colors.away;
   const height = compactGraphHeight(width);
@@ -293,7 +296,7 @@ function MachineNode(props: {
         importantForAccessibility="no"
         className={props.selected ? "font-goat-bold text-foreground" : "text-foreground-muted"}
         numberOfLines={1}
-        maxFontSizeMultiplier={FLEET_GRAPH_LABEL_MAX_SCALE}
+        allowFontScaling={false}
         style={{
           ...props.labelStyle,
           position: "absolute",

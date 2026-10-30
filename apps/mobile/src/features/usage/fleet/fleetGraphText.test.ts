@@ -1,7 +1,12 @@
+import { COMPACT_GRAPH_NODES } from "@goat/client-runtime/state/fleet-layout";
 import { describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_BASE_FONT_SIZE } from "../../../lib/appearancePreferences";
-import { showsFleetGraph } from "./fleetGraphText";
+import {
+  DEFAULT_BASE_FONT_SIZE,
+  MAX_BASE_FONT_SIZE,
+  MIN_BASE_FONT_SIZE,
+} from "../../../lib/appearancePreferences";
+import { fleetGraphLabelStyle, showsFleetGraph } from "./fleetGraphText";
 
 describe("showsFleetGraph", () => {
   it("shows the graph at default text and at the system sizes just above it", () => {
@@ -16,11 +21,24 @@ describe("showsFleetGraph", () => {
   });
 
   it("hides it when GOAT's own text size makes a label line taller than its box", () => {
-    // At GOAT's largest text size (22 pt) a label line is 22 pt: it fits at system scale 1 and
-    // no longer fits once the system scales text up.
     expect(showsFleetGraph({ baseFontSize: 22, fontScale: 1 })).toBe(true);
     expect(showsFleetGraph({ baseFontSize: 22, fontScale: 1.1 })).toBe(false);
     expect(showsFleetGraph({ baseFontSize: 19, fontScale: 1.2 })).toBe(false);
-    expect(showsFleetGraph({ baseFontSize: 16, fontScale: 1.2 })).toBe(true);
+  });
+
+  it("never draws a label line taller than its box, whatever both text settings are", () => {
+    // Regression: a system scale above the cap (1.3) once grew Android's line past the box.
+    for (let base = MIN_BASE_FONT_SIZE; base <= MAX_BASE_FONT_SIZE; base++) {
+      for (const fontScale of [0.8, 1, 1.1, 1.2, 1.25, 1.3, 1.4, 1.49]) {
+        if (!showsFleetGraph({ baseFontSize: base, fontScale })) continue;
+        expect(
+          fleetGraphLabelStyle({ baseFontSize: base, fontScale }).lineHeight,
+        ).toBeLessThanOrEqual(COMPACT_GRAPH_NODES.labelHeight);
+      }
+    }
+    expect(fleetGraphLabelStyle({ baseFontSize: 18, fontScale: 1.3 })).toEqual({
+      fontSize: 16.2,
+      lineHeight: 21.6,
+    });
   });
 });
