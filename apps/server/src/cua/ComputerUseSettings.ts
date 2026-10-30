@@ -1,4 +1,4 @@
-import { ServerSettingsError } from "@goat/contracts";
+import { ServerSettingsError, type ServerSettingsPatch } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -27,6 +27,32 @@ export const admitEnable = Effect.fn("ComputerUseSettings.admitEnable")(function
   );
 });
 
+export const applyPatch = Effect.fn("ComputerUseSettings.applyPatch")(function* <A, R>(
+  handoffs: Handoffs.Handoffs["Service"],
+  patch: ServerSettingsPatch,
+  update: Effect.Effect<A, ServerSettingsError, R>,
+  settingsPath: string,
+) {
+  const result = yield* patch.enableCua === undefined
+    ? update
+    : handoffs
+        .withComputerUseToggle(patch.enableCua, update)
+        .pipe(
+          Effect.catchTag("HandoffError", (cause) =>
+            Effect.fail(new ServerSettingsError({ settingsPath, operation: "normalize", cause })),
+          ),
+        );
+  if (patch.cuaAllowedApps !== undefined)
+    yield* handoffs
+      .revalidateComputerUse()
+      .pipe(
+        Effect.mapError(
+          (cause) => new ServerSettingsError({ settingsPath, operation: "normalize", cause }),
+        ),
+      );
+  return result;
+});
+
 /**
  * Admission can install Cua Driver and take minutes, so the caller's grant is checked again
  * inside the settings write lock: a client revoked meanwhile cannot commit.
@@ -44,17 +70,11 @@ export const setEnabled = Effect.fn("ComputerUseSettings.setEnabled")(function* 
       operation: "normalize",
       reason: "Cannot clear previous computer use sessions.",
     });
-  const stored = yield* handoffs.value
-    .withComputerUseToggle(
-      enabled,
-      settings.updateSettings({ enableCua: enabled }, authorizeAtCommit),
-    )
-    .pipe(
-      Effect.catchTag("HandoffError", (cause) =>
-        Effect.fail(
-          new ServerSettingsError({ settingsPath: "computer-use", operation: "normalize", cause }),
-        ),
-      ),
-    );
+  const stored = yield* applyPatch(
+    handoffs.value,
+    { enableCua: enabled },
+    settings.updateSettings({ enableCua: enabled }, authorizeAtCommit),
+    "computer-use",
+  );
   return { enabled: stored.enableCua };
 });

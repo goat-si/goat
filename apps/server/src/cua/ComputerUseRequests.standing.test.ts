@@ -8,6 +8,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { stopAllComputerUse, stopComputerUse } from "./ComputerUseRpcHandlers.ts";
+import { applyPatch } from "./ComputerUseSettings.ts";
 import {
   requestWithHandoffs,
   sessionId,
@@ -404,6 +405,34 @@ it.effect("an automatic session admission can be ended from its resolved item", 
           sessionId,
         );
         assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
+
+it.effect("removing an allowed app ends its admission before the settings update returns", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "always",
+          },
+          sessionId,
+        );
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* applyPatch(
+          handoffs,
+          { cuaAllowedApps: [] },
+          settings.updateSettings({ cuaAllowedApps: [] }),
+          "test",
+        );
+        assert.equal((yield* leases.state(threadId, first.handoff.handoffId))._tag, "ended");
       }),
     ),
   ),

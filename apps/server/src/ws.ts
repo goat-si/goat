@@ -2732,30 +2732,12 @@ export const layerWsRpc = (
                   ),
               }),
             );
-            const settings = yield* patch.enableCua === undefined
-              ? update
-              : handoffs.withComputerUseToggle(patch.enableCua, update).pipe(
-                  Effect.catchTag("HandoffError", (cause) =>
-                    Effect.fail(
-                      new ServerSettingsError({
-                        settingsPath: config.settingsPath,
-                        operation: "normalize",
-                        cause,
-                      }),
-                    ),
-                  ),
-                );
-            if (patch.cuaAllowedApps !== undefined)
-              yield* handoffs.revalidateComputerUse().pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({
-                      settingsPath: config.settingsPath,
-                      operation: "normalize",
-                      cause,
-                    }),
-                ),
-              );
+            const settings = yield* ComputerUseSettings.applyPatch(
+              handoffs,
+              patch,
+              update,
+              config.settingsPath,
+            );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
