@@ -95,15 +95,19 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
   return {
     /**
      * An observing claim gets a service no other observer holds. A claim whose signal aborts
-     * first rejects with its reason and holds nothing; a service it started is closed.
+     * first rejects with its reason and holds nothing. Waiting for its turn, it rejects at once
+     * and its turn does nothing; once its turn began, the cancelled open and the close of a
+     * service it started finish first.
      */
     claim: (
       executable: string,
       owner: string,
       claimOptions: { readonly observe?: boolean; readonly signal?: AbortSignal } = {},
-    ) =>
-      serialized(async (): Promise<HelperServiceClaim<S>> => {
-        const signal = claimOptions.signal;
+    ) => {
+      const signal = claimOptions.signal;
+      let begun = false;
+      const claimed = serialized(async (): Promise<HelperServiceClaim<S>> => {
+        begun = true;
         signal?.throwIfAborted();
         let running = current;
         if (
@@ -144,7 +148,32 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
         if (claimOptions.observe) owned.observer = claim;
         sessions.set(token, claim);
         return claim;
-      }),
+      });
+      if (!signal) return claimed;
+      return new Promise<HelperServiceClaim<S>>((resolve, reject) => {
+        let settled = false;
+        const cancel = () => {
+          if (settled || begun) return;
+          settled = true;
+          reject(signal.reason);
+        };
+        if (signal.aborted) cancel();
+        else signal.addEventListener("abort", cancel, { once: true });
+        claimed.then(
+          (claim) => {
+            signal.removeEventListener("abort", cancel);
+            settled = true;
+            resolve(claim);
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", cancel);
+            if (settled) return;
+            settled = true;
+            reject(error);
+          },
+        );
+      });
+    },
     /** The live claim a token names, or undefined. */
     sessionFor: (token: string) => sessions.get(token),
   };

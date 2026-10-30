@@ -476,8 +476,9 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         });
         yield* test.request("agent");
         yield* test.helperStarting;
-        // No clock moves: the Stop must not wait out the start's deadline behind it.
-        yield* test.request("stop", false);
+        // No clock moves: the Stop must not wait out the start's deadline behind it. The server
+        // stops a start under that start's request id.
+        yield* test.request("agent", false);
         assert.equal((yield* test.next).status, "unavailable");
         assert.equal((yield* test.next).status, "stopped");
         const { starts, stops } = test.counts();
@@ -485,6 +486,29 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
         assert.deepEqual({ starts, stops }, { starts: 2, stops: 2 });
         yield* test.request("again");
         assert.equal((yield* test.next).status, "ready");
+      }),
+    ),
+  );
+
+  it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          hold: "checkStart",
+        });
+        yield* test.request("agent");
+        yield* test.helperStarting;
+        yield* test.request("agent", false);
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.equal((yield* test.next).status, "stopped");
+        // Only the check's helper ever ran, and it was stopped.
+        assert.deepEqual(
+          test.helperLaunches.map(({ verify }) => verify),
+          [true],
+        );
+        assert.deepEqual(test.counts(), { starts: 1, stops: 1, destroys: 1 });
       }),
     ),
   );

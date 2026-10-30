@@ -105,8 +105,11 @@ export const fixture = Effect.fn(function* (
     development?: { readonly appUserModelId: string };
     denyPermissions?: boolean;
     failFirstStart?: boolean;
-    /** helperStart holds the first agent helper's start until release or that host's stop. */
-    hold?: "start" | "stop" | "monitor" | "helperStart";
+    /**
+     * helperStart holds the first agent helper's start, checkStart the first readiness check
+     * helper's, until release or that host's stop.
+     */
+    hold?: "start" | "stop" | "monitor" | "helperStart" | "checkStart";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -340,7 +343,8 @@ export const fixture = Effect.fn(function* (
             };
           }
           Deferred.doneUnsafe(starting, Exit.void);
-          if (options.hold === "helperStart" && !helper.verify && !helperStartHeld) {
+          const held = options.hold === (helper.verify ? "checkStart" : "helperStart");
+          if (held && !helperStartHeld) {
             helperStartHeld = true;
             Deferred.doneUnsafe(helperStarting, Exit.void);
             // As makeHelperHost: a stop during the start cancels it.

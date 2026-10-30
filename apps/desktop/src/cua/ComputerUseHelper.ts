@@ -214,8 +214,11 @@ export interface HelperSession {
    */
   readonly frames: (framesId: number, targets: DesktopCuaFrames["targets"]) => Promise<void>;
   readonly onFrame: (listener: (frame: HelperFrame) => void) => () => void;
-  /** Ends stdin, the helper's ownership signal, and waits for exit; kills it after a deadline. */
-  readonly close: () => Promise<void>;
+  /**
+   * Ends stdin, the helper's ownership signal, and waits for exit; kills it after a deadline, or
+   * at once when forced (a start cancelled before it served anyone).
+   */
+  readonly close: (options?: { readonly force?: boolean }) => Promise<void>;
   /** Settles when the driver exits on its own or the helper goes away. */
   readonly ended: Promise<void>;
 }
@@ -298,9 +301,10 @@ export async function openHelperSession(
   });
   lines.on("close", finish);
 
-  const close = async () => {
+  const close = async (options?: { readonly force?: boolean }) => {
     process.stdin.end();
     if (
+      options?.force === true ||
       (await Promise.race([
         process.exited.then(() => "exited" as const),
         timeout(CLOSE_TIMEOUT_MS),
@@ -648,14 +652,19 @@ export function makeHelperHost(options: HelperHostOptions) {
     ? (options.service ?? makeHelperService(options.bundle.bundleId, options.spawn))
     : undefined;
 
-  /** Idempotent: what a run opened is taken from it before it is released. */
+  /**
+   * Idempotent: what a run opened is taken from it before it is released. A run stopped before it
+   * started is killed outright: its helper may be busy starting and unable to answer a stop.
+   */
   const release = async (current: HelperRun) => {
     const { session, claim, releaseSocket } = current;
+    const cancelled = current.abort.signal.aborted && current.connection === undefined;
     current.session = undefined;
     current.claim = undefined;
     current.releaseSocket = undefined;
     current.connection = undefined;
     if (claim) await claim.release();
+    else if (session && cancelled) await session.close({ force: true });
     else if (session) {
       await session.stop().catch(() => undefined);
       await session.close();

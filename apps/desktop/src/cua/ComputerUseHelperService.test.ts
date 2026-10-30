@@ -213,7 +213,7 @@ describe("computer use helper service", () => {
       }),
   );
 
-  it("a claim cancelled while it waits its turn never holds the service", async () => {
+  it("a claim cancelled while it waits its turn rejects at once and never holds the service", async () => {
     const gate = Promise.withResolvers<void>();
     const services = fakeServices({ gate: gate.promise });
     const manager = makeHelperServiceManager(services);
@@ -222,9 +222,10 @@ describe("computer use helper service", () => {
     const queued = manager.claim(HELPER, "desktop", { observe: true, signal: cancel.signal });
     const stopped = new Error("stopped");
     cancel.abort(stopped);
+    // The claim ahead of it is still opening; the cancelled one does not wait for it.
+    assert.strictEqual(await rejection(queued), stopped);
     gate.resolve();
     const a = await first;
-    assert.strictEqual(await rejection(queued), stopped);
     assert.lengthOf(services.launched, 1);
     // The other session's claim was never touched, and its release is the last one.
     assert.isFalse(services.launched[0]?.closed());

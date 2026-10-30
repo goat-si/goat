@@ -39,7 +39,7 @@ import {
 } from "./helperReadiness.ts";
 import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
-import { handleStopFirst } from "./desktopCuaRequests.ts";
+import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -130,8 +130,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const mutex = yield* Semaphore.make(1);
   const crashes = yield* Queue.unbounded<OwnedHost>();
   let owned: OwnedHost | undefined;
-  /** This environment's helper service per channel; generations of the host claim it in turn. */
   const helperServiceOf = managerPerChannel(native.helperService);
+  const requests = makeStopFirstRequests();
   let currentRequest: DesktopCuaDriverRequest | undefined;
   let closed = false;
   // The server learns the helper's readiness from these reports; only a helper build sends them.
@@ -227,8 +227,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
     });
 
-  // UniFFI calls can outlive cancellation, so a native start settles before its stop; a helper
-  // host's stop cancels its start. Either way the host is retained until every promise settles.
+  // A helper host's stop cancels its start; an uncancellable UniFFI start settles first.
   const retire = (entry: OwnedHost): Promise<void> => {
     if (!entry.cleanup) {
       entry.cleanup = (async () => {
@@ -819,6 +818,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           // Unproven, or proven for a generation an update has since replaced.
           if (
             selected.kind === "helper" &&
+            !requests.stopped(request.requestId) &&
             (!helperState.confirmed ||
               (provenBundle !== undefined && provenBundle !== selected.bundle.bundlePath))
           )
@@ -837,15 +837,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             return;
           }
         }
+        if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
         if (!(yield* spawn(selected, "agents"))) return;
       }
-      const entry = owned;
-      if (!entry) return yield* unavailable(request.requestId);
+      const entry = owned!;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),
       );
-      // A Stop retired this start meanwhile; its own report follows.
-      if (entry.cleanup) return yield* unavailable(request.requestId);
       const mcp = yield* decodeMcp({
         ...connection.mcp,
         ...(connection.socketPath === "" ? {} : { socketPath: connection.socketPath }),
@@ -856,14 +854,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         yield* noteHelper((state) => withRunning(state, true));
       }
       if (session) yield* followers.attach(session);
-      if (!closed)
-        yield* publisher.publishCuaReport({
-          version: 1,
-          type: "cuaDriverReport",
-          requestId: request.requestId,
-          status: "ready",
-          mcp,
-        });
+      if (closed) return;
+      if (entry.cleanup) return yield* unavailable(request.requestId);
+      yield* publisher.publishCuaReport({
+        version: 1,
+        type: "cuaDriverReport",
+        requestId: request.requestId,
+        status: "ready",
+        mcp,
+      });
     }).pipe(
       Effect.catch((error) =>
         stop.pipe(
@@ -900,7 +899,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         ),
       ),
     );
-  }, mutex.withPermits(1));
+  });
 
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
@@ -935,9 +934,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* Stream.runForEach(publisher.cuaAppsRequests, handleAppsRequest).pipe(
         Effect.forkScoped,
       );
-      yield* handleStopFirst(publisher.cuaRequests, handleRequest, () => {
-        if (owned && !owned.cleanup) void retire(owned).catch(() => undefined);
-      }).pipe(Effect.forkScoped);
+      yield* requests
+        .handle(publisher.cuaRequests, handleRequest, mutex.withPermits(1), () => {
+          if (owned && !owned.cleanup) void retire(owned).catch(() => undefined);
+        })
+        .pipe(Effect.forkScoped);
       yield* publisher.cuaWatchApps.pipe(
         Stream.runForEach((apps) =>
           mutex.withPermits(1)(

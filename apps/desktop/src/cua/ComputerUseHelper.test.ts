@@ -412,6 +412,46 @@ describe("ComputerUseHelper daemon admission", () => {
     assert.isTrue(spawned.at(-1)?.stdinEnded());
   });
 
+  it("a Windows stop while the helper is busy starting its driver kills it instead of asking it to stop", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    let socketReleased = false;
+    // It never answers start, as a helper whose driver is still coming up.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath: "/Helpers/GOAT Computer Use.app",
+        executable: "/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        driverPath: "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      socket: async () => ({
+        path: "\\\\.\\pipe\\goat-cu-test",
+        release: async () => {
+          socketReleased = true;
+        },
+      }),
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+    });
+    const started = host.start();
+    await asked.promise;
+    await host.stop();
+    assert.equal((await helperError(started)).code, "aborted");
+    assert.deepEqual(
+      helper.received.map(({ method }) => method),
+      ["start"],
+    );
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+    assert.isTrue(socketReleased);
+  });
+
   const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: CUA_DRIVER_VERSION };
   const metadata = {
     driverVersion: CUA_DRIVER_VERSION,
