@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   formatThreadStreamReport,
-  noteThreadFeedReplyDrawn,
+  noteThreadFeedReplyRow,
   noteThreadStreamClosed,
   noteThreadStreamEvents,
   noteThreadStreamOpened,
@@ -17,7 +17,7 @@ import {
 
 const events = (
   sequence: number,
-  options: { readonly unknown?: number; readonly reply?: [number, number | null] } = {},
+  options: { readonly unknown?: number; readonly reply?: [number | null, number | null] } = {},
 ) => ({
   known: options.unknown === undefined ? 1 : 0,
   unknown: options.unknown ?? 0,
@@ -44,13 +44,14 @@ function setup() {
       now += ms;
     },
     thread: () => readThreadStreamDiagnostics()[0],
+    report: () => formatThreadStreamReport(readThreadStreamDiagnostics()),
   };
 }
 
 describe("thread stream diagnostics", () => {
   it("names how each subscription attempt started", () => {
     const { thread } = setup();
-    noteThreadStreamSnapshot("env", "thread", { sequence: 4, source: "http" });
+    noteThreadStreamSnapshot("env", "thread", { sequence: 4, source: "http", reply: null });
     noteThreadStreamSubscribed("env", "thread", { afterSequence: 4, completionMarker: true });
     expect(thread()?.lastStart).toBe("http snapshot");
 
@@ -66,10 +67,13 @@ describe("thread stream diagnostics", () => {
 
     noteThreadStreamSubscribed("env", "thread", { afterSequence: 6, completionMarker: false });
     noteThreadStreamEvents("env", "thread", events(7));
-    expect(thread()?.lastStart).toBe("live events");
+    expect(thread()).toMatchObject({
+      lastStart: "events, replay or live unclear",
+      unclearEvents: 1,
+    });
   });
 
-  it("counts unknown events and the cursor they advance", () => {
+  it("counts unknown event types and the cursor they advance", () => {
     const { thread } = setup();
     noteThreadStreamSubscribed("env", "thread", { afterSequence: null, completionMarker: false });
     noteThreadStreamEvents("env", "thread", events(9, { unknown: 2 }));
@@ -77,25 +81,49 @@ describe("thread stream diagnostics", () => {
   });
 
   it.each([
-    { layer: "the client state", applied: 10, expected: "in state 10, drawn 10" },
-    { layer: "the list", applied: 40, expected: "in state 40, drawn 10" },
-  ])("shows a reply that grew on the socket but stalled at $layer", ({ applied, expected }) => {
-    setup();
-    noteThreadStreamEvents("env", "thread", events(1, { reply: [10, 10] }));
-    noteThreadFeedReplyDrawn("env", "thread", "message-1", 10);
-    noteThreadStreamEvents("env", "thread", events(2, { reply: [40, applied] }));
-    const report = formatThreadStreamReport(readThreadStreamDiagnostics());
-    expect(report).toContain("latest reply message-1: received 40 chars");
-    expect(report).toContain(expected);
+    {
+      layer: "the client state",
+      applied: 10,
+      visible: true,
+      expected: "in state 10, row committed 10",
+    },
+    { layer: "the list", applied: 40, visible: true, expected: "in state 40, row committed 10" },
+    { layer: "an offscreen row", applied: 40, visible: false, expected: "offscreen" },
+  ])(
+    "shows a reply that grew on the socket but stalled at $layer",
+    ({ applied, visible, expected }) => {
+      const { report } = setup();
+      noteThreadStreamEvents("env", "thread", events(1, { reply: [10, 10] }));
+      noteThreadFeedReplyRow("env", "thread", "message-1", { length: 10, visible });
+      noteThreadStreamEvents("env", "thread", events(2, { reply: [40, applied] }));
+      expect(report()).toContain("latest reply message-1 via event: received 40 chars");
+      expect(report()).toContain(expected);
+    },
+  );
+
+  it("keeps the received length when a deduplicated body arrives empty", () => {
+    const { thread } = setup();
+    noteThreadStreamEvents("env", "thread", events(1, { reply: [12, 12] }));
+    noteThreadStreamEvents("env", "thread", events(2, { reply: [null, 12] }));
+    expect(thread()?.reply).toMatchObject({ receivedLength: 12, appliedLength: 12 });
+  });
+
+  it("tracks a reply that only a snapshot delivered, and a row that left the list", () => {
+    const { thread, report } = setup();
+    const reply = { messageId: "message-1", receivedLength: 7, appliedLength: 7 };
+    noteThreadStreamSnapshot("env", "thread", { sequence: 3, source: "socket", reply });
+    noteThreadFeedReplyRow("env", "thread", "message-1", { length: 7, visible: true });
+    expect(thread()?.reply).toMatchObject({ receivedVia: "socket snapshot", rowMounted: true });
+    noteThreadFeedReplyRow("env", "thread", "message-1", null);
+    expect(report()).toContain("row committed 7");
+    expect(report()).toContain("since unmounted");
   });
 
   it("keeps error text out of the report", () => {
-    const { thread } = setup();
+    const { thread, report } = setup();
     noteThreadStreamStatus("env", "thread", "cached", true);
-    const report = formatThreadStreamReport(readThreadStreamDiagnostics());
     expect(thread()?.hasError).toBe(true);
-    expect(report).toContain("status: cached with error");
-    expect(Object.values(thread() ?? {})).not.toContain("Could not synchronize the thread.");
+    expect(report()).toContain("status: cached with error");
   });
 
   it("starts a reopened thread fresh and as the most recent entry", () => {

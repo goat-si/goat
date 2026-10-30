@@ -46,11 +46,15 @@ import * as RpcSession from "../rpc/session.ts";
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
   PENDING_QUESTION,
+  assistantMessage,
   assistantReply,
+  awaitThreadState,
   deleted,
+  projectionWithReply,
   questionResolved,
   snapshot,
   synchronized,
+  testSession,
   titleUpdated,
 } from "./threadsSyncFixtures.ts";
 import { onThreadRequestsResolved, type ThreadRequestsResolved } from "./threadRequests.ts";
@@ -87,36 +91,6 @@ const BASE_PROJECTION: OrchestrationV2ThreadProjection = {
 };
 
 type TestThreadInput = OrchestrationV2ThreadStreamItem | Error;
-
-function testSession(
-  client: WsRpcProtocolClient,
-  config?: { readonly completionMarker?: boolean },
-): RpcSession.RpcSession {
-  return {
-    client,
-    initialConfig: Effect.succeed(
-      config?.completionMarker === true
-        ? ({ threadResumeCompletionMarker: true } as never)
-        : ({} as never),
-    ),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
-    ready: Effect.void,
-    probe: Effect.void,
-    inboundFrames: Effect.succeed(0),
-    closed: Effect.never,
-  };
-}
-
-function awaitThreadState(
-  observed: Queue.Queue<EnvironmentThreadState>,
-  predicate: (state: EnvironmentThreadState) => boolean,
-) {
-  return Queue.take(observed).pipe(
-    Effect.repeat({
-      until: predicate,
-    }),
-  );
-}
 
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationV2ThreadProjection;
@@ -657,8 +631,9 @@ describe("EnvironmentThreads", () => {
       );
       yield* Queue.offerAll(harness.inputs, [
         { kind: "unknown-event", sequence: CACHED_SNAPSHOT_SEQUENCE + 2, eventType: "future" },
-        assistantReply("Hel", CACHED_SNAPSHOT_SEQUENCE + 3),
-        titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 4),
+        assistantMessage("Hello", CACHED_SNAPSHOT_SEQUENCE + 3),
+        assistantReply("", CACHED_SNAPSHOT_SEQUENCE + 4, true),
+        titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 5),
       ]);
       yield* awaitThreadState(
         harness.observed,
@@ -668,11 +643,39 @@ describe("EnvironmentThreads", () => {
       expect(StreamDiagnostics.readThreadStreamDiagnostics()[0]).toMatchObject({
         threadId: String(THREAD_ID),
         subscriptions: 2,
-        lastStart: "live events",
-        liveEvents: 4,
+        // A resumed subscription without a completion marker cannot tell replay from live.
+        lastStart: "events, replay or live unclear",
+        unclearEvents: 5,
         unknownEvents: 1,
-        lastSequence: CACHED_SNAPSHOT_SEQUENCE + 4,
-        reply: { messageId: "message-reply", receivedLength: 3, appliedLength: 3 },
+        lastSequence: CACHED_SNAPSHOT_SEQUENCE + 5,
+        reply: { messageId: "message-reply", receivedLength: 5, appliedLength: 5 },
+      });
+    }),
+  );
+
+  it.effect("records the reply an HTTP or socket snapshot carried for diagnostics", () =>
+    Effect.gen(function* () {
+      StreamDiagnostics.resetThreadStreamDiagnosticsForTest();
+      const reply = (text: string) => projectionWithReply(BASE_PROJECTION, text);
+      const harness = yield* makeHarness({
+        httpSnapshot: {
+          _tag: "present",
+          snapshot: { snapshotSequence: 3, projection: reply("Hi") },
+        },
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      const latest = () => StreamDiagnostics.readThreadStreamDiagnostics()[0];
+      expect(latest()).toMatchObject({
+        lastStart: "http snapshot",
+        reply: { receivedVia: "http snapshot", receivedLength: 2 },
+      });
+
+      yield* Queue.offer(harness.inputs, snapshot(reply("Hi there"), 4));
+      yield* awaitThreadState(harness.observed, () => latest()?.lastSequence === 4);
+      expect(latest()?.reply).toMatchObject({
+        receivedVia: "socket snapshot",
+        receivedLength: 8,
+        appliedLength: 8,
       });
     }),
   );

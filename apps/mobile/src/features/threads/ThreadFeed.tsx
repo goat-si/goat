@@ -3097,14 +3097,6 @@ export const ThreadFeed = memo(function ThreadFeed({
       key={info.item.id}
       entering={disclosureToggleSettling ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION : undefined}
     >
-      {info.item.type === "message" && info.item.message.role === "assistant" ? (
-        <ThreadFeedReplyProbe
-          environmentId={String(props.environmentId)}
-          threadId={String(props.threadId)}
-          messageId={String(info.item.message.id)}
-          length={info.item.message.text.length}
-        />
-      ) : null}
       <MessageImageGalleryScope
         entry={info.item}
         environmentId={props.environmentId}
@@ -3112,6 +3104,14 @@ export const ThreadFeed = memo(function ThreadFeed({
         workspaceRoot={props.workspaceRoot}
       >
         <ThreadMediaVisibility>
+          {info.item.type === "message" && info.item.message.role === "assistant" ? (
+            <ThreadFeedReplyProbe
+              environmentId={String(props.environmentId)}
+              threadId={String(props.threadId)}
+              messageId={String(info.item.message.id)}
+              length={info.item.message.text.length}
+            />
+          ) : null}
           {renderFeedEntry(info, {
             environmentId: props.environmentId,
             dispatchingMessageId: props.dispatchingMessageId,

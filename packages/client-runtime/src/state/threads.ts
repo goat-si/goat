@@ -576,12 +576,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
+      const projection = boundedSnapshotProjection(item);
       const hasProgressiveHistory =
         item.historyCursor !== undefined ||
         item.hasMoreHistory !== undefined ||
         item.latestLocalTurnOrdinal !== undefined;
       yield* setThread(
-        boundedSnapshotProjection(item),
+        projection,
         hasProgressiveHistory
           ? {
               history: {
@@ -598,6 +599,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       StreamDiagnostics.noteThreadStreamSnapshot(environmentId, threadId, {
         sequence: item.snapshotSequence,
         source: "socket",
+        reply: StreamDiagnostics.snapshotReply(projection),
       });
       yield* noteStatus;
       return;
@@ -966,6 +968,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                   StreamDiagnostics.noteThreadStreamSnapshot(environmentId, threadId, {
                     sequence: httpResult.snapshot.snapshotSequence,
                     source: "http",
+                    reply: StreamDiagnostics.snapshotReply(httpResult.snapshot.projection),
                   });
                   yield* remember;
                 }),

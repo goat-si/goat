@@ -20,22 +20,34 @@ export type ThreadStreamStart =
   | "socket snapshot"
   | "replay"
   | "up to date"
-  | "live events";
+  | "live events"
+  | "events, replay or live unclear";
+
+/** Without a completion marker a resumed subscription cannot tell replay from the live tail. */
+type EventPhase = "replay" | "live" | "unclear";
 
 export interface ThreadStreamTransition {
   readonly at: number;
   readonly what: string;
 }
 
-/** The newest assistant reply as the socket delivered it, the client state holds it, and the feed drew it. */
+/**
+ * The newest assistant reply as the stream delivered it, as the client state holds it, and as the
+ * feed row last committed it. A committed row can be offscreen, so its visibility is kept too.
+ */
 export interface ThreadStreamReply {
   readonly messageId: string;
-  readonly receivedLength: number;
+  readonly receivedVia: "event" | "http snapshot" | "socket snapshot";
+  readonly receivedLength: number | null;
   readonly receivedAt: number;
   readonly appliedLength: number | null;
-  readonly drawnLength: number | null;
-  readonly drawnAt: number | null;
+  readonly rowLength: number | null;
+  readonly rowVisible: boolean | null;
+  readonly rowMounted: boolean;
+  readonly rowAt: number | null;
 }
+
+type ReceivedReply = Pick<ThreadStreamReply, "messageId" | "receivedLength" | "appliedLength">;
 
 export interface ThreadStreamDiagnostic {
   readonly environmentId: string;
@@ -50,6 +62,7 @@ export interface ThreadStreamDiagnostic {
   readonly snapshots: number;
   readonly replayedEvents: number;
   readonly liveEvents: number;
+  readonly unclearEvents: number;
   readonly unknownEvents: number;
   readonly lastSequence: number | null;
   readonly lastEventAt: number | null;
@@ -63,7 +76,7 @@ type MutableDiagnostic = {
 } & {
   transitions: ThreadStreamTransition[];
   awaitingFirstItem: boolean;
-  replaying: boolean;
+  phase: EventPhase;
   pendingStart: ThreadStreamStart | null;
 };
 
@@ -95,6 +108,7 @@ function freshRecord(environmentId: string, threadId: string): MutableDiagnostic
     snapshots: 0,
     replayedEvents: 0,
     liveEvents: 0,
+    unclearEvents: 0,
     unknownEvents: 0,
     lastSequence: null,
     lastEventAt: null,
@@ -102,7 +116,7 @@ function freshRecord(environmentId: string, threadId: string): MutableDiagnostic
     reply: null,
     transitions: [],
     awaitingFirstItem: false,
-    replaying: false,
+    phase: "live",
     pendingStart: null,
   };
 }
@@ -155,7 +169,11 @@ export function noteThreadStreamSubscribed(
   record.lastStart = record.pendingStart;
   record.awaitingFirstItem = record.pendingStart === null;
   record.pendingStart = null;
-  record.replaying = input.completionMarker;
+  record.phase = input.completionMarker
+    ? "replay"
+    : input.afterSequence === null
+      ? "live"
+      : "unclear";
   transition(
     record,
     input.afterSequence === null ? "subscribe" : `subscribe after #${input.afterSequence}`,
@@ -166,11 +184,16 @@ export function noteThreadStreamSubscribed(
 export function noteThreadStreamSnapshot(
   environmentId: string,
   threadId: string,
-  input: { readonly sequence: number; readonly source: "http" | "socket" },
+  input: {
+    readonly sequence: number;
+    readonly source: "http" | "socket";
+    readonly reply: ReceivedReply | null;
+  },
 ): void {
   const record = recordFor(environmentId, threadId);
   record.snapshots += 1;
   record.lastSequence = input.sequence;
+  if (input.reply !== null) setReply(record, input.reply, `${input.source} snapshot`);
   if (input.source === "http") {
     // The HTTP snapshot loads before the socket subscribes, so it starts the next attempt.
     record.pendingStart = "http snapshot";
@@ -188,7 +211,7 @@ export function noteThreadStreamSynchronized(environmentId: string, threadId: st
     record.awaitingFirstItem = false;
     record.lastStart = "up to date";
   }
-  record.replaying = false;
+  record.phase = "live";
   transition(record, "synchronized");
   notify();
 }
@@ -201,31 +224,29 @@ export function noteThreadStreamEvents(
     readonly unknown: number;
     readonly sequence: number;
     readonly eventType: string | null;
-    readonly reply: Omit<ThreadStreamReply, "receivedAt" | "drawnLength" | "drawnAt"> | null;
+    readonly reply: ReceivedReply | null;
     readonly status: string;
     readonly hasError: boolean;
   },
 ): void {
   const record = recordFor(environmentId, threadId);
   const count = input.known + input.unknown;
-  if (record.replaying) record.replayedEvents += count;
-  else record.liveEvents += count;
+  if (record.phase === "replay") record.replayedEvents += count;
+  else if (record.phase === "live") record.liveEvents += count;
+  else record.unclearEvents += count;
   record.unknownEvents += input.unknown;
   record.lastSequence = input.sequence;
   record.lastEventAt = clock();
   if (input.eventType !== null) record.lastEventType = input.eventType;
-  if (input.reply !== null) {
-    const sameReply = record.reply?.messageId === input.reply.messageId;
-    record.reply = {
-      ...input.reply,
-      receivedAt: clock(),
-      drawnLength: sameReply ? (record.reply?.drawnLength ?? null) : null,
-      drawnAt: sameReply ? (record.reply?.drawnAt ?? null) : null,
-    };
-  }
+  if (input.reply !== null) setReply(record, input.reply, "event");
   if (record.awaitingFirstItem) {
     record.awaitingFirstItem = false;
-    record.lastStart = record.replaying ? "replay" : "live events";
+    record.lastStart =
+      record.phase === "replay"
+        ? "replay"
+        : record.phase === "live"
+          ? "live events"
+          : "events, replay or live unclear";
   }
   if (record.status !== input.status || record.hasError !== input.hasError) {
     record.status = input.status;
@@ -249,46 +270,113 @@ export function noteThreadStreamStatus(
   notify();
 }
 
-/** A feed row drew this reply; only the newest received reply is tracked. */
-export function noteThreadFeedReplyDrawn(
+function setReply(
+  record: MutableDiagnostic,
+  reply: ReceivedReply,
+  via: ThreadStreamReply["receivedVia"],
+): void {
+  const previous = record.reply?.messageId === reply.messageId ? record.reply : null;
+  record.reply = {
+    messageId: reply.messageId,
+    receivedVia: via,
+    // A deduplicated body arrives empty and refers to text received earlier.
+    receivedLength: reply.receivedLength ?? previous?.receivedLength ?? null,
+    receivedAt: clock(),
+    appliedLength: reply.appliedLength,
+    rowLength: previous?.rowLength ?? null,
+    rowVisible: previous?.rowVisible ?? null,
+    rowMounted: previous?.rowMounted ?? false,
+    rowAt: previous?.rowAt ?? null,
+  };
+}
+
+/** A feed row committed this reply; only the newest received reply is tracked. */
+export function noteThreadFeedReplyRow(
   environmentId: string,
   threadId: string,
   messageId: string,
-  length: number,
+  row: { readonly length: number; readonly visible: boolean } | null,
 ): void {
   const record = records.get(keyOf(environmentId, threadId));
-  if (record?.reply?.messageId !== messageId || record.reply.drawnLength === length) return;
-  record.reply = { ...record.reply, drawnLength: length, drawnAt: clock() };
+  if (record?.reply?.messageId !== messageId) return;
+  const reply = record.reply;
+  record.reply =
+    row === null
+      ? { ...reply, rowMounted: false, rowAt: clock() }
+      : {
+          ...reply,
+          rowLength: row.length,
+          rowVisible: row.visible,
+          rowMounted: true,
+          rowAt: clock(),
+        };
   if (listeners.size > 0) notify();
 }
 
 type EventItem = Extract<OrchestrationV2ThreadStreamItem, { kind: "event" }>;
 
-/** The newest assistant reply in a batch, as delivered and as the reducer now holds it. */
+function appliedReplyLength(
+  projection: OrchestrationV2ThreadProjection | null,
+  messageId: string,
+): number | null {
+  const rows = projection?.visibleTurnItems ?? [];
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]?.item;
+    if (item?.type === "assistant_message" && item.messageId === messageId) return item.text.length;
+  }
+  return null;
+}
+
+/**
+ * The newest assistant reply in a batch, with the body length that arrived for it (null when only
+ * a deduplicated body arrived) and the length the reducer now holds.
+ */
 export function replyProgress(
   events: ReadonlyArray<EventItem>,
   projection: OrchestrationV2ThreadProjection | null,
-): Omit<ThreadStreamReply, "receivedAt" | "drawnLength" | "drawnAt"> | null {
+): ReceivedReply | null {
+  let messageId: string | null = null;
+  let receivedLength: number | null = null;
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index]?.event;
-    if (event?.type !== "turn-item.updated" || event.payload.type !== "assistant_message") continue;
-    const item = event.payload;
-    let appliedLength: number | null = null;
-    const rows = projection?.visibleTurnItems ?? [];
-    for (let row = rows.length - 1; row >= 0; row -= 1) {
-      const candidate = rows[row]?.item;
-      if (candidate?.id !== item.id) continue;
-      appliedLength = candidate.type === "assistant_message" ? candidate.text.length : null;
+    let id: string | null = null;
+    let length: number | null = null;
+    if (event?.type === "message.updated" && event.payload.role === "assistant") {
+      id = event.payload.id;
+      length = event.payload.text.length;
+    } else if (event?.type === "turn-item.updated" && event.payload.type === "assistant_message") {
+      id = event.payload.messageId;
+      length = event.payload.textOmitted === true ? null : event.payload.text.length;
+    }
+    if (id === null || (messageId !== null && id !== messageId)) continue;
+    messageId = id;
+    if (length !== null) {
+      receivedLength = length;
       break;
     }
-    return { messageId: item.messageId, receivedLength: item.text.length, appliedLength };
+  }
+  if (messageId === null) return null;
+  return { messageId, receivedLength, appliedLength: appliedReplyLength(projection, messageId) };
+}
+
+/** The newest assistant reply a snapshot carried, which arrives whole. */
+export function snapshotReply(projection: OrchestrationV2ThreadProjection): ReceivedReply | null {
+  const rows = projection.visibleTurnItems;
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const item = rows[index]?.item;
+    if (item?.type !== "assistant_message") continue;
+    return {
+      messageId: item.messageId,
+      receivedLength: item.text.length,
+      appliedLength: item.text.length,
+    };
   }
   return null;
 }
 
 export function readThreadStreamDiagnostics(): ReadonlyArray<ThreadStreamDiagnostic> {
   return [...records.values()]
-    .map(({ awaitingFirstItem: _a, replaying: _r, pendingStart: _p, ...record }) => ({
+    .map(({ awaitingFirstItem: _a, phase: _r, pendingStart: _p, ...record }) => ({
       ...record,
       transitions: [...record.transitions],
     }))
@@ -313,10 +401,14 @@ function formatTime(at: number | null): string {
 
 function formatReply(reply: ThreadStreamReply | null): string {
   if (reply === null) return "  latest reply: none received while open";
+  const row =
+    reply.rowLength === null
+      ? "row not committed yet"
+      : `row committed ${reply.rowLength} at ${formatTime(reply.rowAt)}, ${reply.rowMounted ? (reply.rowVisible ? "on screen" : "offscreen") : "since unmounted"}`;
   return [
-    `  latest reply ${reply.messageId}: received ${reply.receivedLength} chars at ${formatTime(reply.receivedAt)}`,
+    `  latest reply ${reply.messageId} via ${reply.receivedVia}: received ${reply.receivedLength ?? "unknown"} chars at ${formatTime(reply.receivedAt)}`,
     `in state ${reply.appliedLength ?? "missing"}`,
-    `drawn ${reply.drawnLength ?? "not yet"}${reply.drawnAt === null ? "" : ` at ${formatTime(reply.drawnAt)}`}`,
+    row,
   ].join(", ");
 }
 
@@ -330,7 +422,7 @@ export function formatThreadStreamReport(
         `Thread ${d.threadId} (environment ${d.environmentId})${d.closedAt === null ? "" : `, closed ${formatTime(d.closedAt)}`}`,
         `  status: ${d.status}${d.hasError ? " with error" : ""}`,
         `  subscriptions: ${d.subscriptions}, last ${formatTime(d.lastSubscribedAt)}, started by ${d.lastStart ?? "nothing yet"}`,
-        `  events: ${d.replayedEvents} replayed, ${d.liveEvents} live, ${d.unknownEvents} unknown; last #${d.lastSequence ?? "-"} ${d.lastEventType ?? ""} at ${formatTime(d.lastEventAt)}`,
+        `  events: ${d.replayedEvents} replayed, ${d.liveEvents} live, ${d.unclearEvents} unclear, ${d.unknownEvents} unknown types; last #${d.lastSequence ?? "-"} ${d.lastEventType ?? ""} at ${formatTime(d.lastEventAt)}`,
         `  snapshots: ${d.snapshots}`,
         formatReply(d.reply),
         `  recent: ${d.transitions.map((t) => `${t.what} ${formatTime(t.at)}`).join(", ")}`,
