@@ -450,3 +450,21 @@ it("looks again at a skipped run once it is retried, and counts any retry as arm
     false,
   );
 });
+
+it("holds a retry that lands before a look attributed its run, so a stale look cannot skip it", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  const retried = rearmRetriedRun(watch, run2!, 50);
+  expect(retried.heldRuns).toEqual([run2]);
+  expect(rearmRetriedRun(retried, run2!, 60)).toBe(retried);
+  // The look read run-2 ended with run-3 queued behind it before the retry landed.
+  const stale = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 40 }),
+    watchedRun(run3!, 3, { requestedAt: 30 }),
+  ];
+  expect(discoverRuns(retried, stale, 70)).toMatchObject({
+    pendingRuns: [run2, run3],
+    heldRuns: [],
+    armedAt: 70,
+  });
+});

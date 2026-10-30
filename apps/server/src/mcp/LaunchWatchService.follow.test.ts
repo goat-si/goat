@@ -584,4 +584,25 @@ describe("LaunchWatchService runs the thread starts itself", () => {
       expect(reportedRuns(world)).toEqual([run1, run2]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+  it.effect("looks at a retried run at once instead of at the next look", () =>
+    Effect.gen(function* () {
+      const world = yield* makeWorld;
+      const reported = yield* reportsQueue(world);
+      const baseDir = yield* tempDir;
+      addRun(world, run1, 1);
+      yield* withService(world, baseDir, (service) =>
+        Effect.gen(function* () {
+          yield* service.watchExternal(external());
+          yield* launchAndFinish(world, reported);
+          // run-2 failed before any look saw it and is retried in place.
+          addRun(world, run2, 2, { completedAt: null });
+          yield* service.rearmRetried({ host: null, threadId: target, runId: run2 });
+          expect(yield* Queue.take(world.waitStarted)).toBe(run2);
+          yield* Queue.offer(world.waits, finished(run2));
+          yield* Queue.take(reported);
+        }),
+      );
+      expect(reportedRuns(world)).toEqual([run1, run2]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
