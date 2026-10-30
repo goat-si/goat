@@ -45,8 +45,8 @@ it.effect(
       yield* bind(
         {
           list_apps: oversized,
-          list_windows: (args: { app?: string }) =>
-            args.app === "hunter2"
+          list_windows: (args: { app?: string; pid?: number }) =>
+            args.app === "hunter2" || args.pid === 42
               ? { windows: [{ ...windows.windows[0], bundle_id: "hunter2" }] }
               : { windows: [] },
         },

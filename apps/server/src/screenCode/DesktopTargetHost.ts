@@ -444,6 +444,25 @@ export const createDesktopTargetHost = (deps: {
               " came back incomplete, so nothing was bound. Try again.",
           ),
         );
+      // The process's own list is read last, so it decides: the window must still be in it, once.
+      const again = baseline.filter((window) => object(window)?.window_id === requestedWindow);
+      if (again.length !== 1 || object(again[0])?.pid !== pid)
+        return yield* Effect.fail(
+          again.length > 1
+            ? fail(
+                "target_ambiguous",
+                "The driver lists window " +
+                  requestedWindow +
+                  " more than once; call screen.discover() and bind again.",
+              )
+            : {
+                ...fail(
+                  "target_missing",
+                  "That window is closed; pick one from screen.discover().",
+                ),
+                detail: "window_gone",
+              },
+        );
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );

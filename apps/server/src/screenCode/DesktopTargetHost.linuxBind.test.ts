@@ -399,3 +399,24 @@ it.effect("on macOS a window missing from the layer-0 list is not called closed"
     );
   }),
 );
+
+it.effect.each([
+  { case: "closed", baseline: [], code: "target_missing" },
+  { case: "listed twice", baseline: [script, script], code: "target_ambiguous" },
+])("a window the process's own list then shows $case is not bound", ({ baseline, code }) =>
+  Effect.gen(function* () {
+    const { host } = fixture(
+      {
+        list_apps: { apps: appRows },
+        list_windows: (args: { pid?: number }) =>
+          args.pid === undefined ? { windows: [script, thunarWindow] } : { windows: baseline },
+      },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
+    const result = yield* bindResult(host, { window_id: 4194307 });
+    expect(result._tag === "Failure" && result.failure.code).toBe(code);
+  }),
+);
