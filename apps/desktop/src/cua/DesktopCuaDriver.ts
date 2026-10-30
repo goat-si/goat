@@ -37,7 +37,7 @@ import {
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
-import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
+import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
 import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
@@ -92,6 +92,9 @@ interface OwnedHost {
   ) => ReturnType<typeof refreshDesktopManifest>;
   /** It exited before GOAT stopped it; retire aborts before stopping, so its own stop never is. */
   crashed?: boolean;
+  /** The start it serves now, and the ones it served before, whose late Stop leaves it running. */
+  serving?: string;
+  superseded?: Set<string>;
   monitor?: Promise<void>;
   cleanup?: Promise<void>;
 }
@@ -153,16 +156,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    * What a helper said it can do when it started, read from its hello: an agent turn's start and a
    * readiness check's both start one (#1532), and either is the build that runs next.
    */
-  const learnHelper = (
-    session:
-      | {
-          readonly canWatch?: boolean;
-          readonly reportsInput?: boolean;
-          readonly canFrame?: boolean;
-          readonly canCheckCapture?: boolean;
-        }
-      | undefined,
-  ) => {
+  const learnHelper = (session: Partial<HelperFeatures> | undefined) => {
     helperCanWatch = session?.canWatch === true;
     // Only macOS agents run through a connection helper that sees a person's input.
     helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
@@ -771,6 +765,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     request: DesktopCuaDriverRequest,
   ) {
     if (closed) return;
+    // A late Stop of an earlier start leaves the start the host serves now running.
+    if (!request.enabled && owned?.superseded?.has(request.requestId))
+      return yield* report(request.requestId, "stopped");
     currentRequest = request;
     if (!request.enabled) {
       const stopped = yield* stop;
@@ -841,6 +838,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       }
       if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
       const entry = owned!;
+      if (entry.serving !== undefined && entry.serving !== request.requestId)
+        (entry.superseded ??= new Set()).add(entry.serving);
+      entry.serving = request.requestId;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),
       );

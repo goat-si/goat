@@ -514,6 +514,28 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       ),
   );
 
+  it.effect("a late Stop of an earlier start leaves the host a newer start reuses running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("a");
+        assert.equal((yield* test.next).status, "ready");
+        // The server let a newer session start before the earlier one's Stop got here.
+        yield* test.request("b");
+        assert.equal((yield* test.next).status, "ready");
+        const before = test.counts();
+        yield* test.request("a", false);
+        const late = yield* test.next;
+        assert.deepEqual([late.requestId, late.status], ["a", "stopped"]);
+        assert.deepEqual(test.counts(), before);
+        yield* test.request("b", false);
+        const own = yield* test.next;
+        assert.deepEqual([own.requestId, own.status], ["b", "stopped"]);
+        assert.equal(test.counts().stops, before.stops + 1);
+      }),
+    ),
+  );
+
   it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
     Effect.scoped(
       Effect.gen(function* () {
