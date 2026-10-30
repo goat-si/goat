@@ -1,12 +1,12 @@
 import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
 import { Schema } from "effect";
+import { DiagnosticFilter, DiagnosticSince } from "./previewLogsFilters.ts";
 import {
   PreviewAutomationControlReason,
   PreviewAutomationTabControl,
   PreviewAutomationTabOwner,
   previewControlMessage,
 } from "./previewAutomationControl.ts";
-
 import {
   EnvironmentId,
   ForwardCompatibleOptional,
@@ -555,9 +555,9 @@ export const PreviewAutomationWaitForInput = Schema.Struct({
 );
 export type PreviewAutomationWaitForInput = typeof PreviewAutomationWaitForInput.Type;
 
-const DiagnosticFilter = Schema.String.check(Schema.isMaxLength(256));
 export const PreviewAutomationLogsInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
+  since: Schema.optional(DiagnosticSince),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))).annotate(
     {
       description:

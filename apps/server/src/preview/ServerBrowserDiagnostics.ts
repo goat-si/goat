@@ -145,6 +145,7 @@ export class ServerBrowserDiagnostics {
       entry?: PreviewAutomationNetworkEntry;
     }
   >();
+  private readonly networkStarts = new WeakMap<PreviewAutomationNetworkEntry, number>();
   private sequence = 0;
   private disposed = false;
   private readonly page: Page;
@@ -238,6 +239,7 @@ export class ServerBrowserDiagnostics {
     // Snapshots and filtered reads share the same bounded evidence.
     const index = previous === undefined ? -1 : this.networkEntries.indexOf(previous);
     if (index !== -1) this.networkEntries.splice(index, 1);
+    this.networkStarts.set(entry, tracked.startedAt ?? Date.parse(entry.timestamp));
     tracked.entry = entry;
     this.push("network", this.networkEntries, entry);
   }
@@ -254,6 +256,7 @@ export class ServerBrowserDiagnostics {
   /** Newest-first reads never touch the page, clear evidence, or change refs. */
   read(input: PreviewAutomationLogsInput): PreviewAutomationLogs {
     const limit = input.limit ?? 50;
+    const since = input.since === undefined ? undefined : Date.parse(input.since);
     let remainingBytes = ENTRY_BUDGET_BYTES;
     const select = <A>(
       stream: keyof typeof this.dropped,
@@ -281,17 +284,25 @@ export class ServerBrowserDiagnostics {
         this.consoleEntries,
         input.includeConsole ?? true,
         (entry) =>
+          (since === undefined || Date.parse(entry.timestamp) >= since) &&
           (input.consoleLevels === undefined || input.consoleLevels.includes(entry.level)) &&
           contains(entry.text, input.text),
       ),
-      errors: select("errors", this.errors, input.includeErrors ?? true, (entry) =>
-        contains(`${entry.message}\n${entry.stack ?? ""}`, input.text),
+      errors: select(
+        "errors",
+        this.errors,
+        input.includeErrors ?? true,
+        (entry) =>
+          (since === undefined || Date.parse(entry.timestamp) >= since) &&
+          contains(`${entry.message}\n${entry.stack ?? ""}`, input.text),
       ),
       network: select(
         "network",
         this.networkEntries,
         input.includeNetwork ?? true,
         (entry) =>
+          (since === undefined ||
+            (this.networkStarts.get(entry) ?? Date.parse(entry.timestamp)) >= since) &&
           contains(entry.url, input.url) &&
           (input.status === undefined || entry.status === input.status) &&
           (input.failed === undefined || entry.failed === input.failed) &&
