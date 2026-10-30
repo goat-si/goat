@@ -191,7 +191,7 @@ import {
   THREAD_COMPOSER_BOTTOM_GUTTER,
   ThreadComposer,
 } from "./ThreadComposer";
-import { ComposerSlot, useSettledComposerHeight } from "./ComposerSlot";
+import { ComposerCards, ComposerSlot, useSettledComposerHeight } from "./ComposerSlot";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHandle, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
@@ -478,7 +478,8 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   const threadScope = useRef(new AbortController());
   const {
     height: composerHeight,
-    onHeight: handleComposerSlotHeight,
+    onSlotHeight: handleComposerSlotHeight,
+    onCardsHeight: handleCardsHeight,
     cancel: cancelComposerHeightSettle,
   } = useSettledComposerHeight();
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
@@ -1422,7 +1423,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                     });
                   }}
                 />
-                <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                <ComposerCards maxWidth={contentMaxWidth} onHeight={handleCardsHeight}>
                   {props.queuedRunEdit !== null ? (
                     <Animated.View
                       className="shrink-0"
@@ -1540,7 +1541,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                       ) : null}
                     </Animated.View>
                   ) : null}
-                </View>
+                </ComposerCards>
 
                 <ComposerSlot hidden={composerSlotHidden} onHeight={handleComposerSlotHeight}>
                   {isProviderSubagent ? (
