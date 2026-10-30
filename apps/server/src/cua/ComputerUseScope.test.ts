@@ -67,6 +67,18 @@ describe("learnApps", () => {
       { _tag: "refuse", reason: "app_not_allowed" },
     );
   });
+  it("refuses a launch that could override its bundle id with another path", () => {
+    assert.deepInclude(
+      scopeVerdict({
+        name: "launch_app",
+        args: { bundle_id: "com.example.Editor", path: "/Applications/Other.app" },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      }),
+      { _tag: "refuse", reason: "app_not_allowed" },
+    );
+  });
   it("allows app discovery with a pid filter without resolving the target", () => {
     assert.deepEqual(
       scopeVerdict({

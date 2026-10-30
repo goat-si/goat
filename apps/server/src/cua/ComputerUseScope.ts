@@ -155,6 +155,12 @@ export function scopeVerdict(input: {
   const approved = input.apps;
   if (typeof input.name === "string" && UNSCOPED_TOOLS.has(input.name)) return { _tag: "allow" };
   const args = record(input.args);
+  const alternateLaunchTarget =
+    input.name === "launch_app" &&
+    Object.entries(args ?? {}).some(
+      ([key, value]) =>
+        key !== "bundle_id" && key !== "session" && typeof value === "string" && value.length > 0,
+    );
   const pid = targetPid(args);
   const target = pid === undefined ? undefined : input.appOf(pid);
   const named = text(args?.bundle_id) ?? text(args?.name) ?? text(args?.app_name);
@@ -184,6 +190,7 @@ export function scopeVerdict(input: {
     approved === undefined &&
     input.name === "launch_app" &&
     (!input.bundleIds ||
+      alternateLaunchTarget ||
       text(args?.bundle_id) === undefined ||
       text(args?.name) !== undefined ||
       text(args?.app_name) !== undefined)
@@ -213,7 +220,7 @@ export function scopeVerdict(input: {
       return { _tag: "refuse", reason: "app_not_approved", launch: "unverifiable" };
     const bundle = text(args?.bundle_id);
     const launchName = text(args?.name) ?? text(args?.app_name);
-    if (bundle === undefined || launchName !== undefined)
+    if (bundle === undefined || launchName !== undefined || alternateLaunchTarget)
       return { _tag: "refuse", reason: "app_not_approved", launch: "bundle_id" };
     return approves(approved, bundle)
       ? { _tag: "allow" }
