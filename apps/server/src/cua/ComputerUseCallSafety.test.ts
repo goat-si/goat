@@ -2,6 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 
 describe("computer use call safety", () => {
+  it("does not allow a name-only launch when a safety policy applies", () => {
+    expect(
+      deniedCallApp({ name: "launch_app", args: { name: "Editor" } }, ["com.example.Blocked"]),
+    ).toBe("Editor");
+    expect(deniedCallApp({ name: "launch_app", args: { name: "Editor" } }, [], true)).toBe(
+      "Editor",
+    );
+  });
   it("refuses terminal for non-person full access but allows a person's terminal", () => {
     const call = { name: "click", args: {}, app: "com.apple.Terminal" };
     expect(deniedCallApp(call, [], true)).toBe("com.apple.Terminal");

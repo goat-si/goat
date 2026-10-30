@@ -25,6 +25,12 @@ export const deniedCallApp = (
           )
           .map(([, value]) => String(value))
       : [];
+  if (call.name === "launch_app" && (denied.length > 0 || nonPersonFullAccess)) {
+    const name = args.find(
+      ([key, value]) => (key === "name" || key === "app_name") && typeof value === "string",
+    );
+    if (name !== undefined) return String(name[1]);
+  }
   const apps = [
     call.app,
     ...(call.safetyApps ?? []),
