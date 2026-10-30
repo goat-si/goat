@@ -1315,7 +1315,9 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
 
   private func documentMatchesExpectedTokens() -> Bool {
     let source = value as NSString
-    let expectedSources = tokens.compactMap { token -> String? in
+    // Offsets matter too: a token can move between identical strings while the rendered
+    // attachment stays where it was.
+    let expectedChips = tokens.compactMap { token -> String? in
       guard token.start >= 0,
             token.end > token.start,
             token.end <= source.length,
@@ -1324,18 +1326,18 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
             ) == token.source else {
         return nil
       }
-      return token.source
+      return "\(token.start):\(token.source)"
     }
-    var renderedSources: [String] = []
+    var renderedChips: [String] = []
     textView.attributedText.enumerateAttribute(
       .attachment,
       in: NSRange(location: 0, length: textView.attributedText.length)
-    ) { value, _, _ in
+    ) { value, range, _ in
       if let attachment = value as? ComposerTextAttachment {
-        renderedSources.append(attachment.source)
+        renderedChips.append("\(textView.sourceOffset(forDisplayOffset: range.location)):\(attachment.source)")
       }
     }
-    return renderedSources == expectedSources
+    return renderedChips == expectedChips
   }
 }
 
