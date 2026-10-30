@@ -38,6 +38,7 @@ import { ChildProcessSpawner } from "effect/process";
 
 import {
   makeBrowserDriverCapabilityProbe,
+  makeBrowserDriverGetConfig,
   makeBrowserCapabilityLifecycle,
 } from "./BrowserDriverCapabilityProbe.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
@@ -48,6 +49,8 @@ import {
 import type { Union } from "../preview/BrowserOriginGrants.ts";
 import { makeMacGrantObserver } from "./CuaDriverMacGrants.ts";
 import { x11DisplayOf } from "./CuaDriverDisplay.ts";
+import { desktopHelperReadiness } from "./DesktopHelperReadiness.ts";
+export { desktopHelperReadiness } from "./DesktopHelperReadiness.ts";
 
 import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -61,7 +64,6 @@ import { honoredSignals } from "./ComputerUsePrivateMode.ts";
 import * as StandaloneCuaManifest from "./StandaloneCuaManifest.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
 import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
-
 export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>()(
   "CuaDriverStartError",
   { binaryPath: Schema.String, cause: Schema.Defect() },
@@ -70,7 +72,6 @@ export class CuaDriverStartError extends Schema.TaggedError<CuaDriverStartError>
     return "Failed to start Cua Driver.";
   }
 }
-
 export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()(
   "CuaDriverHostError",
   {
@@ -109,10 +110,8 @@ export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()
     return `Cua Driver host failed during ${this.operation}.`;
   }
 }
-
 export const CUA_DRIVER_REFUSED_MESSAGE =
   "Cua Driver refused GOAT's capability manifest or launch options. The server log has the driver's reason.";
-
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
 /** The typed reason behind a failed start, when agents cannot get past it alone (#1399). */
@@ -138,7 +137,6 @@ const currentBlock = (
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
-
 export interface CuaDriverHost {
   readonly start: Effect.Effect<CuaDriverMcpConfiguration, CuaDriverError>;
   readonly stop: Effect.Effect<void, CuaDriverError>;
@@ -148,6 +146,7 @@ export interface CuaDriverHost {
 export class CuaDriver extends Context.Service<
   CuaDriver,
   {
+    readonly readBrowserConfig?: Effect.Effect<unknown, Error>;
     readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
@@ -272,6 +271,7 @@ export interface CuaDriverOptions {
   >;
   /** The driver binary a start would run, for a readiness check before the first turn. */
   readonly binary?: Effect.Effect<string, CuaDriverHostError>;
+  readonly readBrowserConfig?: (mcp: CuaDriverMcpConfiguration) => Effect.Effect<unknown, Error>;
   readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
   readonly probeBrowserClaims?: (mcp: CuaDriverMcpConfiguration) => Effect.Effect<unknown>;
   readonly setDriverCapability?: (supported: boolean) => Effect.Effect<void>;
@@ -500,6 +500,17 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     }
   }, lifecycle.withPermit);
   return CuaDriver.of({
+    readBrowserConfig: Effect.gen(function* () {
+      const entry = active;
+      if (!entry?.running || !entry.mcp || !options.readBrowserConfig)
+        return yield* new BrowserClaimManifestUnavailable({
+          cause: "Driver configuration is unavailable.",
+        });
+      const result = yield* options.readBrowserConfig(entry.mcp);
+      if (active !== entry || entry.revoked)
+        return yield* new BrowserClaimManifestUnavailable({ cause: "Driver was replaced." });
+      return result;
+    }),
     publishBrowserManifest: Effect.fn("CuaDriver.publishBrowserManifest")((union: Union) =>
       manifestLock.withPermits(1)(
         options.publishBrowserManifest?.(union) ??
@@ -765,25 +776,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
   },
 );
 
-/** The desktop host's helper readiness, as desktop telemetry last carried it. */
-/**
- * The desktop app's last readiness report, while that app is still connected. One whose
- * telemetry stopped cannot start the driver (acquire refuses it below), so its last report would
- * call an idle driver ready for the next turn (#1538).
- */
-export const desktopHelperReadiness = Effect.map(
-  DesktopTelemetryReceiver.DesktopTelemetryReceiver,
-  (receiver) =>
-    Effect.gen(function* () {
-      const { status } = yield* receiver.health;
-      if (status === "stopped" || status === "unavailable") return Option.none();
-      return Option.map(yield* receiver.cuaReadiness, ({ readiness, signals }) => ({
-        readiness,
-        signals,
-      }));
-    }),
-);
-
 /** An app's own name when its id is an executable path, so a Linux or Windows entry reads well. */
 export const catalogName = (id: string): string => {
   const base = id.split(/[\\/]/).pop() ?? id;
@@ -982,6 +974,7 @@ export const layer = Layer.effect(
         : {}),
       publishBrowserManifest,
       probeBrowserClaims: yield* makeBrowserDriverCapabilityProbe(),
+      readBrowserConfig: yield* makeBrowserDriverGetConfig(),
       setDriverCapability: (supported) =>
         browserGrants.setDriverCapability(supported).pipe(Effect.ignoreCause({ log: true })),
       ...(install ? { install } : {}),
@@ -993,7 +986,13 @@ export const layer = Layer.effect(
       ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });
     if (driver.publishBrowserManifest)
-      yield* browserManifest.install(driver.publishBrowserManifest);
+      yield* browserManifest.install(
+        driver.publishBrowserManifest,
+        driver.readBrowserConfig ??
+          Effect.fail(
+            new BrowserClaimManifestUnavailable({ cause: "Driver configuration is unavailable." }),
+          ),
+      );
     return driver;
   }),
 );

@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
-import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 
 it.effect("does not bind before approval and hides a mismatch as a decline", () =>
   Effect.gen(function* () {

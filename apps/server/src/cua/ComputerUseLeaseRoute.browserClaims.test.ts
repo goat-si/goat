@@ -30,7 +30,7 @@ import type { ComputerUseControlState } from "./ComputerUseControl.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
+import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
@@ -318,6 +318,13 @@ describe("computer use lease route", () => {
               }),
               Layer.succeed(BrowserClaimManifest, {
                 publish: () => Effect.succeed("a".repeat(64)),
+                readConfig: Effect.succeed({
+                  capability_manifest: {
+                    sha256: "a".repeat(64),
+                    file_sha256: "a".repeat(64),
+                    reload_error: null,
+                  },
+                }),
                 install: () => Effect.void,
               }),
             ),

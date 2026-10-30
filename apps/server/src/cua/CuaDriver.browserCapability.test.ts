@@ -3,13 +3,15 @@ import { EnvironmentId, ThreadId, type CuaDriverMcpConfiguration } from "@goat/c
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import type * as CuaDisplay from "./CuaDisplayCapability.ts";
-import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
+import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 import { makeBrowserDriverCapabilityProbe } from "./BrowserDriverCapabilityProbe.ts";
 import { supportsBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
@@ -192,3 +194,30 @@ it.live("probes a fake MCP driver's own tools list", () =>
     expect(supportsBrowserClaims(result)).toBe(true);
   }).pipe(Effect.provideService(HostProcess.Environment, {})),
 );
+
+it.layer(ServerSettings.layerTest())("browser manifest confirmation", (it) => {
+  it.effect("rejects a configuration reply after the driver generation exits", () =>
+    Effect.gen(function* () {
+      const host = yield* makeHost();
+      const started = yield* Deferred.make<void>();
+      const reply = yield* Deferred.make<unknown>();
+      const { service } = yield* makeService(Effect.succeed(host.host), true, undefined, {
+        readBrowserConfig: () =>
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(reply))),
+      });
+      yield* Deferred.succeed(host.ready, mcp);
+      yield* service.acquire;
+      yield* Deferred.await(host.watching);
+      if (!service.readBrowserConfig) return expect.fail("missing config reader");
+      const result = yield* service.readBrowserConfig.pipe(
+        Effect.exit,
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(started);
+      yield* Deferred.succeed(host.exited, undefined);
+      yield* Deferred.await(host.stopped);
+      yield* Deferred.succeed(reply, { capability_manifest: {} });
+      expect(Exit.isFailure(yield* Fiber.join(result))).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+});

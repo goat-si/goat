@@ -24,7 +24,17 @@ const make = Effect.gen(function* () {
     supported: () => supported && Option.isSome(manifest),
     bindAvailable: () => Option.isSome(bind),
     publish: (union) =>
-      Option.isSome(manifest) ? manifest.value.publish(union).pipe(Effect.asVoid) : Effect.void,
+      Option.isSome(manifest)
+        ? manifest.value.publish(union)
+        : Effect.fail(
+            new BrowserClaimBindUnavailable({ cause: "Browser manifest is unavailable." }),
+          ),
+    confirm: () =>
+      Option.isSome(manifest)
+        ? manifest.value.readConfig
+        : Effect.fail(
+            new BrowserClaimBindUnavailable({ cause: "Driver configuration is unavailable." }),
+          ),
     bind: (request) =>
       Option.isSome(bind)
         ? bind.value.bind(request)

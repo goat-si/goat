@@ -49,6 +49,13 @@ it.effect("reports unsupported capability as unavailable and removes claims from
             }),
             Layer.succeed(BrowserClaimManifest, {
               publish: () => Effect.succeed("a".repeat(64)),
+              readConfig: Effect.succeed({
+                capability_manifest: {
+                  sha256: "a".repeat(64),
+                  file_sha256: "a".repeat(64),
+                  reload_error: null,
+                },
+              }),
               install: () => Effect.void,
             }),
             Layer.succeed(BrowserClaimBind, {
@@ -102,6 +109,13 @@ it.effect("refuses an approved claim as unavailable when the bind service is abs
             }),
             Layer.succeed(BrowserClaimManifest, {
               publish: () => Effect.succeed("a".repeat(64)),
+              readConfig: Effect.succeed({
+                capability_manifest: {
+                  sha256: "a".repeat(64),
+                  file_sha256: "a".repeat(64),
+                  reload_error: null,
+                },
+              }),
               install: () => Effect.void,
             }),
           ),
@@ -185,6 +199,13 @@ it.effect("does not publish a browser union while driver capability is unavailab
                   writes++;
                   return "a".repeat(64);
                 }),
+              readConfig: Effect.succeed({
+                capability_manifest: {
+                  sha256: "a".repeat(64),
+                  file_sha256: "a".repeat(64),
+                  reload_error: null,
+                },
+              }),
               install: () => Effect.void,
             }),
           ),

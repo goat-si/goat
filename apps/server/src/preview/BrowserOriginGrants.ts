@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { manifestApplied } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
 
 export interface Request {
   readonly threadId: ThreadId;
@@ -32,7 +33,8 @@ interface Dependencies {
   readonly environmentId: EnvironmentId;
   readonly supported: () => boolean;
   readonly bindAvailable?: () => boolean;
-  readonly publish: (union: Union) => Effect.Effect<void, Error>;
+  readonly publish: (union: Union) => Effect.Effect<string, Error>;
+  readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
   readonly bind: (input: Request) => Effect.Effect<
     {
       readonly tabId: string;
@@ -43,6 +45,11 @@ interface Dependencies {
     Error
   >;
 }
+
+class BrowserManifestNotApplied extends Schema.TaggedError<BrowserManifestNotApplied>()(
+  "BrowserManifestNotApplied",
+  {},
+) {}
 
 const decline = {
   status: "refused",
@@ -73,10 +80,26 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
 ) {
   const lock = yield* Semaphore.make(1);
   const version = yield* SubscriptionRef.make(0);
-  const publish = (value: Union) =>
+  const confirm = Effect.fn("BrowserOriginGrants.confirmManifest")(function* (sha: string) {
+    if (!manifestApplied(yield* deps.confirm(sha), sha))
+      return yield* new BrowserManifestNotApplied();
+  });
+  const write = (value: Union) =>
     SubscriptionRef.update(version, (current) => current + 1).pipe(
       Effect.andThen(deps.publish(value)),
     );
+  const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
+    yield* confirm(yield* write(value));
+  });
+  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
+    const sha = yield* write(value);
+    yield* confirm(sha).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Browser manifest shrink confirmation failed", { cause }),
+      ),
+      Effect.forkDetach({ startImmediately: true }),
+    );
+  });
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
   const grants = new Map<string, BrowserOriginGrant>();
@@ -147,11 +170,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           pending.delete(claimId);
           claims.delete(claimId);
           if (!existed) grants.delete(grantKey);
-          yield* publish(union());
+          yield* shrink(union());
         });
         const result = yield* Effect.gen(function* () {
           yield* publish(union());
+          if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
           const tab = yield* deps.bind(entry);
+          if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
           if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
             return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
@@ -169,7 +194,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           };
           claims.set(claimId, claim);
           pending.delete(claimId);
-          yield* publish(union());
+          yield* SubscriptionRef.update(version, (current) => current + 1);
           return { agentResult: { status: "attached" as const, claim } };
         }).pipe(Effect.catch(() => rollback.pipe(Effect.as({ agentResult: decline }))));
         return result;
@@ -192,7 +217,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
         for (const [id, claim] of claims)
           if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
-        yield* publish(union());
+        yield* shrink(union());
       }),
     ),
   );
@@ -201,7 +226,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       Effect.gen(function* () {
         for (const [id, entry] of pending) if (entry.threadId === threadId) pending.delete(id);
         for (const [id, claim] of claims) if (claim.threadId === threadId) claims.delete(id);
-        yield* publish(union());
+        yield* shrink(union());
       }),
     ),
   );
@@ -213,7 +238,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (claim?.threadId !== threadId || claim.claimGeneration !== generation) return false;
           claims.delete(claimId);
           ended.set(claimId, { threadId, reason });
-          yield* publish(union());
+          yield* shrink(union());
           return true;
         }),
       ),
@@ -231,7 +256,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     Effect.gen(function* () {
       pending.clear();
       claims.clear();
-      yield* publish(union());
+      yield* shrink(union());
     }),
   );
   const claimsFor = Effect.fn("BrowserOriginGrants.claimsFor")((threadId: ThreadId) =>

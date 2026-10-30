@@ -20,7 +20,7 @@ import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
+import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 
 const threadId = ThreadId.make("thread:bot");
