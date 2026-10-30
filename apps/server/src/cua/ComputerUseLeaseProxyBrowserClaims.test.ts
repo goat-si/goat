@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   manifestApplied,
+  scopeBrowserCall,
   refusesClaimedBrowserDesktopCall,
   supportsBrowserClaims,
 } from "./ComputerUseLeaseProxyBrowserClaims.ts";
@@ -46,6 +47,42 @@ it("requires the applied manifest hash and no reload error", () => {
     ),
   ).toBe(false);
   expect(manifestApplied({}, hash)).toBe(false);
+});
+
+it("limits browser calls to the claimed tab and replaces caller supplied origin scopes", () => {
+  const claims = [
+    {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+    },
+  ];
+  expect(scopeBrowserCall("browser_click", { tab_id: "tab-2" }, claims)).toEqual({ refused: true });
+  expect(scopeBrowserCall("browser_click", { tab_id: "tab-1" }, [])).toEqual({ refused: true });
+  expect(scopeBrowserCall("browser_prepare", { pid: 42, window_id: 7 }, claims)).toEqual({
+    refused: true,
+  });
+  expect(
+    scopeBrowserCall(
+      "browser_click",
+      { tab_id: "tab-1", origin_scope: ["https://other.test"] },
+      claims,
+    ),
+  ).toEqual({
+    args: { tab_id: "tab-1", origin_scope: ["https://example.test"] },
+    claimId: "claim-1",
+    claimGeneration: 1,
+  });
+  expect(
+    scopeBrowserCall(
+      "run_steps",
+      { steps: [{ tool: "browser_click", args: { tab_id: "tab-1" } }] },
+      claims,
+    ),
+  ).toEqual({ refused: true });
 });
 
 it("refuses desktop calls to a host-wide claimed browser pid", () => {

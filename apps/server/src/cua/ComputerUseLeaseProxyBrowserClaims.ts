@@ -18,6 +18,57 @@ export const supportsBrowserClaims = (result: unknown): boolean => {
   return Object.hasOwn(tool.inputSchema.properties, "origin_scope");
 };
 
+export interface ProxyBrowserClaim {
+  readonly claimId: string;
+  readonly claimGeneration: number;
+  readonly pid: number;
+  readonly windowId: number;
+  readonly tabId: string;
+  readonly origins: ReadonlyArray<string>;
+}
+
+const scopedBrowserTools = new Set([
+  "get_browser_state",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_pointer",
+  "browser_select",
+  "browser_dialog",
+]);
+const isBrowserTool = (name: unknown) =>
+  typeof name === "string" &&
+  (name.startsWith("browser_") || name === "get_browser_state" || name === "page");
+
+export const scopeBrowserCall = (
+  name: unknown,
+  args: unknown,
+  claims: ReadonlyArray<ProxyBrowserClaim>,
+) => {
+  if (
+    name === "run_steps" &&
+    isRecord(args) &&
+    Array.isArray(args.steps) &&
+    args.steps.some((step: unknown) => isRecord(step) && isBrowserTool(step.tool))
+  )
+    return { refused: true as const };
+  if (!isBrowserTool(name)) return { unchanged: true as const };
+  if (
+    typeof name !== "string" ||
+    !scopedBrowserTools.has(name) ||
+    !isRecord(args) ||
+    typeof args.tab_id !== "string"
+  )
+    return { refused: true as const };
+  const claim = claims.find((candidate) => candidate.tabId === args.tab_id);
+  if (claim === undefined || claim.origins.length === 0) return { refused: true as const };
+  return {
+    args: { ...args, origin_scope: claim.origins },
+    claimId: claim.claimId,
+    claimGeneration: claim.claimGeneration,
+  };
+};
+
 const desktopTools = new Set([
   "click",
   "double_click",
