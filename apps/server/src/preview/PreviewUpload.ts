@@ -150,7 +150,7 @@ export const setInputFiles = async (
 ) => {
   const locator = targetLocator(page, input);
   if (locator === null) return false;
-  const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.signal);
   try {
     await uploadInto(cdp, handle, input.paths, gate);
   } finally {

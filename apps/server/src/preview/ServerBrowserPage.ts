@@ -22,6 +22,8 @@ import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwrigh
 import { pointerInterception } from "./pointerInterception.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
+  abortable,
+  acquireTarget,
   actionDeadline,
   pinTarget,
   remaining,
@@ -217,11 +219,7 @@ const targetChanged = () =>
   );
 
 /** The target's element, after Playwright's wait for it; a detached target is a changed one. */
-export const elementOf = async (locator: Locator, timeout: number) => {
-  const handle = await locator.elementHandle({ timeout });
-  if (handle === null) throw targetChanged();
-  return handle;
-};
+export const elementOf = acquireTarget;
 
 /** A wait for the target that timed out sent nothing, so the broker can report it unsent. */
 const unsentOnTimeout = (cause: unknown) =>
@@ -237,14 +235,31 @@ const unsentOnTimeout = (cause: unknown) =>
  * Waits for visible, enabled and stable before the gate, within the request's deadline: the
  * Playwright action after it has only a short budget, and motion can come from any script.
  */
-const settled = async (locator: Locator, deadline: number, enabled = true) => {
-  const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
-    throw unsentOnTimeout(cause);
-  });
+const settled = async (
+  locator: Locator,
+  deadline: number,
+  enabled = true,
+  gate: DispatchGate = open,
+) => {
+  const handle = await elementOf(locator, remaining(deadline), gate.signal).catch(
+    (cause: unknown) => {
+      throw unsentOnTimeout(cause);
+    },
+  );
   try {
-    await handle.waitForElementState("visible", { timeout: remaining(deadline) });
-    if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
-    await handle.waitForElementState("stable", { timeout: remaining(deadline) });
+    await abortable(
+      () => handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+      gate.signal,
+    );
+    if (enabled)
+      await abortable(
+        () => handle.waitForElementState("enabled", { timeout: remaining(deadline) }),
+        gate.signal,
+      );
+    await abortable(
+      () => handle.waitForElementState("stable", { timeout: remaining(deadline) }),
+      gate.signal,
+    );
   } catch (cause) {
     throw unsentOnTimeout(cause);
   } finally {
@@ -274,7 +289,7 @@ const locatePoint = async (
   gate: DispatchGate,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
-  const target = await elementOf(locator, remaining(deadline));
+  const target = await elementOf(locator, remaining(deadline), gate.signal);
   try {
     await revealFramesOf(target, deadline, gate);
   } finally {
@@ -670,7 +685,7 @@ export const click = async (
   const point = await targetPoint(page, locator, input, deadline, gate);
   await pointer(point, "click");
   const button = input.button ?? "left";
-  if (locator !== null) await settled(locator, deadline);
+  if (locator !== null) await settled(locator, deadline, true, gate);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
@@ -703,6 +718,7 @@ export const click = async (
         "The click's deadline passed after its first press; the later presses were not sent.",
       );
     await gate();
+    gate.signal?.throwIfAborted();
     sent = true;
     if (count === 1)
       return locator === null
@@ -751,7 +767,7 @@ export const type = async (
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
   const present = locator !== null || (await target.count()) > 0;
-  const handle = present ? await pinTarget(target, deadline) : null;
+  const handle = present ? await pinTarget(target, deadline, gate.signal) : null;
   try {
     if (handle) await waitUntilWritable(handle, deadline, readiness, gate);
     if (handle) await gate();
@@ -853,12 +869,14 @@ export const hover = async (
   if (locator === null) {
     remaining(deadline);
     await gate();
+    gate.signal?.throwIfAborted();
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await settled(locator, deadline, false);
+  await settled(locator, deadline, false, gate);
   remaining(deadline);
   await gate();
+  gate.signal?.throwIfAborted();
   await locator.hover(dispatched(deadline));
 };
 
@@ -869,7 +887,7 @@ export const select = async (
   readiness: Readiness = {},
 ): Promise<PreviewAutomationSelectResult> => {
   const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
-  const handle = await elementOf(targetLocator(page, input)!, remaining(deadline));
+  const handle = await elementOf(targetLocator(page, input)!, remaining(deadline), gate.signal);
   try {
     const ready = await waitUntilSelectable(handle, input.values, deadline, readiness);
     const found = await handle.evaluate((element) => {
@@ -915,6 +933,7 @@ export const select = async (
       );
     remaining(deadline);
     await gate();
+    gate.signal?.throwIfAborted();
     // What Playwright's selectOption does once the options exist, without its wait for them.
     const selected = await handle.evaluate((element, chosen) => {
       const select = element as unknown as {
@@ -959,8 +978,8 @@ export const drag = async (
   const target = targetLocator(page, { locator: input.target })!;
   const start = await targetPoint(page, source, {}, deadline, gate);
   await pointer(start, "move");
-  await settled(source, deadline, false);
-  await settled(target, deadline, false);
+  await settled(source, deadline, false, gate);
+  await settled(target, deadline, false, gate);
   const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
   if (!end) throw targetChanged();
   const finish = { x: end.x + end.width / 2, y: end.y + end.height / 2 };
@@ -974,6 +993,7 @@ export const press = async (
   gate: DispatchGate = open,
 ) => {
   await gate();
+  gate.signal?.throwIfAborted();
   await page.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
 };
 
@@ -992,13 +1012,15 @@ export const scroll = async (
   const locator = targetLocator(page, input);
   if (locator === null) {
     await gate();
+    gate.signal?.throwIfAborted();
     // Page-side code is passed as source: the server compiles without DOM types.
     await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
     return { settled: await settleScroll(page, undefined, gate.deadline) };
   }
-  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS);
+  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS, gate.signal);
   try {
     await gate();
+    gate.signal?.throwIfAborted();
     await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
     return { settled: await settleScroll(page, { element: handle }, gate.deadline) };
   } finally {

@@ -15,7 +15,7 @@ interface ReadinessGate {
   (): void | Promise<void>;
   readonly signal?: AbortSignal | undefined;
 }
-const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {
+export const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {
   if (!signal) return work();
   if (signal.aborted) throw signal.reason;
   let abort: (() => void) | undefined;
@@ -142,11 +142,24 @@ export const revealFramesOf = async (
 };
 
 /** The element a locator names now, held for the rest of the action. */
-export const pinTarget = async (target: Locator, deadline: number) => {
-  const handle = await target.elementHandle({ timeout: remaining(deadline) });
+export const acquireTarget = async (target: Locator, timeout: number, signal?: AbortSignal) => {
+  const pending = target.elementHandle({ timeout });
+  let handle: ElementHandle | null;
+  try {
+    handle = await abortable(() => pending, signal);
+  } catch (cause) {
+    void pending.then(
+      (late) => late?.dispose().catch(() => undefined),
+      () => undefined,
+    );
+    throw cause;
+  }
   if (handle === null) throw targetChanged();
   return handle;
 };
+
+export const pinTarget = (target: Locator, deadline: number, signal?: AbortSignal) =>
+  acquireTarget(target, remaining(deadline), signal);
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
 const selectable = ([element, wanted]: readonly [unknown, ReadonlyArray<string>]) => {
