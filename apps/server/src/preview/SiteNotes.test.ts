@@ -123,7 +123,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     ],
     ["private key header", "-----BEGIN PRIVATE KEY-----"],
     ["openssh private key header", "-----BEGIN OPENSSH PRIVATE KEY-----"],
-  ])("refuses secret shape: %s", ([_name, text]) =>
+  ] satisfies Array<[string, string]>)("refuses secret shape: %s", ([_name, text]) =>
     Effect.gen(function* () {
       yield* runMigrations();
       yield* Effect.gen(function* () {
