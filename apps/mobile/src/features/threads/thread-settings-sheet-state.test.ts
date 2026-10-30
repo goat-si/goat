@@ -8,7 +8,7 @@ import { EnvironmentId, ProviderInstanceId, type ProviderOptionSelection } from 
 import type { ModelOption } from "../../lib/modelOptions";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { modelOptionMemoryAtom } from "../../state/use-composer-drafts";
-import { canSelectModel } from "./thread-settings-sheet-state";
+import { canSelectModel, popoverSheetHeight } from "./thread-settings-sheet-state";
 import { ThreadComposer, type ThreadComposerProps } from "./ThreadComposer";
 
 vi.hoisted(() =>
@@ -333,5 +333,20 @@ describe("thread settings sheet state", () => {
         },
       ]),
     ).toBe(false);
+  });
+});
+
+describe("popoverSheetHeight", () => {
+  it("hugs short content so the popover has no empty space", () => {
+    expect(popoverSheetHeight({ contentHeight: 231.4, windowHeight: 844, isPad: false })).toBe(231);
+  });
+
+  it("stops below the phone sheet's maximum so the last option row can scroll into view", () => {
+    expect(popoverSheetHeight({ contentHeight: 2000, windowHeight: 844, isPad: false })).toBe(675);
+  });
+
+  it("stays inside an iPad form sheet, which UIKit sizes on its own", () => {
+    expect(popoverSheetHeight({ contentHeight: 2000, windowHeight: 1194, isPad: true })).toBe(560);
+    expect(popoverSheetHeight({ contentHeight: 300, windowHeight: 1194, isPad: true })).toBe(300);
   });
 });

@@ -19,6 +19,7 @@ import {
   ThreadSettingsSessionProvider,
   type ThreadSettingsSessionProps,
 } from "./thread-settings-session";
+import { popoverSheetHeight } from "./thread-settings-sheet-state";
 
 const THREAD_SETTINGS_HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(
   Platform.OS,
@@ -72,9 +73,9 @@ let lastPopoverHeight = 320;
 
 /**
  * The composer's reasoning popover; its "fitToContents" sheet sizes to this content.
- * On iOS, react-native-screens wraps a sheet's content in a flex:1 SafeAreaView, which collapses
- * to zero height inside the content-sized wrapper, so the sheet would measure nothing. The popover
- * measures its own content and gives that wrapper an explicit height through `contentStyle`.
+ * On iOS the flex:1 layers between the sheet's content-sized wrapper and this content (Screens'
+ * SafeAreaView on iOS 26+, the card stack and column views) collapse to zero, so the sheet would
+ * measure nothing. The popover measures its content and sets the wrapper's height via `contentStyle`.
  */
 function ThreadSettingsPopover(
   props: ThreadSettingsSessionProps & { readonly onOpenModelPicker: () => void },
@@ -82,7 +83,11 @@ function ThreadSettingsPopover(
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [contentHeight, setContentHeight] = useState(lastPopoverHeight);
-  const sheetHeight = Math.round(Math.min(contentHeight, height * 0.9));
+  const sheetHeight = popoverSheetHeight({
+    contentHeight,
+    windowHeight: height,
+    isPad: Platform.OS === "ios" && Platform.isPad,
+  });
   return (
     <ThreadSettingsSessionProvider {...props}>
       {Platform.OS === "ios" ? (

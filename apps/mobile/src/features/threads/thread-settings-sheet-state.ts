@@ -53,3 +53,20 @@ export function providerSectionIsCollapsed(input: {
   }
   return input.defaultExpanded ? input.hasExpansionOverride : !input.hasExpansionOverride;
 }
+
+// UIKit caps a sheet below the window (status bar, grabber; a form sheet on iPad), and content
+// taller than the visible sheet would be clipped instead of scrolling, so stop well short of it.
+const POPOVER_PHONE_MAX_FRACTION = 0.8;
+const POPOVER_PAD_MAX_HEIGHT = 560;
+
+/** The height a content-sized popover sheet gives its content; past the cap, the content scrolls. */
+export function popoverSheetHeight(input: {
+  readonly contentHeight: number;
+  readonly windowHeight: number;
+  readonly isPad: boolean;
+}): number {
+  const cap = input.isPad
+    ? Math.min(POPOVER_PAD_MAX_HEIGHT, input.windowHeight * POPOVER_PHONE_MAX_FRACTION)
+    : input.windowHeight * POPOVER_PHONE_MAX_FRACTION;
+  return Math.round(Math.min(Math.max(0, input.contentHeight), cap));
+}
