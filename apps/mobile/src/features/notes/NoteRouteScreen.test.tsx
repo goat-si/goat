@@ -705,6 +705,21 @@ describe("live note editor", () => {
     expect(container.textContent).toContain("nothing was saved");
   });
 
+  it("keeps the recovery warning when the editor dies while a save waits for its text", async () => {
+    const answer = Promise.withResolvers<{ synced: boolean }>();
+    mocks.sync.mockReturnValueOnce(answer.promise);
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    act(() => button("Save on phone").click());
+    act(() => button("Editor crashed mid-resync").click());
+    await act(async () => answer.resolve({ synced: false }));
+    expect(container.textContent).toContain("the last few edits may be missing");
+    expect(container.textContent).not.toContain("nothing was saved");
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
   it("keeps the recovery warning when a save started before it finishes later", async () => {
     const pending = Promise.withResolvers<string>();
     mocks.enqueue.mockReturnValueOnce(pending.promise);

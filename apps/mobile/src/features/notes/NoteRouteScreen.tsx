@@ -321,7 +321,10 @@ function NoteContent(props: NoteParams) {
   /** Saves what the live editor holds now, after it confirms React Native has all of it. */
   const saveCurrent = async (nextStatus?: NoteStatus) => {
     const editor = liveUnavailable === null ? liveEditor.current : null;
+    const epoch = recoveryEpoch.current;
     const synced = editor ? await editor.sync() : true;
+    // A recovery loss while waiting already says what happened; keep that warning.
+    if (epoch !== recoveryEpoch.current) return;
     if (!synced) {
       setError("The editor did not answer, so nothing was saved. Try Save again.");
       return;
