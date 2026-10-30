@@ -11,7 +11,7 @@
  *
  * @module ComputerUseScope
  */
-import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 
 import { backgroundBatch, batchAppScope } from "./ComputerUseBatchScope.ts";
 import { foreground } from "./ComputerUseCallReservations.ts";
@@ -123,6 +123,16 @@ export function scopeVerdict(input: {
   readonly bundleIds: boolean;
 }): ScopeVerdict {
   const approved = input.apps;
+  const args = record(input.args);
+  const pid = targetPid(args);
+  const target = pid === undefined ? undefined : input.appOf(pid);
+  const named = text(args?.bundle_id) ?? text(args?.name) ?? text(args?.app_name);
+  const protectedApp = [target?.id, target?.name, target?.executable, named].find(
+    (value) => value !== undefined && isExcludedCuaApplication(value),
+  );
+  if (protectedApp !== undefined)
+    return { _tag: "refuse", reason: "app_not_approved", app: protectedApp };
+  if (pid !== undefined && target === undefined) return { _tag: "resolve", pid };
   if (approved === undefined) return { _tag: "allow" };
   const name = typeof input.name === "string" ? input.name : "";
   if (UNSCOPED_TOOLS.has(name)) return { _tag: "allow" };
@@ -133,7 +143,6 @@ export function scopeVerdict(input: {
       ? { _tag: "allow" }
       : { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
   }
-  const args = record(input.args);
   if (name === "launch_app") {
     // The driver picks what to open from a name, a path, an AUMID or URLs before any id a grant
     // names (cua-driver v0.37.0); on Linux and Windows those can open an app another thread's
@@ -141,14 +150,13 @@ export function scopeVerdict(input: {
     if (!input.bundleIds)
       return { _tag: "refuse", reason: "app_not_approved", launch: "unverifiable" };
     const bundle = text(args?.bundle_id);
-    const named = text(args?.name) ?? text(args?.app_name);
-    if (bundle === undefined || named !== undefined)
+    const launchName = text(args?.name) ?? text(args?.app_name);
+    if (bundle === undefined || launchName !== undefined)
       return { _tag: "refuse", reason: "app_not_approved", launch: "bundle_id" };
     return approves(approved, bundle)
       ? { _tag: "allow" }
       : { _tag: "refuse", reason: "app_not_approved", app: bundle };
   }
-  const pid = targetPid(args);
   if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };

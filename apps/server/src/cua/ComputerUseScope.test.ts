@@ -14,6 +14,28 @@ const verdict = (listed: Map<number, ListedApp>) =>
   });
 
 describe("learnApps", () => {
+  it("refuses protected apps even under an unrestricted control", () => {
+    for (const id of [
+      "com.apple.systempreferences",
+      "com.apple.loginwindow",
+      "com.apple.SecurityAgent",
+      "com.apple.coreauthd",
+      "com.apple.LocalAuthentication.UIAgent",
+      "com.apple.keychainaccess",
+      "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeWidgetApplication",
+      "com.apple.ScreenTimeViewService",
+    ]) {
+      const result = scopeVerdict({
+        name: "click",
+        args: { pid: 12, window_id: 34 },
+        apps: undefined,
+        appOf: () => ({ id, name: "System app" }),
+        bundleIds: true,
+      });
+      assert.equal(result._tag, "refuse", id);
+    }
+  });
   it("lists a pid again after a reply names its app without the bundle id a grant names", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed, true);
