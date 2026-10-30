@@ -14,6 +14,7 @@ import {
 
 import { useTurnItemDetail } from "../../state/queries";
 import { Badge } from "../ui/badge";
+import { ComputerUseHistorySection } from "./ComputerUseHistorySection";
 
 const STATUS_VARIANT = {
   running: "info",
@@ -71,6 +72,11 @@ export function ComputerUseRunCard(props: {
         {target === null ? null : <span className="min-w-0 truncate">{target}</span>}
       </div>
       {note === null ? null : <p className="text-xs text-muted-foreground">{note}</p>}
+      <ComputerUseHistorySection
+        key={`${props.environmentId}:${props.projectedItem.sourceThreadId}`}
+        environmentId={props.environmentId}
+        threadId={props.projectedItem.sourceThreadId}
+      />
     </div>
   );
 }
