@@ -119,7 +119,10 @@ export const makeComputerUseStanding = (deps: {
           .pipe(Effect.mapError(unavailable));
       }
     }
-    if (endsApproved) yield* clear(input.threadId);
+    if (endsApproved) {
+      yield* clear(input.threadId);
+      yield* revalidateUnlocked(input.threadId);
+    }
   });
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
     const attempt = withAllowedSettings((list, enabled) =>
@@ -196,25 +199,23 @@ export const makeComputerUseStanding = (deps: {
     });
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
-  const revalidate = Effect.fn("Handoffs.revalidateComputerUse")((threadId?: ThreadId) => {
-    const effect = withAllowedSettings((list) =>
+  const revalidateUnlocked = (threadId?: ThreadId) =>
+    withAllowedSettings((list) =>
       Effect.gen(function* () {
         if (Option.isNone(leases)) return;
         const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
         for (const grant of grants) {
           if (threadId !== undefined && grant.threadId !== threadId) continue;
           const handoff = yield* deps.read(grant.threadId, grant.handoffId);
-          if (
-            (handoff.computerUseScope !== "always" && handoff.computerUseScope !== "standing") ||
-            handoff.apps === undefined
-          )
-            continue;
+          if (handoff.computerUseScope === undefined || handoff.apps === undefined) continue;
           if (yield* allowed(grant.threadId, handoff.apps, list)) continue;
           yield* leases.value.release([grant.handoffId]);
           yield* deps.revoke(handoff);
         }
       }),
-    ).pipe(lock.withPermits(1));
+    );
+  const revalidate = Effect.fn("Handoffs.revalidateComputerUse")((threadId?: ThreadId) => {
+    const effect = revalidateUnlocked(threadId).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
   return { validate, record, clear, auto, stop, revalidate, toggle };

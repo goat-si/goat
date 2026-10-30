@@ -487,3 +487,39 @@ it.effect("a legacy approval remains time-limited without a standing choice", ()
     ),
   ),
 );
+
+it.effect("ending one admission clears the thread's other session admissions", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.AppA"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        const second = yield* request({ apps: ["com.example.AppB"] });
+        if (second.kind !== "needs_human") return assert.fail("expected second approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: second.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        yield* handoffs.respond(
+          { threadId, handoffId: first.handoff.handoffId, action: "cancelled" },
+          sessionId,
+        );
+        assert.equal((yield* request({ apps: ["com.example.AppB"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
