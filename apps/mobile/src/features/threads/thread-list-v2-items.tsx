@@ -71,11 +71,8 @@ import { liftedThreadListV2Status, type LaunchLift } from "./threadListV2LaunchF
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
-import {
-  ThreadListV2Duration,
-  ThreadListV2RowOrigin,
-  ThreadListV2WorkingSpinner,
-} from "./thread-list-v2-row-meta";
+import { ThreadListV2Duration } from "./thread-list-pane-clock";
+import { ThreadListV2RowOrigin, ThreadListV2WorkingSpinner } from "./thread-list-v2-row-meta";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -1061,7 +1058,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                         ? resolveThreadWorkingStartedAt(thread)
                         : (thread.latestRun?.completedAt ?? null)
                     }
-                    sidebar={sidebarPane}
                   />
                 ) : null}
               </Text>

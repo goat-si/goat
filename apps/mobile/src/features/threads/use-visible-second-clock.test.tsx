@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({ focused: true, active: true }));
 vi.mock("@react-navigation/native", () => ({ useIsFocused: () => state.focused }));
 vi.mock("../../lib/appState", () => ({ useAppActive: () => state.active }));
 
+import { ThreadListPaneVisibleContext, ThreadListV2Duration } from "./thread-list-pane-clock";
 import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 function Clock() {
@@ -71,6 +72,32 @@ it("keeps an always-visible pane's label ticking while its route is unfocused, u
     state.active = false;
     await act(async () => root.render(<Sidebar />));
     expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+  }
+});
+
+it("ticks a sidebar row's elapsed time only while the sidebar pane is shown", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-01T03:00:00.000Z"));
+  state.focused = false;
+  state.active = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const row = (shown: boolean) => (
+    <ThreadListPaneVisibleContext value={shown}>
+      <span>
+        <ThreadListV2Duration startedAt="2026-06-01T02:59:00.000Z" />
+      </span>
+    </ThreadListPaneVisibleContext>
+  );
+  try {
+    await act(async () => root.render(row(false)));
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => root.render(row(true)));
+    expect(vi.getTimerCount()).toBe(1);
   } finally {
     await act(async () => root.unmount());
     vi.useRealTimers();

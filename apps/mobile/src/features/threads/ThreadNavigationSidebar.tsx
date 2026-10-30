@@ -64,6 +64,7 @@ import {
   ThreadListV2WorkingShelfHeader,
 } from "./thread-list-v2-items";
 import { ThreadListV2PriorityHeader } from "./thread-list-v2-priority-header";
+import { ThreadListPaneVisibleContext } from "./thread-list-pane-clock";
 import {
   ThreadListV2LaunchGroupRow,
   ThreadListV2LaunchMoreRow,
@@ -114,10 +115,15 @@ interface ThreadNavigationSidebarProps {
 }
 
 export function ThreadNavigationSidebar(props: ThreadNavigationSidebarProps) {
-  if (Platform.OS !== "ios") {
-    return <ThreadNavigationSidebarPane {...props} nativeChrome={false} />;
-  }
-  return <NativeSidebarContainer {...props} />;
+  return (
+    <ThreadListPaneVisibleContext value={props.visible}>
+      {Platform.OS !== "ios" ? (
+        <ThreadNavigationSidebarPane {...props} nativeChrome={false} />
+      ) : (
+        <NativeSidebarContainer {...props} />
+      )}
+    </ThreadListPaneVisibleContext>
+  );
 }
 
 function NativeSidebarContainer(props: ThreadNavigationSidebarProps) {
