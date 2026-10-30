@@ -403,3 +403,21 @@ describe("proxy expiry follows the server", () => {
     }),
   );
 });
+
+describe("a full access grant follows its control's later expiry", () => {
+  it.effect(
+    "a foreground call after the grant's first expiry goes out once the server moved it",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness({ expiresAt: "1970-01-01T01:00:00.000Z" });
+        yield* h.push(foregroundActive("1970-01-01T01:00:00.000Z"));
+        assert.equal(yield* h.applied, "active");
+        yield* TestClock.adjust("50 minutes");
+        yield* h.push(foregroundActive("1970-01-01T01:50:00.000Z"));
+        assert.equal(yield* h.applied, "active");
+        yield* TestClock.adjust("20 minutes");
+        yield* h.send(call(1, "bring_to_front", { pid: 42 }));
+        assert.equal((yield* h.nextToDriver).id, 1);
+      }),
+  );
+});

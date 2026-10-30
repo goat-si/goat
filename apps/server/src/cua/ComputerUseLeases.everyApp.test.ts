@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Statement from "effect/sql/Statement";
@@ -118,6 +119,30 @@ it.effect("reusing a full access control tells the proxies following it its new 
     Option.getOrThrow(yield* leases.everyAppControl(owner, false));
     assert.isAbove(yield* PubSub.remaining(proxies), before);
   }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "calls every 30 s announce each move of the control's expiry, never leaving it unsaid",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-control-hour-frequent");
+      yield* threadIn(owner, "full-access");
+      Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+      const proxies = yield* leases.subscribe;
+      let expiry = 60 * 60_000;
+      for (let step = 1; step <= 6; step++) {
+        yield* TestClock.adjust("30 seconds");
+        const before = yield* PubSub.remaining(proxies);
+        const reused = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+        const next = DateTime.toEpochMillis(reused.expiresAt);
+        assert.isAtLeast(next, step * 30_000 + 60 * 60_000);
+        assert.equal((yield* PubSub.remaining(proxies)) > before, next !== expiry);
+        expiry = next;
+      }
+      assert.equal(expiry, 63 * 60_000);
+    }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
 );
 
 it.effect("gives a full access thread every app until it leaves full access", () =>
