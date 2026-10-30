@@ -18,7 +18,7 @@ export class EnvironmentUrlUnreachableError extends Schema.TaggedError<Environme
 export const isEnvironmentUrlUnreachableError = Schema.is(EnvironmentUrlUnreachableError);
 
 /** The system-browser address for a URL that came from this environment, or the reason there is none. */
-export function resolveEnvironmentExternalUrl(environmentId: EnvironmentId, url: string) {
+function resolveEnvironmentExternalUrl(environmentId: EnvironmentId, url: string) {
   const connection = readPreparedConnection(environmentId);
   return resolveEnvironmentLoopbackUrl({
     url,
