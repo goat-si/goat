@@ -95,7 +95,11 @@ function boot(init: NoteEditorInit) {
   const parent = document.getElementById("editor");
   if (!parent) return;
   let generation = init.generation;
+  let seq = 0;
   let source = false;
+  // Replacing text or reconfiguring mid-composition can drop the syllable being composed.
+  let deferredDoc: Extract<NoteEditorInbound, { type: "setDoc" }> | null = null;
+  let deferredConfig: NoteEditorConfig | null = null;
   const { lineBreak } = init;
   const accessCompartment = new Compartment();
   const previewCompartment = new Compartment();
@@ -124,12 +128,15 @@ function boot(init: NoteEditorInit) {
             post({
               type: "change",
               generation,
+              seq: ++seq,
               changes: noteEditorChanges(tr.startState.doc, tr.changes, lineBreak),
               length: noteTextLength(tr.state.doc, lineBreak),
               checkbox: tr.annotation(checkboxChange) === true,
             });
           }
           if (update.focusChanged) post({ type: "focus", focused: update.view.hasFocus });
+          if (!update.view.composing && (deferredDoc || deferredConfig))
+            queueMicrotask(applyDeferred);
         }),
       ],
     }),
@@ -151,6 +158,25 @@ function boot(init: NoteEditorInit) {
   window.addEventListener("resize", keepCursorVisible);
   window.visualViewport?.addEventListener("resize", keepCursorVisible);
 
+  function applyDeferred() {
+    if (view.composing) return;
+    if (deferredDoc) {
+      const message = deferredDoc;
+      deferredDoc = null;
+      generation = message.generation;
+      seq = 0;
+      const spec = replaceNoteText(view.state, message.doc);
+      if (spec) view.dispatch(spec);
+    }
+    if (deferredConfig) {
+      const config = deferredConfig;
+      deferredConfig = null;
+      applyTheme(config);
+      view.dispatch({ effects: accessCompartment.reconfigure(access(config)) });
+    }
+  }
+  view.contentDOM.addEventListener("compositionend", () => setTimeout(applyDeferred));
+
   const receive = (event: Event) => {
     let message: NoteEditorInbound;
     try {
@@ -159,18 +185,16 @@ function boot(init: NoteEditorInit) {
       return;
     }
     switch (message.type) {
-      case "setDoc": {
-        generation = message.generation;
-        const spec = replaceNoteText(view.state, message.doc);
-        if (spec) view.dispatch(spec);
+      case "setDoc":
+        deferredDoc = message;
+        if (!view.composing) applyDeferred();
         return;
-      }
       case "config":
-        applyTheme(message.config);
-        view.dispatch({ effects: accessCompartment.reconfigure(access(message.config)) });
+        deferredConfig = message.config;
+        if (!view.composing) applyDeferred();
         return;
       case "requestDoc":
-        post({ type: "doc", generation, doc: noteText(view.state) });
+        post({ type: "doc", generation, seq, doc: noteText(view.state) });
         return;
       case "command":
         switch (message.command) {

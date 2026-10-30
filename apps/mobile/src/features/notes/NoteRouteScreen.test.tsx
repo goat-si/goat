@@ -537,6 +537,84 @@ describe("live note editor", () => {
     expect(button("Delete note").disabled).toBe(false);
   });
 
+  it("bases a second save on the hub revision of the first one while the editor keeps focus", async () => {
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: "v1\n", baseRevision: "a".repeat(64) }),
+    );
+    mocks.read.mockResolvedValue(AsyncResult.success(noteDocument("v1\n", "c".repeat(64))));
+    await act(async () => {
+      mocks.connected = true;
+      mocks.rows = [];
+      render();
+    });
+    mocks.liveNext = "v2\n";
+    act(() => button("Live edit").click());
+    expect(editor()?.textContent).toContain("v2");
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: "v2\n", baseRevision: "c".repeat(64) }),
+    );
+  });
+
+  it("keeps the base when the hub holds someone else's text after this phone's save", async () => {
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    await act(async () => button("Save on phone").click());
+    mocks.read.mockResolvedValue(AsyncResult.success(noteDocument("theirs\n", "c".repeat(64))));
+    await act(async () => {
+      mocks.connected = true;
+      mocks.rows = [];
+      render();
+    });
+    expect(editor()?.textContent).toContain("v1");
+    mocks.liveNext = "v2\n";
+    act(() => button("Live edit").click());
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenLastCalledWith(
+      expect.objectContaining({ body: "v2\n", baseRevision: "a".repeat(64) }),
+    );
+  });
+
+  it("keeps edits that arrive while a save is being written as unsaved", async () => {
+    const pending = Promise.withResolvers<void>();
+    mocks.enqueue.mockReturnValueOnce(pending.promise);
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    act(() => button("Save on phone").click());
+    mocks.liveNext = "v2\n";
+    act(() => button("Live edit").click());
+    await act(async () => pending.resolve());
+    expect(container.textContent).toContain("Unsaved edits");
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenLastCalledWith(expect.objectContaining({ body: "v2\n" }));
+  });
+
+  it("offers Save for a new empty note while the editor has focus", async () => {
+    mocks.live = true;
+    mocks.rows = [];
+    await act(async () =>
+      root.render(
+        <NoteRouteScreen
+          route={{ params: { environmentId: "hub", path: "new.md", create: true } }}
+        />,
+      ),
+    );
+    act(() => button("Focus live editor").click());
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "new.md", body: "" }),
+    );
+  });
+
   it("opens a note it cannot write back byte for byte as markdown source and says why", async () => {
     await live("# Mixed\r\nline\nline\r\n");
     expect(editor()).toBeNull();

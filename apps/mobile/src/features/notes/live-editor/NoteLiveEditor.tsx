@@ -14,8 +14,9 @@ import {
   type NoteEditorTheme,
   type NoteLineBreak,
 } from "./note-editor-protocol";
-import { applyNoteEditorChanges } from "./note-editor-support";
+import { NoteEditorBridge } from "./note-editor-bridge";
 
+const READY_TIMEOUT_MS = 10_000;
 let editorUri: Promise<string> | null = null;
 /** Copies the bundled editor page to a readable file the first time a note opens. */
 function loadEditorUri() {
@@ -118,10 +119,7 @@ function NoteEditorPage({
 }: NoteLiveEditorProps & { readonly uri: string; readonly onTerminated: () => void }) {
   const webView = useRef<WebView<object>>(null);
   const [ready, setReady] = useState(false);
-  // What React Native last knew the page to hold, and which replacement it belongs to.
-  const known = useRef(props.value);
-  const generation = useRef(0);
-  const awaitingDoc = useRef(false);
+  const [bridge] = useState(() => new NoteEditorBridge(props.value));
   const sentConfig = useRef(JSON.stringify(props.config));
   const [openedAt] = useState(() => performance.now());
   const [boot] = useState(
@@ -137,20 +135,27 @@ function NoteEditorPage({
   );
   const send = (message: NoteEditorInbound) =>
     webView.current?.postMessage(JSON.stringify(message));
+  const fail = (detail: string) => {
+    if (__DEV__) console.warn("[notes] live editor unavailable:", detail);
+    props.onUnavailable("The live editor could not start, so this note opens as markdown source.");
+  };
   useImperativeHandle(
     ref,
     () => ({ command: (command) => send({ type: "command", command }) }),
     [],
   );
+  const giveUp = useEffectEvent(() => fail("no ready signal"));
+  // oxlint-disable-next-line goat/react-effect-budget -- a page that never boots must fall back to source
+  useEffect(() => {
+    if (ready) return;
+    const timer = setTimeout(giveUp, READY_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [ready]);
   // oxlint-disable-next-line goat/react-effect-budget -- pushes hub updates and theme changes into the WebView
   useEffect(() => {
     if (!ready) return;
-    if (props.value !== known.current) {
-      generation.current++;
-      known.current = props.value;
-      awaitingDoc.current = false;
-      send({ type: "setDoc", generation: generation.current, doc: props.value });
-    }
+    const replacement = bridge.sync(props.value);
+    if (replacement) send(replacement);
     const config = JSON.stringify(props.config);
     if (config !== sentConfig.current) {
       sentConfig.current = config;
@@ -173,24 +178,13 @@ function NoteEditorPage({
           );
         if (props.autoFocus) send({ type: "command", command: "focus" });
         return;
-      case "change": {
-        if (message.generation !== generation.current || awaitingDoc.current) return;
-        const next = applyNoteEditorChanges(known.current, message.changes, message.length);
-        if (next === null) {
-          awaitingDoc.current = true;
-          send({ type: "requestDoc" });
-          return;
-        }
-        known.current = next;
-        props.onChange(next, message.checkbox);
+      case "change":
+      case "doc": {
+        const receipt = bridge.receive(message);
+        if (receipt.kind === "send") send(receipt.message);
+        else if (receipt.kind === "value") props.onChange(receipt.value, receipt.checkbox);
         return;
       }
-      case "doc":
-        if (message.generation !== generation.current) return;
-        awaitingDoc.current = false;
-        known.current = message.doc;
-        props.onChange(message.doc, false);
-        return;
       case "focus":
         props.onFocusChange(message.focused);
         return;
@@ -201,7 +195,8 @@ function NoteEditorPage({
         props.onLink(message.href);
         return;
       case "error":
-        if (__DEV__) console.warn("[notes] live editor error:", message.message);
+        if (!ready) fail(message.message);
+        else if (__DEV__) console.warn("[notes] live editor error:", message.message);
         return;
     }
   };
@@ -215,6 +210,8 @@ function NoteEditorPage({
       allowingReadAccessToURL={uri.slice(0, uri.lastIndexOf("/") + 1)}
       injectedJavaScriptBeforeContentLoaded={boot}
       onMessage={onMessage}
+      onError={(event) => fail(event.nativeEvent.description)}
+      onHttpError={(event) => fail("HTTP " + event.nativeEvent.statusCode)}
       hideKeyboardAccessoryView
       keyboardDisplayRequiresUserAction={false}
       scrollEnabled={false}

@@ -58,26 +58,74 @@ export type NoteEditorOutbound =
   | {
       readonly type: "change";
       readonly generation: number;
+      /** Numbers this page's edits within a generation, starting at 1. */
+      readonly seq: number;
       readonly changes: ReadonlyArray<NoteEditorChange>;
       readonly length: number;
       readonly checkbox: boolean;
     }
-  | { readonly type: "doc"; readonly generation: number; readonly doc: string }
+  | {
+      readonly type: "doc";
+      readonly generation: number;
+      readonly seq: number;
+      readonly doc: string;
+    }
   | { readonly type: "focus"; readonly focused: boolean }
   | { readonly type: "source"; readonly source: boolean }
   | { readonly type: "link"; readonly href: string }
   | { readonly type: "error"; readonly message: string };
 
-const outboundTypes = new Set(["ready", "change", "doc", "focus", "source", "link", "error"]);
+const isCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+const isChange = (value: unknown): value is NoteEditorChange =>
+  Array.isArray(value) &&
+  value.length === 3 &&
+  isCount(value[0]) &&
+  isCount(value[1]) &&
+  typeof value[2] === "string";
 
+/** Checks every field: the page renders note text, so its messages are untrusted input. */
 export function parseNoteEditorMessage(data: string): NoteEditorOutbound | null {
+  let value: unknown;
   try {
-    const value: unknown = JSON.parse(data);
-    if (typeof value !== "object" || value === null || !("type" in value)) return null;
-    return typeof value.type === "string" && outboundTypes.has(value.type)
-      ? (value as NoteEditorOutbound)
-      : null;
+    value = JSON.parse(data);
   } catch {
     return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const message: Record<string, unknown> = { ...value };
+  const { type } = message;
+  switch (type) {
+    case "ready":
+      return isCount(message.bootMs) ? { type, bootMs: message.bootMs } : null;
+    case "change": {
+      const { generation, seq, changes, length, checkbox } = message;
+      return isCount(generation) &&
+        isCount(seq) &&
+        isCount(length) &&
+        typeof checkbox === "boolean" &&
+        Array.isArray(changes) &&
+        changes.every(isChange)
+        ? { type, generation, seq, changes, length, checkbox }
+        : null;
+    }
+    case "doc": {
+      const { generation, seq, doc } = message;
+      return isCount(generation) && isCount(seq) && typeof doc === "string"
+        ? { type, generation, seq, doc }
+        : null;
+    }
+    case "focus":
+      return typeof message.focused === "boolean" ? { type, focused: message.focused } : null;
+    case "source":
+      return typeof message.source === "boolean" ? { type, source: message.source } : null;
+    case "link":
+      return typeof message.href === "string" && message.href.length > 0
+        ? { type, href: message.href }
+        : null;
+    case "error":
+      return typeof message.message === "string" ? { type, message: message.message } : null;
+    default:
+      return null;
   }
 }

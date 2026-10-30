@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState, Range } from "@codemirror/state";
+import type { EditorState, Range, Text } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -9,7 +9,18 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { SyntaxNodeRef } from "@lezer/common";
+import { noteLinkDefinitions, normalizeLinkLabel } from "./note-editor-links";
 import { toggleTaskAt } from "./note-editor-state";
+
+const definitionsByDoc = new WeakMap<Text, ReadonlyMap<string, string>>();
+function linkDefinitions(doc: Text) {
+  let definitions = definitionsByDoc.get(doc);
+  if (!definitions) {
+    definitions = noteLinkDefinitions(doc.toString());
+    definitionsByDoc.set(doc, definitions);
+  }
+  return definitions;
+}
 
 class BulletWidget extends WidgetType {
   override eq() {
@@ -165,6 +176,25 @@ function buildDecorations(view: EditorView): DecorationSet {
         const url = node.node.getChild("URL");
         const open = linkMarks[0];
         const close = linkMarks[1];
+        if (!url && open && close && node.name === "Link" && !shown(node.from)) {
+          // [text][label], [text][] and [text] take their target from a definition.
+          const label = node.node.getChild("LinkLabel");
+          const text = doc.sliceString(open.to, close.from);
+          const named = label ? doc.sliceString(label.from + 1, label.to - 1) : "";
+          const href = text.startsWith("^")
+            ? undefined
+            : linkDefinitions(doc).get(normalizeLinkLabel(named || text));
+          if (href) {
+            replace(open.from, open.to);
+            replace(close.from, node.to);
+            mark(
+              open.to,
+              close.from,
+              Decoration.mark({ class: "cm-goat-link", attributes: { "data-href": href } }),
+            );
+            return;
+          }
+        }
         if (!url || !open || !close || shown(node.from)) {
           mark(
             node.from,

@@ -91,6 +91,8 @@ function NoteContent(props: NoteParams) {
   const localBody = useRef(body);
   const localStatus = useRef(status);
   const pendingSaves = useRef(0);
+  // This phone's last saved snapshot; once the hub holds exactly it, its revision is the next base.
+  const savedSnapshot = useRef<{ body: string; status: NoteStatus } | null>(null);
   // Bumped when a delete starts or adopts the hub's version, so older reads cannot overwrite it.
   const readEpoch = useRef(0);
   const latest = Option.getOrNull(AsyncResult.value(feed))?.notes.find(
@@ -133,14 +135,25 @@ function NoteContent(props: NoteParams) {
     };
   }, [environmentId, props.path]);
   useEffect(() => {
-    if (!restored || !connected || row || editing || saving || dirty || (props.create && !latest))
-      return;
+    if (!restored || !connected || row || saving || (props.create && !latest)) return;
+    // While text is being edited, a read only refreshes the base of this phone's own last save.
+    const baseOnly = editing || dirty;
+    if (baseOnly && savedSnapshot.current === null) return;
     let active = true;
     const epoch = readEpoch.current;
     void read({ environmentId: readRequest.environmentId, input: readRequest.input }).then(
       (result) => {
         if (!active || epoch !== readEpoch.current) return;
         if (AsyncResult.isSuccess(result)) {
+          const saved = savedSnapshot.current;
+          savedSnapshot.current = null;
+          if (baseOnly) {
+            if (saved?.body === result.value.body && saved.status === result.value.status) {
+              setNote(result.value);
+              editBase.current = result.value.revision;
+            }
+            return;
+          }
           setHasSnapshot(true);
           setNote(result.value);
           setBody(result.value.body);
@@ -186,9 +199,13 @@ function NoteContent(props: NoteParams) {
         baseRevision: editBase.current,
         localUpdatedAt: Date.now(),
       });
-      setDirty(false);
-      // A focused live editor keeps editing, so hub reads cannot replace text under the cursor.
-      setEditing(editorFocusedRef.current);
+      savedSnapshot.current = { body: nextBody, status: nextStatus };
+      // Edits that arrived while the outbox was writing are not in this snapshot.
+      if (localBody.current === nextBody && localStatus.current === nextStatus) {
+        setDirty(false);
+        // A focused live editor keeps editing, so hub reads cannot replace text under the cursor.
+        setEditing(editorFocusedRef.current);
+      }
       setError(null);
       void flushNotes(environmentId).catch((error: unknown) => setError(notesError(error)));
     } catch (error) {
@@ -432,7 +449,7 @@ function NoteContent(props: NoteParams) {
               >
                 {syncText}
               </Text>
-              {dirty ? (
+              {dirty || (props.create && !note && !row) ? (
                 <Button
                   tone="primary"
                   label={saving ? "Saving…" : "Save on phone"}
@@ -460,13 +477,14 @@ function NoteContent(props: NoteParams) {
             autoFocus={props.create}
             config={{ editable: canEditBody, readOnly: busy || !restored, theme: editorTheme }}
             onChange={(next, checkbox) => {
+              setBody(next);
+              localBody.current = next;
               if (checkbox && !editing) {
-                if (next !== localBody.current) void save(next, localStatus.current);
+                if (canWrite && !deletingRef.current) void save(next, localStatus.current);
+                else setDirty(true);
                 return;
               }
               beginEdit("live");
-              setBody(next);
-              localBody.current = next;
               setDirty(true);
             }}
             onFocusChange={(focused) => {
