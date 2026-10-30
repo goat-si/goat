@@ -115,14 +115,18 @@ it.live(
     return runCells(broker, [
       `const tab = await screen.tab('form');
       await tab.claim();
-      const page = await tab.observe();
-      try { await tab.click(page.elements[0].index); } catch (error) { screen.state.lost = error.code; }
-      try { await tab.click(page.elements[0].index); } catch (error) { screen.state.again = error.code; }
+      await tab.observe();
+      try { await tab.click(0); } catch (error) { screen.state.lost = error.code; }
+      try { await tab.click(0); } catch (error) { screen.state.again = error.code; }
       const after = await tab.observe({ diff: false });
-      return { lost: screen.state.lost, again: screen.state.again, elements: after.elements.length };`,
+      return { lost: screen.state.lost, again: screen.state.again, text: after.text };`,
     ]).pipe(
       Effect.map(([result]) => {
-        expect(result?.value).toEqual({ lost: "unknown_outcome", again: "not_run", elements: 1 });
+        expect(result?.value).toEqual({
+          lost: "unknown_outcome",
+          again: "not_run",
+          text: "- button Save [0]",
+        });
         expect(
           result?.journal.find((entry) => entry.receipt.method === "click")?.receipt,
         ).toMatchObject({
