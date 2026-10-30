@@ -426,6 +426,8 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var tokensJson = "[]"
   private var tokens: [ComposerTokenPayload] = []
   private var requestedSelection: ComposerSelectionPayload?
+  /// The source text a caret request was made against, kept while IME composition defers it.
+  private var requestedSelectionValue: String?
   private var theme = ComposerThemePayload(
     text: "#262626",
     placeholder: "#8e8e93"
@@ -444,6 +446,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var pendingIconUris = Set<String>()
   private var tokensNeedRebuild = false
   private var chipsNeedMeasuredWidth = false
+  private var hasDeferredChipRedraw = false
   private var hasDeferredForcedRebuild = false
   private var pendingContentOffset: CGPoint?
   private var needsSelectionReveal = false
@@ -597,7 +600,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     textView.frame = bounds
     if chipsNeedMeasuredWidth, bounds.width > 0 {
       chipsNeedMeasuredWidth = false
-      applyControlledDocument(force: true)
+      redrawChips()
     }
     if textView.isScrollEnabled, bounds.width > 0, bounds.height > 0 {
       textView.layoutIfNeeded()
@@ -654,13 +657,23 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     if tokensJson != document.tokensJson {
+      let nextTokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
+      // Typing before a chip only shifts its offsets, and UIKit already moved the attachment.
+      // Rebuilding for that would reset the keyboard on every keystroke; a chip that was
+      // inserted or removed still rebuilds through documentMatchesExpectedTokens.
+      if Self.chipPresentation(nextTokens) != Self.chipPresentation(tokens) {
+        tokensNeedRebuild = true
+      }
       tokensJson = document.tokensJson
-      tokens = decode([ComposerTokenPayload].self, from: document.tokensJson) ?? []
-      tokensNeedRebuild = true
+      tokens = nextTokens
     }
     let previousSelection = sourceSelection()
     value = document.value
-    requestedSelection = document.selection
+    // Echoes carry no selection; a caret request still waiting on an IME composition survives them.
+    if let selection = document.selection {
+      requestedSelection = selection
+      requestedSelectionValue = document.value
+    }
     applyControlledDocument(force: tokensNeedRebuild)
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
@@ -777,11 +790,13 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   func setSelection(start: Int, end: Int) {
     let previousSelection = sourceSelection()
     requestedSelection = ComposerSelectionPayload(start: start, end: end)
+    requestedSelectionValue = textView.serializedText()
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
   }
 
   public func textViewDidChange(_ textView: UITextView) {
+    applyRequestedSelectionAfterComposition()
     emitTextChange()
   }
 
@@ -790,6 +805,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     restoreBaseTypingAttributes()
+    applyRequestedSelectionAfterComposition()
     // UIKit moves the selection before textViewDidChange runs. Emitting here
     // would pair the post-edit text with a pre-edit revision counter, so let
     // the change event that follows carry both; only pure caret moves emit.
@@ -855,6 +871,10 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   public func textViewDidEndEditing(_ textView: UITextView) {
+    if hasDeferredChipRedraw {
+      hasDeferredChipRedraw = false
+      applyControlledDocument(force: true)
+    }
     onComposerBlur()
   }
 
@@ -874,6 +894,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     hasDeferredForcedRebuild = false
+    hasDeferredChipRedraw = false
 
     let previousSelection = sourceSelection()
     if textView.isScrollEnabled {
@@ -881,8 +902,9 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     isApplyingControlledValue = true
     textView.attributedText = makeAttributedDocument()
-    let targetSelection = requestedSelection ?? previousSelection
+    let targetSelection = currentRequestedSelection() ?? previousSelection
     requestedSelection = nil
+    requestedSelectionValue = nil
     textView.selectedRange = displayRange(for: targetSelection)
     restoreBaseTypingAttributes()
     isApplyingControlledValue = false
@@ -895,21 +917,21 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     emitContentSizeIfNeeded()
   }
 
+  /// Chip-only redraws (a measured width, a loaded icon) wait for editing to end: rebuilding the
+  /// text resets the keyboard, which splits a Korean syllable composed without marked text.
+  private func redrawChips() {
+    guard !textView.isFirstResponder else {
+      hasDeferredChipRedraw = true
+      return
+    }
+    applyControlledDocument(force: true)
+  }
+
   private func makeAttributedDocument() -> NSAttributedString {
     let result = NSMutableAttributedString()
     let source = value as NSString
     var cursor = 0
-    let validTokens = tokens.filter {
-      $0.start >= cursor &&
-        $0.end > $0.start &&
-        $0.end <= source.length &&
-        source.substring(with: NSRange(location: $0.start, length: $0.end - $0.start)) == $0.source
-    }
-
-    for token in validTokens {
-      if token.start < cursor {
-        continue
-      }
+    for token in renderedTokens() {
       if token.start > cursor {
         appendPlainText(
           source.substring(with: NSRange(location: cursor, length: token.start - cursor)),
@@ -926,6 +948,22 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       )
     }
     return result
+  }
+
+  /// The tokens drawn as chips: those matching the text, in order, skipping any that overlap an
+  /// earlier chip. Rendering, offset mapping and the rebuild check must all agree on this list.
+  private func renderedTokens() -> [ComposerTokenPayload] {
+    let source = value as NSString
+    var cursor = 0
+    var rendered: [ComposerTokenPayload] = []
+    for token in tokens where token.start >= cursor &&
+      token.end > token.start &&
+      token.end <= source.length &&
+      source.substring(with: NSRange(location: token.start, length: token.end - token.start)) == token.source {
+      rendered.append(token)
+      cursor = token.end
+    }
+    return rendered
   }
 
   private func appendPlainText(_ text: String, to result: NSMutableAttributedString) {
@@ -1055,7 +1093,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       DispatchQueue.main.async {
         self.pendingIconUris.remove(uri)
         self.iconImages[uri] = image
-        self.applyControlledDocument(force: true)
+        self.redrawChips()
       }
     }.resume()
     return nil
@@ -1087,7 +1125,13 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     guard textView.markedTextRange == nil else {
       return
     }
-    textView.typingAttributes = baseAttributes()
+    let attributes = baseAttributes()
+    // Assigning typing attributes resets the keyboard's input context, which splits a Korean
+    // syllable the keyboard is still composing; skip the write when nothing would change.
+    guard !NSDictionary(dictionary: textView.typingAttributes).isEqual(to: attributes) else {
+      return
+    }
+    textView.typingAttributes = attributes
   }
 
   private func applyTheme() {
@@ -1142,26 +1186,34 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
 
   private func displayOffset(forSourceOffset sourceOffset: Int) -> Int {
     let boundedOffset = max(0, min((value as NSString).length, sourceOffset))
+    let rendered = renderedTokens()
     var collapsedLength = 0
-    for token in tokens where token.end <= boundedOffset {
+    for token in rendered where token.end <= boundedOffset {
       collapsedLength += max(0, token.end - token.start - 1)
     }
-    if let token = tokens.first(where: { $0.start < boundedOffset && boundedOffset < $0.end }) {
+    if let token = rendered.first(where: { $0.start < boundedOffset && boundedOffset < $0.end }) {
       return token.start - collapsedLength + 1
     }
     return boundedOffset - collapsedLength
   }
 
   private func applyRequestedSelection() {
-    guard let requestedSelection else {
+    // Moving the caret commits marked text, so an IME composition would end mid-syllable.
+    // The request waits for the composition to finish; see applyRequestedSelectionAfterComposition.
+    guard requestedSelection != nil, textView.markedTextRange == nil else {
       return
     }
-    let nextRange = displayRange(for: requestedSelection)
+    let request = currentRequestedSelection()
+    self.requestedSelection = nil
+    requestedSelectionValue = nil
+    guard let request else {
+      return
+    }
+    let nextRange = displayRange(for: request)
     guard nextRange.location <= textView.attributedText.length,
           NSMaxRange(nextRange) <= textView.attributedText.length else {
       return
     }
-    self.requestedSelection = nil
     // Programmatically assigning selectedRange resets the keyboard's
     // autocorrect and predictive-text context even when the range is
     // unchanged, so a no-op assignment must be skipped.
@@ -1172,6 +1224,27 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     textView.selectedRange = nextRange
     isApplyingControlledValue = false
     revealSelectionAfterLayout()
+  }
+
+  private func applyRequestedSelectionAfterComposition() {
+    applyRequestedSelection()
+  }
+
+  /// A caret request's offsets refer to the text it was made against; once typing has changed
+  /// that text, the caret belongs to the typing and the request no longer applies.
+  private func currentRequestedSelection() -> ComposerSelectionPayload? {
+    guard let requestedSelection,
+          requestedSelectionValue == nil || requestedSelectionValue == textView.serializedText() else {
+      return nil
+    }
+    return requestedSelection
+  }
+
+  private static func chipPresentation(_ tokens: [ComposerTokenPayload]) -> [String] {
+    tokens.map {
+      [$0.type, $0.source, $0.label, $0.detail ?? "", $0.accent ?? "", $0.iconUri ?? "", $0.tintsIcon == true ? "1" : "0"]
+        .joined(separator: "\u{1F}")
+    }
   }
 
   private func restoreSelectionBeforeFocusingTap() {
@@ -1248,28 +1321,19 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   private func documentMatchesExpectedTokens() -> Bool {
-    let source = value as NSString
-    let expectedSources = tokens.compactMap { token -> String? in
-      guard token.start >= 0,
-            token.end > token.start,
-            token.end <= source.length,
-            source.substring(
-              with: NSRange(location: token.start, length: token.end - token.start)
-            ) == token.source else {
-        return nil
-      }
-      return token.source
-    }
-    var renderedSources: [String] = []
+    // Offsets matter too: a token can move between identical strings while the rendered
+    // attachment stays where it was.
+    let expectedChips = renderedTokens().map { "\($0.start):\($0.source)" }
+    var renderedChips: [String] = []
     textView.attributedText.enumerateAttribute(
       .attachment,
       in: NSRange(location: 0, length: textView.attributedText.length)
-    ) { value, _, _ in
+    ) { value, range, _ in
       if let attachment = value as? ComposerTextAttachment {
-        renderedSources.append(attachment.source)
+        renderedChips.append("\(textView.sourceOffset(forDisplayOffset: range.location)):\(attachment.source)")
       }
     }
-    return renderedSources == expectedSources
+    return renderedChips == expectedChips
   }
 }
 
