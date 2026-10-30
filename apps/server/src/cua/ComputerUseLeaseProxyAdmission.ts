@@ -7,7 +7,7 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
 import { callApp, type Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
-import { grantedAppId, type ListedApp } from "./ComputerUseScope.ts";
+import { grantedAppId, targetPid, type ListedApp } from "./ComputerUseScope.ts";
 import type { AppLabels } from "./ComputerUseAppLabels.ts";
 
 export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(function* (
@@ -36,7 +36,8 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     ? input.foreground.find((grant) => grant.expiresAtMillis > now)
     : undefined;
   const { listed, apps } = input.scope;
-  const known = callApp(name, args, listed);
+  const pid = targetPid(args);
+  const known = callApp(name, args, listed) ?? (pid === undefined ? undefined : listed.get(pid));
   const app = known === undefined ? undefined : grantedAppId(known, apps);
   const appLabel = input.scope.labels?.forCall(args);
   const decision = yield* options.reservation({
