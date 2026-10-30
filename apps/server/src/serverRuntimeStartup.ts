@@ -10,6 +10,7 @@ import {
   ThreadId,
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
@@ -274,6 +275,8 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
   settings = DEFAULT_SERVER_SETTINGS,
 ) {
   yield* AutomationHold.awaitRelease;
+  // A pull may dial an SSH remote; a process refused SSH leaves copied checkouts alone.
+  if ((yield* sshHostsRefusal) !== undefined) return;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const workspaceRoots = [
     ...new Set(
