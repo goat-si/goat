@@ -366,3 +366,66 @@ it.live("a user interacting refusal stops subsequent concurrent app inputs", () 
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live("a failed middle input leaves later group members not run", () => {
+  const { host, sent } = fixture({
+    press_key: new DriverError({ effect: "refused", code: "outside_scope" }),
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} const clicks = [app.click('Apply'), app.press('a'), app.click('Apply')]; ${SETTLED}`,
+    );
+    expect(result.value).toEqual(["confirmed", "permission_denied:true", "not_run:true"]);
+    expect(
+      sent
+        .filter((entry) => ["press_key", "click"].includes(entry.tool))
+        .map((entry) => entry.tool),
+    ).toEqual(["click", "press_key"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.live("adjacent groups for separate windows keep each window's inputs together", () => {
+  const { host, sent } = fixture({
+    list_windows: {
+      windows: [
+        { pid: 42, window_id: 7, title: "First" },
+        { pid: 42, window_id: 8, title: "Second" },
+      ],
+    },
+  });
+  return Effect.gen(function* () {
+    const result =
+      yield* runCell(`const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+      const b = await screen.app({bundle_id: 'org.example.Editor', window_id: 8});
+      const clicks = [a.press('a'), a.press('b'), b.press('c'), b.press('d')]; ${SETTLED}`);
+    expect(result.value).toEqual(["confirmed", "confirmed", "confirmed", "confirmed"]);
+    expect(
+      sent
+        .filter((entry) => entry.tool === "press_key")
+        .map((entry) => (entry.args as { key: string }).key),
+    ).toEqual(["a", "b", "c", "d"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.live("an invalid selection and a guarded menu refuse their whole groups", () => {
+  const { host, sent } = fixture({
+    list_apps: { apps: [{ pid: 42, name: "KakaoTalk", bundle_id: "com.kakao.KakaoTalkMac" }] },
+  });
+  return Effect.gen(function* () {
+    const result =
+      yield* runCell(`const app = await screen.app({bundle_id:'com.kakao.KakaoTalkMac', window_id:7}); await app.observe();
+      const select = await Promise.allSettled([app.click('Apply'), app.selectText('Apply', '')]);
+      const menu = await Promise.allSettled([app.click('Apply'), app.menu(['Chat', 'Send'])]);
+      return [select, menu].map((group) => group.map((r) => r.status === 'fulfilled' ? r.value.verdict : r.reason.code + ':' + r.reason.nothingSent));`);
+    expect(result.value).toEqual([
+      ["not_run:true", "invalid_argument:true"],
+      ["not_run:true", "permission_denied:true"],
+    ]);
+    expect(
+      sent.filter((entry) => ["click", "select_text", "invoke_menu"].includes(entry.tool)),
+    ).toEqual([]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
