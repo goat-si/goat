@@ -446,6 +446,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var pendingIconUris = Set<String>()
   private var tokensNeedRebuild = false
   private var chipsNeedMeasuredWidth = false
+  private var hasDeferredChipRedraw = false
   private var hasDeferredForcedRebuild = false
   private var pendingContentOffset: CGPoint?
   private var needsSelectionReveal = false
@@ -599,7 +600,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     textView.frame = bounds
     if chipsNeedMeasuredWidth, bounds.width > 0 {
       chipsNeedMeasuredWidth = false
-      applyControlledDocument(force: true)
+      redrawChips()
     }
     if textView.isScrollEnabled, bounds.width > 0, bounds.height > 0 {
       textView.layoutIfNeeded()
@@ -662,8 +663,11 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     let previousSelection = sourceSelection()
     value = document.value
-    requestedSelection = document.selection
-    requestedSelectionValue = document.selection == nil ? nil : document.value
+    // Echoes carry no selection; a caret request still waiting on an IME composition survives them.
+    if let selection = document.selection {
+      requestedSelection = selection
+      requestedSelectionValue = document.value
+    }
     applyControlledDocument(force: tokensNeedRebuild)
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
@@ -861,6 +865,10 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   public func textViewDidEndEditing(_ textView: UITextView) {
+    if hasDeferredChipRedraw {
+      hasDeferredChipRedraw = false
+      applyControlledDocument(force: true)
+    }
     onComposerBlur()
   }
 
@@ -880,6 +888,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     hasDeferredForcedRebuild = false
+    hasDeferredChipRedraw = false
 
     let previousSelection = sourceSelection()
     if textView.isScrollEnabled {
@@ -900,6 +909,16 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     }
     updatePlaceholderVisibility()
     emitContentSizeIfNeeded()
+  }
+
+  /// Chip-only redraws (a measured width, a loaded icon) wait for editing to end: rebuilding the
+  /// text resets the keyboard, which splits a Korean syllable composed without marked text.
+  private func redrawChips() {
+    guard !textView.isFirstResponder else {
+      hasDeferredChipRedraw = true
+      return
+    }
+    applyControlledDocument(force: true)
   }
 
   private func makeAttributedDocument() -> NSAttributedString {
@@ -1062,7 +1081,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       DispatchQueue.main.async {
         self.pendingIconUris.remove(uri)
         self.iconImages[uri] = image
-        self.applyControlledDocument(force: true)
+        self.redrawChips()
       }
     }.resume()
     return nil

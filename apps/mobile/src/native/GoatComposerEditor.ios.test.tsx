@@ -21,8 +21,9 @@ interface Document {
   readonly isNativeEcho: boolean;
 }
 
-// Mirrors GoatComposerEditorView.swift: it keeps its own text, rejects stale payloads and
-// records every programmatic write, since each one resets the iOS Korean keyboard.
+// Mirrors how GoatComposerEditorView.swift accepts controlled payloads: it keeps its own text,
+// rejects stale revisions and echoes, and records each text or caret write JS asks for. Native-only
+// writes (typing attributes, chip redraws, marked text) are out of this test's reach.
 const native = vi.hoisted(() => ({
   value: "",
   selection: { start: 0, end: 0 },
@@ -194,21 +195,34 @@ async function typeKorean(prefix: string, batched: boolean, caretEvents = false)
   await act(async () => root.render(<Host initial={prefix} />));
   native.writes = [];
   for (const keystroke of KEYSTROKES) {
-    const events = keystroke.flatMap((value) => {
-      const edit = { kind: "change" as const, ...nativeEdit(prefix + value) };
-      if (!caretEvents) return [edit];
-      native.eventCount += 1;
-      return [edit, { ...edit, kind: "selection" as const, eventCount: native.eventCount }];
+    // Each step edits native state and returns the event it emits.
+    const steps = keystroke.flatMap((value) => {
+      const change = () => ({ kind: "change" as const, ...nativeEdit(prefix + value) });
+      if (!caretEvents) return [change];
+      const caret = () => {
+        native.eventCount += 1;
+        const { value: current, selection } = native;
+        return {
+          kind: "selection" as const,
+          value: current,
+          selection,
+          eventCount: native.eventCount,
+        };
+      };
+      return [change, caret];
     });
-    const deliver = (event: (typeof events)[number]) =>
+    const deliver = (event: ReturnType<(typeof steps)[number]>) =>
       (event.kind === "change" ? native.onChange : native.onSelection)?.({ nativeEvent: event });
     if (batched) {
+      // The keyboard's delete and insert both land natively before JS handles either event.
+      const events = steps.map((step) => step());
       await act(async () => {
         for (const event of events) deliver(event);
       });
     } else {
-      for (const event of events) {
-        await act(async () => deliver(event));
+      // JS renders, and its payload reaches native, between the delete and the insert.
+      for (const step of steps) {
+        await act(async () => deliver(step()));
       }
     }
   }
@@ -231,14 +245,14 @@ const DELIVERIES = [
 ];
 
 it.each(DELIVERIES)(
-  "Korean composition gets no programmatic writes in plain text ($delivery)",
+  "JS asks native for no text or caret writes while Korean composes in plain text ($delivery)",
   async ({ batched, caretEvents }) => {
     expect(await typeKorean("", batched, caretEvents)).toEqual({ value: "오기 전", writes: [] });
   },
 );
 
 it.each(DELIVERIES)(
-  "Korean composition gets no programmatic writes after a leading image chip ($delivery)",
+  "JS asks native for no text or caret writes while Korean composes after an image chip ($delivery)",
   async ({ batched, caretEvents }) => {
     expect(await typeKorean(CHIP + " ", batched, caretEvents)).toEqual({
       value: CHIP + " 오기 전",
