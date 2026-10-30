@@ -4,8 +4,8 @@ import Animated, { type SharedValue, useAnimatedStyle } from "react-native-reani
 import { AppText as Text } from "../../components/ui/AppText";
 
 /**
- * Centers in the area the composer leaves visible. It sits over the list, which insets itself for
- * the keyboard, so it follows the composer's keyboard lift: half of it keeps the text centered.
+ * Fills the area between the header and the composer, following the composer's keyboard lift,
+ * and clips text taller than that area rather than drawing it under the composer or header.
  */
 export function ThreadFeedPlaceholder(props: {
   readonly bottomInset: number;
@@ -15,28 +15,30 @@ export function ThreadFeedPlaceholder(props: {
   readonly title: string;
   readonly topInset: number;
 }) {
-  const { keyboardLift } = props;
-  const liftStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: -(keyboardLift?.value ?? 0) / 2 }],
+  const { bottomInset, keyboardLift } = props;
+  const areaStyle = useAnimatedStyle(() => ({
+    paddingBottom: bottomInset + (keyboardLift?.value ?? 0),
   }));
   return (
-    <View
-      style={{
-        flex: 1,
-        flexGrow: 1,
-        alignItems: "center",
-        justifyContent: "center",
-        paddingTop: props.topInset,
-        paddingBottom: props.bottomInset,
-        paddingHorizontal: props.horizontalPadding + 24,
-      }}
+    <Animated.View
+      style={[
+        {
+          flex: 1,
+          flexGrow: 1,
+          paddingTop: props.topInset,
+          paddingHorizontal: props.horizontalPadding + 24,
+        },
+        areaStyle,
+      ]}
     >
-      <Animated.View className="max-w-[320px] items-center gap-2" style={liftStyle}>
-        <Text className="text-center font-goat-bold text-lg text-foreground">{props.title}</Text>
-        <Text className="text-center text-sm leading-normal text-foreground-secondary">
-          {props.detail}
-        </Text>
-      </Animated.View>
-    </View>
+      <View className="flex-1 items-center justify-center overflow-hidden">
+        <View className="max-w-[320px] items-center gap-2">
+          <Text className="text-center font-goat-bold text-lg text-foreground">{props.title}</Text>
+          <Text className="text-center text-sm leading-normal text-foreground-secondary">
+            {props.detail}
+          </Text>
+        </View>
+      </View>
+    </Animated.View>
   );
 }

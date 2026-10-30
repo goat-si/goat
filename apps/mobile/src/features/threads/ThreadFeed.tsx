@@ -3159,7 +3159,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       <ThreadFeedPlaceholder
         title={props.contentPresentation.title}
         detail={props.contentPresentation.detail}
-        topInset={topContentInset}
+        topInset={anchorTopInset}
         bottomInset={bottomContentInset}
         keyboardLift={props.placeholderKeyboardLift}
         horizontalPadding={horizontalPadding}
@@ -3310,7 +3310,7 @@ export const ThreadFeed = memo(function ThreadFeed({
             <ThreadFeedPlaceholder
               title="No conversation yet"
               detail="Ask the agent to inspect the repo, run a command, or continue the active thread."
-              topInset={topContentInset}
+              topInset={anchorTopInset}
               bottomInset={bottomContentInset}
               keyboardLift={props.placeholderKeyboardLift}
               horizontalPadding={horizontalPadding}
