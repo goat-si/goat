@@ -176,11 +176,15 @@ const focusRestorationWarning = (value: unknown): string | undefined => {
       : undefined;
 };
 
-export const driverWarnings = (reply: ComputerUsePrimitiveReply): readonly string[] => {
+/** Driver notes the model must see; only an input's own text can carry a disabled-action note. */
+export const driverWarnings = (
+  reply: ComputerUsePrimitiveReply,
+  source: "input" | "read",
+): readonly string[] => {
   const value = driverValue(reply);
   const fields = object(value);
   const focusWarning = focusRestorationWarning(value);
-  const texts = array(object(reply.result)?.content)
+  const texts = (source === "input" ? array(object(reply.result)?.content) : [])
     .map(object)
     .map((part) => (part?.type === "text" ? string(part.text) : undefined));
   const marked = texts.find((part) => part?.includes("Its effect is unverified."));
@@ -212,7 +216,7 @@ export const driverResult = (
       : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
         ? "suspected_noop"
         : "unverifiable";
-  const warnings = driverWarnings(reply);
+  const warnings = driverWarnings(reply, "input");
   return {
     value,
     category,

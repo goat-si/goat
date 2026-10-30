@@ -256,6 +256,23 @@ it.live("an input deduplicates identical structured notes and warnings", () =>
   }),
 );
 
+it.live("a window read never turns input-only driver text into a warning", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      get_window_state: new DriverSuccess(
+        state,
+        "Window 7. Its effect is unverified. The item read disabled before the press.",
+      ),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+        "const observation = await app.observe(); return { hasWarnings: 'warnings' in observation };",
+    );
+    expect(result.value).toEqual({ hasWarnings: false });
+  }),
+);
+
 it.live("a routine app observation has no warnings", () =>
   Effect.gen(function* () {
     const { host } = fixture({ get_window_state: state });

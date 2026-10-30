@@ -499,7 +499,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       context,
     );
     driverMs += elapsed(sentAt, yield* Clock.currentTimeMillis);
-    for (const warning of driverWarnings(reply))
+    for (const warning of driverWarnings(reply, "read"))
       if (!warnings.includes(warning) && warnings.length < 4) warnings.push(warning);
     return reply;
   });
