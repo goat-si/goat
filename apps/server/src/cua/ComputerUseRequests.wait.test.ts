@@ -11,10 +11,24 @@ import * as TestClock from "effect/testing/TestClock";
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import type * as Handoffs from "../handoffs/Handoffs.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { purpose, sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
 
 const WAIT = Duration.minutes(10);
 const APP = "com.example.AppA";
+
+it.effect("organization denial precedes full access", () =>
+  withWaiting(({ request, leases, runId }) =>
+    Effect.gen(function* () {
+      yield* leases.everyAppControl(threadId, false, { runId });
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({ cuaDeniedApps: [APP] });
+      assert.deepInclude(yield* request({ apps: [APP] }), {
+        kind: "refused",
+        code: "app_not_allowed",
+      });
+    }),
+  ),
+);
 
 type Orchestrator = Parameters<Parameters<typeof withHarness>[0]>[0]["orchestrator"];
 interface Waiting {
