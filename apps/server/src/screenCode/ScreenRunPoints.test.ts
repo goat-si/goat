@@ -218,3 +218,90 @@ it.live(
     });
   },
 );
+
+it.live(
+  "tab.screenshot() returns the image, its imageRef and the image pixel size, and a click at its [x, y] lands on that viewport pixel",
+  () => {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("canvas"),
+      title: "Canvas",
+      url: "https://canvas.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const clicks: unknown[] = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+        Effect.sync(() => {
+          if (request.operation === "click") clicks.push(request.input);
+          return (
+            request.operation === "status"
+              ? { tabId: tab.tabId, url: tab.url, control: { owner: "unclaimed", generation: 0 } }
+              : request.operation === "snapshot"
+                ? {
+                    url: tab.url,
+                    title: "Canvas",
+                    loading: false,
+                    accessibilityTree: "- img [ref=e1]",
+                    treeComplete: true,
+                    refGeneration: "1",
+                    // A 2x capture of a 300 x 200 viewport.
+                    screenshot: {
+                      mimeType: "image/png",
+                      data: "AQID",
+                      width: 600,
+                      height: 400,
+                      region: { kind: "viewport", x: 0, y: 0, width: 300, height: 200 },
+                      scale: 2,
+                    },
+                  }
+                : {}
+          ) as A;
+        }),
+    };
+    return Effect.gen(function* () {
+      const tabHost = yield* makePreviewTargetHost(broker);
+      return yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const result = yield* service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation,
+          source: `const tab = await screen.tab({tabId: 'canvas'});
+          await tab.claim();
+          const shot = await tab.screenshot();
+          await tab.click([60, 40]);
+          return { imageRef: shot.imageRef, size: [shot.pixelWidth, shot.pixelHeight], capabilities: tab.capabilities };`,
+        });
+        expect(result).toMatchObject({
+          status: "completed",
+          value: { size: [600, 400] },
+        });
+        const value = result.value as { imageRef: string; capabilities: string[] };
+        expect(value.capabilities).toEqual(expect.arrayContaining(["points", "screenshot"]));
+        expect(result.images.map((image) => image.imageRef)).toEqual([value.imageRef]);
+        expect(clicks).toEqual([{ x: 30, y: 20, timeoutMs: 5_000 }]);
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+            tabHost,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    });
+  },
+);
