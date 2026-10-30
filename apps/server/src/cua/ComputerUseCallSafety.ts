@@ -1,5 +1,5 @@
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
-import { batchAppScope } from "./ComputerUseBatchScope.ts";
+import { batchAppScope, isBatchTool } from "./ComputerUseBatchScope.ts";
 
 export const deniedCallApp = (
   call: {
@@ -38,7 +38,8 @@ export const deniedCallApp = (
       return "unidentified app";
   }
   const scope = batchAppScope(call.name, call.args);
-  if (scope !== undefined && (denied.length > 0 || nonPersonFullAccess)) return scope.apps[0];
+  if (isBatchTool(call.name) && (denied.length > 0 || nonPersonFullAccess))
+    return scope?.apps[0] ?? "unscoped batch";
   const apps = [call.app, ...(call.safetyApps ?? []), ...named, ...(scope?.apps ?? [])];
   return apps.find(
     (app) =>

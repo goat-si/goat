@@ -22,6 +22,9 @@ describe("computer use call safety", () => {
     };
     expect(deniedCallApp(call, ["com.example.Blocked"])).toBe("Editor");
     expect(deniedCallApp(call, [], true)).toBe("Editor");
+    expect(deniedCallApp({ name: "run_script", args: { script: "click()" } }, [], true)).toBe(
+      "unscoped batch",
+    );
   });
   it("refuses terminal for non-person full access but allows a person's terminal", () => {
     const call = { name: "click", args: {}, app: "com.apple.Terminal" };
