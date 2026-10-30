@@ -265,8 +265,9 @@ export class ComputerUseLeases extends Context.Service<
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
     /**
-     * Marks the thread's control idle once none of its runs is still open; true when it did.
-     * A turn that starts meanwhile keeps the control it reused active.
+     * Marks the thread's control idle once no turn can call its driver: no run is open, or the
+     * open ones only wait; true when it did. A turn that starts meanwhile keeps the control it
+     * reused active.
      */
     readonly turnEnded: (threadId: ThreadId) => Effect.Effect<boolean, ComputerUseLeaseError>;
     /** Checks every acting control for a thread with nothing left open; see turnEnded. */
@@ -324,6 +325,8 @@ interface ControlRecord extends ComputerUseControl {
   readonly named?: ReadonlyArray<string>;
   /** The run whose attachment last took this control up. */
   readonly runId?: RunId;
+  /** Idled while a run waited, keeping its approvals until nothing of the thread is open. */
+  readonly waitHeld?: boolean;
 }
 
 /** Whether an agent can act on the screen through this control now. */
@@ -804,7 +807,11 @@ const make = Effect.gen(function* () {
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>
       Effect.forEach(
-        [...controls.values()].filter(acting).map((record) => record.threadId),
+        [...controls.values()]
+          .filter(
+            (record) => acting(record) || (record.ended === undefined && record.waitHeld === true),
+          )
+          .map((record) => record.threadId),
         (threadId) =>
           turnEnded(threadId).pipe(
             Effect.catch((cause) =>
