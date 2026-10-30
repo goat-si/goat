@@ -10,8 +10,9 @@ In **Settings → General → Send shortcut**, choose whether Enter sends, requi
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
 **Follow-up behavior** chooses Queue or Steer while the agent runs. Use
-`mod+Enter` to do the opposite for one message, even when the send shortcut
-requires a modifier. `mod+Alt+Enter` sends, keeps that thread running in the
+`mod+Enter` to do the opposite for one message. When the send shortcut requires
+`mod+Enter` for that message, `mod+Enter` sends with your follow-up behavior and
+`mod+Shift+Enter` does the opposite. `mod+Alt+Enter` sends, keeps that thread running in the
 background, and opens a fresh new-thread composer. In a new thread, `mod+Enter`
 does the same. Change these shortcuts in **Settings → Keybindings** under
 **Composer: Opposite Queue or Steer Action**, **Composer: Start in Background**,
@@ -19,7 +20,9 @@ or **Composer: Send and Start New Thread**. These bindings take priority over th
 send shortcut. Click the send button to use the configured follow-up behavior.
 
 When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
-steer. Change it under **Queue: Send First Queued Message as Steer** in Keybindings.
+steer. While the composer uses `mod+Shift+Enter` for the opposite action, move focus
+out of the composer first. Change it under **Queue: Send First Queued Message** in
+Keybindings.
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
 To step a new thread to the next machine instead of opening the menu, bind
@@ -131,9 +134,11 @@ behavior in Settings → Keyboard.
 
 ## Edit the configuration file
 
-Keybindings live on the environment's machine, in
-`~/.t3/userdata/keybindings.json` by default. You can edit this file directly.
-It is a JSON array of rules:
+Keybindings live on the environment's machine, in `keybindings.json` in its
+`userdata` folder: `~/.goat/userdata/keybindings.json` for `goat serve` and SSH
+hosts, and `~/.goat/desktop/userdata/keybindings.json` for the desktop app
+([GOAT (Nightly) uses its own folder](./install.md#goat-and-goat-nightly-side-by-side)).
+You can edit this file directly. It is a JSON array of rules:
 
 ```json
 [
@@ -163,9 +168,10 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 ## When conditions
 
 Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
-`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
-`turnRunning`, `editableFocus`, `fileViewFocus`, `fileTreeFocus`, `isWeb`, and
-`isDesktop`.
+`previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `notesPageOpen`,
+`composerFocus`, `draftThreadRoute`, `turnRunning`, `editableFocus`, `fileViewFocus`,
+`fileTreeFocus`, `isWeb`, and `isDesktop`.
+`draftThreadRoute` is true in a new thread before you send its first message.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `fileViewFocus` is true while the Files panel or an open file has
 the keyboard, and `fileTreeFocus` while the Files panel has it. `isWeb` is true in a browser tab. `isDesktop` is true in the
