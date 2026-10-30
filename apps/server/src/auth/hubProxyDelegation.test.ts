@@ -12,6 +12,8 @@ import {
   HUB_PROXY_NODE_SCOPE_CEILING,
   type AuthEnvironmentScope,
 } from "@goat/contracts";
+import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -72,10 +74,15 @@ const makeRoutes = (input: { readonly hubEnabled: boolean; readonly devToken?: b
 };
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-type Handler = ReturnType<typeof HttpRouter.toWebHandler>;
+const toHandler = (input: { readonly hubEnabled: boolean; readonly devToken?: boolean }) =>
+  HttpRouter.toWebHandler(makeRoutes(input), { disableLogger: true });
+type Handler = ReturnType<typeof toHandler>;
 
-const client = (web: Handler) => {
-  const call = (request: Request) => web.handler(request);
+const client = (
+  web: Handler,
+  context: Context.Context<Crypto.Crypto | ServerSecretStore.ServerSecretStore>,
+) => {
+  const call = (request: Request) => web.handler(request, context);
   const exchange = async (credential: string) => {
     const response = await call(
       new Request("http://127.0.0.1/oauth/token", {
@@ -139,11 +146,23 @@ const withRoutes = (
   input: { readonly hubEnabled: boolean; readonly devToken?: boolean },
   use: (api: ReturnType<typeof client>) => Promise<void>,
 ) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => HttpRouter.toWebHandler(makeRoutes(input), { disableLogger: true })),
-    (web) => Effect.tryPromise(() => use(client(web))),
-    (web) => Effect.promise(() => web.dispose()),
-  ).pipe(Effect.provide(NodeServices.layer));
+  Effect.gen(function* () {
+    const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: () => Effect.void,
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const context = Context.make(Crypto.Crypto, yield* Crypto.Crypto).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
+    );
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => toHandler(input)),
+      (web) => Effect.tryPromise(() => use(client(web, context))),
+      (web) => Effect.promise(() => web.dispose()),
+    );
+  }).pipe(Effect.provide(NodeServices.layer));
 
 const withHubProxy = [...AuthStandardClientScopes, AuthHubProxyScope];
 

@@ -472,12 +472,10 @@ export const layer = HttpApiBuilder.group(
               // Held or not, hub:proxy is the owner's to grant, and only while the hub is on.
               if (delegatedScope === AuthHubProxyScope) {
                 // Read on demand so routes that never grant hub access need no settings service.
-                const hub = yield* Effect.serviceOption(ServerSettingsService).pipe(
-                  Effect.flatMap((settings) =>
-                    Option.isSome(settings)
-                      ? settings.value.getSettings
-                      : Effect.fail("server settings are unavailable"),
-                  ),
+                const settings = yield* Effect.serviceOption(ServerSettingsService);
+                if (Option.isNone(settings))
+                  return yield* failEnvironmentInternal("pairing_credential_issuance_failed");
+                const hub = yield* settings.value.getSettings.pipe(
                   Effect.map((current) => current.hub.enabled),
                   Effect.catch((error) =>
                     failEnvironmentInternal("pairing_credential_issuance_failed", error),

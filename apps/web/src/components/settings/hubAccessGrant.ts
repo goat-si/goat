@@ -11,7 +11,7 @@ import { usePrimaryEnvironment } from "~/state/environments";
  * The hub owner's session may grant hub access to a new pairing while the hub is on. The server
  * checks both again when it issues the pairing.
  */
-export function useHubAccessGrantable(): boolean {
+function useHubAccessGrantable(): boolean {
   const config = usePrimaryEnvironment()?.serverConfig ?? null;
   const session = usePrimarySessionState().data;
   return (
