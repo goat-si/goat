@@ -89,6 +89,29 @@ import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 export * from "./settingsFontSizes.ts";
 export { requiredScopesForServerSettingsPatch } from "./auth.ts";
 
+export function normalizeBlockedBrowserHost(value: string): string | null {
+  const input = value.trim();
+  if (!input || /[\s/@?#\\]/u.test(input)) return null;
+  if (input.startsWith("[") ? !/^\[[\da-f:.]+\]$/i.test(input) : input.includes(":")) return null;
+  try {
+    return new URL(`http://${input}/`).hostname.replace(/\.$/, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+const BlockedBrowserHost = Schema.String.check(
+  Schema.makeFilter((value) => normalizeBlockedBrowserHost(value) !== null),
+).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transform({
+      decode: (value) => normalizeBlockedBrowserHost(value) ?? value,
+      encode: (value) => value,
+    }),
+  ),
+);
+
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
@@ -1441,6 +1464,9 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  blockedBrowserHosts: Schema.Array(BlockedBrowserHost).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1914,6 +1940,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  blockedBrowserHosts: Schema.optionalKey(Schema.Array(BlockedBrowserHost)),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),

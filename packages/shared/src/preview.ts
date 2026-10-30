@@ -1,4 +1,5 @@
 import type { BrowserSearchEngine } from "@goat/contracts";
+import { normalizeBlockedBrowserHost } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 import { isLocalLoopbackHost } from "./hostClassification.ts";
@@ -6,17 +7,7 @@ import { isLocalLoopbackHost } from "./hostClassification.ts";
 const TAB_ID_PREFIX = "tab_";
 let nextPreviewTabSequence = 0;
 
-export function normalizeBlockedBrowserHost(value: string): string | null {
-  const input = value.trim();
-  if (!input || /[\s/@?#\\]/u.test(input)) return null;
-  if (input.startsWith("[") ? !/^\[[\da-f:.]+\]$/i.test(input) : input.includes(":")) return null;
-  try {
-    const host = new URL(`http://${input}/`).hostname.replace(/\.$/, "");
-    return host || null;
-  } catch {
-    return null;
-  }
-}
+export { normalizeBlockedBrowserHost };
 
 export function isBlockedBrowserUrl(url: string, hosts: readonly string[]): boolean {
   try {

@@ -45,6 +45,18 @@ const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 
+it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
+  expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
+  expect(
+    decodeServerSettingsPatch({ blockedBrowserHosts: [" EXAMPLE.COM. ", "[2001:0db8::1]"] }),
+  ).toEqual({
+    blockedBrowserHosts: ["example.com", "[2001:db8::1]"],
+  });
+  for (const host of ["", "https://example.com", "example.com:443", "example.com/path"]) {
+    expect(() => decodeServerSettingsPatch({ blockedBrowserHosts: [host] })).toThrow();
+  }
+});
+
 describe("Connect hub standing consent", () => {
   it("defaults off and preserves an explicit Boolean policy", () => {
     expect(decodeServerSettings({}).hub.connectDevicesHubProxy).toBe(false);
