@@ -1813,7 +1813,7 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     ),
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
-    /** Why computer use cannot run on this host, written for users. */
+    /** Why a setting cannot be applied, written for users. */
     reason: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
