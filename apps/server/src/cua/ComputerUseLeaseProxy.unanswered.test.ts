@@ -132,6 +132,30 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
   );
 
   it.effect(
+    "a click queued behind a long call is replaced when its cell ends, not when the long call ends",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.push(foregroundActive());
+        const first = yield* h.driverStarted;
+        yield* h.send(call("script", "run_script", { script: "1", timeout_ms: 120_000 }));
+        yield* h.nextToDriver;
+        yield* h.sendPrimitive({
+          ...listApps("click:queued", first.connectionId, 3_000),
+          tool: "click",
+          args: { pid: 42, window_id: 7 },
+        });
+        yield* h.nextToDriver;
+        yield* TestClock.adjust(5_000);
+        assert.isFalse(yield* h.isKilled);
+        yield* h.cancelPrimitive("click:queued");
+        yield* TestClock.adjust(1_000);
+        assert.equal((yield* h.primitiveReply).status, "unknown_outcome");
+        assert.isTrue(yield* h.isKilled);
+      }),
+  );
+
+  it.effect(
     "a call queued behind one still being admitted is answered at its own deadline as never sent",
     () =>
       Effect.gen(function* () {

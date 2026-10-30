@@ -355,7 +355,9 @@ export const makeUnansweredWatch = <E>(
             since = head?.since ?? now;
             break;
           }
-          const headDeadline = head.since + stuckAfterMs(head.call.tool, head.call.args);
+          // A call its cell gave up on waits behind the head only until its own deadline.
+          const stuck = head.since + stuckAfterMs(head.call.tool, head.call.args);
+          const headDeadline = abandoned.has(key) ? Math.min(stuck, deadlineMillis) : stuck;
           if (now < headDeadline) {
             const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
             if (Option.isSome(step)) continue;

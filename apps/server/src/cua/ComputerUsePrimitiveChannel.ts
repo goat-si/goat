@@ -349,20 +349,32 @@ export const make = Effect.gen(function* () {
       return yield* Effect.fail(desktopNotReady("unbound"));
     }
     let timedOut = false;
+    const deadlineFailure = () => ({
+      code: "deadline" as const,
+      effectStarted: pending.sent,
+      nextStep: pending.sent
+        ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
+        : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
+    });
     return yield* Deferred.await(answer).pipe(
       Effect.timeoutOrElse({
         duration: Math.max(0, deadlineMillis - now) + PROXY_ANSWER_GRACE_MS,
         orElse: () => {
           timedOut = true;
-          return Effect.fail({
-            code: "deadline" as const,
-            effectStarted: pending.sent,
-            nextStep: pending.sent
-              ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
-              : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
-          });
+          return Effect.fail(deadlineFailure());
         },
       }),
+      // The grace is only for the proxy to say it never sent the call; an answer the driver
+      // gave past the deadline is still a call that missed it.
+      Effect.flatMap((answered) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((at) =>
+            at > deadlineMillis && answered.status !== "not_started"
+              ? Effect.fail(deadlineFailure())
+              : Effect.succeed(answered),
+          ),
+        ),
+      ),
       Effect.ensuring(
         Effect.sync(() => {
           if (!record.pending.delete(request.requestId)) return;
@@ -618,22 +630,22 @@ export const make = Effect.gen(function* () {
         Effect.map((now) => {
           const registered = registration(input, now);
           const record = registered?.controls.get(input.reply.controlId);
+          const answers = (original: ComputerUsePrimitiveRequest) =>
+            original.registrationId === input.reply.registrationId &&
+            original.controlId === input.reply.controlId &&
+            original.connectionGeneration === input.reply.connectionGeneration &&
+            original.runId === input.reply.runId &&
+            original.turnId === input.reply.turnId &&
+            original.callId === input.reply.callId;
           // A late answer to a call its cell gave up on: the driver is free again.
-          if (record?.abandoned.get(input.reply.requestId)?.request.runId === input.reply.runId)
-            return record.abandoned.delete(input.reply.requestId);
+          const abandoned = record?.abandoned.get(input.reply.requestId);
+          if (abandoned !== undefined && record !== undefined)
+            return answers(abandoned.request) && record.abandoned.delete(input.reply.requestId);
           const pending = record?.pending.get(input.reply.requestId);
           if (pending === undefined || registered === undefined || record === undefined)
             return false;
           const original = pending.request;
-          if (
-            original.registrationId !== input.reply.registrationId ||
-            original.controlId !== input.reply.controlId ||
-            original.connectionGeneration !== input.reply.connectionGeneration ||
-            original.runId !== input.reply.runId ||
-            original.turnId !== input.reply.turnId ||
-            original.callId !== input.reply.callId
-          )
-            return false;
+          if (!answers(original)) return false;
           record.pending.delete(original.requestId);
           Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
           return true;

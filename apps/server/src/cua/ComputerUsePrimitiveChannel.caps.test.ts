@@ -120,6 +120,51 @@ describe("ComputerUsePrimitiveChannel caps each driver call", () => {
       }),
   );
 
+  it.effect("a driver answer that lands in the grace past the cap still fails at the cap", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      const waiter = yield* f.call("list_apps", {});
+      const request = yield* f.delivered;
+      yield* TestClock.adjust(2_500);
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: request.registrationId,
+          reply: { ...request, status: "settled", result: { content: [] } },
+        }),
+      );
+      const result = yield* Fiber.join(waiter);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure.code, "deadline");
+        assert.isTrue(result.failure.effectStarted);
+      }
+    }),
+  );
+
+  it.effect("a late answer naming another call does not clear a call its cell gave up on", () =>
+    Effect.gen(function* () {
+      const f = yield* bound();
+      const waiter = yield* f.call("list_apps", {});
+      const request = yield* f.delivered;
+      yield* TestClock.adjust(2_000 + PrimitiveChannel.PROXY_ANSWER_GRACE_MS);
+      assert.equal((yield* Fiber.join(waiter))._tag, "Failure");
+      assert.isFalse(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: request.registrationId,
+          reply: { ...request, callId: request.callId + 1, status: "settled" },
+        }),
+      );
+      const marker = yield* f.next.pipe(Effect.forkChild);
+      yield* f.channel.cancel("run:one", "cell:one");
+      assert.deepEqual(yield* Fiber.join(marker), {
+        state: "primitive-cancel",
+        requestId: request.requestId,
+      });
+    }),
+  );
+
   it.effect("a call the driver never took fails at its cap as nothing sent", () =>
     Effect.gen(function* () {
       const f = yield* bound();
