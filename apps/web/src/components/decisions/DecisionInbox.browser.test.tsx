@@ -463,7 +463,7 @@ function durable(recommended: string | null): Extract<DecisionItem, { kind: "dec
   };
 }
 
-it("sends a durable decision's recommended option or another choice without a typed reason", async () => {
+it("sends a durable decision's recommended option without a typed reason", async () => {
   await mount([durable("sqlite")], { feedEnvironments: [primary] });
   expect(button("SQLite (recommended)").getAttribute("aria-checked")).toBe("true");
   expect(button("Submit decision").disabled).toBe(false);
@@ -474,21 +474,14 @@ it("sends a durable decision's recommended option or another choice without a ty
   });
 });
 
-it("needs a choice when nothing is recommended, then sends it with the typed reason", async () => {
+it("needs a choice when nothing is recommended, then sends the chosen option", async () => {
   await mount([durable(null)], { feedEnvironments: [primary] });
   expect(button("Submit decision").disabled).toBe(true);
+  expect(container.querySelector("textarea")).toBeNull();
   await click("Postgres");
-  const reason = container.querySelector("textarea")!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      reason,
-      "  We already run one  ",
-    );
-    reason.dispatchEvent(new Event("input", { bubbles: true }));
-  });
   await click("Submit decision");
   expect(state.decision).toHaveBeenCalledExactlyOnceWith({
     environmentId: primary,
-    input: { id: "decision:1", optionId: "pg", reason: "We already run one" },
+    input: { id: "decision:1", optionId: "pg", reason: "Chose Postgres." },
   });
 });

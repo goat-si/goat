@@ -1,5 +1,6 @@
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { DecisionAnswerInput, EnvironmentId, ThreadId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -9,9 +10,6 @@ vi.mock("react-native", () => ({
 }));
 vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
-  AppTextInput: (props: { accessibilityLabel?: string; value?: string }) => (
-    <input aria-label={props.accessibilityLabel} value={props.value} readOnly />
-  ),
 }));
 vi.mock("../../components/ui/Button", () => ({
   Button: (props: { label: string; disabled?: boolean; onPress?: () => void }) => (
@@ -84,11 +82,16 @@ async function renderCard(recommended: string | null) {
   };
 }
 
-it("submits the recommended option without a typed reason", async () => {
+it("submits a contract-valid answer for the recommended option without asking for a reason", async () => {
   await using card = await renderCard("sqlite");
   expect(card.submit.disabled).toBe(false);
   await act(() => card.submit.click());
-  expect(card.onSubmit).toHaveBeenCalledExactlyOnceWith("sqlite", "");
+  const [answer] = card.onSubmit.mock.calls[0] ?? [];
+  expect(Schema.decodeUnknownSync(DecisionAnswerInput)(answer)).toEqual({
+    id: "decision:1",
+    optionId: "sqlite",
+    reason: "Chose SQLite.",
+  });
 });
 
 it("waits for a choice when nothing is recommended", async () => {

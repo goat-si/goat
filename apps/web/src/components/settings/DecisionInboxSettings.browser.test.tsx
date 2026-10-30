@@ -106,7 +106,7 @@ function setup(
   return { registry, allowed, items, [Symbol.dispose]: () => registry.dispose() };
 }
 
-it("keeps an answer editable after failure, then records the chosen option and reason", async () => {
+it("keeps an answer retryable after failure, then records the chosen option without asking for a reason", async () => {
   using fixture = setup();
   state.run.mockImplementationOnce(async () => ({
     _tag: "Failure",
@@ -118,62 +118,43 @@ it("keeps an answer editable after failure, then records the chosen option and r
     </RegistryContext>,
   );
   const option = screen.getByRole("button", { name: "Stage rollout (recommended)" });
-  await userEvent.fill(
-    screen.getByRole("textbox", { name: "Reason for your answer (optional)" }),
-    "Validate the migration on one host.",
-  );
+  await expect.element(screen.getByRole("textbox")).not.toBeInTheDocument();
   await userEvent.click(option);
   await expect
     .element(screen.getByRole("alert"))
     .toHaveTextContent("Decision changed; refresh and retry.");
-  await expect
-    .element(screen.getByRole("textbox"))
-    .toHaveValue("Validate the migration on one host.");
   await userEvent.click(option);
   await expect.element(screen.getByText("No open decisions.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Show answered and expired" }));
   await expect.element(screen.getByText("Answered: Stage rollout · You")).toBeVisible();
   expect(state.run.mock.calls.at(-1)?.[1]).toEqual({
     environmentId,
-    input: { id: "decision-1", optionId: "staged", reason: "Validate the migration on one host." },
+    input: { id: "decision-1", optionId: "staged", reason: "Chose Stage rollout." },
   });
   expect(state.run).toHaveBeenCalledTimes(2);
 });
 
-it("sends the recommended option without a typed reason", async () => {
-  using fixture = setup();
-  await using screen = await render(
-    <RegistryContext value={fixture.registry}>
-      <DecisionInboxSettings />
-    </RegistryContext>,
-  );
-  await userEvent.click(screen.getByRole("button", { name: "Stage rollout (recommended)" }));
-  await expect.element(screen.getByText("No open decisions.")).toBeVisible();
-  expect(state.run.mock.calls[0]?.[1]).toEqual({
-    environmentId,
-    input: { id: "decision-1", optionId: "staged", reason: "Chose Stage rollout." },
-  });
-});
+const projected: DecisionItem = {
+  ...decision,
+  id: "pending-1",
+  source: "pending_request",
+  options: [],
+  pending: {
+    threadId: ThreadId.make("asking-thread"),
+    requestId: RuntimeRequestId.make("request-1"),
+    questions: [
+      {
+        id: "scope",
+        header: "Scope",
+        question: "Which hosts?",
+        options: [{ label: "Canary host", value: "canary", description: "Use one host." }],
+      },
+    ],
+  },
+};
 
 it("answers a projected question using its provider option value", async () => {
-  using fixture = setup({
-    ...decision,
-    id: "pending-1",
-    source: "pending_request",
-    options: [],
-    pending: {
-      threadId: ThreadId.make("asking-thread"),
-      requestId: RuntimeRequestId.make("request-1"),
-      questions: [
-        {
-          id: "scope",
-          header: "Scope",
-          question: "Which hosts?",
-          options: [{ label: "Canary host", value: "canary", description: "Use one host." }],
-        },
-      ],
-    },
-  });
+  using fixture = setup(projected);
   await using screen = await render(
     <RegistryContext value={fixture.registry}>
       <DecisionInboxSettings />
@@ -191,7 +172,7 @@ it("answers a projected question using its provider option value", async () => {
   });
 });
 
-it("baseline-failing: revalidates and answers on the asking host, preserving the draft when the host refuses", async () => {
+it("baseline-failing: revalidates and answers on the asking host, reporting when the host refuses", async () => {
   using fixture = setup({ ...decision, from: { host: "build-host" } });
   state.run.mockResolvedValue({
     _tag: "Failure",
@@ -202,12 +183,10 @@ it("baseline-failing: revalidates and answers on the asking host, preserving the
       <DecisionInboxSettings />
     </RegistryContext>,
   );
-  await userEvent.fill(screen.getByRole("textbox"), "Keep the staged rollout.");
   await userEvent.click(screen.getByRole("button", { name: "Stage rollout (recommended)" }));
   await expect
     .element(screen.getByRole("alert"))
     .toHaveTextContent("The asking host is unavailable.");
-  await expect.element(screen.getByRole("textbox")).toHaveValue("Keep the staged rollout.");
   expect(state.read.mock.calls[0]?.[1]).toEqual({
     environmentId,
     input: { id: decision.id, host: "build-host" },
@@ -218,19 +197,19 @@ it("baseline-failing: revalidates and answers on the asking host, preserving the
       id: decision.id,
       host: "build-host",
       optionId: "staged",
-      reason: "Keep the staged rollout.",
+      reason: "Chose Stage rollout.",
     },
   });
 });
 
 it("baseline-failing: keeps same-id drafts attached to their destination when a partial refresh reorders rows", async () => {
   const first = {
-    ...decision,
+    ...projected,
     title: "First destination",
     from: { environmentId: EnvironmentId.make("remote-a"), host: "alpha" },
   };
   const second = {
-    ...decision,
+    ...projected,
     title: "Second destination",
     from: { environmentId: EnvironmentId.make("remote-b"), host: "beta" },
   };
@@ -287,7 +266,6 @@ it("baseline-failing: shows unavailable destinations and truncation while keepin
   await expect
     .element(screen.getByText("Some decisions are not shown.", { exact: false }))
     .toBeVisible();
-  await userEvent.fill(screen.getByRole("textbox"), "Available destination still works.");
   await expect
     .element(screen.getByRole("button", { name: "Stage rollout (recommended)" }))
     .toBeEnabled();

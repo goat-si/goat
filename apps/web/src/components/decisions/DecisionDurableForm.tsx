@@ -1,13 +1,11 @@
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
-import { useId } from "react";
 
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
 
-export type DecisionAnswer = { readonly optionId: string; readonly reason: string };
-export type DecisionDraft = { readonly optionId: string | null; readonly reason: string };
+export type DecisionAnswer = { readonly optionId: string };
+export type DecisionDraft = { readonly optionId: string | null };
 
-/** A decision an agent asked for: pick one option, optionally say why; the choice goes back to it. */
+/** A decision an agent asked for: pick one option; the choice goes back to it. */
 export function DecisionDurableForm({
   item,
   draft,
@@ -21,18 +19,14 @@ export function DecisionDurableForm({
   onChange: (draft: DecisionDraft) => void;
   onSubmit: (answer: DecisionAnswer) => Promise<unknown>;
 }) {
-  const reasonId = useId();
   const { decision } = item;
   const optionId = draft?.optionId ?? decision.recommended;
-  const reason = draft?.reason ?? "";
-  const setOptionId = (next: string) => onChange({ optionId: next, reason });
-  const setReason = (next: string) => onChange({ optionId, reason: next });
   return (
     <form
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!disabled && optionId !== null) void onSubmit({ optionId, reason });
+        if (!disabled && optionId !== null) void onSubmit({ optionId });
       }}
     >
       <div className="flex flex-col gap-1">
@@ -50,7 +44,7 @@ export function DecisionDurableForm({
             aria-checked={optionId === option.id}
             variant={optionId === option.id ? "default" : "outline"}
             disabled={disabled}
-            onClick={() => setOptionId(option.id)}
+            onClick={() => onChange({ optionId: option.id })}
           >
             {option.label}
             {decision.recommended === option.id ? " (recommended)" : ""}
@@ -62,16 +56,6 @@ export function DecisionDurableForm({
           {decision.options.find((option) => option.id === optionId)?.consequence}
         </p>
       ) : null}
-      <label htmlFor={reasonId} className="text-sm font-medium">
-        Reason (optional)
-      </label>
-      <Textarea
-        id={reasonId}
-        value={reason}
-        disabled={disabled}
-        onChange={(event) => setReason(event.target.value)}
-        placeholder="Why this choice?"
-      />
       <div>
         <Button type="submit" disabled={disabled || optionId === null}>
           Submit decision

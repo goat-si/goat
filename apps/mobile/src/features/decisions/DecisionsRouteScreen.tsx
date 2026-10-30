@@ -156,7 +156,7 @@ function FocusedDecisionsContent(props: {
                   disabled={!canOperateThread || paused}
                   responding={responding}
                   onChange={onChangeDecisionDraft}
-                  onSubmit={(optionId, reason) => void onAnswerDecision(optionId, reason)}
+                  onSubmit={(answer) => void onAnswerDecision(answer)}
                 />
               ) : current.kind === "approval" ? (
                 <PendingApprovalCard

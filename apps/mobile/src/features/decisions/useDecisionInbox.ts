@@ -11,6 +11,7 @@ import {
 } from "@goat/client-runtime/state/thread-requests";
 import {
   AuthOrchestrationOperateScope,
+  type DecisionAnswerInput,
   type ProviderApprovalDecision,
   type RuntimeRequestId,
 } from "@goat/contracts";
@@ -47,7 +48,7 @@ export function useDecisionInboxSessionState() {
   >({});
   // Durable choices survive Skip like question drafts do, until the decision leaves the feed.
   const [decisionDraftsById, setDecisionDraftsById] = useState<
-    Record<string, { readonly optionId: string | null; readonly reason: string }>
+    Record<string, { readonly optionId: string | null }>
   >({});
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
   const [errorsById, setErrorsById] = useState<Record<string, string>>({});
@@ -263,21 +264,22 @@ export function useDecisionInbox(
     return item?.kind === "user_input" && item.request.requestId === requestId ? item : undefined;
   }
 
-  async function onAnswerDecision(optionId: string, reason: string) {
+  async function onAnswerDecision(answer: DecisionAnswerInput) {
     if (current === null || paused || inFlight.current.has(current.id)) return;
     const item = readActionItem(current.id);
     if (item?.kind !== "decision") return;
-    const input = durableDecisionAnswer(item.decision, optionId, reason);
+    if (answer.id !== item.decision.id || answer.optionId === undefined) return;
+    const input = durableDecisionAnswer(item.decision, answer.optionId);
     if (input === null) return;
     return runResponse(item, () =>
       answerDecision({ environmentId: item.ref.environmentId, input }),
     );
   }
 
-  function onChangeDecisionDraft(optionId: string | null, reason: string) {
+  function onChangeDecisionDraft(optionId: string) {
     if (current?.kind !== "decision" || inFlight.current.has(current.id)) return;
     const id = current.id;
-    setDecisionDraftsById((previous) => ({ ...previous, [id]: { optionId, reason } }));
+    setDecisionDraftsById((previous) => ({ ...previous, [id]: { optionId } }));
   }
 
   function onSelectOption(

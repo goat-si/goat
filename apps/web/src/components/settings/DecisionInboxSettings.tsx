@@ -202,19 +202,22 @@ function DecisionRow({
       ) : canAnswer ? (
         <>
           {simpleQuestion ? <p className="text-sm">{simpleQuestion.question}</p> : null}
-          <div className="space-y-1">
-            <label htmlFor={reasonId} className="text-xs text-muted-foreground">
-              Reason for your answer (optional)
-            </label>
-            <Input
-              id={reasonId}
-              value={reason}
-              maxLength={2000}
-              disabled={saving || !allowed}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="Explain your choice"
-            />
-          </div>
+          {/* A durable decision delivers only the chosen option; projected requests keep the reason. */}
+          {item.source === "decision" ? null : (
+            <div className="space-y-1">
+              <label htmlFor={reasonId} className="text-xs text-muted-foreground">
+                Reason for your answer (optional)
+              </label>
+              <Input
+                id={reasonId}
+                value={reason}
+                maxLength={2000}
+                disabled={saving || !allowed}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Explain your choice"
+              />
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {item.pending?.approval ? (
               <>
