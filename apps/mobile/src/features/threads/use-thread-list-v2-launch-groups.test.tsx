@@ -27,16 +27,16 @@ const preferencesAtom = mobilePreferencesAtom as Atom.Writable<
 >;
 const updateAtom = updateMobilePreferencesAtom as unknown as Atom.Writable<Update>;
 
-async function renderGroups(options: {
-  readonly selected: string | null;
-  readonly reveal?: string[];
-}) {
-  resetThreadListV2LaunchGroupSession();
-  const registry = AtomRegistry.make();
+/** One mounted thread list (Home or the tablet sidebar) reading launch group expansion. */
+async function mountList(
+  registry: AtomRegistry.AtomRegistry,
+  selected: string | null,
+  reveal: readonly string[] = [],
+) {
   let groups: ReturnType<typeof useThreadListV2LaunchGroups> | undefined;
   function Groups(props: { readonly selected: string | null }) {
     const value = useThreadListV2LaunchGroups(props.selected);
-    useRevealLaunchGroups(value, options.reveal ?? []);
+    useRevealLaunchGroups(value, reveal);
     useLayoutEffect(() => {
       groups = value;
     });
@@ -44,43 +44,63 @@ async function renderGroups(options: {
   }
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const root = createRoot(document.createElement("div"));
-  const show = (selected: string | null) =>
+  const select = (next: string | null) =>
     act(async () =>
       root.render(
         <RegistryContext.Provider value={registry}>
-          <Groups selected={selected} />
+          <Groups selected={next} />
         </RegistryContext.Provider>,
       ),
     );
-  await show(options.selected);
-  const current = () => {
-    if (groups === undefined) throw new Error("the hook did not render");
-    return groups;
-  };
+  await select(selected);
   return {
-    registry,
-    current,
-    show,
+    current: () => {
+      if (groups === undefined) throw new Error("the list did not render");
+      return groups;
+    },
+    collapsed: () => [...(groups?.state.routeCollapsed ?? [])],
+    select,
     [Symbol.asyncDispose]: () => act(async () => root.unmount()),
   };
 }
 
+async function loadedRegistry() {
+  resetThreadListV2LaunchGroupSession();
+  const registry = AtomRegistry.make();
+  registry.set(preferencesAtom, AsyncResult.success({}));
+  return registry;
+}
+
 describe("mobile launch group expansion", () => {
-  it("forgets a collapse made for one selected thread once another is selected", async () => {
-    await using view = await renderGroups({ selected: "env:a" });
-    await act(async () => view.registry.set(preferencesAtom, AsyncResult.success({})));
-    await act(async () => view.current().toggle("env:launcher", true, true));
-    expect([...view.current().state.routeCollapsed]).toEqual(["env:launcher"]);
-    await view.show("env:b");
-    await view.show("env:a");
-    expect([...view.current().state.routeCollapsed]).toEqual([]);
+  it("forgets a collapse made for a selected thread once another is selected", async () => {
+    const registry = await loadedRegistry();
+    await using list = await mountList(registry, "env:a");
+    await act(async () => list.current().toggle("env:launcher", true, true));
+    expect(list.collapsed()).toEqual(["env:launcher"]);
+    await list.select("env:b");
+    await list.select("env:a");
+    expect(list.collapsed()).toEqual([]);
+  });
+
+  it("keeps one list's collapse while another list mounts or selects a different thread", async () => {
+    const registry = await loadedRegistry();
+    await using home = await mountList(registry, "env:a");
+    await act(async () => home.current().toggle("env:launcher", true, true));
+    await using sidebar = await mountList(registry, "env:b");
+    await act(async () => sidebar.current().toggle("env:other", true, true));
+    await sidebar.select("env:c");
+    expect(home.collapsed()).toEqual(["env:launcher"]);
+    await sidebar.select("env:a");
+    expect(sidebar.collapsed()).toEqual(["env:launcher"]);
   });
 
   it("remembers groups opened for a selected thread once preferences finish loading", async () => {
-    await using view = await renderGroups({ selected: "env:child", reveal: ["env:launcher"] });
-    expect(view.registry.get(updateAtom)).toBeNull();
-    await act(async () => view.registry.set(preferencesAtom, AsyncResult.success({})));
-    const update = view.registry.get(updateAtom);
+    resetThreadListV2LaunchGroupSession();
+    const registry = AtomRegistry.make();
+    await using _list = await mountList(registry, "env:child", ["env:launcher"]);
+    expect(registry.get(updateAtom)).toBeNull();
+    await act(async () => registry.set(preferencesAtom, AsyncResult.success({})));
+    const update = registry.get(updateAtom);
     expect(update?.transform({}).threadListLaunchGroupsExpanded).toEqual({ "env:launcher": true });
   });
 });

@@ -9,13 +9,14 @@ const NO_EXPANDED: Readonly<Record<string, boolean>> = {};
 const NO_KEYS: ReadonlySet<string> = new Set();
 
 // Home and the thread sidebar read one session, so "+N more" and a collapse made while a folded
-// thread is selected agree between them.
+// thread is selected agree between them. A collapse lasts while some list has that thread selected.
 interface LaunchGroupSession {
   readonly showAll: ReadonlySet<string>;
-  readonly route: string | null;
-  readonly routeCollapsed: ReadonlySet<string>;
+  /** Groups collapsed above a selected thread, by that thread's key. */
+  readonly routeCollapsed: ReadonlyMap<string, ReadonlySet<string>>;
 }
-let session: LaunchGroupSession = { showAll: NO_KEYS, route: null, routeCollapsed: NO_KEYS };
+const NO_ROUTES: ReadonlyMap<string, ReadonlySet<string>> = new Map();
+let session: LaunchGroupSession = { showAll: NO_KEYS, routeCollapsed: NO_ROUTES };
 const listeners = new Set<() => void>();
 function setSession(next: LaunchGroupSession) {
   session = next;
@@ -29,9 +30,21 @@ const subscribe = (listener: () => void) => {
 };
 const readSession = () => session;
 
+// Each mounted list's selected thread; overrides for threads no list selects are dropped.
+const selections = new Map<symbol, string | null>();
+function forgetUnselectedRoutes() {
+  const selected = new Set(selections.values());
+  if ([...session.routeCollapsed.keys()].every((route) => selected.has(route))) return;
+  setSession({
+    ...session,
+    routeCollapsed: new Map([...session.routeCollapsed].filter(([route]) => selected.has(route))),
+  });
+}
+
 /** Tests start each case from a fresh session. */
 export function resetThreadListV2LaunchGroupSession() {
-  setSession({ showAll: NO_KEYS, route: null, routeCollapsed: NO_KEYS });
+  selections.clear();
+  setSession({ showAll: NO_KEYS, routeCollapsed: NO_ROUTES });
 }
 
 const withKey = (record: Readonly<Record<string, boolean>>, key: string, on: boolean) =>
@@ -51,15 +64,24 @@ export function useThreadListV2LaunchGroups(selectedThreadKey: string | null) {
   const expanded =
     (loaded ? preferencesResult.value.threadListLaunchGroupsExpanded : undefined) ?? NO_EXPANDED;
   const current = useSyncExternalStore(subscribe, readSession, readSession);
-  // oxlint-disable-next-line goat/react-effect-budget -- The shared session forgets a collapse made for the previous selection once the selection changes.
+  // oxlint-disable-next-line goat/react-effect-budget -- Registers this list's selection so the shared session forgets collapses for threads no list selects anymore.
   useEffect(() => {
-    if (session.route !== selectedThreadKey)
-      setSession({ ...session, route: selectedThreadKey, routeCollapsed: NO_KEYS });
+    const list = Symbol("launch-group-list");
+    selections.set(list, selectedThreadKey);
+    forgetUnselectedRoutes();
+    return () => {
+      selections.delete(list);
+      forgetUnselectedRoutes();
+    };
   }, [selectedThreadKey]);
+  const routeCollapsed =
+    selectedThreadKey === null
+      ? NO_KEYS
+      : (current.routeCollapsed.get(selectedThreadKey) ?? NO_KEYS);
   const state: ThreadListV2LaunchGroupState = {
     expanded,
     showAll: current.showAll,
-    routeCollapsed: current.route === selectedThreadKey ? current.routeCollapsed : NO_KEYS,
+    routeCollapsed,
   };
   return {
     loaded,
@@ -68,11 +90,14 @@ export function useThreadListV2LaunchGroups(selectedThreadKey: string | null) {
     toggle: (parentKey: string, isExpanded: boolean, onRoute: boolean) => {
       if (!loaded) return;
       const next = !isExpanded;
-      if (onRoute) {
-        const keys = new Set(state.routeCollapsed);
+      if (onRoute && selectedThreadKey !== null) {
+        const keys = new Set(routeCollapsed);
         if (next) keys.delete(parentKey);
         else keys.add(parentKey);
-        setSession({ ...session, route: selectedThreadKey, routeCollapsed: keys });
+        setSession({
+          ...session,
+          routeCollapsed: new Map([...session.routeCollapsed, [selectedThreadKey, keys]]),
+        });
       }
       savePreferences({
         transform: (preferences) => ({
