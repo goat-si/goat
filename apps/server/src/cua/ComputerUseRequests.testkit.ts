@@ -4,6 +4,7 @@ import {
   type AuthClientSession,
   type ComputerUseCapabilities,
   type ComputerUseRequestInput,
+  type ComputerUseApp,
   EnvironmentId,
   ScheduledTaskId,
   ThreadId,
@@ -135,6 +136,7 @@ export const withRequests = <A, E, R>(
   from: "person" | "schedule" | "remote" = "person",
   /** Hears what the leases tell the desktop to watch and admit to the driver's manifest. */
   setCuaWatch?: DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]["setCuaWatch"],
+  catalog: ReadonlyArray<ComputerUseApp> = [],
 ) => {
   let current = failure;
   return Effect.gen(function* () {
@@ -183,7 +185,7 @@ export const withRequests = <A, E, R>(
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
           listedApps: Effect.succeed(listedApps),
-          appCatalog: Effect.succeed([]),
+          appCatalog: Effect.succeed(catalog),
           block: Effect.sync(() => CuaDriver.agentBlock(current)),
           acquire: Effect.sync(() => {
             retry.starts += 1;

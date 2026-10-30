@@ -109,6 +109,7 @@ to let threads request the apps on this environment without another card; remove
 **Settings → Integrations → Computer use → Allowed apps**. Removing it also ends admissions
 that depend on that standing choice. Each request still receives a
 time-limited admission shown in the thread, which you can end early.
+After you have approved computer use on this environment once, naming an app in your own message can also allow it for the conversation without another card.
 A request for foreground control says so; approving it lets the agent bring
 apps forward and use keyboard or pointer focus for the stated purpose. Agents
 cannot screenshot the whole display; they look at one window at a time. On

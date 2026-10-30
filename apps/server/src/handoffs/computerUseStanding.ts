@@ -168,7 +168,9 @@ export const makeComputerUseStanding = (deps: {
                   !used.some((row) => row.message_id === entry.messageId),
               );
               if (candidate === undefined) return Option.none();
-              named.push(candidate);
+              named.push(
+                ...input.namedMessages.filter((entry) => cuaAppKey(entry.app) === cuaAppKey(app)),
+              );
             }
           }
         }

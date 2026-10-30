@@ -3,7 +3,10 @@ import type { ComputerUseApp, OrchestrationV2ConversationMessage } from "@goat/c
 
 const mentions = (text: string, name: string) => {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "iu").test(text);
+  return new RegExp(
+    `(?<![\\p{L}\\p{N}_])(?<![\\p{L}\\p{N}][.-])${escaped}(?![\\p{L}\\p{N}_]|[.-][\\p{L}\\p{N}_])`,
+    "iu",
+  ).test(text);
 };
 
 export const namedAppMessages = (

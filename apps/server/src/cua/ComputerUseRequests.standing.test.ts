@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, MessageId, ProjectId, ThreadId } from "@goat/contracts";
+import { CommandId, MessageId, ProjectId, ScheduledTaskId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -38,6 +38,181 @@ it.effect("a person's named app receives a session admission after a prior appro
             { threadId, handoffId: first.handoff.handoffId, action: "completed" },
             sessionId,
           );
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        }),
+      );
+    }),
+  ),
+);
+
+for (const scenario of [
+  { title: "display name", text: "Please use Fancy Editor", expected: "available" },
+  { title: "case insensitive bundle id", text: "use COM.EXAMPLE.EDITOR", expected: "available" },
+  { title: "substring", text: "Use Fancy Editors", expected: "needs_human" },
+  { title: "bundle id prefix", text: "Use com.example.Editor.extra", expected: "needs_human" },
+  { title: "agent message", text: "Use Fancy Editor", expected: "needs_human", agent: true },
+  { title: "agent send", text: "Use Fancy Editor", expected: "needs_human", sender: true },
+  {
+    title: "scheduled message",
+    text: "Use Fancy Editor",
+    expected: "needs_human",
+    scheduled: true,
+  },
+  { title: "remote launch", text: "Use Fancy Editor", expected: "needs_human", remote: true },
+  {
+    title: "no prior approval",
+    text: "Use Fancy Editor",
+    expected: "needs_human",
+    noApproval: true,
+  },
+] as const) {
+  it.effect(`named app: ${scenario.title}`, () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("named-scenario"),
+          threadId,
+          messageId: MessageId.make("message:named-scenario"),
+          text: scenario.text,
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent" in scenario ? "agent" : "user",
+          creationSource: "agent" in scenario ? "mcp" : "web",
+          ...("scheduled" in scenario
+            ? { scheduledTaskId: ScheduledTaskId.make("task:named") }
+            : {}),
+          ...("sender" in scenario ? { senderThreadId: ThreadId.make("thread:sender") } : {}),
+        });
+        yield* withRequests(
+          orchestrator,
+          supported,
+          ({ request, handoffs, leases }) =>
+            Effect.gen(function* () {
+              if (!("noApproval" in scenario)) {
+                const first = yield* request({ apps: ["com.example.Other"] });
+                if (first.kind !== "needs_human") return assert.fail("expected approval");
+                yield* handoffs.respond(
+                  { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+                  sessionId,
+                );
+              }
+              const result = yield* request({ apps: ["com.example.Editor"] });
+              assert.equal(result.kind, scenario.expected);
+              if (result.kind === "available") {
+                const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+                assert.isTrue(
+                  records.turnItems.some(
+                    (item) =>
+                      item.type === "human_handoff" &&
+                      item.handoff.reason.includes("person named the app"),
+                  ),
+                );
+                yield* stopComputerUse(Option.some(leases), handoffs, sessionId, threadId);
+                assert.equal(
+                  (yield* request({ apps: ["com.example.Editor"] })).kind,
+                  "needs_human",
+                );
+              }
+            }),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "remote" in scenario ? "remote" : "person",
+          undefined,
+          [{ id: "com.example.Editor", name: "Fancy Editor" }],
+        );
+      }),
+    ),
+  );
+}
+
+it.effect("a named denied app is refused after a person's approval", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("named-denied"),
+        threadId,
+        messageId: MessageId.make("message:named-denied"),
+        text: "Use com.1password.safari",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Other"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          const denied = yield* request({ apps: ["com.1password.safari"] });
+          assert.equal(denied.kind, "refused");
+          if (denied.kind === "refused") assert.equal(denied.code, "app_not_allowed");
+        }),
+      );
+    }),
+  ),
+);
+
+it.effect("automatic approvals do not count as a person's first approval", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("auto-not-person"),
+        threadId,
+        messageId: MessageId.make("message:auto-not-person"),
+        text: "Use com.example.Editor",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* withRequests(orchestrator, supported, ({ request }) =>
+        Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaAllowedApps: ["com.example.Other"],
+          });
+          assert.equal((yield* request({ apps: ["com.example.Other"] })).kind, "available");
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        }),
+      );
+    }),
+  ),
+);
+
+it.effect("a person's approval survives a handoff service restart for named apps", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("named-restart"),
+        threadId,
+        messageId: MessageId.make("message:named-restart"),
+        text: "Use com.example.Editor",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Other"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+        }),
+      );
+      yield* withRequests(orchestrator, supported, ({ request }) =>
+        Effect.gen(function* () {
           assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
         }),
       );
