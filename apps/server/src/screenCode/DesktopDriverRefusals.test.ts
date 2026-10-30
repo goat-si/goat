@@ -80,9 +80,13 @@ it.live.each(["user_interacting", "screen_locked"])(
         invocation: context.invocation,
         source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
           try { await app.click({x: 1, y: 2, verify: true}); return 'success'; }
-          catch (e) { return { code: e.code, nothingSent: e.nothingSent }; }`,
+          catch (e) { return { code: e.code, nothingSent: e.nothingSent, retryClass: e.safety?.retryClass }; }`,
       });
-      expect(result.value).toEqual({ code, nothingSent: true });
+      expect(result.value).toEqual({
+        code,
+        nothingSent: true,
+        retryClass: code === "user_interacting" ? "new_key" : "never",
+      });
       expect(sent.some((entry) => entry.tool === "click")).toBe(false);
       yield* service.finishTurn({
         runId: "r",
