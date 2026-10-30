@@ -36,8 +36,6 @@ export default function NoteVisualEditor(props: {
   readonly editable: boolean;
   readonly handleRef: Ref<NoteVisualEditorHandle>;
   readonly onChange: () => void;
-  /** A style change, which may be menu formatting: not proof of an edit, but reads must retry. */
-  readonly onActivity: () => void;
   readonly onError: (message: string) => void;
   readonly onFallback: (reason: string) => void;
 }) {
@@ -225,7 +223,9 @@ export default function NoteVisualEditor(props: {
           markdownShortcuts={{ heading: true, unorderedList: true }}
           // Typed URLs stay as typed; auto-linking would rewrite them into [text](url).
           linkRegex={null}
-          formatMenuConfig={{ underline: { enabled: false }, spoiler: { enabled: false } }}
+          // The native Format menu changes styles without a reliable change event, so formatting goes
+          // through the toolbar, which reports every edit.
+          selectionMenuConfig={{ format: { enabled: false } }}
           placeholder="Write your note"
           placeholderTextColor={nativeTextStyle.mutedColor}
           cursorColor={nativeTextStyle.linkColor}
@@ -235,12 +235,6 @@ export default function NoteVisualEditor(props: {
           onChangeState={(state) => {
             const next = styleStateKey(state);
             if (next !== styleKey) setStyleKey(next);
-            // Native menu and keyboard formatting report only a style change, so it gets an undo
-            // snapshot after the usual pause; a duplicate of the last one is skipped.
-            if (!ready) return;
-            version.current++;
-            props.onActivity();
-            scheduleSnapshot();
           }}
           style={{
             height: Math.min(Math.max(height * 0.5, 280), 720),

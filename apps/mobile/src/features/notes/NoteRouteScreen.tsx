@@ -261,8 +261,9 @@ function NoteContent(props: NoteParams) {
   };
   // Formatting from the native menu can change the note without a text event, so an open
   // visual editor is read once, under the same lock as saving, before leaving without a prompt.
-  usePreventRemove(dirty || saving || (editing && visual), ({ data }) => {
-    if (saving) return;
+  usePreventRemove(dirty || saving || reading || (editing && visual), ({ data }) => {
+    // Leaving while a save reads the editor would race the save; the screen stays.
+    if (saving || readingRef.current) return;
     const leave = () => navigation.dispatch(data.action);
     const ask = () =>
       Alert.alert(
@@ -419,9 +420,6 @@ function NoteContent(props: NoteParams) {
                       onChange={() => {
                         editVersion.current++;
                         setDirty(true);
-                      }}
-                      onActivity={() => {
-                        editVersion.current++;
                       }}
                       onError={setError}
                       onFallback={(reason) => {

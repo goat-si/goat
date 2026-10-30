@@ -216,19 +216,6 @@ function button(label: string) {
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 }
-function plainStyle() {
-  return {
-    bold: { isActive: false },
-    italic: { isActive: false },
-    underline: { isActive: false },
-    strikethrough: { isActive: false },
-    spoiler: { isActive: false },
-    link: { isActive: false, destination: "" },
-    heading: { isActive: false, level: 1 },
-    unorderedList: { isActive: false, depth: 0 },
-    orderedList: { isActive: false, depth: 0 },
-  };
-}
 /** Opens the editor and waits for the lazy visual editor to load and check the note. */
 async function edit() {
   await act(async () => button("Edit").click());
@@ -724,17 +711,18 @@ describe("visual note editor", () => {
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
-  it("a style change during a save read forces another read, so menu formatting is saved", async () => {
+  it("Back during a save read keeps the screen and offers no discard", async () => {
     await act(async () => render());
     await edit();
-    const first = Promise.withResolvers<string>();
-    mocks.serialize = () => first.promise;
+    act(() => type("edited"));
+    const read = Promise.withResolvers<string>();
+    mocks.serialize = () => read.promise;
     await act(async () => button("Save on phone").click());
-    act(() => mocks.inputProps?.onChangeState(plainStyle()));
-    mocks.serialize = () => "**mine**";
-    await act(async () => first.resolve("mine"));
-    expect(mocks.enqueue).toHaveBeenCalledOnce();
-    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "**mine**" }));
+    await act(async () => mocks.preventRemove?.callback({ data: { action: "back" } }));
+    expect(mocks.alert).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    await act(async () => read.resolve("edited"));
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "edited" }));
   });
 
   it("a failed background undo snapshot is shown and the edit stays", async () => {
