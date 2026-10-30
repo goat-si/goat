@@ -160,6 +160,7 @@ function makeContext() {
   const context = {
     page,
     sessions,
+    on: () => context,
     newPage: async () => page as unknown as Page,
     grantPermissions: async () => {},
     newCDPSession: async (_target: unknown) => {

@@ -54,9 +54,9 @@ To keep agents away from a site, select an environment and add its host under
 **Settings → Integrations → Browser → Blocked browser hosts**. On mobile, use
 **Settings → Agent behavior → Preview browser**. Enter a host such as `example.com`, without a
 scheme or path; its subdomains are blocked too. The list starts empty and you can remove hosts at
-any time. GOAT refuses the agent's navigation, claim or input on a blocked host with `blocked_url`.
-If the tab reaches a blocked host, the agent cannot use that tab again during the same turn, even
-after it leaves the host. A later turn can use it once the tab is on an allowed host.
+any time. GOAT stops agents from opening or acting on blocked sites, and if a page sends the browser
+there anyway, the agent loses access to that tab for the rest of the turn. A later turn can use it
+once the tab is on an allowed host.
 
 Ask an agent to use a page in GOAT's built-in browser and an app on the computer
 running that GOAT environment in the same task. Point it to a specific tab or

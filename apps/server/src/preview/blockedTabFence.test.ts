@@ -44,6 +44,7 @@ it.effect("a late observation cannot fence a later turn with the same run id", (
         page: { url: () => "https://safe.example/" },
       };
       const end = yield* activity.begin(threadId, "run");
+      const captured = fence.capture(threadId)!;
       const observation = fence.observe(tab, "https://example.com/");
       expect(observation).toBeDefined();
       yield* Deferred.await(entered);
@@ -51,6 +52,7 @@ it.effect("a late observation cannot fence a later turn with the same run id", (
       const endNext = yield* activity.begin(threadId, "run");
       yield* Deferred.succeed(release, undefined);
       yield* Effect.promise(() => observation!);
+      yield* Effect.promise(() => fence.observe(tab, "https://example.com/", captured)!);
       yield* Effect.promise(() => fence.assertTab(tab, "run"));
       yield* endNext;
     }),

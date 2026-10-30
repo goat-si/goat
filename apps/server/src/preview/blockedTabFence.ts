@@ -18,6 +18,10 @@ interface Identity {
   readonly threadId: string;
   readonly runId: string;
 }
+export interface BlockedTabRun {
+  readonly runId: string;
+  readonly token: object;
+}
 
 export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -50,11 +54,17 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   });
   const blocked = () =>
     new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
-  const observe = (tab: Tab, url: string) => {
+  const capture = (threadId: string): BlockedTabRun | undefined => {
+    const runId = runSync(activity.currentRun(ThreadId.make(threadId)));
+    if (!runId) return undefined;
+    const value = token(threadId, runId);
+    return value ? { runId, token: value } : undefined;
+  };
+  const observe = (tab: Tab, url: string, observedRun?: BlockedTabRun) => {
     const key = keyOf(tab);
-    const runId = runSync(activity.currentRun(ThreadId.make(tab.threadId)));
-    if (!runId) return;
-    const version = token(tab.threadId, runId);
+    const observed = observedRun ?? capture(tab.threadId);
+    if (!observed) return;
+    const { runId, token: version } = observed;
     const prior = pending.get(key)?.check ?? Promise.resolve();
     const check = prior.then(async () => {
       const current = await run(settings.getSettings);
@@ -130,5 +140,5 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     pending.delete(key);
     for (const entry of entries.keys()) if (entry.startsWith(`${key}\u0000`)) entries.delete(entry);
   };
-  return { assertTab, assertUrl, observe, drop, gate };
+  return { assertTab, assertUrl, capture, observe, drop, gate };
 });

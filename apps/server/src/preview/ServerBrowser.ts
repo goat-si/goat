@@ -98,6 +98,8 @@ import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { inputFence } from "./PreviewInputFence.ts";
+import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
+import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowserClipboard.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { pushBounded } from "./boundedBuffer.ts";
@@ -119,7 +121,7 @@ import {
   type RequestedSession,
 } from "./sessionMode.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
-import { makeBlockedTabFence } from "./blockedTabFence.ts";
+import { makeBlockedTabFence, type BlockedTabRun } from "./blockedTabFence.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
@@ -377,7 +379,23 @@ const make = Effect.gen(function* () {
   const pendingTabs = new Map<string, Promise<ServerTab>>();
 
   const closedPendingTabs = new Set<string>();
-  const adoptedPages = new Map<string, { readonly page: Page; readonly openerTabId: string }>();
+  const adoptedPages = new Map<
+    string,
+    {
+      readonly page: Page;
+      readonly openerTabId: string;
+      readonly visits: ReadonlyArray<{ readonly url: string; readonly run: BlockedTabRun }>;
+    }
+  >();
+  const popupNavigation = new PopupNavigationRequests((context) => {
+    const runs = new Map<string, BlockedTabRun>();
+    for (const tab of tabs.values()) {
+      if (tab.page.context() !== context) continue;
+      const run = blockedTabs.capture(tab.threadId);
+      if (run) runs.set(tab.threadId, run);
+    }
+    return runs;
+  });
   const closedPopups = new AgentTabState.ClosedPopups();
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
@@ -638,6 +656,7 @@ const make = Effect.gen(function* () {
         isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
       ));
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
+    popupNavigation.watch(context);
     if (!desktop) await prepareContext(context);
     const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
     attachNetworkTracker(page);
@@ -703,10 +722,19 @@ const make = Effect.gen(function* () {
       await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
     }
     await applyRendering(tab, snapshot);
+    const observeNavigation = (url: string, run?: BlockedTabRun) => {
+      blockedTabs.observe(tab, url, run);
+      const opener = tab.openerTabId && tabs.get(tabKey(tab.threadId, tab.openerTabId));
+      if (opener) blockedTabs.observe(opener, url, run);
+    };
     const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
       request.isNavigationRequest() && request.frame() === page.mainFrame();
     const navigationGenerations = new WeakMap<object, number>();
     page.on("request", (request) => {
+      if (request.isNavigationRequest()) {
+        for (let hop: typeof request | null = request; hop; hop = hop.redirectedFrom())
+          observeNavigation(hop.url());
+      }
       if (!isMainNavigation(request)) return;
       navigationGenerations.set(request, ++tab.navigationGeneration);
       tab.documentGeneration++;
@@ -718,12 +746,20 @@ const make = Effect.gen(function* () {
         title: "",
       });
     });
+    if (adopted) {
+      for (const visit of adopted.visits) observeNavigation(visit.url, visit.run);
+      for (const visit of popupNavigation.take(page)) {
+        const run = visit.runs.get(tab.threadId);
+        if (run) observeNavigation(visit.url, run);
+      }
+    }
+    popupNavigation.track(page);
     page.on("load", () => {
       tab.loading = false;
       void reportLoaded(tab);
     });
     page.on("framenavigated", (frame) => {
-      if (frame === page.mainFrame()) blockedTabs.observe(tab, page.url());
+      if (frame === page.mainFrame()) observeNavigation(page.url());
       if (frame === page.mainFrame()) tab.documentGeneration++;
       // Same-document navigations (SPA routes) fire no load event.
       if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
@@ -1024,72 +1060,6 @@ const make = Effect.gen(function* () {
     await context.grantPermissions(["clipboard-write"]);
   };
 
-  const recordCopies = async (cdp: CDPSession) => {
-    // Scripts for new documents run only while this session's Page domain is on.
-    await cdp.send("Page.enable");
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
-      source: ViewerInput.CLIPBOARD_SCRIPT,
-      worldName: ViewerInput.CLIPBOARD_WORLD,
-      runImmediately: true,
-    });
-  };
-
-  /** Out-of-process frames need their own copy-recording session until target closure. */
-  const recordFrameCopies = async (tab: ServerTab, frame: Frame) => {
-    if (frame === tab.page.mainFrame() || tab.frameSessions.has(frame)) return;
-
-    const cdp = await tab.page
-      .context()
-      .newCDPSession(frame)
-      .catch(() => null);
-    if (!cdp) return;
-    if (tab.frameSessions.has(frame) || frame.isDetached()) {
-      await cdp.detach().catch(constVoid);
-      return;
-    }
-    tab.frameSessions.set(frame, cdp);
-    cdp.on("close", () => {
-      if (tab.frameSessions.get(frame) !== cdp) return;
-      tab.frameSessions.delete(frame);
-
-      if (!frame.isDetached()) void recordFrameCopies(tab, frame);
-    });
-    await recordCopies(cdp).catch(constVoid);
-  };
-
-  const takeSessionCopies = async (cdp: CDPSession) => {
-    const tree = await cdp.send("Page.getFrameTree").catch(() => null);
-    if (!tree) return [];
-    const frameIds = (node: typeof tree.frameTree): Array<string> => [
-      node.frame.id,
-      ...(node.childFrames ?? []).flatMap(frameIds),
-    ];
-    return Promise.all(
-      frameIds(tree.frameTree).map((frameId) =>
-        cdp
-          .send("Page.createIsolatedWorld", { frameId, worldName: ViewerInput.CLIPBOARD_WORLD })
-          .then(({ executionContextId }) =>
-            cdp.send("Runtime.evaluate", {
-              contextId: executionContextId,
-              expression: "globalThis.takeCopy?.()",
-              returnByValue: true,
-            }),
-          )
-          .then(
-            ({ result }) => (typeof result.value === "string" ? result.value : ""),
-            () => "",
-          ),
-      ),
-    );
-  };
-
-  const takeCopiedText = async (tab: ServerTab) => {
-    const copies = await Promise.all(
-      [tab.cdp, ...tab.frameSessions.values()].map(takeSessionCopies),
-    );
-    return copies.flat().find((text) => text.length > 0);
-  };
-
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
     const targetId = await AgentTabState.targetIdOf(popup).catch(() => undefined);
     const agentId = opener.popups.owner(targetId, opener, Date.now());
@@ -1098,6 +1068,11 @@ const make = Effect.gen(function* () {
       return;
     }
     const url = popup.url();
+    const visits = popupNavigation.take(popup).flatMap((visit) => {
+      const run = visit.runs.get(opener.threadId);
+      return run ? [{ url: visit.url, run }] : [];
+    });
+    for (const visit of visits) blockedTabs.observe(opener, visit.url, visit.run);
 
     const controller = [...opener.viewers].find(
       (viewer) => viewer.id === opener.control.controller,
@@ -1114,6 +1089,7 @@ const make = Effect.gen(function* () {
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
             page: popup,
             openerTabId: opener.tabId,
+            visits,
           }),
       }),
     ).then(

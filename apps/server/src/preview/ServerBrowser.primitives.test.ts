@@ -135,6 +135,7 @@ function makeContext() {
   const context = {
     page,
     sessions,
+    on: () => context,
     cookies: vi.fn(async () => [{ name: "sid", value: "SecretCookieValue99" }]),
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
