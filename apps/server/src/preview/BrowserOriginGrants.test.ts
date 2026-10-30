@@ -100,3 +100,34 @@ it.effect("keeps grants per thread and shrinks the exact window union on revoke 
     assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
   }),
 );
+
+it.effect("does not grant a noncanonical origin or use an unsupported driver", () =>
+  Effect.gen(function* () {
+    let supported = false;
+    let published = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => supported,
+      publish: () =>
+        Effect.sync(() => {
+          published++;
+        }),
+      bind: () => Effect.die("bind must not run"),
+    });
+    const input = {
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test/",
+      windowTitle: "Browser",
+    };
+    const unavailable = yield* service.request(input);
+    assert.equal(unavailable.status, "refused");
+    if (unavailable.status === "refused") assert.equal(unavailable.code, "unavailable");
+    supported = true;
+    const invalid = yield* service.request(input);
+    assert.equal(invalid.status, "refused");
+    if (invalid.status === "refused") assert.equal(invalid.code, "invalid_origin");
+    assert.equal(published, 0);
+  }),
+);

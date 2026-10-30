@@ -1,5 +1,12 @@
-import type { BrowserOriginGrant, EnvironmentId, LiveTabClaim, ThreadId } from "@goat/contracts";
+import {
+  BrowserOrigin,
+  type BrowserOriginGrant,
+  type EnvironmentId,
+  type LiveTabClaim,
+  type ThreadId,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 interface Request {
@@ -45,6 +52,12 @@ const unavailable = {
   code: "unavailable",
   message: "Needs a newer GOAT Computer Use.",
 } as const;
+const invalidOrigin = {
+  status: "refused",
+  code: "invalid_origin",
+  message: "Expected a canonical HTTP origin.",
+} as const;
+const isOrigin = Schema.is(BrowserOrigin);
 
 export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(function* (
   deps: Dependencies,
@@ -85,6 +98,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     lock.withPermits(1)(
       Effect.sync(() => {
         if (!deps.supported()) return unavailable;
+        if (!isOrigin(input.origin)) return invalidOrigin;
         const claimId = `browser-claim:${++sequence}`;
         pending.set(claimId, { ...input, claimId, granted: false });
         return { status: "pending" as const, claimId };
