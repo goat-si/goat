@@ -2,7 +2,12 @@ import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManif
 import { batchAppScope } from "./ComputerUseBatchScope.ts";
 
 export const deniedCallApp = (
-  call: { readonly name: string; readonly args: unknown; readonly app?: string },
+  call: {
+    readonly name: string;
+    readonly args: unknown;
+    readonly app?: string;
+    readonly safetyApps?: ReadonlyArray<string>;
+  },
   denied: ReadonlyArray<string>,
   nonPersonFullAccess = false,
 ): string | undefined => {
@@ -20,7 +25,12 @@ export const deniedCallApp = (
           )
           .map(([, value]) => String(value))
       : [];
-  const apps = [call.app, ...named, ...(batchAppScope(call.name, call.args)?.apps ?? [])];
+  const apps = [
+    call.app,
+    ...(call.safetyApps ?? []),
+    ...named,
+    ...(batchAppScope(call.name, call.args)?.apps ?? []),
+  ];
   return apps.find(
     (app) =>
       app !== undefined &&

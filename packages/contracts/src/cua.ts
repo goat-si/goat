@@ -772,6 +772,11 @@ export const ComputerUseCallReservation = Schema.Union([
     foregroundGrantId: Schema.optionalKey(TurnItemId),
     /** The app the proxy judged this call to act on, by the id its scope check uses (#1484). */
     app: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(500))),
+    safetyApps: Schema.optionalKey(
+      Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(500))).check(
+        Schema.isMaxLength(4),
+      ),
+    ),
     appLabel: Schema.optionalKey(ComputerUseCallAppLabel),
   }),
   strictTicketValidation,

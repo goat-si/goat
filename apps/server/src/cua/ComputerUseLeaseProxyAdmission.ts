@@ -53,6 +53,13 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     name,
     args,
     ...(app === undefined ? {} : { app }),
+    ...(known === undefined
+      ? {}
+      : {
+          safetyApps: [known.id, known.name, known.executable].filter(
+            (id): id is string => id !== undefined && id.length > 0 && id.length <= 500,
+          ),
+        }),
     ...(appLabel === undefined ? {} : { appLabel }),
   });
   const admission = proxyCallAdmission(
