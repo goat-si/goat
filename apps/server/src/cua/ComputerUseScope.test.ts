@@ -36,6 +36,19 @@ describe("learnApps", () => {
       assert.equal(result._tag, "refuse", id);
     }
   });
+
+  it("does not run an unrestricted batch without an app scope", () => {
+    assert.equal(
+      scopeVerdict({
+        name: "run_script",
+        args: { script: "click()" },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      })._tag,
+      "refuse",
+    );
+  });
   it("lists a pid again after a reply names its app without the bundle id a grant names", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed, true);

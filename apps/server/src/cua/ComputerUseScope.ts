@@ -132,7 +132,18 @@ export function scopeVerdict(input: {
   );
   if (protectedApp !== undefined)
     return { _tag: "refuse", reason: "app_not_approved", app: protectedApp };
-  if (pid !== undefined && target === undefined) return { _tag: "resolve", pid };
+  if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name) && approved === undefined) {
+    const scope = batchAppScope(input.name, input.args);
+    return scope !== undefined && !scope.apps.some(isExcludedCuaApplication)
+      ? { _tag: "allow" }
+      : { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
+  }
+  if (
+    pid !== undefined &&
+    target === undefined &&
+    (typeof input.name !== "string" || !OPAQUE_TOOLS.has(input.name))
+  )
+    return { _tag: "resolve", pid };
   if (approved === undefined) return { _tag: "allow" };
   const name = typeof input.name === "string" ? input.name : "";
   if (UNSCOPED_TOOLS.has(name)) return { _tag: "allow" };
