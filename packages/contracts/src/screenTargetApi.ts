@@ -31,6 +31,7 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // that input's safety, and its nextStep names the input; read again in a new cell and never resend it.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
+// Diff text uses + added, ~ changed and - removed rows; unchanged numbers remain valid.
 interface Observation extends ReadTime { text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs

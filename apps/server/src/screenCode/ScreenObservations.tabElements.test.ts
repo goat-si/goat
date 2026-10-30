@@ -107,12 +107,12 @@ describe("tab observation elements", () => {
     const full = observe(observations, calculator);
     const diff = observe(observations, calculator.replace('"8"', '"9"'), { base: full });
     expect(diff.mode).toBe("diff");
-    expect(diff.indexedText).toContain('+   - button "9" [3]');
+    expect(diff.indexedText).toContain('+   - button "9" [5]');
     expect(diff.elements.map((element) => [element.index, element.name])).toEqual([
       [0, ""],
       [1, "CE"],
       [2, "7"],
-      [3, "9"],
+      [5, "9"],
       [4, ""],
     ]);
   });

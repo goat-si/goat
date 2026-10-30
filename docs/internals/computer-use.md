@@ -161,7 +161,9 @@ designated requirement, never a pid or path alone. The driver would remain the h
 - App observations start with a full tree. Later reads request a driver diff against the latest
   snapshot and retain the new snapshot's element tokens and frames internally. A driver fallback
   returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
-  computed by GOAT's observation tracker. Model-facing observations omit the element array.
+  computed by GOAT's observation tracker using role, accessible name and ref. Added, changed and
+  removed rows use `+`, `~` and `-`; unchanged numbers stay valid. Model-facing observations omit
+  the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
