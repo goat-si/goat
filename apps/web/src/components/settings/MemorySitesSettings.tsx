@@ -1,6 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, SiteNoteListEntry } from "@goat/contracts";
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -39,17 +39,33 @@ export function MemorySitesSettings({ environmentId }: { environmentId: Environm
   const [busy, setBusy] = useState(false);
   const [origin, setOrigin] = useState("");
   const [text, setText] = useState("");
+  // Only the newest list request applies, so a slow first load cannot replace a later reload.
+  const latestLoad = useRef(0);
   // oxlint-disable-next-line goat/react-effect-budget -- Loads the selected connection's site notes from the server.
   useEffect(() => {
     if (!canRead) return;
     let active = true;
-    void loadNotes(registry, environmentId, { setNotes, setError }, () => active);
+    const id = ++latestLoad.current;
+    void loadNotes(
+      registry,
+      environmentId,
+      { setNotes, setError },
+      () => active && latestLoad.current === id,
+    );
     return () => {
       active = false;
     };
   }, [canRead, environmentId, registry]);
   if (!canRead) return null;
-  const reload = () => loadNotes(registry, environmentId, { setNotes, setError });
+  const reload = () => {
+    const id = ++latestLoad.current;
+    return loadNotes(
+      registry,
+      environmentId,
+      { setNotes, setError },
+      () => latestLoad.current === id,
+    );
+  };
   const save = async (noteOrigin: string, noteText: string) => {
     setBusy(true);
     const result = await memoryEnvironment.siteNotesWrite.run(registry, {
