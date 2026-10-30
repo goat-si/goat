@@ -246,3 +246,33 @@ it.live.each(["non-password field", "different origin"] as const)(
     );
   },
 );
+
+it.live("evaluation returns page objects without stripping their keys", () => {
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      Effect.succeed(
+        (request.operation === "evaluate"
+          ? { _timing: "page-value", _noResult: true }
+          : {
+              tabId: formTab.tabId,
+              url: formTab.url,
+              control: { owner: "agent", ownedByCaller: true, generation: 0 },
+            }) as A,
+      ),
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab('form'); return await tab.evaluate('pageValue');`,
+  ]).pipe(
+    Effect.map(([result]) =>
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: {
+          status: "completed",
+          value: { _timing: "page-value", _noResult: true },
+        },
+      }),
+    ),
+  );
+});

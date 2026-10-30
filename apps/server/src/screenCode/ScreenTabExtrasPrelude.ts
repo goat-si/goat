@@ -19,7 +19,7 @@ const __tabExtras = (tab, call, aim, act) => ({
   },
   evaluate: (expression) => {
     if (!tab) throw new ScreenError('unsupported', 'Evaluation is only available on tabs.', true);
-    return call('tab_evaluate', { expression });
+    return call('tab_evaluate', { expression }).then((answer) => answer.result);
   },
   logs: (options = {}) => {
     if (!tab) throw new ScreenError('unsupported', 'Logs are only available on tabs.', true);

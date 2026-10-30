@@ -39,7 +39,7 @@ export const evaluateTab = Effect.fn("PreviewTargetHost.evaluate")(function* (
     });
   const value = yield* invoke(input);
   return {
-    value: value ?? null,
+    value: { result: value ?? null },
     category: "unverifiable" as const,
     evidence: ["Evaluation completed"],
   };
