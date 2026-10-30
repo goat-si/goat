@@ -41,7 +41,10 @@ it.effect("does not bind before approval and hides a mismatch as a decline", () 
     if (second.status !== "pending") return assert.fail("expected pending request");
     const decline = yield* service.answer(second.claimId, false);
     assert.deepEqual(mismatch.agentResult, decline.agentResult);
-    assert.equal(mismatch.personMessage, "This tab is not on https://example.test");
+    assert.equal(
+      "personMessage" in mismatch ? mismatch.personMessage : undefined,
+      "This tab is not on https://example.test",
+    );
     assert.deepEqual((yield* service.list(threadId)).grants, []);
     assert.equal(binds, 1);
     assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });

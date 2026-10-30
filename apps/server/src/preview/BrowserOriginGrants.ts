@@ -58,6 +58,13 @@ const invalidOrigin = {
   message: "Expected a canonical HTTP origin.",
 } as const;
 const isOrigin = Schema.is(BrowserOrigin);
+const originOf = (url: string) => {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+};
 
 export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(function* (
   deps: Dependencies,
@@ -130,13 +137,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         const result = yield* Effect.gen(function* () {
           yield* deps.publish(union());
           const tab = yield* deps.bind(entry);
-          let origin = "";
-          try {
-            origin = new URL(tab.url).origin;
-          } catch {
-            /* The tab is not on the approved site. */
-          }
-          if (origin !== entry.origin) {
+          if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
             return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
           }
