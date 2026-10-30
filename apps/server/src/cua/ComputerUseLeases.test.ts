@@ -28,6 +28,8 @@ import {
   grant,
 } from "./ComputerUseLeases.projection.testkit.ts";
 
+const isComputerUsePauseReason = Schema.is(ComputerUsePauseReason);
+
 const layer = it.layer(
   Layer.merge(
     database,
@@ -38,7 +40,7 @@ layer("ComputerUseLeases controls", (it) => {
   it.effect("screen lock pauses the live session with its own reason", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        assert.isTrue(Schema.is(ComputerUsePauseReason)("screen_locked"));
+        assert.isTrue(isComputerUsePauseReason("screen_locked"));
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const owner = ThreadId.make("thread-screen-locked");
