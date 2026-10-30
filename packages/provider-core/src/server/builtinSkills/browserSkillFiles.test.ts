@@ -50,6 +50,14 @@ describe("browser site notes", () => {
 });
 
 describe("browser guide in results", () => {
+  it("uses the shared note delivery for each URL independently of the guide pointer", () => {
+    const guide = makeBrowserGuide(
+      () => "/state/skills/browser/SKILL.md",
+      (thread, url) => (url === "https://example.com" ? `saved:${thread}` : undefined),
+    );
+    expect(guide("thread-a", "https://example.com")).toContain("saved:thread-a");
+    expect(guide("thread-a", "https://example.com")).toBe("saved:thread-a");
+  });
   it("points a thread at the guide once and gives each site's notes on its first visit", () => {
     const guide = makeBrowserGuide(() => "/state/skills/browser/SKILL.md");
     const first = guide("thread-a", "https://example.com/");

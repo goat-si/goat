@@ -132,9 +132,16 @@ export function browserSiteNote(hostname: string): string | undefined {
  * What a thread's browser results add once: the guide's path on its first answer, and a site's
  * notes on its first visit to that site, like the per-app notes computer use adds to a first read.
  */
-export function makeBrowserGuide(skillPath: () => string | undefined) {
+export function makeBrowserGuide(
+  skillPath: () => string | undefined,
+  deliver?: (threadId: string, url: string) => string | undefined,
+) {
   const told = new Map<string, Set<string>>();
-  return (threadId: string, url: string | undefined): string | undefined => {
+  return (
+    threadId: string,
+    url: string | undefined,
+    deliverOverride?: (threadId: string, url: string) => string | undefined,
+  ): string | undefined => {
     const lines: string[] = [];
     let seen = told.get(threadId);
     if (seen === undefined) {
@@ -146,11 +153,17 @@ export function makeBrowserGuide(skillPath: () => string | undefined) {
       if (path !== undefined)
         lines.push(`Before more browser work, read the browser skill at ${path}.`);
     }
-    const host = url === undefined ? undefined : hostOf(url);
-    const note = host === undefined ? undefined : browserSiteNote(host);
-    if (host !== undefined && note !== undefined && !seen.has(note)) {
-      seen.add(note);
-      lines.push(`GOAT notes for ${host}: ${note}`);
+    const deliverNote = deliverOverride ?? deliver;
+    if (deliverNote !== undefined && url !== undefined) {
+      const note = deliverNote(threadId, url);
+      if (note !== undefined) lines.push(note);
+    } else {
+      const host = url === undefined ? undefined : hostOf(url);
+      const note = host === undefined ? undefined : browserSiteNote(host);
+      if (host !== undefined && note !== undefined && !seen.has(note)) {
+        seen.add(note);
+        lines.push(`GOAT notes for ${host}: ${note}`);
+      }
     }
     return lines.length === 0 ? undefined : lines.join("\n");
   };
