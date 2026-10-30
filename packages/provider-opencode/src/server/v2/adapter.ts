@@ -414,6 +414,7 @@ const sessionRules = (
   paths: ReadonlyArray<Rule>,
   grants: ReadonlyArray<Rule>,
   mcpServerNames: { readonly goat: string; readonly cua: string | null } | null,
+  subagentsOff: boolean,
 ): ReadonlyArray<Rule> => [
   ...(policy.runtimeMode === "full-access"
     ? [rule("*", "allow")]
@@ -427,7 +428,13 @@ const sessionRules = (
   ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
   ...paths,
   ...mcpRules(mcpServerNames),
+  // OpenCode checks this before every launch but has no concurrency cap: a goatclaw limit of
+  // zero denies subagents last so no grant can reopen them, and other limits leave them uncapped.
+  ...(subagentsOff ? [rule("subagent", "deny")] : []),
 ];
+
+const deniesSubagents = (rules: ReadonlyArray<Rule> | undefined) =>
+  rules?.some((entry) => entry.action === "subagent" && entry.effect === "deny") === true;
 
 const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
   left?.length === right.length &&
@@ -2819,6 +2826,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         policy.runtimeMode === "full-access" && !plan
           ? []
           : yield* pathsFor(thread.directory, plan ? [thread.agent, "plan"] : [thread.agent]);
+      const mcpSession =
+        appThreadId === null ? undefined : yield* mcpSessions.read(ThreadId.make(appThreadId));
       return sessionRules(
         policy,
         paths,
@@ -2828,10 +2837,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           : {
               goat: yield* mcpServerNameFor(appThreadId),
               cua:
-                (yield* mcpSessions.read(ThreadId.make(appThreadId)))?.cuaDriver === undefined
-                  ? null
-                  : yield* cuaServerNameFor(appThreadId),
+                mcpSession?.cuaDriver === undefined ? null : yield* cuaServerNameFor(appThreadId),
             },
+        mcpSession?.nativeSubagentLimit === 0,
       );
     });
 
@@ -3729,7 +3737,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
                 });
                 state.agent = agent;
               }
-              // Refresh stale mode rules; running subagent updates are best effort because they outlive this turn.
+              // Refresh stale mode rules; running subagent updates are best effort because they outlive
+              // this turn, except one that newly denies subagents, which must land before the prompt.
               yield* writeRules(state, turnInput.runtimePolicy);
               yield* writeTitle(state, turnInput.appThread.title).pipe(
                 Effect.timeout(REQUEST_REPLY_TIMEOUT),
@@ -3737,10 +3746,12 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
               );
               for (const call of runningCalls(state)) {
                 if (call.child === undefined) continue;
-                yield* writeRules(call.child, turnInput.runtimePolicy).pipe(
+                const update = writeRules(call.child, turnInput.runtimePolicy).pipe(
                   Effect.timeout(REQUEST_REPLY_TIMEOUT),
-                  Effect.ignore({ log: true }),
                 );
+                yield* deniesSubagents(state.rules) && !deniesSubagents(call.child.rules)
+                  ? update
+                  : update.pipe(Effect.ignore({ log: true }));
               }
               if (!sameModel(model, state.model)) {
                 yield* client.session.switchModel({ sessionID: Session.ID.make(sessionId), model });
