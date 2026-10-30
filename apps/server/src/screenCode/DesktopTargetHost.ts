@@ -393,6 +393,7 @@ export const createDesktopTargetHost = (deps: {
             : undefined;
       let { reply: windowsReply, windows: listedWindows } = yield* listWindows(filter ?? {});
       let listedPid = onlyPid;
+      let unfiltered = filter === undefined;
       // Not among the filtered windows: whose window it is, if anyone's, decides the answer.
       if (
         filter !== undefined &&
@@ -401,6 +402,7 @@ export const createDesktopTargetHost = (deps: {
       ) {
         ({ reply: windowsReply, windows: listedWindows } = yield* listWindows({}));
         listedPid = undefined;
+        unfiltered = true;
       }
       // A list cut at the reply cap cannot show the window, its owner, or a duplicate of its id.
       if (!Array.isArray(listedWindows))
@@ -419,6 +421,15 @@ export const createDesktopTargetHost = (deps: {
         name,
         requestedWindow,
       });
+      // macOS lists windows above layer 0 (panels, popovers) only for their pid.
+      if (matched.error?.detail === "window_gone" && isMac && unfiltered)
+        return yield* Effect.fail({
+          ...matched.error,
+          nextStep:
+            "Window " +
+            requestedWindow +
+            " is not in the window list: it is closed, or a panel macOS lists only with its app. Pass the bundle_id or name of the app that owns it with window_id.",
+        });
       if (matched.error || !matched.pid || !matched.window)
         return yield* Effect.fail(matched.error ?? fail("target_missing"));
       const { pid, app, window: foundWin } = matched;

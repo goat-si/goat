@@ -515,10 +515,19 @@ export const matchBindWindow = (input: {
   if (!first) return { error: fail("target_missing") };
   const pid = natural(first.pid);
   const lower = (value: unknown) => (typeof value === "string" ? value.toLowerCase() : undefined);
+  const holds = (app: Record<string, unknown>) =>
+    Array.isArray(app.windows) &&
+    app.windows.some((window) => object(window)?.window_id === requestedWindow);
+  const ofPid = rows?.filter((app) => pid !== undefined && natural(app.pid) === pid) ?? [];
+  // One process can show several apps' windows (soffice.bin's Calc and Writer); list_apps puts
+  // each window in its own app's row, so a window another app's row holds is not this app's.
+  const owner = ofPid.some((app) => asked(app) && holds(app))
+    ? undefined
+    : ofPid.find((app) => !asked(app) && holds(app));
   const agrees =
     (bundleId === undefined && name === undefined) ||
     (rows !== undefined
-      ? (pid !== undefined && pid > 0 && askedPids.has(pid)) ||
+      ? (pid !== undefined && pid > 0 && askedPids.has(pid) && owner === undefined) ||
         (bundleId === undefined && first.app_name === name)
       : // A cut app list: the driver's filter matched a substring of a name, so only the
         // window's own bundle id or app_name proves which app it is.
@@ -548,11 +557,10 @@ export const matchBindWindow = (input: {
         "Window " + requestedWindow + " has no process the driver can name, so it cannot be bound.",
       ),
     };
-  const ofPid = rows?.filter((app) => natural(app.pid) === pid) ?? [];
-  const holds = (app: Record<string, unknown>) =>
-    Array.isArray(app.windows) &&
-    app.windows.some((window) => object(window)?.window_id === requestedWindow);
   const app =
+    ofPid.find(
+      (each) => (bundleId !== undefined || name !== undefined) && asked(each) && holds(each),
+    ) ??
     ofPid.find((each) => (bundleId !== undefined || name !== undefined) && asked(each)) ??
     ofPid.find(holds) ??
     ofPid[0];

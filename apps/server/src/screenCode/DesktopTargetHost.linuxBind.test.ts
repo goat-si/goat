@@ -324,3 +324,78 @@ it.effect("a bind whose process window list comes back cut is refused", () =>
     expect(result._tag === "Failure" && result.failure.code).toBe("downstream_failure");
   }),
 );
+
+it.effect("a window of a process two apps share binds only under the app whose row holds it", () =>
+  Effect.gen(function* () {
+    // One soffice.bin shows Calc and Writer; list_apps puts each window in its own app's row.
+    const calc = { ...script, pid: 3000, window_id: 5001, app_name: "libreoffice-calc" };
+    const writer = { ...script, pid: 3000, window_id: 5002, app_name: "libreoffice-writer" };
+    const { host } = fixture(
+      {
+        list_apps: {
+          apps: [
+            {
+              pid: 3000,
+              name: "Calc",
+              bundle_id: "libreoffice-calc",
+              running: true,
+              windows: [calc],
+            },
+            {
+              pid: 3000,
+              name: "Writer",
+              bundle_id: "libreoffice-writer",
+              running: true,
+              windows: [writer],
+            },
+          ],
+        },
+        list_windows: listWindows([calc, writer]),
+      },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
+    const wrong = yield* bindResult(host, { bundle_id: "libreoffice-calc", window_id: 5002 });
+    expect(wrong._tag === "Failure" && wrong.failure.code).toBe("target_missing");
+    expect(wrong._tag === "Failure" && wrong.failure.nextStep).toContain(
+      "libreoffice-writer (pid 3000)",
+    );
+    const right = yield* bindResult(host, { bundle_id: "libreoffice-calc", window_id: 5001 });
+    expect(right._tag).toBe("Success");
+  }),
+);
+
+it.effect(
+  "an installed copy at pid 0 leaves the app's one running process to list its own windows",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({
+        list_apps: {
+          apps: [
+            { pid: 0, name: "Editor", bundle_id: "org.example.Editor", running: false },
+            { pid: 42, name: "Editor", bundle_id: "org.example.Editor", running: true },
+          ],
+        },
+        list_windows: (args: { pid?: number }) =>
+          args.pid === 42 ? { windows: [{ pid: 42, window_id: 7, layer: 3 }] } : { windows: [] },
+      });
+      const bound = yield* bindResult(host, { bundle_id: "org.example.Editor", window_id: 7 });
+      expect(bound._tag).toBe("Success");
+      expect(
+        sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
+      ).toEqual([{ pid: 42 }]);
+    }),
+);
+
+it.effect("on macOS a window missing from the layer-0 list is not called closed", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({ list_apps: { apps: [] }, list_windows: { windows: [] } });
+    const result = yield* bindResult(host, { window_id: 77 });
+    expect(result._tag === "Failure" && result.failure.code).toBe("target_missing");
+    expect(result._tag === "Failure" && result.failure.nextStep).toContain(
+      "a panel macOS lists only with its app",
+    );
+  }),
+);
