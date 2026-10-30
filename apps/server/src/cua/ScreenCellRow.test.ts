@@ -181,6 +181,23 @@ describe("ScreenCellRow", () => {
     );
     expect(screenCellSummary(facts({ durationMs: 320 }))).toBe("320 ms");
   });
+  it("summarizes window observations separately from driver outcomes", () => {
+    const summary = screenCellSummary(
+      facts({
+        receipts: [
+          {
+            ...receipt(1, "click", "unverifiable"),
+            observedEffect: { state: "change_seen", rows: ['~ AXStaticText = "8"'] },
+          },
+          {
+            ...receipt(2, "click", "unverifiable"),
+            observedEffect: { state: "no_change_seen", rows: [] },
+          },
+        ],
+      }),
+    );
+    expect(summary).toContain("2 unverifiable · 1 window change seen · 1 no window change seen");
+  });
 });
 
 it("names tab operation receipts without exposing their arguments", () => {

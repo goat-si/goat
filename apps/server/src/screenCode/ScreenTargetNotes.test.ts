@@ -1,16 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
-import { browserSiteNote } from "@goat/provider-core/server/builtinSkills/browserSkillFiles";
+import { computerUseAppNote } from "@goat/provider-core/server/builtinSkills/computerUseSkillFiles";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { screenTargetNote } from "./ScreenTargetNotes.ts";
 
 describe("notes a bound target carries", () => {
-  it("finds a tab's site note from its URL, IPv6 loopback included", () => {
-    const loopback = browserSiteNote("localhost");
-    expect(screenTargetNote("site", "http://[::1]:5173/app")).toBe(loopback);
-    expect(screenTargetNote("site", "http://127.0.0.1:3000/")).toBe(loopback);
-    expect(screenTargetNote("site", "https://shopping.naver.com/home")).toBe(
-      browserSiteNote("naver.com"),
+  it("keeps app guidance and does not inject static site notes", () => {
+    expect(screenTargetNote("app", "Finder")).toBe(
+      computerUseAppNote(HostProcess.Platform.defaultValue(), "Finder"),
     );
-    expect(screenTargetNote("site", "about:blank")).toBeUndefined();
-    expect(screenTargetNote("site", "not a url")).toBeUndefined();
+    expect(screenTargetNote("site", "https://www.naver.com")).toBeUndefined();
+    expect(screenTargetNote("app", "")).toBeUndefined();
   });
 });

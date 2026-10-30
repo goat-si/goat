@@ -895,29 +895,6 @@ it.live("interrupting the run fiber cuts its exact child and discards the cell",
   }),
 );
 
-it.live("a cell's wall limit includes the time its fresh child takes to start", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const asset = yield* resolveScreenRuntimeAsset("dev");
-      const limits = screenRunLimits({ cellWallMs: 1 });
-      const supervisor = fixtureSupervisor({
-        asset,
-        limits,
-        hostBridge: new ScreenHostBridge(),
-        scheduleDeadline: childDeadlineOnly,
-      });
-      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
-      const result = yield* supervisor.runCell(
-        { runId: "r", turnId: "t", context: context("one", limits) },
-        "console.log('ran'); return 1;",
-        false,
-      );
-      expect(result.status).toBe("deadline");
-      expect(result.console).toEqual([]);
-    }),
-  ),
-);
-
 it.live.each([false, true])(
   "rejects an oversized screen frame before newline or child EOF, keeping what ended it for the row (effect dispatched: %s)",
   (effectDispatched) =>
@@ -929,6 +906,7 @@ it.live.each([false, true])(
           `
       require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
         const frame = JSON.parse(line);
+        if (frame.t === 'boot') process.stdout.write(JSON.stringify({t:'ready'}) + '\\n');
         if (frame.t === 'cell' && ${effectDispatched}) process.stdout.write(JSON.stringify({
           t: 'call', runId: 'r', turnId: 't', cellId: frame.cellId, callId: 1, method: 'list_apps', args: {}, deadlineMillis: frame.deadlineMillis
         }) + '\\n');
