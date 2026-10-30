@@ -56,8 +56,8 @@ struct PolledKind {
   }
 }
 
-/// Reports a person's keyboard and pointer use: the kind and the time only, never a key, a
-/// position, a button or a window. The driver posts some of the agent's input through the same
+/// Reports activity as kind and time, and reports physical Esc separately. The driver posts
+/// some of the agent's input through the same
 /// system, so this reports the agent's events too; the lease proxy and the server know when input
 /// calls ran and keep only the rest (apps/server/src/cua/agentInputLog.ts).
 ///
