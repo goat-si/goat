@@ -16,6 +16,8 @@ import { SessionControl } from "./SessionControl.ts";
 import { waitUntilWritable } from "./actionReadiness.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
+const externalFence = () => new AbortController();
+
 it.effect("a fence immediately after readiness admission prevents starting scroll", () =>
   Effect.gen(function* () {
     const scroll = vi.fn(async () => {});
@@ -25,7 +27,7 @@ it.effect("a fence immediately after readiness admission prevents starting scrol
       ownerFrame: async () => null,
       scrollIntoViewIfNeeded: scroll,
     } as unknown as ElementHandle;
-    const controller = new AbortController();
+    const controller = externalFence();
     const gate = Object.assign(
       () => {
         controller.abort(new BrowserControlInterrupted("blocked", "blocked_url"));
@@ -124,7 +126,7 @@ it.effect("a fence immediately after the focus gate sends no focus", () =>
           `<input id="f" value="old"><script>window.focuses=0;f.addEventListener('focus',()=>focuses++)</script>`,
         ),
       );
-      const controller = new AbortController();
+      const controller = externalFence();
       let calls = 0;
       const gate = Object.assign(
         () => {
@@ -158,7 +160,7 @@ it.effect("a fence immediately after the selection gate sends no selection", () 
           `<input id="f" value="old"><script>window.selections=0;const original=f.select.bind(f);f.select=()=>{selections++;original()}</script>`,
         ),
       );
-      const controller = new AbortController();
+      const controller = externalFence();
       let calls = 0;
       const gate = Object.assign(
         () => {
