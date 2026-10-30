@@ -35,11 +35,13 @@ it.effect("real handoffs preserve enable, disable, and commit-time revocation", 
         );
         const invoke = (enabled: boolean, revoke: boolean) =>
           ComputerUseSettings.setEnabled(enabled, authorize).pipe(
-            Effect.provideService(Handoffs.Handoffs, handoffs),
             Effect.provide(
-              Layer.mock(CuaDriver.CuaDriver)({ admitEnable: Ref.set(revoked, revoke) }),
+              Layer.mergeAll(
+                Layer.succeed(Handoffs.Handoffs, handoffs),
+                Layer.mock(CuaDriver.CuaDriver)({ admitEnable: Ref.set(revoked, revoke) }),
+                ServerConfig.layerTest("/tmp", { prefix: "cu-settings-test-" }),
+              ),
             ),
-            Effect.provide(ServerConfig.layerTest("/tmp", { prefix: "cu-settings-test-" })),
           );
         const refused = yield* invoke(true, true).pipe(Effect.result);
         assert.equal(refused._tag, "Failure");
