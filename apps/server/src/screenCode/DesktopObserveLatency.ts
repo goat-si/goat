@@ -382,6 +382,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     delete bound.observationId;
     delete bound.snapshotId;
     delete bound.diffBaseline;
+    delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;
     delete bound.rows;
@@ -488,7 +489,9 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
             ? "full read: window changed"
             : since === undefined
               ? baseObservationId === bound.observationId
-                ? "full read: scope changed"
+                ? bound.lastReadCut
+                  ? "full read: the last read was cut"
+                  : "full read: scope changed"
                 : "full read: observation expired"
               : currentStatus === "unknown_snapshot"
                 ? "full read: snapshot expired"
@@ -567,6 +570,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       if (followedSheet) deps.setEpoch(nextEpoch);
       commitObservedSheet(bound, sheet, nextRef, nextBounds);
       if (snapshotId !== undefined) bound.snapshotId = snapshotId;
+      bound.lastReadCut = query === undefined && !interactive && observation.truncated;
       bound.diffBaseline =
         query === undefined &&
         !interactive &&
