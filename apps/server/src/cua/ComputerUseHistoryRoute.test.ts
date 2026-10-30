@@ -3,6 +3,7 @@ import { COMPUTER_USE_LEASE_ROUTE, EnvironmentId, ProviderInstanceId } from "@go
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import { HttpRouter } from "effect/http";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
@@ -68,6 +69,12 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       assert.equal(entries[0]?.typedLength, 6);
       assert.isNull(entries[0]?.typedText);
       assert.deepEqual(yield* history.listForThread(f.b), []);
+      yield* f.leases.stop(f.a);
+      const replacement = yield* f.leases.control(f.a, Option.none());
+      assert.notEqual(replacement.controlId, f.first.controlId);
+      assert.equal((yield* send(f.first.controlId)).status, 204);
+      assert.equal((yield* history.listForThread(f.a)).length, 2);
+      assert.equal((yield* send(f.second.controlId)).status, 409);
       yield* Effect.promise(() => dispose());
     }),
   ).pipe(

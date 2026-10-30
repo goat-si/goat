@@ -195,6 +195,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly currentControl: (
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseControlSnapshot>>;
+    readonly ownsControl: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /** Where one control stands, for the proxy started with it. */
     readonly controlState: (
       threadId: ThreadId,
@@ -342,6 +343,7 @@ const make = Effect.gen(function* () {
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
+  const controlOwners = new Map<string, ThreadId>();
   const authorityListeners = new Set<
     (change: {
       kind: "stop" | "credentialRevoked" | "pause" | "private";
@@ -450,6 +452,7 @@ const make = Effect.gen(function* () {
           stoppedCards.replaced(existing);
         }
         controls.set(threadId, next);
+        controlOwners.set(next.controlId, threadId);
         foreground.bindPending(
           threadId,
           next.controlId,
@@ -714,6 +717,8 @@ const make = Effect.gen(function* () {
       "ComputerUseLeases.currentControl",
       PER_SIGNAL_READ,
     )((threadId) => Effect.sync(() => Option.fromNullishOr(controls.get(threadId)))),
+    ownsControl: (threadId, controlId) =>
+      Effect.sync(() => controlOwners.get(controlId) === threadId),
     controlState,
     ...makeForegroundAuthority({
       foreground,

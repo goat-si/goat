@@ -213,8 +213,7 @@ export const reportLayer = HttpRouter.add(
     }
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     if ("type" in value) {
-      const control = yield* leases.currentControl(threadId);
-      if (Option.isNone(control) || control.value.controlId !== value.controlId)
+      if (!(yield* leases.ownsControl(threadId, value.controlId)))
         return HttpServerResponse.empty({ status: 409 });
       const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
       if (Option.isNone(sql)) return HttpServerResponse.empty({ status: 503 });
