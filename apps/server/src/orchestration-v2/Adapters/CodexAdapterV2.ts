@@ -2315,25 +2315,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const offeredContinuationItemsByTurn = yield* Ref.make(new Map<string, Set<string>>());
         const finalAnswerItemIdsByTurn = yield* Ref.make(new Map<string, Set<string>>());
         const completedFinalAnswerTextsByTurn = yield* Ref.make(new Map<string, Set<string>>());
-        const generatedImagePathsByTurn = yield* Ref.make(new Map<string, Set<string>>());
-        const lastFinalAnswerByTurn = yield* Ref.make(
-          new Map<string, { readonly id: string; readonly text: string }>(),
-        );
-        const clearGeneratedImageState = (nativeTurnId: string) =>
-          Effect.gen(function* () {
-            yield* Ref.update(generatedImagePathsByTurn, (current) => {
-              const updated = new Map(current);
-              updated.delete(nativeTurnId);
-              return updated;
-            });
-            yield* Ref.update(lastFinalAnswerByTurn, (current) => {
-              const updated = new Map(current);
-              updated.delete(nativeTurnId);
-              return updated;
-            });
-          });
-        // Native completion and the interrupt timeout share one finalization
-        // path. Serialize the race so only one can publish terminal events.
+        const imageTurns = new Map<
+          string,
+          {
+            readonly running: Set<string>;
+            readonly saved: Map<string, string>;
+            pending: boolean;
+            answer?: { readonly id: string; readonly text: string };
+          }
+        >();
+        const imageTurn = (nativeTurnId: string) => {
+          let state = imageTurns.get(nativeTurnId);
+          if (state === undefined) {
+            state = { running: new Set(), saved: new Map(), pending: false };
+            imageTurns.set(nativeTurnId, state);
+          }
+          return state;
+        };
+        // Serialize native completion and interrupt timeout so only one publishes terminal events.
         const turnTerminalizationPermit = yield* Semaphore.make(1);
         const goalsByNativeThread = new Map<string, OrchestrationV2ProviderGoal | null>();
         const rootProviderThreads = new Map<string, OrchestrationV2ProviderThread>();
@@ -2367,6 +2366,27 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
 
         const emitProviderEvent = (event: ProviderAdapter.ProviderAdapterV2Event) =>
           Queue.offer(events, event).pipe(Effect.asVoid);
+
+        const emitImageWorkState =
+          /* Provider events include streaming deltas; avoid a span for each update. */
+          Effect.fnUntraced(function* (context: ActiveCodexTurnContext, pending: boolean) {
+            const state = imageTurns.get(context.nativeTurnId);
+            if (state === undefined || state.pending === pending) return;
+            state.pending = pending;
+            yield* emitProviderEvent({
+              type: "background_work.updated",
+              driver: CODEX_PROVIDER,
+              providerTurnId: context.providerTurnId,
+              pending,
+            });
+          });
+
+        const clearImageWork = Effect.fn("CodexAdapterV2.clearImageWork")(function* (
+          context: ActiveCodexTurnContext,
+        ) {
+          yield* emitImageWorkState(context, false);
+          imageTurns.delete(context.nativeTurnId);
+        });
 
         // Setting a goal passes through cleared and paused states; publish only the result.
         const goalUpdatesHeld = new Set<string>();
@@ -2675,6 +2695,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if ((yield* Ref.get(pendingMcpAppCaptures)).has(nativeTurnId)) {
               return true;
             }
+            const images = imageTurns.get(nativeTurnId);
+            if (images !== undefined && (images.running.size > 0 || images.saved.size > 0)) {
+              return true;
+            }
             const tools = (yield* Ref.get(runningDynamicToolsByTurn)).get(nativeTurnId);
             if (tools === undefined) {
               return false;
@@ -2717,6 +2741,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               updated.delete(nativeTurnId);
               return updated;
             });
+            imageTurns.delete(nativeTurnId);
             yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
               if (!current.has(nativeTurnId)) {
                 return current;
@@ -3869,9 +3894,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               };
               yield* emitProviderEvent(update.sealed ? sealAssistantTextEvent(event) : event);
               if (finalAnswerItem && update.completed) {
-                yield* Ref.update(lastFinalAnswerByTurn, (current) =>
-                  new Map(current).set(update.turnId, { id: update.itemId, text: update.text }),
-                );
+                imageTurn(update.turnId).answer = { id: update.itemId, text: update.text };
                 yield* Ref.update(completedFinalAnswerTextsByTurn, (current) => {
                   const updated = new Map(current);
                   const texts = new Set(updated.get(update.turnId) ?? []);
@@ -5248,6 +5271,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return;
             }
 
+            if (payload.item.type === "imageGeneration") {
+              if (!(yield* Ref.get(interruptingNativeTurns)).has(payload.turnId)) {
+                imageTurn(payload.turnId).running.add(payload.item.id);
+                yield* emitImageWorkState(context, true);
+              }
+              return;
+            }
+
             if (payload.item.type === "commandExecution") {
               if (!codexItemStatus(payload.item.status).completed) {
                 yield* trackRunningCommandItem(payload.turnId, {
@@ -5373,39 +5404,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               if (yield* emitSubagentUserMessage(context, payload.item)) {
                 return;
               }
-            }
-
-            if (payload.item.type === "imageGeneration" && payload.item.status === "completed") {
-              const savedImagePath = payload.item.savedPath;
-              if (savedImagePath) {
-                yield* Ref.update(generatedImagePathsByTurn, (current) => {
-                  const updated = new Map(current);
-                  const paths = new Set(updated.get(payload.turnId) ?? []);
-                  paths.add(savedImagePath);
-                  updated.set(payload.turnId, paths);
-                  return updated;
-                });
-              } else if ("fileId" in payload.item || payload.item.result) {
-                // Keep inline bytes on the tool output so the existing image asset
-                // ingestion/serving path owns their storage and wire projection.
-                if ("fileId" in payload.item) {
-                  yield* Effect.logWarning(
-                    "Codex generated image has only an attachment id and no local copy",
-                  ).pipe(Effect.annotateLogs({ fileId: payload.item.fileId }));
-                }
-                const artifacts = yield* buildDynamicToolArtifacts(context, payload.item);
-                yield* emitProviderEvent({
-                  type: "node.updated",
-                  driver: CODEX_PROVIDER,
-                  node: artifacts.node,
-                });
-                yield* emitProviderEvent({
-                  type: "turn_item.updated",
-                  driver: CODEX_PROVIDER,
-                  turnItem: artifacts.turnItem,
-                });
-              }
-              return;
             }
 
             if (payload.item.type === "commandExecution") {
@@ -5566,6 +5564,50 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 context,
                 item: payload.item,
               });
+              return;
+            }
+
+            if (payload.item.type === "imageGeneration") {
+              if ((yield* Ref.get(interruptingNativeTurns)).has(payload.turnId)) return;
+              const { id, savedPath, status, failure } = payload.item;
+              const state = imageTurn(payload.turnId);
+              if (savedPath?.trim() && status === "completed" && failure == null) {
+                state.saved.set(id, savedPath);
+              }
+              if (
+                !savedPath &&
+                status === "completed" &&
+                failure == null &&
+                ("fileId" in payload.item || payload.item.result)
+              ) {
+                // Keep inline bytes on the tool output so the existing image asset
+                // ingestion/serving path owns their storage and wire projection.
+                if ("fileId" in payload.item) {
+                  yield* Effect.logWarning(
+                    "Codex generated image has only an attachment id and no local copy",
+                  ).pipe(Effect.annotateLogs({ fileId: payload.item.fileId }));
+                }
+                const artifacts = yield* buildDynamicToolArtifacts(context, payload.item);
+                yield* emitProviderEvent({
+                  type: "node.updated",
+                  driver: CODEX_PROVIDER,
+                  node: artifacts.node,
+                });
+                yield* emitProviderEvent({
+                  type: "turn_item.updated",
+                  driver: CODEX_PROVIDER,
+                  turnItem: artifacts.turnItem,
+                });
+              }
+              // Idle release runs concurrently, so keep this work pending through projection.
+              if (settled) {
+                yield* projectGeneratedImages(context, payload.turnId);
+              }
+              state.running.delete(id);
+              yield* emitImageWorkState(context, state.running.size > 0 || state.saved.size > 0);
+              if (settled) {
+                yield* releaseSettledTurnIfIdle(payload.turnId);
+              }
               return;
             }
 
@@ -6432,6 +6474,50 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           },
         );
 
+        const projectGeneratedImages = Effect.fn("CodexAdapterV2.projectGeneratedImages")(
+          function* (context: ActiveCodexTurnContext, nativeTurnId: string) {
+            const state = imageTurns.get(nativeTurnId);
+            const firstImageItemId = state?.saved.keys().next().value;
+            if (state === undefined || firstImageItemId === undefined) return;
+            const finalAnswer = state.answer;
+            const available = new Set<string>();
+            for (const savedPath of state.saved.values()) {
+              if (yield* fileSystem.exists(savedPath).pipe(Effect.orElseSucceed(() => false))) {
+                available.add(savedPath);
+              }
+            }
+            const text = appendGeneratedImageMarkdown(
+              finalAnswer?.text ?? "",
+              available,
+              context.input.runtimePolicy.cwd ?? process.cwd(),
+              path,
+            );
+            if (text === (finalAnswer?.text ?? "")) {
+              state.saved.clear();
+              return;
+            }
+            const message = { id: finalAnswer?.id ?? firstImageItemId, text };
+            state.answer = message;
+            const artifacts = yield* buildAgentMessageArtifacts(context, message, true);
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CODEX_PROVIDER,
+              node: artifacts.node,
+            });
+            yield* emitProviderEvent({
+              type: "message.updated",
+              driver: CODEX_PROVIDER,
+              message: artifacts.message,
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CODEX_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
+            state.saved.clear();
+          },
+        );
+
         const finalizeCodexTurn = (input: {
           readonly context: ActiveCodexTurnContext;
           readonly nativeTurnId: string;
@@ -6561,7 +6647,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     Effect.andThen(startRetry([])),
                     Effect.forkIn(scope),
                   );
-                  yield* clearGeneratedImageState(input.nativeTurnId);
+                  yield* clearImageWork(input.context);
                   return false;
                 }
               }
@@ -6608,45 +6694,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* agentMessageDeltas.flushTurn(input.nativeTurnId);
               yield* reasoningDeltas.flushTurn(input.nativeTurnId);
               yield* planDeltas.flushTurn(input.nativeTurnId);
-              const paths = (yield* Ref.get(generatedImagePathsByTurn)).get(input.nativeTurnId);
-              if (paths?.size) {
-                const existing = (yield* Ref.get(lastFinalAnswerByTurn)).get(input.nativeTurnId);
-                const available = new Set<string>();
-                for (const path of paths) {
-                  if (yield* fileSystem.exists(path).pipe(Effect.orElseSucceed(() => false))) {
-                    available.add(path);
-                  }
-                }
-                const text = appendGeneratedImageMarkdown(
-                  existing?.text ?? "",
-                  available,
-                  input.context.input.runtimePolicy.cwd ?? process.cwd(),
-                  path,
-                );
-                if (text !== (existing?.text ?? "")) {
-                  const artifacts = yield* buildAgentMessageArtifacts(
-                    input.context,
-                    { id: existing?.id ?? `image-generation:${input.nativeTurnId}`, text },
-                    true,
-                  );
-                  yield* emitProviderEvent({
-                    type: "node.updated",
-                    driver: CODEX_PROVIDER,
-                    node: artifacts.node,
-                  });
-                  yield* emitProviderEvent({
-                    type: "message.updated",
-                    driver: CODEX_PROVIDER,
-                    message: artifacts.message,
-                  });
-                  yield* emitProviderEvent({
-                    type: "turn_item.updated",
-                    driver: CODEX_PROVIDER,
-                    turnItem: artifacts.turnItem,
-                  });
-                }
-              }
-              yield* clearGeneratedImageState(input.nativeTurnId);
               for (const [key, part] of reasoningParts) {
                 if (part.turnId === input.nativeTurnId) reasoningParts.delete(key);
               }
@@ -6658,6 +6705,15 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   providerTurnStatusToTerminal(input.status),
                   input.completedAt,
                 );
+              }
+              yield* projectGeneratedImages(input.context, input.nativeTurnId);
+              if (input.status !== "completed") {
+                yield* clearImageWork(input.context);
+              } else {
+                const images = imageTurns.get(input.nativeTurnId);
+                if (images !== undefined) {
+                  yield* emitImageWorkState(input.context, images.running.size > 0);
+                }
               }
               // Codex continues an active goal with another turn, so the run stays
               // open and this turn reads as running until that turn starts.
@@ -6862,6 +6918,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   updated.delete(input.nativeTurnId);
                   return updated;
                 });
+                imageTurns.delete(input.nativeTurnId);
                 yield* Ref.update(finalAnswerItemIdsByTurn, (current) => {
                   if (!current.has(input.nativeTurnId)) {
                     return current;
@@ -7424,6 +7481,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             }
             if ((yield* Ref.get(pendingMcpAppCaptures)).size > 0) {
               return true;
+            }
+            for (const state of imageTurns.values()) {
+              if (state.running.size > 0 || state.saved.size > 0) return true;
             }
             for (const subagent of (yield* Ref.get(subagentThreads)).values()) {
               if (subagent.task.status === "running") {
@@ -8181,6 +8241,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                         updated.delete(context.nativeTurnId);
                         return updated;
                       });
+                      yield* clearImageWork(context);
                       yield* releaseSettledTurnIfIdle(context.nativeTurnId);
                     }
                   }),
