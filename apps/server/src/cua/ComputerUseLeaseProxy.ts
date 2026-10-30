@@ -47,6 +47,7 @@ import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
+import { historySink } from "./ComputerUseHistoryProxy.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import * as Cursor from "./ComputerUseCursorTools.ts";
@@ -248,10 +249,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
-
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
@@ -653,7 +652,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   }).pipe(lifecycleLock.withPermits(1));
   const forward = Effect.fn("ComputerUseLeaseProxy.forward")(function* (
     incoming: string,
-    sink: ReplySink,
+    originalSink: ReplySink,
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
@@ -661,8 +660,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const keyCall = resolveKeyCall(incoming);
     let line = "line" in keyCall ? keyCall.line : incoming;
     const decoded = decodeProviderIngress(line);
-    if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
+    if (decoded.kind === "invalid") return yield* originalSink.answer(decoded.response);
     let message = decoded.message;
+    const sink = historySink(options, message, labels, originalSink, scope);
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);

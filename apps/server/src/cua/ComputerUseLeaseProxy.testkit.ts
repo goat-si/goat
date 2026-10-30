@@ -106,6 +106,9 @@ export const harness = Effect.fn(function* (
       }>,
     ) => Effect.Effect<boolean>;
     readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<void>;
+    readonly onCallOutcome?: (
+      report: import("@goat/contracts").ComputerUseLeaseCallOutcome,
+    ) => Effect.Effect<unknown>;
     /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
     readonly manifestStamp?: () => string | undefined;
     /** Holds the first driver's kill open until done, as a child slow to stop would. */
@@ -202,6 +205,7 @@ export const harness = Effect.fn(function* (
     ...(options.cursorEvents ? { cursorEvents: Stream.fromQueue(cursorEvents) } : {}),
     expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
     bundleIds: true,
+    ...(options.onCallOutcome === undefined ? {} : { onCallOutcome: options.onCallOutcome }),
     input: Stream.fromQueue(input),
     primitiveRequests: Stream.fromQueue(primitiveInput),
     ...(options.primitiveCancelled === undefined
