@@ -23,18 +23,27 @@ const LABELS: Readonly<Record<string, string>> = {
 };
 const label = (type: string) => LABELS[type] ?? "content the visual editor cannot show";
 
-function inlineBlocker(children: ReadonlyArray<RootContent>): string | null {
+// Where remark and the input's md4c read the same bytes differently: md4c parses `_x_` as
+// underline and `||x||` as a spoiler, which remark keeps as emphasis and plain text.
+function inlineBlocker(text: string, children: ReadonlyArray<RootContent>): string | null {
   for (const child of children) {
     if (!INLINE.has(child.type)) return label(child.type);
-    const found = "children" in child ? inlineBlocker(child.children) : null;
+    if (child.type === "text" && child.value.includes("||")) return "a || marker";
+    if (
+      (child.type === "emphasis" || child.type === "strong") &&
+      text[child.position?.start.offset ?? -1] === "_"
+    )
+      return "underscore formatting";
+    const found = "children" in child ? inlineBlocker(text, child.children) : null;
     if (found) return found;
   }
   return null;
 }
 
 function blockBlocker(text: string, node: RootContent, inList: boolean): string | null {
-  if (node.type === "paragraph") return inlineBlocker(node.children);
-  if (node.type === "heading") return inList ? "a heading in a list" : inlineBlocker(node.children);
+  if (node.type === "paragraph") return inlineBlocker(text, node.children);
+  if (node.type === "heading")
+    return inList ? "a heading in a list" : inlineBlocker(text, node.children);
   if (node.type !== "list") return label(node.type);
   if (node.spread) return "a list with blank lines between items";
   for (const item of node.children) {

@@ -24,6 +24,9 @@ export interface NoteVisualEditorHandle {
 
 const HISTORY_LIMIT = 30;
 const HISTORY_PAUSE_MS = 600;
+// The fork's serializer costs lines × blocks (about 1 ms at 200 list items, 120 ms at 2,000 on
+// an M-series Mac), so long notes take undo snapshots only at toolbar taps and undo.
+const PAUSE_SNAPSHOT_MAX_LINES = 400;
 const NO_STATE = "";
 
 /** Loaded lazily from the note screen, so the rich input costs nothing until a note is edited. */
@@ -44,7 +47,9 @@ export default function NoteVisualEditor(props: {
   const [canUndo, setCanUndo] = useState(false);
   const history = useRef([session.text]);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const restoring = useRef(false);
+  const [pauseSnapshots] = useState(
+    () => session.text.split("\n").length <= PAUSE_SNAPSHOT_MAX_LINES,
+  );
   const onFallback = useEffectEvent((reason: string) => props.onFallback(reason));
 
   // oxlint-disable-next-line goat/react-effect-budget -- checks the native serializer once, after the input mounts
@@ -86,14 +91,16 @@ export default function NoteVisualEditor(props: {
     if (stack.length > HISTORY_LIMIT) stack.shift();
     setCanUndo(stack.length > 1);
   };
-  // Typing only flags the change; serializing waits for a pause so large notes type smoothly.
+  // Typing only flags the change; serializing waits for a pause, and long notes skip it.
   const changed = () => {
     props.onChange();
     if (pending.current) clearTimeout(pending.current);
-    pending.current = setTimeout(() => void snapshot(), HISTORY_PAUSE_MS);
+    pending.current = pauseSnapshots ? setTimeout(() => void snapshot(), HISTORY_PAUSE_MS) : null;
   };
-  const command = (run: (target: EnrichedMarkdownTextInputInstance) => void) => {
+  const command = async (run: (target: EnrichedMarkdownTextInputInstance) => void) => {
     if (!input.current || !ready) return;
+    await snapshot();
+    if (!input.current) return;
     run(input.current);
     changed();
   };
@@ -103,7 +110,7 @@ export default function NoteVisualEditor(props: {
     const previous = stack.at(-2);
     if (previous === undefined || !input.current) return;
     stack.pop();
-    restoring.current = true;
+    // iOS echoes setValue as a change and Android does not; a duplicate snapshot is skipped either way.
     input.current.setValue(previous);
     setCanUndo(stack.length > 1);
     props.onChange();
@@ -114,7 +121,8 @@ export default function NoteVisualEditor(props: {
     () => ({
       body: async () => {
         const markdown = await input.current?.getMarkdown();
-        return markdown === undefined ? session.source : visualNoteBody(session, markdown);
+        if (markdown === undefined) throw new Error("The editor closed before the note was read.");
+        return visualNoteBody(session, markdown);
       },
     }),
     [session],
@@ -148,14 +156,14 @@ export default function NoteVisualEditor(props: {
           name="Bold"
           selected={active("bold")}
           disabled={!ready}
-          onPress={() => command((target) => target.toggleBold())}
+          onPress={() => void command((target) => target.toggleBold())}
         />
         <ToolbarButton
           label="I"
           name="Italic"
           selected={active("italic")}
           disabled={!ready}
-          onPress={() => command((target) => target.toggleItalic())}
+          onPress={() => void command((target) => target.toggleItalic())}
         />
         {([1, 2, 3] as const).map((level) => (
           <ToolbarButton
@@ -164,7 +172,7 @@ export default function NoteVisualEditor(props: {
             name={`Heading ${level}`}
             selected={active(`h${level}`)}
             disabled={!ready}
-            onPress={() => command((target) => target.toggleHeading(level))}
+            onPress={() => void command((target) => target.toggleHeading(level))}
           />
         ))}
         <ToolbarButton
@@ -172,14 +180,14 @@ export default function NoteVisualEditor(props: {
           name="Bulleted list"
           selected={active("bullet")}
           disabled={!ready}
-          onPress={() => command((target) => target.toggleUnorderedList())}
+          onPress={() => void command((target) => target.toggleUnorderedList())}
         />
         <ToolbarButton
           label="1."
           name="Numbered list"
           selected={active("numbered")}
           disabled={!ready}
-          onPress={() => command((target) => target.toggleOrderedList())}
+          onPress={() => void command((target) => target.toggleOrderedList())}
         />
         <ToolbarButton
           label="↶"
@@ -205,10 +213,7 @@ export default function NoteVisualEditor(props: {
           cursorColor={nativeTextStyle.linkColor}
           selectionColor={nativeTextStyle.linkColor}
           markdownStyle={markdownStyle}
-          onChangeText={() => {
-            if (restoring.current) restoring.current = false;
-            else changed();
-          }}
+          onChangeText={changed}
           onChangeState={(state) => {
             const next = styleStateKey(state);
             if (next !== styleKey) setStyleKey(next);

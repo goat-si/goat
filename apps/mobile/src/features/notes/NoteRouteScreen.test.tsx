@@ -31,7 +31,7 @@ const { mocks, Children } = vi.hoisted(() => ({
     enqueue: vi.fn(),
     restore: vi.fn(),
     flush: vi.fn(),
-    serialize: (markdown: string) => markdown,
+    serialize: (markdown: string): string | Promise<string> => markdown,
   },
 }));
 vi.mock("react-native", () => ({
@@ -232,7 +232,7 @@ beforeEach(() => {
   mocks.enqueue.mockReset().mockResolvedValue(undefined);
   mocks.restore.mockReset().mockResolvedValue(undefined);
   mocks.flush.mockReset().mockResolvedValue(undefined);
-  mocks.serialize = (markdown) => markdown;
+  mocks.serialize = (markdown: string): string | Promise<string> => markdown;
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -548,6 +548,61 @@ describe("visual note editor", () => {
     await edit();
     expect(container.textContent).toContain("the visual editor would rewrite parts of this note");
     expect(container.querySelector("textarea")?.value).toBe("- a\n  - b\n");
+  });
+
+  it("a second Save tap while the editor is being read saves once, with the edit", async () => {
+    await act(async () => render());
+    await edit();
+    act(() => type("edited"));
+    const read = Promise.withResolvers<string>();
+    mocks.serialize = () => read.promise;
+    await act(async () => button("Save on phone").click());
+    expect(
+      container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.disabled,
+    ).toBe(true);
+    await act(async () => button("Save on phone").click());
+    await act(async () => read.resolve("edited"));
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "edited" }));
+  });
+
+  it("a failed editor read keeps the edit open and says why", async () => {
+    await act(async () => render());
+    await edit();
+    act(() => type("edited"));
+    mocks.serialize = () => Promise.reject(new Error("native read failed"));
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("native read failed");
+    expect(container.textContent).toContain("Unsaved edits");
+    expect(
+      container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.disabled,
+    ).toBe(false);
+  });
+
+  it("a new note's editor opens with the draft restored after the screen mounted", async () => {
+    const restoredDraft = Promise.withResolvers<void>();
+    mocks.rows = [];
+    mocks.restore.mockReturnValue(restoredDraft.promise);
+    await act(async () =>
+      root.render(
+        <NoteRouteScreen
+          route={{ params: { environmentId: "hub", path: "note.md", create: true } }}
+        />,
+      ),
+    );
+    expect(container.querySelector('[aria-label="Visual note"]')).toBeNull();
+    await act(async () => {
+      mocks.rows = [row()];
+      restoredDraft.resolve();
+    });
+    await act(() =>
+      vi.waitFor(() =>
+        expect(
+          container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.value,
+        ).toBe("mine"),
+      ),
+    );
   });
 
   it("carries visual edits into the markdown editor and back", async () => {

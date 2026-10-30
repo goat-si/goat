@@ -30,6 +30,13 @@ describe("visual note editor eligibility", () => {
     expect(visualEditorBlocker("- item\n  continued\n")).toBe("a list item with several lines");
     expect(visualEditorBlocker("- item\n\n  more\n")).toBe("a list with blank lines between items");
   });
+
+  it("refuses syntax the input's parser reads differently from remark", () => {
+    expect(visualEditorBlocker("A ||secret|| word\n")).toBe("a || marker");
+    expect(visualEditorBlocker("An _emphasis_ word\n")).toBe("underscore formatting");
+    expect(visualEditorBlocker("A __strong__ word\n")).toBe("underscore formatting");
+    expect(visualEditorBlocker("A *safe* and **safe** word\n")).toBeNull();
+  });
 });
 
 describe("saving from the visual editor", () => {

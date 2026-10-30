@@ -65,11 +65,15 @@ function NoteContent(props: NoteParams) {
   const [visual, setVisual] = useState(true);
   const [fallback, setFallback] = useState<string | null>(null);
   const visualEditor = useRef<NoteVisualEditorHandle>(null);
+  // Reading the native editor is asynchronous; one read at a time, and saving waits for it.
+  const [reading, setReading] = useState(false);
+  const readingRef = useRef(false);
+  const editVersion = useRef(0);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const deletingRef = useRef(false);
-  const busy = saving || deleting;
+  const busy = saving || deleting || reading;
   const [checkboxRender, setCheckboxRender] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [restored, setRestored] = useState(false);
@@ -234,8 +238,31 @@ function NoteContent(props: NoteParams) {
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
   const editorBody = async () =>
     visual && visualEditor.current ? visualEditor.current.body() : localBody.current;
+  const stableEditorBody = async () => {
+    // A keystroke that lands while the native read is in flight forces another read.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const version = editVersion.current;
+      const next = await editorBody();
+      if (version === editVersion.current) return next;
+    }
+    throw new Error("The note kept changing while it was being saved. Try again.");
+  };
+  /** The editor's body, or null when another read is running or the read failed. */
+  const readEditor = async (): Promise<string | null> => {
+    if (readingRef.current) return null;
+    readingRef.current = true;
+    setReading(true);
+    const next = await stableEditorBody().catch((error: unknown) => {
+      setError(notesError(error));
+      return null;
+    });
+    readingRef.current = false;
+    setReading(false);
+    return next;
+  };
   const showMarkdown = async () => {
-    const next = await editorBody();
+    const next = await readEditor();
+    if (next === null) return;
     setBody(next);
     localBody.current = next;
     setFallback(null);
@@ -367,7 +394,9 @@ function NoteContent(props: NoteParams) {
             </View>
             {editing ? (
               <>
-                {visual ? (
+                {visual && !restored ? (
+                  <Text className="text-xs text-foreground-muted">Loading saved edits…</Text>
+                ) : visual ? (
                   <Suspense
                     fallback={
                       <Text className="text-xs text-foreground-muted">Opening editor…</Text>
@@ -375,9 +404,12 @@ function NoteContent(props: NoteParams) {
                   >
                     <NoteVisualEditor
                       body={body}
-                      editable={canWrite && !saving && restored}
+                      editable={canWrite && !saving && !reading}
                       handleRef={visualEditor}
-                      onChange={() => setDirty(true)}
+                      onChange={() => {
+                        editVersion.current++;
+                        setDirty(true);
+                      }}
                       onFallback={(reason) => {
                         setFallback(reason);
                         setVisual(false);
@@ -408,7 +440,7 @@ function NoteContent(props: NoteParams) {
                 <Button
                   label={visual ? "Edit as markdown" : "Edit visually"}
                   tone="text"
-                  disabled={saving || !restored}
+                  disabled={saving || reading || !restored}
                   onPress={() => {
                     if (visual) void showMarkdown();
                     else setVisual(true);
@@ -418,8 +450,12 @@ function NoteContent(props: NoteParams) {
                   fullWidth
                   tone="primary"
                   label={saving ? "Saving…" : "Save on phone"}
-                  disabled={!canWrite || saving || !restored}
-                  onPress={() => void editorBody().then((next) => save(next, localStatus.current))}
+                  disabled={!canWrite || saving || reading || !restored}
+                  onPress={() =>
+                    void readEditor().then((next) =>
+                      next === null ? undefined : save(next, localStatus.current),
+                    )
+                  }
                 />
               </>
             ) : (
