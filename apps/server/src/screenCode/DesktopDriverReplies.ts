@@ -141,6 +141,14 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
     if (code === "stale_basis") {
       const reason =
         string(object(structured.refusal)?.reason) ?? string(structured.reason) ?? "unknown";
+      if (reason === "no_proven_origin")
+        return {
+          ...fail(
+            "unsupported",
+            "This desktop cannot prove where the window is, so screenshot pixels cannot be clicked; pass an element number from observe(). Nothing was sent.",
+          ),
+          ...refusalOf(structured),
+        };
       return {
         ...fail(
           "stale_reference",

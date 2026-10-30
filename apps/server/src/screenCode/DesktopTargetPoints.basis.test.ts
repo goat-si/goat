@@ -186,6 +186,8 @@ it.effect(
     Effect.gen(function* () {
       const cases = [
         ["stale_basis", { reason: "window_moved" }, "stale_reference"],
+        // A window whose position no capture can prove (Wayland): a new screenshot cannot help.
+        ["stale_basis", { reason: "no_proven_origin" }, "unsupported"],
         ["point_outside_window", {}, "invalid_argument"],
         ["invalid_arguments", {}, "invalid_argument"],
         ["background_unavailable", {}, "unsupported"],
@@ -208,7 +210,7 @@ it.effect(
           .invoke(call("click", { x: 20, y: 16, regionId }, win.ref), context)
           .pipe(Effect.flip);
         expect(refused, driverCode).toMatchObject({ code, effectStarted: false });
-        if (driverCode === "stale_basis") {
+        if (driverCode === "stale_basis" && extra.reason === "window_moved") {
           expect(refused.nextStep).toContain("window_moved");
           expect(refused.nextStep).toContain("screenshot");
         }
