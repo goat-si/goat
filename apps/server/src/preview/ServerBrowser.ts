@@ -96,13 +96,12 @@ import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
-import { browserFailure, recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
+import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
-import { pushBounded } from "./boundedBuffer.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { READ_OPERATIONS } from "./readOperations.ts";
@@ -145,7 +144,6 @@ const sleepUntil = (deadline: number) =>
 const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
-const ACTION_TIMELINE_LIMIT = 50;
 
 export class ServerBrowserTabNotFoundError extends Schema.TaggedError<ServerBrowserTabNotFoundError>()(
   "ServerBrowserTabNotFoundError",
@@ -1551,51 +1549,7 @@ const make = Effect.gen(function* () {
       }
     };
 
-  const recordAction = <A>(
-    tab: ServerTab,
-    action: string,
-    run: () => Promise<A>,
-    details?: { url?: string; typedText?: string },
-  ): Promise<A> => {
-    const event: {
-      -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
-    } = {
-      id: NodeCrypto.randomUUID(),
-      action,
-      status: "running",
-      startedAt: new Date().toISOString(),
-    };
-    pushBounded(tab.actionTimeline, event, ACTION_TIMELINE_LIMIT);
-    const url = details?.url ?? tab.page.url();
-    const record = (outcome: {
-      verdict: "sent" | "refused" | "unknown_outcome";
-      refusalCode?: string;
-    }) =>
-      runPromise(
-        recordBrowserAction(history, {
-          threadId: tab.threadId,
-          url: action === "back" || action === "forward" ? tab.page.url() : url,
-          action,
-          ...outcome,
-          ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
-        }),
-      );
-    return run().then(
-      async (result) => {
-        event.status = "succeeded";
-        event.completedAt = new Date().toISOString();
-        await record({ verdict: "sent" });
-        return result;
-      },
-      async (cause: unknown) => {
-        event.status = "failed";
-        event.completedAt = new Date().toISOString();
-        event.error = tab.diagnostics.firstLine(cause);
-        await record(browserFailure(cause));
-        throw cause;
-      },
-    );
-  };
+  const recordAction = makeBrowserHistoryRecordAction(history, runPromise);
 
   const requireTab = async (request: PreviewAutomationRequest) => {
     SessionControl.requireAgentSession(request);
