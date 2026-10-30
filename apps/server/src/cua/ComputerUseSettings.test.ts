@@ -79,11 +79,22 @@ it.effect("turns computer use off even when session cleanup is unavailable", () 
 it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
-    const result = yield* Effect.result(
-      settings.updateSettings({ cuaAllowedApps: ["com.1password.1password"] }),
-    );
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.message).toContain("protected app");
+    for (const app of [
+      "com.1password.1password",
+      "com.apple.systempreferences",
+      "com.apple.loginwindow",
+      "com.apple.SecurityAgent",
+      "com.apple.coreauthd",
+      "com.apple.LocalAuthentication.UIAgent",
+      "com.apple.keychainaccess",
+      "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeWidgetApplication",
+      "com.apple.ScreenTimeViewService",
+    ]) {
+      const result = yield* Effect.result(settings.updateSettings({ cuaAllowedApps: [app] }));
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.message).toContain("protected app");
+    }
     expect((yield* settings.getSettings).cuaAllowedApps).toEqual([]);
   }).pipe(Effect.provide(base)),
 );
