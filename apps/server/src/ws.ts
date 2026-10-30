@@ -324,6 +324,7 @@ import {
   resolveEditorConfig,
   resolveFileManagerRevealKindForConfig,
   withLateEditorConfig,
+  withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
 import { isNetworkPath } from "@goat/shared/path";
 
@@ -3433,7 +3434,7 @@ export const layerWsRpc = (
                 ),
               );
 
-              return Stream.concat(
+              const events = Stream.concat(
                 rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
                 withLateEditorConfig(
                   config,
@@ -3443,6 +3444,9 @@ export const layerWsRpc = (
                   automationHold.changes,
                 ),
               );
+              return input.providerStatusChanges === true
+                ? withProviderStatusChanges(events)
+                : events;
             }),
           ),
         [WS_METHODS.subscribeServerLifecycle]: (input) =>

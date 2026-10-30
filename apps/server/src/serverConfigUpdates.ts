@@ -4,8 +4,10 @@ import type {
   FileManagerRevealKind,
   ServerConfig as ClientServerConfig,
   ServerConfigStreamEvent,
+  ServerProvider,
   ServerWorktreeCheckoutHealth,
 } from "@goat/contracts";
+import { diffProviderStatuses } from "@goat/shared/providerStatusChanges";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -139,3 +141,31 @@ export const withLateEditorConfig = <E, R>(
     ),
   );
 };
+
+/** Replaces each full provider list with its changes since the list this subscriber last received. */
+export const withProviderStatusChanges = <E, R>(
+  events: Stream.Stream<ServerConfigStreamEvent, E, R>,
+) =>
+  events.pipe(
+    Stream.mapAccum(
+      (): ReadonlyArray<ServerProvider> => [],
+      (
+        sent,
+        event,
+      ): readonly [ReadonlyArray<ServerProvider>, ReadonlyArray<ServerConfigStreamEvent>] => {
+        switch (event.type) {
+          case "snapshot":
+            return [event.config.providers, [event]];
+          case "providerStatuses": {
+            const payload = diffProviderStatuses(sent, event.payload.providers);
+            return [
+              event.payload.providers,
+              payload === undefined ? [] : [{ version: 1, type: "providerStatusChanges", payload }],
+            ];
+          }
+          default:
+            return [sent, [event]];
+        }
+      },
+    ),
+  );
