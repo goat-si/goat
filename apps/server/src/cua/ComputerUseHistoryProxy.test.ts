@@ -53,6 +53,18 @@ it.effect("reports one sent click and does not report a read", () =>
     const reports = yield* Queue.unbounded<ComputerUseLeaseCallOutcome>();
     const h = yield* harness({ onCallOutcome: (report) => Queue.offer(reports, report) });
     yield* h.push(active());
+    yield* h.send(call(7, "list_apps"));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 7,
+        result: {
+          structuredContent: { apps: [{ pid: 4, bundle_id: "fixture.app", name: "Fixture" }] },
+        },
+      }),
+    );
+    yield* h.nextToProvider;
     yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
     yield* h.nextToDriver;
     yield* h.reply(
@@ -63,7 +75,10 @@ it.effect("reports one sent click and does not report a read", () =>
       }),
     );
     yield* h.nextToProvider;
-    assert.equal((yield* Queue.take(reports)).verdict, "sent");
+    assert.deepInclude(yield* Queue.take(reports), {
+      verdict: "sent",
+      app: { id: "fixture.app", name: "Fixture" },
+    });
     yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
     yield* h.nextToDriver;
     yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: {} }));

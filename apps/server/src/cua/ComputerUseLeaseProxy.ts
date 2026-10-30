@@ -662,7 +662,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const decoded = decodeProviderIngress(line);
     if (decoded.kind === "invalid") return yield* originalSink.answer(decoded.response);
     let message = decoded.message;
-    const sink = historySink(options, message, labels, originalSink, scope);
+    const sink = historySink(options, message, listed, originalSink, scope);
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);

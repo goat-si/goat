@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import { driverOutcomeSafety } from "./ComputerUseDriverOutcome.ts";
 import { isHistoryRead } from "./agentInputLog.ts";
+import { callApp } from "./ComputerUseLeaseProtocol.ts";
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 
@@ -69,7 +70,7 @@ export const historySink = (
     readonly onCallOutcome?: (outcome: ComputerUseLeaseCallOutcome) => Effect.Effect<unknown>;
   },
   message: import("./ComputerUseLeaseProtocol.ts").Envelope,
-  labels: import("./ComputerUseAppLabels.ts").AppLabels,
+  listed: ReadonlyMap<number, import("./ComputerUseScope.ts").ListedApp>,
   sink: import("./ComputerUseLeaseProxyOptions.ts").ReplySink,
   scope: import("effect/Scope").Scope,
 ): import("./ComputerUseLeaseProxyOptions.ts").ReplySink => {
@@ -77,7 +78,7 @@ export const historySink = (
     message.method === "tools/call" && typeof message.params?.name === "string"
       ? message.params.name
       : undefined;
-  const label = labels.forCall(message.params?.arguments);
+  const label = callApp(tool, message.params?.arguments, listed);
   const call = {
     ...(tool === undefined ? {} : { tool }),
     args: message.params?.arguments,
