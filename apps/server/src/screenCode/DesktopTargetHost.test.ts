@@ -974,8 +974,10 @@ it.effect("model fit is requested only for supported macOS driver captures", () 
       yield* host.observe(call("screenshot", {}, ref), context);
       const capture = sent.filter((entry) => entry.tool === "get_window_state").at(-1)?.args;
       expect(capture).toMatchObject({ include_screenshot: true });
-      if (supported) expect(capture).toHaveProperty("screenshot_fit", "model");
-      else expect(capture).not.toHaveProperty("screenshot_fit");
+      if (supported) {
+        expect(capture).toHaveProperty("screenshot_fit", "model");
+        expect(capture).not.toHaveProperty("screenshot_format");
+      } else expect(capture).not.toHaveProperty("screenshot_fit");
     }
   }),
 );

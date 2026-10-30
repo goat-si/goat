@@ -138,7 +138,7 @@ const buildDesktopReadArgs = (input: {
   window_id: input.windowId,
   include_accessibility_tree: !input.capture,
   include_screenshot: input.capture,
-  ...(input.capture && input.jpeg ? { screenshot_format: "jpeg" } : {}),
+  ...(input.capture && input.jpeg && !input.modelFit ? { screenshot_format: "jpeg" } : {}),
   ...(input.capture && input.modelFit ? { screenshot_fit: "model" } : {}),
   max_elements: input.limit,
   ...(input.capture ? {} : { tree_format: "both" }),
