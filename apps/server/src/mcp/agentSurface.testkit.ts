@@ -93,6 +93,7 @@ import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestSync from "../orchestration-v2/PullRequestSyncReactor.ts";
 import * as ThreadDiffMcpService from "./ThreadDiffMcpService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -263,6 +264,7 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(Telemetry.ResourceTelemetry)({}),
   Layer.mock(Review.ReviewService)({}),
   Layer.mock(ProjectService.ProjectService)({}),
+  Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ discard: () => Effect.void }),
   Layer.mock(ProviderDiagnosisRouting.ProviderDiagnosisRouting)({}),
   Layer.mock(CloudAgentService.CloudAgentService)({}),
   Layer.mock(HomeRequests.CodexHomeRequests)({}),

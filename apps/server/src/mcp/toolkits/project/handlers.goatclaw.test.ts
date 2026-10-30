@@ -19,6 +19,7 @@ import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementSer
 import * as Sqlite from "../../../persistence/Sqlite.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Project from "../../../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as HostThreadsMcpService from "../../HostThreadsMcpService.ts";
@@ -80,6 +81,7 @@ const served = (
           getThreadShell: (threadId) =>
             Effect.sync(() => liveThreadShell(threadId, { runtimeMode: state.mode })),
         }),
+        Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ discard: () => Effect.void }),
         Layer.mock(Project.ProjectService)({
           create: () =>
             Effect.sync(() => {
