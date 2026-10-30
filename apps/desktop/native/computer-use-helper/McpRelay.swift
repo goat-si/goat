@@ -87,6 +87,10 @@ func runMcp() -> Never {
   let terminate: (Int32, String) -> Never = { code, reason in
     terminal.lock()
     kill(child, SIGKILL)
+    // Exit only once the driver has: a launcher that found it still running would end its whole
+    // group, and the proxy would see a signal instead of this typed code.
+    var info = siginfo_t()
+    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
     mcpFail(code, reason)
   }
   let driverWire = McpWire(launched.input, failure: { terminate($0, $1) })

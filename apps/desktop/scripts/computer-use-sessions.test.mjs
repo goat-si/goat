@@ -335,9 +335,11 @@ describe.skipIf(platform !== "darwin")("macOS helper service's agent sessions", 
     stubborn.send({ jsonrpc: "2.0", id: 3, method: "fixture/hold" });
     await service.stderrIncludes("holding");
     process.kill(service.greeting.pid, "SIGKILL");
-    // A driver was still running, so the launcher ended its whole group, itself included.
-    expect(await service.exited).toBeNull();
-    // The driver holds the service's stderr, so the launcher's stdio closes only once it ended.
+    // The launcher ends its whole group, itself included, while anything of it still runs, and
+    // keeps the service's status only once nothing does; which it sees depends on timing.
+    expect([null, 128 + 9]).toContain(await service.exited);
+    // The held driver never exits by itself and holds the service's stderr, so the launcher's
+    // stdio closes only once the driver was killed.
     await service.stdioClosed;
     await stubborn.closed;
   });
