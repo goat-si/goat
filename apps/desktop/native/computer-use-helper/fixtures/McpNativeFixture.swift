@@ -489,25 +489,25 @@ private func delayedCheck() throws {
 
 private func interrupts() throws {
   let capture = Harness()
-  registerNativeMcpSession(capture.session)
   try capture.call(); capture.ready()
-  interruptNativeMcp(["op": "hide", "reason": "capture"])
+  interruptNativeMcp(["op": "hide", "reason": "capture"], session: capture.session)
   try capture.reply(0); try capture.clock.advance(200); try capture.reply(1)
   try capture.expectOutcome("settled", unavailable: false)
   for reason in ["private", "ended", "human_input", "takeover"] {
     let h = Harness()
-    registerNativeMcpSession(h.session)
     try h.call(); h.ready()
-    interruptNativeMcp(["op": "hide", "reason": reason])
+    let other = Harness()
+    try other.call(); other.ready()
+    interruptNativeMcp(["op": "hide", "reason": reason], session: h.session)
+    try require(!other.watch.cancelled, "\(reason) must leave another session's native work running")
     try require(h.watch.cancelled, "\(reason) must detach synchronously at command receipt")
     try h.reply(0); h.watch.send(.changed); try h.clock.advance(5000)
     try h.call("after-interrupt", "click")
     try require(h.provider.frames.isEmpty && h.driver.frames.count == 1, "\(reason) must suppress late replies and future reads/actions")
     let queued = Harness()
-    registerNativeMcpSession(queued.session)
     try queued.call(); queued.ready(); try queued.reply(0); try queued.clock.advance(200)
     queued.provider.held = true; try queued.reply(1)
-    interruptNativeMcp(["op": "hide", "reason": reason]); queued.provider.flush()
+    interruptNativeMcp(["op": "hide", "reason": reason], session: queued.session); queued.provider.flush()
     try require(queued.provider.frames.isEmpty, "\(reason) must drop native output already queued")
   }
 }

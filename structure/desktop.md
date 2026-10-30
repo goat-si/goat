@@ -84,7 +84,9 @@ team, whatever its identifier; a development or ad-hoc helper, built with
 with responsibility disclaimed, speaks line-delimited
 JSON on stdio and starts `cua-driver mcp --direct --embedded` as its direct child (no socket), so macOS attributes
 Accessibility and Screen Recording to the helper's bundle id. The host checks the helper's hello
-and that the driver it reports is the helper's child. Packaged macOS builds without the helper
+and that the driver it reports is the helper's child. The desktop's helper service also hosts
+agent sessions (`openAgentSession` in `apps/desktop/src/cua/ComputerUseHelperService.ts`): each
+session attaches over a per-user socket and gets drivers of its own (ADR-0023 D3 amendment 3). Packaged macOS builds without the helper
 keep computer use off. Development builds without a helper need `GOAT_CUA_DRIVER_PATH`. On macOS the
 host checks both permissions before starting and reports `unavailable` until they are granted. It
 reuses a running driver, retires a crashed one, and passes the same telemetry and update-check

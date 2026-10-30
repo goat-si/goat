@@ -5,6 +5,8 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vite-plus/test";
 
+import { buildHelperFixture } from "./computer-use-helper-fixture.mjs";
+
 // oxlint-disable-next-line goat/no-global-process-runtime -- The native executable is qualified on its actual OS.
 const platform = process.platform;
 const source = NodeURL.fileURLToPath(new URL("../native/computer-use-helper/", import.meta.url));
@@ -114,34 +116,7 @@ describe.skipIf(platform !== "darwin")("macOS helper's production MCP transport"
 
   beforeAll(() => {
     directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-mcp-native-"));
-    const bundle = NodePath.join(directory, "GOAT Relay Fixture.app");
-    executable = NodePath.join(bundle, "Contents/MacOS/GOAT Relay Fixture");
-    const resources = NodePath.join(bundle, "Contents/Resources/cua-driver");
-    NodeFS.mkdirSync(NodePath.dirname(executable), { recursive: true });
-    NodeFS.mkdirSync(resources, { recursive: true });
-    NodeFS.writeFileSync(
-      NodePath.join(bundle, "Contents/Info.plist"),
-      '<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>si.goat.relay.fixture.computer-use</string><key>CFBundleExecutable</key><string>GOAT Relay Fixture</string><key>CFBundlePackageType</key><string>APPL</string><key>GOATComputerUseAllowAnyParent</key><true/></dict></plist>',
-    );
-    const swift = NodeFS.readdirSync(source)
-      .filter((name) => name.endsWith(".swift"))
-      .map((name) => NodePath.join(source, name));
-    NodeChildProcess.execFileSync("xcrun", [
-      "swiftc",
-      "-whole-module-optimization",
-      "-lbsm",
-      "-o",
-      executable,
-      ...swift,
-    ]);
-    const driver = NodePath.join(resources, "cua-driver");
-    NodeChildProcess.execFileSync("cc", [
-      NodePath.join(source, "fixtures/mcp-echo.c"),
-      "-o",
-      driver,
-    ]);
-    NodeChildProcess.execFileSync("codesign", ["--force", "--sign", "-", driver]);
-    NodeChildProcess.execFileSync("codesign", ["--force", "--sign", "-", bundle]);
+    ({ executable } = buildHelperFixture(directory));
     manifest = NodePath.join(directory, "manifest.json");
     NodeFS.writeFileSync(manifest, "{}");
     framing = NodePath.join(directory, "framing");

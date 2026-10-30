@@ -543,14 +543,10 @@ final class McpNativeSession {
   }
 }
 
-private let nativeSessionLock = NSLock()
-private weak var currentNativeSession: McpNativeSession?
-func registerNativeMcpSession(_ session: McpNativeSession) {
-  nativeSessionLock.lock(); currentNativeSession = session; nativeSessionLock.unlock()
-}
-func interruptNativeMcp(_ command: [String: Any]) {
+/// A hide that pauses or ends control interrupts the native work of the channel's own session,
+/// never another's.
+func interruptNativeMcp(_ command: [String: Any], session: McpNativeSession?) {
   guard command["op"] as? String == "hide", let reason = command["reason"] as? String,
     ["human_input", "takeover", "private", "ended"].contains(reason) else { return }
-  nativeSessionLock.lock(); let session = currentNativeSession; nativeSessionLock.unlock()
   session?.interrupt()
 }
