@@ -18,6 +18,7 @@ import {
 import { needsHumanFields } from "./humanStepResult.ts";
 import { ComputerUseAgentCursor, AgentCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
+import { BrowserOrigin } from "./browserClaims.ts";
 import {
   AgentCursorLeaseUpdate,
   ComputerUsePrimitiveCancel,
@@ -568,6 +569,18 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
     claimedBrowserPids: Schema.optionalKey(Schema.Array(Schema.Int.check(Schema.isGreaterThan(0)))),
+    browserClaims: Schema.optionalKey(
+      Schema.Array(
+        Schema.Struct({
+          claimId: TrimmedNonEmptyString,
+          claimGeneration: Schema.Int.check(Schema.isGreaterThan(0)),
+          pid: Schema.Int.check(Schema.isGreaterThan(0)),
+          windowId: Schema.Int.check(Schema.isGreaterThan(0)),
+          tabId: TrimmedNonEmptyString,
+          origins: Schema.Array(BrowserOrigin).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+        }),
+      ),
+    ),
     foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),

@@ -119,6 +119,39 @@ effectIt.effect("the proxy does not send an unclaimed browser call", () =>
   }),
 );
 
+effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 1,
+          pid: 42,
+          windowId: 7,
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* h.send(
+      call(3, "browser_click", { tab_id: "tab-1", origin_scope: ["https://other.test"] }),
+    );
+    const result = yield* Effect.raceFirst(
+      h.nextToProvider.pipe(Effect.map(() => ({ kind: "refused" as const }))),
+      h.nextToDriver.pipe(Effect.map((message) => ({ kind: "sent" as const, message }))),
+    );
+    assert.equal(result.kind, "sent");
+    if (result.kind === "sent")
+      assert.deepEqual(result.message.params, {
+        name: "browser_click",
+        arguments: { tab_id: "tab-1", origin_scope: ["https://example.test"] },
+      });
+  }),
+);
+
 effectIt.effect("a newly claimed pid fences a desktop call held before dispatch", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();

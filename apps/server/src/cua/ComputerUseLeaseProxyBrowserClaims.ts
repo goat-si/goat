@@ -1,6 +1,15 @@
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+export const replaceCallArguments = (
+  line: string,
+  args: Readonly<Record<string, unknown>>,
+): string => {
+  const value: unknown = JSON.parse(line);
+  if (!isRecord(value) || !isRecord(value.params)) throw new Error("Invalid tool call envelope.");
+  return JSON.stringify({ ...value, params: { ...value.params, arguments: args } });
+};
+
 export const manifestApplied = (state: unknown, expectedSha256: string): boolean =>
   /^[a-f0-9]{64}$/u.test(expectedSha256) &&
   isRecord(state) &&
