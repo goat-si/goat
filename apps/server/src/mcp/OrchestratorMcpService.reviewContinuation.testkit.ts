@@ -46,12 +46,12 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
-export const instanceId = ProviderInstanceId.make("codex");
+const instanceId = ProviderInstanceId.make("codex");
 export const driver = ProviderDriverKind.make("codex");
-export const parentModel = { instanceId, model: "author-model" };
+const parentModel = { instanceId, model: "author-model" };
 export const childModel = { instanceId, model: "reviewer-model" };
 export const parentId = ThreadId.make("continue-review-parent");
-export const baseTime = "2026-10-30T00:00:00.000Z";
+const baseTime = "2026-10-30T00:00:00.000Z";
 export const at = DateTime.makeUnsafe(baseTime);
 export const scope: McpInvocationScope = {
   environmentId: EnvironmentId.make("continue-review"),
@@ -61,7 +61,7 @@ export const scope: McpInvocationScope = {
   client: undefined,
   thread: { threadId: parentId, providerInstanceId: instanceId, providerSessionId: "session" },
 };
-export const providerSnapshot: ServerProvider = {
+const providerSnapshot: ServerProvider = {
   instanceId,
   driver,
   enabled: true,
@@ -80,7 +80,7 @@ export const providerSnapshot: ServerProvider = {
   skills: [],
 };
 export const providerMode = { cloud: false };
-export const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
+const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
   instanceId,
   driver,
   getCapabilities: () =>
@@ -338,7 +338,7 @@ export interface ServiceOptions {
   readonly staleTasks?: { current: ReadonlyArray<OrchestrationV2Subagent> | undefined };
 }
 
-export const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions = {}) =>
+const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions = {}) =>
   Effect.gen(function* () {
     const receipts = yield* Effect.serviceOption(CommandReceiptStore.CommandReceiptStoreV2);
     const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
