@@ -219,10 +219,11 @@ export const reportLayer = HttpRouter.add(
       const token = request.headers["x-goat-proxy-channel"] ?? "";
       if ((yield* channel.value.authenticate({ threadId, proxyChannelToken: token })) === undefined)
         return HttpServerResponse.empty({ status: 401 });
-      const handoffs = yield* Handoffs.Handoffs;
+      const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
+      if (Option.isNone(handoffs)) return HttpServerResponse.empty({ status: 503 });
       const result = yield* stopComputerUseFromHelper(
         Option.some(leases),
-        handoffs,
+        handoffs.value,
         threadId,
         value.controlId,
       );

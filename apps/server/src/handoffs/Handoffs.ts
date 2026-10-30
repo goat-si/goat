@@ -169,7 +169,7 @@ export class Handoffs extends Context.Service<
     ) => Effect.Effect<Handoff, HandoffError | EnvironmentAuthorizationError>;
     readonly cancelComputerUseByPerson: (
       input: HandoffReadInput,
-    ) => Effect.Effect<Handoff, HandoffError>;
+    ) => Effect.Effect<Handoff, HandoffError | EnvironmentAuthorizationError>;
     readonly answerSecret: (
       input: SecretRequestAnswerInput,
       sessionId: AuthSessionId,

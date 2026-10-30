@@ -226,7 +226,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly appHolders?: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<AppHolder>>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
-    readonly stopIfCurrent: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
+    readonly stopIfCurrent?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /**
      * Records the window an agent's admitted call named, or where its cursor is on it (see
      * withCursor), reported by that control's own proxy; false when not the thread's live one.

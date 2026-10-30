@@ -102,7 +102,8 @@ export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")
   threadId: ThreadId,
   controlId: string,
 ) {
-  if (Option.isNone(leases)) return { stopped: false, failed: 0 };
+  if (Option.isNone(leases) || leases.value.stopIfCurrent === undefined)
+    return { stopped: false, failed: 0 };
   const stopped = yield* leases.value.stopIfCurrent(threadId, controlId);
   if (!stopped) return { stopped: false, failed: 0 };
   const { failed } = yield* endGrants(
