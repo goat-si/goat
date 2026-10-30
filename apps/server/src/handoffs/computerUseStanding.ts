@@ -155,7 +155,7 @@ export const makeComputerUseStanding = (deps: {
     return Option.isSome(leases) ? leases.value.serializeAdmission(attempt) : attempt;
   });
   const stopUnlocked = Effect.fn("Handoffs.stopComputerUseSessionsUnlocked")(function* (
-    threadId?: ThreadId,
+    threadId: ThreadId | undefined,
   ) {
     const stopped = new Set(
       Option.isNone(leases)
@@ -191,7 +191,7 @@ export const makeComputerUseStanding = (deps: {
     const effect = Effect.gen(function* () {
       if (Option.isNone(settings)) return yield* new HandoffError({ reason: "unavailable" });
       const before = yield* settings.value.getSettings.pipe(Effect.mapError(unavailable));
-      if (!enabled || !before.enableCua) yield* stopUnlocked();
+      if (!enabled || !before.enableCua) yield* stopUnlocked(undefined);
       return yield* update;
     });
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
