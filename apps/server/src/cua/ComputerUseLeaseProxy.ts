@@ -292,7 +292,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           const waiter = ownAnswers.get(message.id);
           ownAnswers.delete(message.id);
           if (waiter !== undefined) {
-            if (driverScreenLocked(message)) {
+            if (driverScreenLocked(message) && !screenLockPending) {
               screenLockPending = true;
               yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
             }
@@ -304,7 +304,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
-        if (driverScreenLocked(message)) {
+        if (driverScreenLocked(message) && !screenLockPending) {
           screenLockPending = true;
           yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
         }

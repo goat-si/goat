@@ -58,6 +58,11 @@ layer("ComputerUseLeases controls", (it) => {
         if (screenLocked === undefined) return yield* Effect.die("missing screenLocked");
         assert.isFalse(yield* screenLocked(owner, "stale-control"));
         assert.isTrue(yield* screenLocked(owner, control.controlId));
+        assert.isTrue(yield* screenLocked(owner, control.controlId));
+        yield* leases.resume;
+        const afterResume = yield* leases.controlState(owner, control.controlId);
+        assert.equal(afterResume._tag === "active" ? afterResume.interruptions.count : -1, 1);
+        assert.isTrue(yield* screenLocked(owner, control.controlId));
         assert.deepInclude(yield* leases.controlState(owner, control.controlId), {
           _tag: "paused",
           reason: "screen_locked",

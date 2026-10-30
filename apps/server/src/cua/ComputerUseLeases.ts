@@ -758,6 +758,7 @@ const make = Effect.gen(function* () {
     screenLocked: Effect.fn("ComputerUseLeases.screenLocked")(function* (threadId, controlId) {
       const record = yield* liveControl(threadId, controlId);
       if (record === undefined || !acting(record)) return false;
+      if (paused === "screen_locked") return true;
       yield* pause("screen_locked");
       return true;
     }),
