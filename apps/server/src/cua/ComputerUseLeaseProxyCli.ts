@@ -93,6 +93,7 @@ async function report(
   authorization: string,
   body: ComputerUseLeaseReport,
   proxyToken?: string,
+  acceptConflict = false,
 ): Promise<boolean> {
   try {
     const response = await fetch(url, {
@@ -105,7 +106,7 @@ async function report(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
     });
-    return response.status === 204;
+    return response.status === 204 || (acceptConflict && response.status === 409);
   } catch {
     return false;
   }
@@ -501,7 +502,13 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
       ),
     onPersonStop: () =>
       Effect.promise(() =>
-        report(url, authorization, { controlId, personStop: "person_esc" }, proxyChannelToken),
+        report(
+          url,
+          authorization,
+          { controlId, personStop: "person_esc" },
+          proxyChannelToken,
+          true,
+        ),
       ),
     onAgentInput: (
       agentInput: Parameters<NonNullable<LeaseProxyOptions<never, never>["onAgentInput"]>>[0],
