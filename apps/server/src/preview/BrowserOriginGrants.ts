@@ -223,5 +223,40 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       yield* deps.publish(union());
     }),
   );
-  return { request, answer, list, revoke, stop, end, endReason, driverRestarted };
+  const claimsFor = Effect.fn("BrowserOriginGrants.claimsFor")((threadId: ThreadId) =>
+    lock.withPermits(1)(
+      Effect.sync(() => {
+        const origins = [...grants.values()]
+          .filter((grant) => grant.threadId === threadId)
+          .map((grant) => grant.origin);
+        return [...claims.values()]
+          .filter((claim) => claim.threadId === threadId)
+          .map((claim) => ({
+            claimId: claim.claimId,
+            claimGeneration: claim.claimGeneration,
+            pid: claim.tab.pid,
+            windowId: claim.tab.windowId,
+            tabId: claim.tab.tabId,
+            origins,
+          }));
+      }),
+    ),
+  );
+  const claimedPids = Effect.fn("BrowserOriginGrants.claimedPids")(() =>
+    lock.withPermits(1)(
+      Effect.sync(() => [...new Set([...claims.values()].map((claim) => claim.tab.pid))]),
+    ),
+  );
+  return {
+    request,
+    answer,
+    list,
+    revoke,
+    stop,
+    end,
+    endReason,
+    driverRestarted,
+    claimsFor,
+    claimedPids,
+  };
 });

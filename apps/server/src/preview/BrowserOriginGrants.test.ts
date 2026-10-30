@@ -212,3 +212,54 @@ it.effect("ends only the matching claim generation when its origin changes", () 
     assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
   }),
 );
+
+it.effect("exposes each thread's claims and fences claimed browser pids until revoked", () =>
+  Effect.gen(function* () {
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: () =>
+        Effect.succeed({
+          tabId: "tab-1",
+          title: "Site",
+          url: "https://example.test",
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending request");
+    const answer = yield* service.answer(request.claimId, true);
+    if (answer.agentResult.status !== "attached") return assert.fail("expected attached claim");
+    assert.deepEqual(yield* service.claimsFor(threadId), [
+      {
+        claimId: request.claimId,
+        claimGeneration: answer.agentResult.claim.claimGeneration,
+        pid: 42,
+        windowId: 7,
+        tabId: "tab-1",
+        origins: ["https://example.test"],
+      },
+    ]);
+    assert.deepEqual(yield* service.claimsFor(ThreadId.make("thread:other")), []);
+    assert.deepEqual(yield* service.claimedPids(), [42]);
+    assert.isFalse(
+      yield* service.end(
+        ThreadId.make("thread:other"),
+        request.claimId,
+        answer.agentResult.claim.claimGeneration,
+        "origin_changed",
+      ),
+    );
+    yield* service.revoke(threadId, "https://example.test");
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
+    assert.deepEqual(yield* service.claimedPids(), []);
+  }),
+);
