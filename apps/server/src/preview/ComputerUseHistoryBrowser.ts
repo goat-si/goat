@@ -5,6 +5,14 @@ import type { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 
 type History = Effect.Success<typeof makeComputerUseHistory>;
 
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+};
+
 export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAction")(function* (
   history: History,
   input: {
@@ -16,12 +24,7 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
     readonly typedText?: string;
   },
 ) {
-  let host = "";
-  try {
-    host = new URL(input.url).hostname;
-  } catch {
-    /* Invalid URLs have no host. */
-  }
+  const host = hostOf(input.url);
   yield* history.record({
     threadId: input.threadId,
     target: { kind: "tab", host },

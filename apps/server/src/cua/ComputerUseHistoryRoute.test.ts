@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { COMPUTER_USE_LEASE_ROUTE } from "@goat/contracts";
+import { COMPUTER_USE_LEASE_ROUTE, EnvironmentId, ProviderInstanceId } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,7 +24,19 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       >();
       const registry = yield* Layer.build(
         Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-          resolve: () => Effect.succeed({ thread: { threadId: f.a } }),
+          resolve: () =>
+            Effect.succeed({
+              environmentId: EnvironmentId.make("env:test"),
+              capabilities: new Set(),
+              issuedAt: 0,
+              requestNamespace: "test",
+              client: undefined,
+              thread: {
+                threadId: f.a,
+                providerInstanceId: ProviderInstanceId.make("codex"),
+                providerSessionId: "session",
+              },
+            }),
         }),
       );
       const services = Context.merge(current, registry);
