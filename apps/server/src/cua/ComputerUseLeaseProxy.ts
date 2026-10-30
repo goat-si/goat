@@ -43,6 +43,7 @@ import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
+import { makeProxyPointBasis } from "./ComputerUseLeaseProxyPointBasis.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -145,6 +146,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current);
+  const pointBasis = makeProxyPointBasis(batches.toolsOf, () => lifecycle.current);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();
@@ -747,6 +749,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const batch = yield* batches.scope(id, line, message, () => notSent(id));
       if ("refused" in batch) return yield* sink.answer(batch.refused);
       ({ line, message } = batch);
+      const unchecked = yield* pointBasis(id, message, () => notSent(id));
+      if (unchecked !== undefined) return yield* sink.answer(unchecked);
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       const needsProof =
         options.placement !== undefined && (tool === undefined || !DISPLAY_PROOF_FREE.has(tool));
