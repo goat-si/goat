@@ -96,6 +96,8 @@ describe("resolveEnvironmentLoopbackUrl", () => {
       url,
     });
     expect(resolve(url, bearer, "http://127.0.0.1:3773")).toEqual({ _tag: "Open", url });
+    expect(resolve(url, bearer, "http://goat.localhost:3773")).toEqual({ _tag: "Open", url });
+    expect(resolve(url, bearer, "http://0.0.0.0:3773")).toEqual({ _tag: "Open", url });
   });
 
   it("leaves addresses that are not loopback web URLs unchanged", () => {

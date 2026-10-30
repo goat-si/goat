@@ -33,14 +33,20 @@ export function markdownLinkNeedsEnvironmentRoute(
   href: string,
 ): boolean {
   if (environmentId === null) return false;
-  const resolved = resolveEnvironmentExternalUrl(environmentId, href);
-  return resolved._tag === "Unreachable" || resolved.url !== href;
+  const url = absoluteLinkUrl(href);
+  const resolved = resolveEnvironmentExternalUrl(environmentId, url);
+  return resolved._tag === "Unreachable" || resolved.url !== url;
 }
 
 export function openMarkdownLinkInSystemBrowser(environmentId: EnvironmentId | null, href: string) {
-  void openMarkdownLinkExternally(environmentId, href).catch((cause: unknown) =>
+  void openMarkdownLinkExternally(environmentId, absoluteLinkUrl(href)).catch((cause: unknown) =>
     reportMarkdownExternalOpenFailure(href, cause),
   );
+}
+
+// Protocol-relative links (//localhost:5173) navigate with this page's scheme.
+function absoluteLinkUrl(href: string): string {
+  return href.startsWith("//") ? `${window.location.protocol}${href}` : href;
 }
 
 /** Middle clicks skip onClick, so a loopback link would otherwise open on this device. */

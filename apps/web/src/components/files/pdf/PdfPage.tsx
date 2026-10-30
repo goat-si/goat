@@ -127,6 +127,16 @@ export function PdfPage(props: {
           style={{ left: link.left, top: link.top, width: link.width, height: link.height }}
           href={link.url ?? `#page=${link.targetPageNumber}`}
           aria-label={link.url ?? `Go to page ${link.targetPageNumber}`}
+          // Middle clicks open here too, so a remote environment's loopback link never opens natively.
+          onAuxClick={(event) => {
+            if (event.button !== 1 || !link.url) return;
+            event.preventDefault();
+            void props
+              .openLink(link.url)
+              .catch((cause: unknown) =>
+                setError(cause instanceof Error ? cause.message : "Could not open link."),
+              );
+          }}
           onClick={(event) => {
             event.preventDefault();
             if (link.targetPageNumber) props.navigate(link.targetPageNumber);

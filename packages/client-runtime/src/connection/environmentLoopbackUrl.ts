@@ -86,7 +86,7 @@ export function resolveEnvironmentLoopbackUrl(input: {
       reason: `${address} is on ${target.label}, whose address can't be read. ${insteadHint}`,
     };
   }
-  if (isLocalLoopbackHost(environmentUrl.hostname)) return open;
+  if (isLoopbackAddress(environmentUrl.hostname)) return open;
   if (!isPrivateNetworkHost(environmentUrl.hostname)) {
     return {
       _tag: "Unreachable",
