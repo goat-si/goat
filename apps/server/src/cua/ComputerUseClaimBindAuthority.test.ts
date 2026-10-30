@@ -49,7 +49,7 @@ describe("claimBind authority", () => {
     ).toBeUndefined();
   });
   it("allows only an existing-profile background prepare for the pending window", () => {
-    const prepare = { pid: 42, window_id: 7, strategy: "existing_profile" };
+    const prepare = { pid: 42, window_id: 7, strategy: { kind: "existing_profile" } };
     expect(Authority.authorizeClaimBind("claimBind", "browser_prepare", prepare, pending)).toEqual(
       pending[0],
     );
@@ -65,7 +65,7 @@ describe("claimBind authority", () => {
       Authority.authorizeClaimBind(
         "claimBind",
         "browser_prepare",
-        { ...prepare, strategy: "new_profile" },
+        { ...prepare, strategy: { kind: "new_profile" } },
         pending,
       ),
     ).toBeUndefined();

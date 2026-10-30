@@ -148,13 +148,13 @@ export const leaseUpdates = (input: {
           yield* Queue.take(wake);
           continue;
         }
-        const browserClaimBindings = Option.isSome(grants)
-          ? yield* grants.value.bindingsFor(input.threadId)
-          : [];
-        const browserClaims = Option.isSome(grants)
-          ? yield* grants.value.claimsFor(input.threadId)
-          : [];
-        const claimedBrowserPids = Option.isSome(grants) ? yield* grants.value.claimedPids() : [];
+        const snapshot = Option.isSome(grants)
+          ? yield* grants.value.snapshotFor(input.threadId)
+          : undefined;
+        const browserClaimVersion = snapshot?.revision ?? 0;
+        const browserClaimBindings = snapshot?.bindings ?? [];
+        const browserClaims = snapshot?.claims ?? [];
+        const claimedBrowserPids = snapshot?.pids ?? [];
         yield* Queue.offer(
           queue,
           state.idle === true
@@ -171,6 +171,7 @@ export const leaseUpdates = (input: {
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
+                browserClaimVersion,
                 ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                 ...(browserClaims.length === 0 ? {} : { browserClaims }),
                 ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),

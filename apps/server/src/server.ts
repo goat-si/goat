@@ -227,6 +227,7 @@ import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwne
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as BrowserOriginGrants from "./preview/BrowserOriginGrantsLayer.ts";
 import * as BrowserClaimManifestModule from "./preview/BrowserClaimManifest.ts";
+import * as BrowserClaimBindModule from "./preview/BrowserClaimBind.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
@@ -381,14 +382,12 @@ const layerResourceDiagnostics = Layer.mergeAll(
   ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
   ProcessGroupMetrics.layer.pipe(Layer.provide(layerResourceTelemetry)),
 );
-
 const layerRelayClient = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
-
 const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
@@ -421,9 +420,7 @@ const layerHttpServer = Layer.unwrap(
 );
 const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
 export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
-
 const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
-
 const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
   Layer.provideMerge(SourceControlBuiltInDrivers.layer),
   Layer.provideMerge(GitVcsDriver.layer),
@@ -612,7 +609,11 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(
 
 const layerBrowserOriginGrants = Layer.provide(
   BrowserOriginGrants.layer,
-  Layer.merge(layerServerEnvironment, BrowserClaimManifestModule.layer),
+  Layer.mergeAll(
+    layerServerEnvironment,
+    BrowserClaimManifestModule.layer,
+    BrowserClaimBindModule.layer,
+  ),
 );
 const layerCuaDriver = CuaDriver.layer.pipe(
   Layer.provide(layerBrowserOriginGrants),

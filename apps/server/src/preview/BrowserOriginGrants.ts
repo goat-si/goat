@@ -38,7 +38,9 @@ interface Dependencies {
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
-  readonly bind: (input: Request) => Effect.Effect<
+  readonly bind: (
+    input: Request & { readonly claimId: string; readonly bindingVersion: number },
+  ) => Effect.Effect<
     {
       readonly tabId: string;
       readonly title: string;
@@ -84,16 +86,17 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const lock = yield* Semaphore.make(1);
   const writeLock = yield* Semaphore.make(1);
   const version = yield* SubscriptionRef.make(0);
+  let currentRevision = 0;
+  const advance = SubscriptionRef.update(version, (current) => {
+    currentRevision = current + 1;
+    return currentRevision;
+  });
   const confirm = Effect.fn("BrowserOriginGrants.confirmManifest")(function* (sha: string) {
     if (!manifestApplied(yield* deps.confirm(sha), sha))
       return yield* new BrowserManifestNotApplied();
   });
   const write = (value: Union) =>
-    writeLock.withPermits(1)(
-      SubscriptionRef.update(version, (current) => current + 1).pipe(
-        Effect.andThen(deps.publish(value)),
-      ),
-    );
+    writeLock.withPermits(1)(advance.pipe(Effect.andThen(deps.publish(value))));
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
     yield* confirm(yield* write(value));
   });
@@ -202,7 +205,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (Option.isNone(applied)) return { agentResult: decline };
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
-          const bound = yield* untilRestart(deps.bind(entry), signal);
+          const bindingVersion = yield* SubscriptionRef.get(version);
+          const bound = yield* untilRestart(deps.bind({ ...entry, bindingVersion }), signal);
           if (Option.isNone(bound)) return { agentResult: decline };
           const tab = bound.value;
           if (epoch !== driverEpoch) return { agentResult: decline };
@@ -225,7 +229,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           uncommittedGrants.delete(grantKey);
           claims.set(claimId, claim);
           pending.delete(claimId);
-          yield* SubscriptionRef.update(version, (current) => current + 1);
+          yield* advance;
           if (epoch !== driverEpoch) return { agentResult: decline };
           return { agentResult: { status: "attached" as const, claim } };
         }).pipe(
@@ -315,36 +319,43 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     yield* Deferred.succeed(previousSignal, undefined);
     yield* shrink(union());
   });
+  const bindingValues = (threadId: ThreadId) =>
+    [...pending.values()]
+      .filter((entry) => entry.threadId === threadId && entry.granted)
+      .map(({ claimId, pid, windowId, origin }) => ({ claimId, pid, windowId, origin }));
+  const claimValues = (threadId: ThreadId) => {
+    const origins = [...grants.values()]
+      .filter(
+        (grant) =>
+          grant.threadId === threadId && !uncommittedGrants.has(key(grant.threadId, grant.origin)),
+      )
+      .map((grant) => grant.origin);
+    return [...claims.values()]
+      .filter((claim) => claim.threadId === threadId)
+      .map((claim) => ({
+        claimId: claim.claimId,
+        claimGeneration: claim.claimGeneration,
+        pid: claim.tab.pid,
+        windowId: claim.tab.windowId,
+        tabId: claim.tab.tabId,
+        origins,
+      }));
+  };
+  const pidValues = () => [...new Set([...claims.values()].map((claim) => claim.tab.pid))];
   const bindingsFor = Effect.fn("BrowserOriginGrants.bindingsFor")((threadId: ThreadId) =>
-    Effect.sync(() =>
-      [...pending.values()]
-        .filter((entry) => entry.threadId === threadId && entry.granted)
-        .map(({ claimId, pid, windowId, origin }) => ({ claimId, pid, windowId, origin })),
-    ),
+    Effect.sync(() => bindingValues(threadId)),
   );
   const claimsFor = Effect.fn("BrowserOriginGrants.claimsFor")((threadId: ThreadId) =>
-    Effect.sync(() => {
-      const origins = [...grants.values()]
-        .filter(
-          (grant) =>
-            grant.threadId === threadId &&
-            !uncommittedGrants.has(key(grant.threadId, grant.origin)),
-        )
-        .map((grant) => grant.origin);
-      return [...claims.values()]
-        .filter((claim) => claim.threadId === threadId)
-        .map((claim) => ({
-          claimId: claim.claimId,
-          claimGeneration: claim.claimGeneration,
-          pid: claim.tab.pid,
-          windowId: claim.tab.windowId,
-          tabId: claim.tab.tabId,
-          origins,
-        }));
-    }),
+    Effect.sync(() => claimValues(threadId)),
   );
-  const claimedPids = Effect.fn("BrowserOriginGrants.claimedPids")(() =>
-    Effect.sync(() => [...new Set([...claims.values()].map((claim) => claim.tab.pid))]),
+  const claimedPids = Effect.fn("BrowserOriginGrants.claimedPids")(() => Effect.sync(pidValues));
+  const snapshotFor = Effect.fn("BrowserOriginGrants.snapshotFor")((threadId: ThreadId) =>
+    Effect.sync(() => ({
+      revision: currentRevision,
+      bindings: bindingValues(threadId),
+      claims: claimValues(threadId),
+      pids: pidValues(),
+    })),
   );
   return {
     request,
@@ -356,8 +367,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     endReason,
     driverRestarted,
     bindingsFor,
+    snapshotFor,
     claimsFor,
     claimedPids,
+    revision: SubscriptionRef.get(version),
     changes: SubscriptionRef.changes(version),
   };
 });

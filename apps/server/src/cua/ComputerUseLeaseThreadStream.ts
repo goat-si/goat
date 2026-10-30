@@ -150,13 +150,13 @@ export const threadLeaseUpdates = (input: {
           controlId: current.controlId,
           expiresAt: DateTime.formatIso(current.expiresAt),
         };
-        const browserClaimBindings = Option.isSome(grants)
-          ? yield* grants.value.bindingsFor(input.threadId)
-          : [];
-        const browserClaims = Option.isSome(grants)
-          ? yield* grants.value.claimsFor(input.threadId)
-          : [];
-        const claimedBrowserPids = Option.isSome(grants) ? yield* grants.value.claimedPids() : [];
+        const snapshot = Option.isSome(grants)
+          ? yield* grants.value.snapshotFor(input.threadId)
+          : undefined;
+        const browserClaimVersion = snapshot?.revision ?? 0;
+        const browserClaimBindings = snapshot?.bindings ?? [];
+        const browserClaims = snapshot?.claims ?? [];
+        const claimedBrowserPids = snapshot?.pids ?? [];
         yield* Queue.offer(
           queue,
           value._tag === "paused"
@@ -173,6 +173,7 @@ export const threadLeaseUpdates = (input: {
                     ? {}
                     : { interruptions: value.interruptions }),
                   ...(value.shared === true ? { shared: true } : {}),
+                  browserClaimVersion,
                   ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                   ...(browserClaims.length === 0 ? {} : { browserClaims }),
                   ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
@@ -230,6 +231,52 @@ export const withPrimitiveRequests = <A, R>(
               Effect.forkScoped,
             );
             let firstState = true;
+            let latestRevision = -1;
+            let activeState = false;
+            const waitingBinds: Array<ComputerUsePrimitiveRequest> = [];
+            const sendState = Effect.fn("ComputerUseLeaseThreadStream.sendState")(function* (
+              value: A,
+            ) {
+              if (typeof value === "object" && value !== null && "state" in value) {
+                activeState = value.state === "active";
+                if (
+                  activeState &&
+                  "browserClaimVersion" in value &&
+                  typeof value.browserClaimVersion === "number"
+                )
+                  latestRevision = value.browserClaimVersion;
+              }
+              yield* Queue.offer(output, value);
+            });
+            const holdBind = (
+              value:
+                | ComputerUsePrimitiveRequest
+                | ComputerUsePrimitiveCancel
+                | AgentCursorLeaseUpdate,
+            ) =>
+              value.state === "primitive-request" &&
+              value.authority === "claimBind" &&
+              value.bindingVersion !== undefined &&
+              activeState &&
+              value.bindingVersion > latestRevision;
+            const forwardPrimitive = Effect.fn("ComputerUseLeaseThreadStream.forwardPrimitive")(
+              function* (
+                value:
+                  | ComputerUsePrimitiveRequest
+                  | ComputerUsePrimitiveCancel
+                  | AgentCursorLeaseUpdate,
+              ) {
+                if (value.state === "primitive-cancel") {
+                  const index = waitingBinds.findIndex(
+                    (waiting) => waiting.requestId === value.requestId,
+                  );
+                  if (index >= 0) waitingBinds.splice(index, 1);
+                }
+                if (holdBind(value) && value.state === "primitive-request")
+                  waitingBinds.push(value);
+                else yield* Queue.offer(output, value);
+              },
+            );
             let pendingPrimitive:
               | ComputerUsePrimitiveRequest
               | ComputerUsePrimitiveCancel
@@ -239,25 +286,31 @@ export const withPrimitiveRequests = <A, R>(
               const readyState = Option.getOrUndefined(yield* Queue.poll(stateQueue));
               if (readyState !== undefined) {
                 if (readyState.kind === "end") return yield* Queue.end(output);
-                yield* Queue.offer(output, readyState.value);
+                yield* sendState(readyState.value);
                 firstState = false;
                 continue;
               }
+              const readyBind = waitingBinds.findIndex((value) => !holdBind(value));
+              if (readyBind >= 0) {
+                const [binding] = waitingBinds.splice(readyBind, 1);
+                if (binding !== undefined) yield* Queue.offer(output, binding);
+                continue;
+              }
               if (pendingPrimitive !== undefined) {
-                yield* Queue.offer(output, pendingPrimitive);
+                yield* forwardPrimitive(pendingPrimitive);
                 pendingPrimitive = undefined;
                 continue;
               }
               if (firstState) {
                 const first = yield* Queue.take(stateQueue);
                 if (first.kind === "end") return yield* Queue.end(output);
-                yield* Queue.offer(output, first.value);
+                yield* sendState(first.value);
                 firstState = false;
                 continue;
               }
               const critical = Option.getOrUndefined(yield* Queue.poll(primitiveQueue));
               if (critical !== undefined) {
-                yield* Queue.offer(output, critical);
+                yield* forwardPrimitive(critical);
                 continue;
               }
               const cursor = Option.getOrUndefined(yield* Queue.poll(cursorQueue));
@@ -275,15 +328,15 @@ export const withPrimitiveRequests = <A, R>(
               );
               if (selected.kind === "state") {
                 if (selected.value.kind === "end") return yield* Queue.end(output);
-                yield* Queue.offer(output, selected.value.value);
+                yield* sendState(selected.value.value);
                 continue;
               }
               const overtakingState = Option.getOrUndefined(yield* Queue.poll(stateQueue));
               if (overtakingState !== undefined) {
                 pendingPrimitive = selected.value;
                 if (overtakingState.kind === "end") return yield* Queue.end(output);
-                yield* Queue.offer(output, overtakingState.value);
-              } else yield* Queue.offer(output, selected.value);
+                yield* sendState(overtakingState.value);
+              } else yield* forwardPrimitive(selected.value);
             }
           }),
         { bufferSize: 1, strategy: "suspend" },

@@ -47,3 +47,45 @@ it.effect("exposes binding authority only after approval and only to the owning 
     assert.deepEqual(yield* service.bindingsFor(threadId), []);
   }),
 );
+
+it.effect("returns the bind and revision in one snapshot", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const threadId = ThreadId.make("thread:one");
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test/",
+            driverGeneration: 1,
+          }),
+        ),
+    });
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending");
+    const answer = yield* service
+      .answer(request.claimId, true)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    const snapshot = yield* service.snapshotFor(threadId);
+    assert.equal(snapshot.revision, yield* service.revision);
+    assert.deepEqual(snapshot.bindings, [
+      { claimId: request.claimId, pid: 42, windowId: 7, origin: "https://example.test" },
+    ]);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(answer);
+  }),
+);

@@ -210,6 +210,16 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
         },
       };
     }
+    const untrustedArgs: unknown = message.params?.arguments;
+    if (isRecord(untrustedArgs) && untrustedArgs.authority === "claimBind")
+      return {
+        refused: refusal(
+          id,
+          message.method,
+          "outside_manifest",
+          "Claim bind authority is host-only.",
+        ),
+      };
     const browser = scopeBrowserCall(
       message.params?.name,
       message.params?.arguments,

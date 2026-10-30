@@ -580,6 +580,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    browserClaimVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     browserClaimBindings: Schema.optionalKey(Schema.Array(PendingBrowserBind)),
     claimedBrowserPids: Schema.optionalKey(Schema.Array(Schema.Int.check(Schema.isGreaterThan(0)))),
     browserClaims: Schema.optionalKey(
@@ -747,7 +748,6 @@ export const COMPUTER_USE_LEASE_ROUTE = "/api/computer-use/lease";
 export const COMPUTER_USE_PRIMITIVE_REPLY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-replies`;
 export const COMPUTER_USE_PRIMITIVE_CONTROL_READY_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-ready`;
 export const COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE = `${COMPUTER_USE_LEASE_ROUTE}/primitive-control-cutoff`;
-
 const ComputerUseCallOwner = {
   controlId: TrimmedNonEmptyString,
   connectionId: TrimmedNonEmptyString.check(Schema.isMaxLength(200)),
