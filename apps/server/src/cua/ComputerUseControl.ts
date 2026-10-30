@@ -108,6 +108,11 @@ export type ComputerUseControlState =
       /** When this state can next change without a signal, epoch ms. */
       readonly wakeAt: number;
       /**
+       * When the authority a call is admitted under lapses without a signal, epoch ms; wakeAt
+       * when absent. A re-check that only looks for a missed run end is not one.
+       */
+      readonly validUntil?: number;
+      /**
        * Another thread holds a grant on this screen, so this one must not raise windows or move
        * the pointer over it.
        */

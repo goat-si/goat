@@ -49,7 +49,8 @@ const callAdmissionRefusal = (input: {
     (current.idleEpoch ?? 0) !== call.idleEpoch
   )
     return "replaced";
-  if (DateTime.toEpochMillis(current.expiresAt) <= now || state.wakeAt <= now) return "expired";
+  if (DateTime.toEpochMillis(current.expiresAt) <= now || (state.validUntil ?? state.wakeAt) <= now)
+    return "expired";
   if (!allowsForegroundCall(call, state.foreground, now, input.bound))
     return "foreground_not_approved";
   if (state.shared === true && takesScreen(call.name, call.args)) return "screen_shared";

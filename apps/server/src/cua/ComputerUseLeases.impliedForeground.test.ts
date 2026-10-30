@@ -10,8 +10,10 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import { MaxOpsBeforeYield } from "effect/Scheduler";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { sendUnlessShared } from "./ComputerUseLeaseProtocol.ts";
 import { IMPLIED_RECHECK_MS } from "./ComputerUseOpenWork.ts";
 import { database } from "./ComputerUseLeases.projection.testkit.ts";
 
@@ -139,6 +141,46 @@ it.effect(
 
 // A control's reuse takes well under this many fiber ops, so the sweep below covers every step.
 const YIELD_SWEEP = 160;
+
+it.effect(
+  "a full access read that waits past the run-end re-check still runs: the re-check is not its permission's end",
+  () =>
+    Effect.gen(function* () {
+      const { leases, threadId, control } = yield* personRun("read-waits");
+      const admitted = yield* leases.callReservation(threadId, {
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:read-waits",
+        callId: "read",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "get_window_state",
+        args: { pid: 7, window_id: 3 },
+      });
+      assert.equal(admitted.status, "admitted");
+      const validUntil =
+        admitted.status === "admitted"
+          ? (admitted.permissions?.validUntilMillis ?? Infinity)
+          : -Infinity;
+      // The driver is busy with another call; this read reaches the send barrier later.
+      yield* TestClock.adjust(IMPLIED_RECHECK_MS * 2);
+      let sent = false;
+      const outcome = yield* sendUnlessShared(
+        false,
+        () => false,
+        () => true,
+        Effect.sync(() => {
+          sent = true;
+        }),
+        validUntil,
+      );
+      assert.equal(outcome, "sent");
+      assert.isTrue(sent);
+      // The permission ends with the control it was admitted under.
+      assert.equal(validUntil, DateTime.toEpochMillis(control.expiresAt));
+      yield* leases.stopAll;
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+);
 
 it.effect(
   "a Stop that lands at any scheduler yield during a control's reuse is never undone (#1653)",
