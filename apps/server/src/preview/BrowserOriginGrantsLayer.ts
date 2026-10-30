@@ -35,6 +35,10 @@ const make = Effect.gen(function* () {
         : Effect.fail(
             new BrowserClaimBindUnavailable({ cause: "Driver configuration is unavailable." }),
           ),
+    windowTitle: (request) =>
+      Option.isSome(bind) && bind.value.windowTitle
+        ? bind.value.windowTitle(request)
+        : Effect.fail(new BrowserClaimBindUnavailable({ cause: "Window listing is unavailable." })),
     bind: (request) =>
       Option.isSome(bind)
         ? bind.value.bind(request)

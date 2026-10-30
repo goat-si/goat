@@ -25,7 +25,8 @@ const bindInstaller = Layer.effectDiscard(
     const channel = yield* ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel;
     const service = yield* BrowserClaimBind.BrowserClaimBind;
     const bind = yield* BrowserClaimBind.makeBrowserClaimBind(channel);
-    if (service.install) yield* service.install(bind);
+    const windowTitle = yield* BrowserClaimBind.makeBrowserClaimWindow(channel);
+    if (service.install) yield* service.install(bind, windowTitle);
   }),
 ).pipe(Layer.provide(primitives), Layer.provide(BrowserClaimBind.layer));
 

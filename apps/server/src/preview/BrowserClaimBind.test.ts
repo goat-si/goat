@@ -101,3 +101,30 @@ it.effect("a redacted active tab produces the identical decline and revokes the 
     assert.equal(calls, 1);
   }),
 );
+
+it.effect(
+  "reads the pending card title from the selected window and rejects a missing window",
+  () =>
+    Effect.gen(function* () {
+      const requests: unknown[] = [];
+      const title = yield* Bind.makeBrowserClaimWindow({
+        request: (input) =>
+          Effect.sync(() => {
+            requests.push(input);
+            return {
+              status: "settled",
+              result: {
+                structuredContent: {
+                  windows: [{ pid: 42, window_id: 7, title: "Observed browser" }],
+                },
+              },
+            };
+          }),
+      });
+      const target = { threadId: ThreadId.make("thread:one"), pid: 42, windowId: 7 };
+      assert.equal(yield* title(target), "Observed browser");
+      assert.deepInclude(requests[0], { tool: "list_windows", args: { pid: 42 } });
+      const missing = yield* title({ ...target, windowId: 8 }).pipe(Effect.result);
+      assert.equal(missing._tag, "Failure");
+    }),
+);

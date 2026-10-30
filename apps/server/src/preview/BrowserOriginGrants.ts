@@ -40,6 +40,9 @@ interface Dependencies {
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
+  readonly windowTitle?: (
+    input: Pick<Request, "threadId" | "pid" | "windowId">,
+  ) => Effect.Effect<string, Error>;
   readonly bind: (
     input: Request & { readonly claimId: string; readonly bindingVersion: number },
   ) => Effect.Effect<
@@ -172,6 +175,15 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }),
     ),
   );
+  const requestWindow = Effect.fn("BrowserOriginGrants.requestWindow")(function* (
+    input: Omit<Request, "windowTitle">,
+  ) {
+    if (!deps.supported()) return unavailable;
+    if (!isOrigin(input.origin)) return invalidOrigin;
+    if (!deps.windowTitle) return yield* new BrowserManifestNotApplied();
+    const windowTitle = yield* deps.windowTitle(input);
+    return yield* request({ ...input, windowTitle });
+  });
   const answer = Effect.fn("BrowserOriginGrants.answer")((claimId: string, approved: boolean) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
@@ -259,6 +271,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   );
   const claim = Effect.fn("BrowserOriginGrants.claim")(function* (input: Request) {
     const result = yield* request(input);
+    if (result.status !== "pending") return { agentResult: result };
+    return yield* answer(result.claimId, true);
+  });
+  const claimWindow = Effect.fn("BrowserOriginGrants.claimWindow")(function* (
+    input: Omit<Request, "windowTitle">,
+  ) {
+    const result = yield* requestWindow(input);
     if (result.status !== "pending") return { agentResult: result };
     return yield* answer(result.claimId, true);
   });
@@ -399,8 +418,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   );
   return {
     request,
+    requestWindow,
     answer,
     claim,
+    claimWindow,
     list,
     listAll,
     endPerson,

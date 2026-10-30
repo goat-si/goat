@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Unique host call ids prevent cancellation across requests.
+import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
@@ -84,6 +86,51 @@ export const makeBrowserClaimBind = Effect.fn("BrowserClaimBind.make")((channel:
   ),
 );
 
+type WindowRequest = Pick<Request, "threadId" | "pid" | "windowId">;
+export const makeBrowserClaimWindow = Effect.fn("BrowserClaimBind.makeWindowReader")(
+  (channel: Transport) =>
+    Effect.succeed(
+      Effect.fn("BrowserClaimBind.readWindowTitle")(function* (input: WindowRequest) {
+        const now = yield* Clock.currentTimeMillis;
+        const id = NodeCrypto.randomUUID();
+        const reply = yield* channel
+          .request({
+            threadId: input.threadId,
+            runId: `claim-window:${id}`,
+            turnId: `claim-window:${id}`,
+            callId: 0,
+            deadlineMillis: now + 15_000,
+            tool: "list_windows",
+            args: { pid: input.pid },
+          })
+          .pipe(Effect.mapError((cause) => new BrowserClaimBindFailure({ cause })));
+        const result =
+          record(reply.result) && record(reply.result.structuredContent)
+            ? reply.result.structuredContent
+            : undefined;
+        if (
+          reply.status !== "settled" ||
+          !record(reply.result) ||
+          reply.result.isError === true ||
+          !result ||
+          !Array.isArray(result.windows)
+        )
+          return yield* new BrowserClaimBindFailure({ cause: "Window listing is unavailable." });
+        const matches = result.windows.filter(
+          (value: unknown) =>
+            record(value) &&
+            value.window_id === input.windowId &&
+            (value.pid === undefined || value.pid === input.pid),
+        );
+        if (matches.length !== 1 || !record(matches[0]) || typeof matches[0].title !== "string")
+          return yield* new BrowserClaimBindFailure({
+            cause: "The selected window was not found.",
+          });
+        return matches[0].title;
+      }),
+    ),
+);
+
 export class BrowserClaimBind extends Context.Service<
   BrowserClaimBind,
   {
@@ -96,6 +143,7 @@ export class BrowserClaimBind extends Context.Service<
       },
       Error
     >;
+    readonly windowTitle?: (request: WindowRequest) => Effect.Effect<string, Error>;
     readonly install?: (
       bind: (request: BindRequest) => Effect.Effect<
         {
@@ -106,6 +154,7 @@ export class BrowserClaimBind extends Context.Service<
         },
         Error
       >,
+      windowTitle: (request: WindowRequest) => Effect.Effect<string, Error>,
     ) => Effect.Effect<void>;
   }
 >()("goat/preview/BrowserClaimBind") {}
@@ -114,6 +163,7 @@ export const layer = Layer.effect(
   BrowserClaimBind,
   Effect.sync(() => {
     let active: BrowserClaimBind["Service"]["bind"] | undefined;
+    let windowReader: NonNullable<BrowserClaimBind["Service"]["windowTitle"]> | undefined;
     return {
       bind: Effect.fn("BrowserClaimBind.dispatch")((request: BindRequest) =>
         Effect.suspend(() =>
@@ -124,9 +174,19 @@ export const layer = Layer.effect(
               ),
         ),
       ),
-      install: (bind) =>
+      windowTitle: Effect.fn("BrowserClaimBind.windowTitle")((request: WindowRequest) =>
+        Effect.suspend(() =>
+          windowReader
+            ? windowReader(request)
+            : Effect.fail(
+                new BrowserClaimBindFailure({ cause: "Window listing channel is unavailable." }),
+              ),
+        ),
+      ),
+      install: (bind, windowTitle) =>
         Effect.sync(() => {
           active = bind;
+          windowReader = windowTitle;
         }),
     };
   }),
