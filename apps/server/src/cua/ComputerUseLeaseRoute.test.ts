@@ -33,13 +33,17 @@ import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
 
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
 const expiresAt = DateTime.makeUnsafe(10 * 60_000);
 
 /** Leases whose one control ends when revoked or at its expiry, and pauses on request. */
-const fixture = Effect.fnUntraced(function* (grants?: BrowserOriginGrants["Service"]) {
+const fixture = Effect.fnUntraced(function* (
+  grants?: BrowserOriginGrants["Service"],
+  wholeScreen = false,
+) {
   const revoked = yield* Ref.make(false);
   const paused = yield* Ref.make<ComputerUsePauseReason | undefined>(undefined);
   const signals = yield* PubSub.unbounded<void>();
@@ -67,7 +71,7 @@ const fixture = Effect.fnUntraced(function* (grants?: BrowserOriginGrants["Servi
           _tag: "active",
           expiresAt,
           interruptions: { count: 0, last: "human_input" },
-          apps: ["com.apple.calculator"],
+          ...(wholeScreen ? {} : { apps: ["com.apple.calculator"] }),
           wakeAt: DateTime.toEpochMillis(expiresAt),
         } as const;
       }),
@@ -299,6 +303,164 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect("revoking a service claim makes the next proxied call refuse", () =>
+    Effect.gen(function* () {
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const request = yield* grants.request({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return assert.fail("expected pending");
+      yield* grants.answer(request.claimId, true);
+      const stream = yield* fixture({ ...grants, reportDriverCapability: () => Effect.void }, true);
+      const initial = yield* stream.next;
+      if (initial?.state !== "active") return assert.fail("expected active");
+      const h = yield* harness();
+      yield* h.push(initial);
+      yield* h.applied;
+      yield* grants.revoke(threadId, "https://example.test");
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
+      const updated = yield* stream.next;
+      if (updated?.state !== "active") return assert.fail("expected active");
+      yield* h.push(updated);
+      yield* h.applied;
+      yield* h.send(call(1, "browser_click", { tab_id: "tab" }));
+      assert.equal((yield* h.nextToProvider).id, 1);
+      assert.equal(yield* h.driverQueued, 0);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest())),
+  );
+  it.effect(
+    "enforces service claims through the control stream and ends a claim after an origin report",
+    () =>
+      Effect.gen(function* () {
+        const grants = yield* makeBrowserOriginGrants({
+          environmentId: EnvironmentId.make("environment:test"),
+          supported: () => true,
+          publish: () => Effect.void,
+          bind: () =>
+            Effect.succeed({
+              tabId: "tab",
+              title: "Site",
+              url: "https://example.test",
+              driverGeneration: 1,
+            }),
+        });
+        const request = yield* grants.request({
+          threadId,
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        });
+        if (request.status !== "pending") return assert.fail("expected pending");
+        const answer = yield* grants.answer(request.claimId, true);
+        if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
+        const service = { ...grants, reportDriverCapability: () => Effect.void };
+        const stream = yield* fixture(service, true);
+        const initial = yield* stream.next;
+        if (initial?.state !== "active") return assert.fail("expected active");
+        assert.lengthOf(initial.browserClaims ?? [], 1);
+        const reports: Array<unknown> = [];
+        const h = yield* harness({
+          onBrowserClaimReport: (report) => {
+            reports.push(report);
+          },
+        });
+        yield* h.push(initial);
+        yield* h.applied;
+        yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }));
+        yield* h.nextToDriver;
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 99,
+            result: {
+              tools: [
+                { name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } },
+              ],
+            },
+          }),
+        );
+        yield* h.nextToProvider;
+        yield* h.send(call(1, "browser_click", { tab_id: "other" }));
+        assert.equal((yield* h.nextToProvider).id, 1);
+        yield* h.send(
+          call(2, "get_browser_state", { tab_id: "tab", origin_scope: ["https://other.test"] }),
+        );
+        const sent = yield* Effect.raceFirst(
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "sent" as const, message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "refused" as const, message }))),
+        );
+        assert.equal(sent.kind, "sent", JSON.stringify(sent.message));
+        if (sent.kind !== "sent") return;
+        assert.deepEqual(sent.message.params?.arguments, {
+          tab_id: "tab",
+          origin_scope: ["https://example.test"],
+        });
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 2,
+            result: { structuredContent: { tab_id: "tab", url: "https://other.test/private" } },
+          }),
+        );
+        assert.notInclude(JSON.stringify(yield* h.nextToProvider), "other.test");
+        const ended = reports.find(
+          (report) =>
+            typeof report === "object" && report !== null && "browserClaimEnded" in report,
+        );
+        assert.isDefined(ended);
+        const registry = yield* McpSessionRegistry.McpSessionRegistry.pipe(
+          Effect.provide(
+            Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+              resolve: () => Effect.succeed({ thread: { threadId } }),
+            }),
+          ),
+        );
+        const services = Context.make(McpSessionRegistry.McpSessionRegistry, registry).pipe(
+          Context.add(BrowserOriginGrants, service),
+        );
+        const { handler, dispose } = HttpRouter.toWebHandler(LeaseRoute.reportLayer, {
+          disableLogger: true,
+        });
+        const status = yield* Effect.promise(
+          async () =>
+            (
+              await handler(
+                new Request("http://goat.test/api/computer-use/lease", {
+                  method: "POST",
+                  headers: { authorization: "Bearer good" },
+                  body: JSON.stringify(ended),
+                }),
+                services,
+              )
+            ).status,
+        ).pipe(Effect.ensuring(Effect.promise(() => dispose())));
+        assert.equal(status, 204);
+        assert.equal(yield* grants.endReason(threadId, request.claimId), "origin_changed");
+        const updated = yield* stream.next;
+        if (updated?.state !== "active") return assert.fail("expected active");
+        yield* h.push(updated);
+        yield* h.applied;
+        yield* h.send(call(3, "browser_click", { tab_id: "tab" }));
+        assert.equal((yield* h.nextToProvider).id, 3);
+        assert.equal(yield* h.driverQueued, 0);
+      }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest())),
+  );
   it.effect("advertises claims through the authenticated thread stream", () =>
     Effect.gen(function* () {
       const grants = yield* makeBrowserOriginGrants({
