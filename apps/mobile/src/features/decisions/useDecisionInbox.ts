@@ -1,6 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   type DecisionItem,
+  durableDecisionAnswer,
   isDecisionItemRemoved,
   orderDecisionQueue,
 } from "@goat/client-runtime/state/decision-inbox";
@@ -266,12 +267,10 @@ export function useDecisionInbox(
     if (current === null || paused || inFlight.current.has(current.id)) return;
     const item = readActionItem(current.id);
     if (item?.kind !== "decision") return;
-    if (!item.decision.options.some((option) => option.id === optionId)) return;
+    const input = durableDecisionAnswer(item.decision, optionId, reason);
+    if (input === null) return;
     return runResponse(item, () =>
-      answerDecision({
-        environmentId: item.ref.environmentId,
-        input: { id: item.decision.id, optionId, reason },
-      }),
+      answerDecision({ environmentId: item.ref.environmentId, input }),
     );
   }
 

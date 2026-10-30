@@ -22,6 +22,7 @@ type Snapshot = {
   loadingRefs: readonly ScopedThreadRef[];
   errors: readonly { ref: ScopedThreadRef; message: string }[];
   isLoading: boolean;
+  feedEnvironments?: readonly EnvironmentId[];
 };
 type Receipt = AtomCommandResult<void, Error>;
 type Run = (...args: unknown[]) => Promise<Receipt>;
@@ -31,12 +32,14 @@ const state = vi.hoisted<{
   grants: Atom.Writable<ReadonlySet<EnvironmentId>> | null;
   approval: ReturnType<typeof vi.fn<Run>>;
   userInput: ReturnType<typeof vi.fn<Run>>;
+  decision: ReturnType<typeof vi.fn<Run>>;
 }>(() => ({
   registry: null,
   snapshot: null,
   grants: null,
   approval: vi.fn<Run>(),
   userInput: vi.fn<Run>(),
+  decision: vi.fn<Run>(),
 }));
 vi.mock("../../state/decisionInbox", async () => {
   const { Atom } = await import("effect/reactivity");
@@ -81,7 +84,12 @@ vi.mock("../ChatMarkdown", () => ({
   default: (props: { readonly text: string }) => <p>{props.text}</p>,
 }));
 vi.mock("../../state/use-atom-command", () => ({
-  useAtomCommand: (command: string) => (command === "approval" ? state.approval : state.userInput),
+  useAtomCommand: (command: string) =>
+    command === "approval"
+      ? state.approval
+      : command === "decisionAnswer"
+        ? state.decision
+        : state.userInput,
 }));
 vi.mock("../../state/entities", () => ({
   useThreadShell: (ref: ScopedThreadRef | null) =>
@@ -241,6 +249,7 @@ beforeEach(() => {
   state.registry.set(state.grants!, new Set([primary, secondary]));
   state.approval.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   state.userInput.mockReset().mockResolvedValue(AsyncResult.success(undefined));
+  state.decision.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -422,4 +431,64 @@ it("opens the exact environment/thread route from a disabled card", async () => 
   expect(router.state.location.pathname).toBe("/secondary/a");
   expect(container.textContent).toContain("Opened thread");
   expect(state.approval).not.toHaveBeenCalled();
+});
+
+function durable(recommended: string | null): Extract<DecisionItem, { kind: "decision" }> {
+  return {
+    id: JSON.stringify(["decision", primary, "decision:1"]),
+    ref: b.ref,
+    routing: { routedTo: "person" },
+    kind: "decision",
+    createdAt: b.createdAt,
+    decision: {
+      id: "decision:1",
+      source: "decision",
+      from: { threadId: b.ref.threadId },
+      title: "Which database?",
+      context: "",
+      options: [
+        { id: "sqlite", label: "SQLite", consequence: "No new server" },
+        { id: "pg", label: "Postgres", consequence: "Needs a server" },
+      ],
+      recommended,
+      requiredProfile: "default",
+      expiresAt: null,
+      status: "open",
+      answer: null,
+      answeredBy: null,
+      createdAt: b.createdAt,
+      updatedAt: b.createdAt,
+      humanRequired: false,
+    },
+  };
+}
+
+it("sends a durable decision's recommended option or another choice without a typed reason", async () => {
+  await mount([durable("sqlite")], { feedEnvironments: [primary] });
+  expect(button("SQLite (recommended)").getAttribute("aria-checked")).toBe("true");
+  expect(button("Submit decision").disabled).toBe(false);
+  await click("Submit decision");
+  expect(state.decision).toHaveBeenCalledExactlyOnceWith({
+    environmentId: primary,
+    input: { id: "decision:1", optionId: "sqlite", reason: "Chose SQLite." },
+  });
+});
+
+it("needs a choice when nothing is recommended, then sends it with the typed reason", async () => {
+  await mount([durable(null)], { feedEnvironments: [primary] });
+  expect(button("Submit decision").disabled).toBe(true);
+  await click("Postgres");
+  const reason = container.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      reason,
+      "  We already run one  ",
+    );
+    reason.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await click("Submit decision");
+  expect(state.decision).toHaveBeenCalledExactlyOnceWith({
+    environmentId: primary,
+    input: { id: "decision:1", optionId: "pg", reason: "We already run one" },
+  });
 });

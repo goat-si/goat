@@ -3,7 +3,7 @@ import { View } from "react-native";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
 
-/** A decision an agent asked for: pick one option and say why; the answer goes back to it. */
+/** A decision an agent asked for: pick one option, optionally say why; the choice goes back to it. */
 export function DecisionDurableCard(props: {
   readonly item: Extract<DecisionItem, { kind: "decision" }>;
   readonly draft: { readonly optionId: string | null; readonly reason: string } | undefined;
@@ -37,11 +37,11 @@ export function DecisionDurableCard(props: {
         <Text className="text-xs text-foreground-muted">{chosen.consequence}</Text>
       ) : null}
       <TextInput
-        accessibilityLabel="Reason"
+        accessibilityLabel="Reason (optional)"
         value={reason}
         editable={!props.disabled}
         multiline
-        placeholder="Why this choice? The agent sees it."
+        placeholder="Why this choice? (optional)"
         onChangeText={(next) => props.onChange(optionId, next)}
         className="min-h-[54px] rounded-2xl border border-input-border bg-input px-3.5 py-3 font-sans text-base text-foreground"
       />
@@ -49,9 +49,9 @@ export function DecisionDurableCard(props: {
         label={props.responding ? "Waiting for the decision to update…" : "Submit decision"}
         fullWidth
         tone="primary"
-        disabled={props.disabled || props.responding || optionId === null || !reason.trim()}
+        disabled={props.disabled || props.responding || optionId === null}
         onPress={() => {
-          if (optionId !== null && reason.trim()) props.onSubmit(optionId, reason.trim());
+          if (optionId !== null) props.onSubmit(optionId, reason);
         }}
       />
     </View>

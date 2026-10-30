@@ -118,9 +118,8 @@ it("keeps an answer editable after failure, then records the chosen option and r
     </RegistryContext>,
   );
   const option = screen.getByRole("button", { name: "Stage rollout (recommended)" });
-  await expect.element(option).toBeDisabled();
   await userEvent.fill(
-    screen.getByRole("textbox", { name: "Reason for your answer" }),
+    screen.getByRole("textbox", { name: "Reason for your answer (optional)" }),
     "Validate the migration on one host.",
   );
   await userEvent.click(option);
@@ -139,6 +138,21 @@ it("keeps an answer editable after failure, then records the chosen option and r
     input: { id: "decision-1", optionId: "staged", reason: "Validate the migration on one host." },
   });
   expect(state.run).toHaveBeenCalledTimes(2);
+});
+
+it("sends the recommended option without a typed reason", async () => {
+  using fixture = setup();
+  await using screen = await render(
+    <RegistryContext value={fixture.registry}>
+      <DecisionInboxSettings />
+    </RegistryContext>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Stage rollout (recommended)" }));
+  await expect.element(screen.getByText("No open decisions.")).toBeVisible();
+  expect(state.run.mock.calls[0]?.[1]).toEqual({
+    environmentId,
+    input: { id: "decision-1", optionId: "staged", reason: "Chose Stage rollout." },
+  });
 });
 
 it("answers a projected question using its provider option value", async () => {
@@ -166,7 +180,7 @@ it("answers a projected question using its provider option value", async () => {
     </RegistryContext>,
   );
   await userEvent.fill(
-    screen.getByRole("textbox", { name: "Reason for your answer" }),
+    screen.getByRole("textbox", { name: "Reason for your answer (optional)" }),
     "Check one host first.",
   );
   await userEvent.click(screen.getByRole("button", { name: "Canary host" }));

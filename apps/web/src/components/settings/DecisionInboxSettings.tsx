@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
+import { decisionAnswerReason } from "@goat/client-runtime/state/decision-inbox";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { DecisionAnswerInput, DecisionItem, EnvironmentId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
@@ -140,8 +141,8 @@ function DecisionRow({
   const local =
     !item.from.host && (!item.from.environmentId || item.from.environmentId === environmentId);
   const threadId = local ? (item.from.threadId ?? item.pending?.threadId) : undefined;
-  const submit = async (input: Omit<DecisionAnswerInput, "id" | "reason">) => {
-    if (saving || !allowed || !reason.trim()) return;
+  const submit = async (input: Omit<DecisionAnswerInput, "id" | "reason">, choice: string) => {
+    if (saving || !allowed) return;
     setSaving(true);
     setError(null);
     const target = { id: item.id, ...(item.from.host ? { host: item.from.host } : {}) };
@@ -162,7 +163,7 @@ function DecisionRow({
     }
     const result = await answer({
       environmentId,
-      input: { ...input, ...target, reason: reason.trim() },
+      input: { ...input, ...target, reason: decisionAnswerReason(reason, choice) },
     });
     setSaving(false);
     if (result._tag === "Failure") {
@@ -171,7 +172,7 @@ function DecisionRow({
       return;
     }
   };
-  const disabled = saving || !allowed || !reason.trim();
+  const disabled = saving || !allowed;
   const reasonId = `decision-reason-${encodeURIComponent(JSON.stringify([item.from.environmentId ?? environmentId, item.from.host, item.id]))}`;
   return (
     <li className="space-y-2 px-4 py-3">
@@ -203,7 +204,7 @@ function DecisionRow({
           {simpleQuestion ? <p className="text-sm">{simpleQuestion.question}</p> : null}
           <div className="space-y-1">
             <label htmlFor={reasonId} className="text-xs text-muted-foreground">
-              Reason for your answer
+              Reason for your answer (optional)
             </label>
             <Input
               id={reasonId}
@@ -221,7 +222,7 @@ function DecisionRow({
                   size="sm"
                   variant="outline"
                   disabled={disabled}
-                  onClick={() => void submit({ decision: "accept" })}
+                  onClick={() => void submit({ decision: "accept" }, "Accept")}
                 >
                   Accept
                 </Button>
@@ -229,7 +230,7 @@ function DecisionRow({
                   size="sm"
                   variant="outline"
                   disabled={disabled}
-                  onClick={() => void submit({ decision: "decline" })}
+                  onClick={() => void submit({ decision: "decline" }, "Decline")}
                 >
                   Decline
                 </Button>
@@ -242,9 +243,10 @@ function DecisionRow({
                     variant="outline"
                     disabled={disabled}
                     onClick={() =>
-                      void submit({
-                        answers: { [simpleQuestion.id]: option.value ?? option.label },
-                      })
+                      void submit(
+                        { answers: { [simpleQuestion.id]: option.value ?? option.label } },
+                        option.label,
+                      )
                     }
                   >
                     {option.label}
@@ -259,7 +261,7 @@ function DecisionRow({
                     size="sm"
                     variant="outline"
                     disabled={disabled}
-                    onClick={() => void submit({ optionId: option.id })}
+                    onClick={() => void submit({ optionId: option.id }, option.label)}
                   >
                     {option.label}
                     {item.recommended === option.id ? " (recommended)" : ""}

@@ -24,6 +24,7 @@ type Snapshot = {
   loadingRefs: readonly ScopedThreadRef[];
   errors: readonly { ref: ScopedThreadRef; message: string }[];
   isLoading: boolean;
+  feedEnvironments?: readonly EnvironmentId[];
 };
 type Run = (...args: unknown[]) => Promise<AtomCommandResult<void, Error>>;
 const fixture = vi.hoisted<{
@@ -824,6 +825,44 @@ it("answers through mounted body option and text interactions without selection"
   await click("Submit");
   expect(fixture.userInput.mock.calls[0]?.[0]).toMatchObject({
     input: { answers: { q: "Typed reply" } },
+  });
+});
+
+it("sends a durable decision's recommended option without a typed reason", async () => {
+  const decision: Extract<DecisionItem, { kind: "decision" }> = {
+    id: JSON.stringify(["decision", envA, "decision:1"]),
+    ref: a.ref,
+    routing: { routedTo: "person" },
+    kind: "decision",
+    createdAt: a.createdAt,
+    decision: {
+      id: "decision:1",
+      source: "decision",
+      from: { threadId: a.ref.threadId },
+      title: "Which database?",
+      context: "",
+      options: [
+        { id: "sqlite", label: "SQLite", consequence: "No new server" },
+        { id: "pg", label: "Postgres", consequence: "Needs a server" },
+      ],
+      recommended: "sqlite",
+      requiredProfile: "default",
+      expiresAt: null,
+      status: "open",
+      answer: null,
+      answeredBy: null,
+      createdAt: a.createdAt,
+      updatedAt: a.createdAt,
+      humanRequired: false,
+    },
+  };
+  write([decision], { feedEnvironments: [envA] });
+  await render(<DecisionsRouteScreen />);
+  expect(button("Submit decision").disabled).toBe(false);
+  await click("Submit decision");
+  expect(fixture.userInput).toHaveBeenCalledExactlyOnceWith({
+    environmentId: envA,
+    input: { id: "decision:1", optionId: "sqlite", reason: "Chose SQLite." },
   });
 });
 

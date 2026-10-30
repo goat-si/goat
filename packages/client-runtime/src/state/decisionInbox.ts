@@ -34,6 +34,22 @@ export type DecisionItem = {
 );
 
 const PERSON: DecisionRouting = { routedTo: "person" };
+
+/**
+ * The reason sent with a person's answer. The server requires one but only records it (a durable
+ * decision delivers just the chosen option), so a blank reason names the choice instead of
+ * blocking the answer.
+ */
+export function decisionAnswerReason(reason: string, choice: string) {
+  const typed = reason.trim();
+  return typed.length > 0 ? typed : `Chose ${choice}.`.slice(0, 2000);
+}
+
+export function durableDecisionAnswer(decision: DurableDecision, optionId: string, reason: string) {
+  const option = decision.options.find((entry) => entry.id === optionId);
+  if (option === undefined) return null;
+  return { id: decision.id, optionId, reason: decisionAnswerReason(reason, option.label) };
+}
 const compareStrings = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 const pendingKey = (environmentId: string, threadId: string, requestId: string) =>
   JSON.stringify([environmentId, threadId, requestId]);

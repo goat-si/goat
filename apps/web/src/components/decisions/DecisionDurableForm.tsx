@@ -7,7 +7,7 @@ import { Textarea } from "../ui/textarea";
 export type DecisionAnswer = { readonly optionId: string; readonly reason: string };
 export type DecisionDraft = { readonly optionId: string | null; readonly reason: string };
 
-/** A decision an agent asked for: pick one option and say why; the answer goes back to it. */
+/** A decision an agent asked for: pick one option, optionally say why; the choice goes back to it. */
 export function DecisionDurableForm({
   item,
   draft,
@@ -27,14 +27,12 @@ export function DecisionDurableForm({
   const reason = draft?.reason ?? "";
   const setOptionId = (next: string) => onChange({ optionId: next, reason });
   const setReason = (next: string) => onChange({ optionId, reason: next });
-  const ready = optionId !== null && reason.trim().length > 0;
   return (
     <form
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!disabled && optionId !== null && reason.trim())
-          void onSubmit({ optionId, reason: reason.trim() });
+        if (!disabled && optionId !== null) void onSubmit({ optionId, reason });
       }}
     >
       <div className="flex flex-col gap-1">
@@ -65,17 +63,17 @@ export function DecisionDurableForm({
         </p>
       ) : null}
       <label htmlFor={reasonId} className="text-sm font-medium">
-        Reason
+        Reason (optional)
       </label>
       <Textarea
         id={reasonId}
         value={reason}
         disabled={disabled}
         onChange={(event) => setReason(event.target.value)}
-        placeholder="Why this choice? The agent sees it."
+        placeholder="Why this choice?"
       />
       <div>
-        <Button type="submit" disabled={disabled || !ready}>
+        <Button type="submit" disabled={disabled || optionId === null}>
           Submit decision
         </Button>
       </div>
