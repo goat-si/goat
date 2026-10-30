@@ -27,6 +27,7 @@ import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
+import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
@@ -111,20 +112,6 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   error,
 });
 /** Results that did not do what was asked; a write that answers one fails its call. */
-const APP_INPUTS: ReadonlySet<ScreenHostCall["method"]> = new Set([
-  "click",
-  "right_click",
-  "hover",
-  "drag",
-  "scroll",
-  "type_text",
-  "press_key",
-  "set_value",
-  "bring_to_front",
-  "select",
-  "select_text",
-  "invoke_menu",
-]);
 const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
@@ -763,62 +750,7 @@ export class ScreenHostBridge {
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
     const evidence = result.success.evidence ?? [];
-    if (call.targetRef?.kind === "app") {
-      const target = call.targetRef.id;
-      if (call.method === "get_accessibility_tree" || call.method === "get_window_state") {
-        const pending = state.pendingObserved.get(target) ?? [];
-        state.pendingObserved.delete(target);
-        const observation = typeof value === "object" && value !== null ? value : undefined;
-        if (
-          observation &&
-          "mode" in observation &&
-          observation.mode === "diff" &&
-          "indexedText" in observation &&
-          typeof observation.indexedText === "string" &&
-          result.success.observedWindow !== undefined
-        ) {
-          const matched = pending.filter((item) => item.window === result.success.observedWindow);
-          const rows = observation.indexedText
-            .split("\n")
-            .filter((line) => /^[+~-]\s/.test(line))
-            .slice(0, 16)
-            .map((line) => line.slice(0, 200));
-          const noChange = /^no change\b/i.test(observation.indexedText);
-          if (matched.length && (rows.length || noChange)) {
-            const first = matched[0] && state.journal[matched[0].index]?.receipt;
-            const label =
-              matched.length === 1
-                ? `after ${first?.method ?? "input"}`
-                : `after ${matched.length} inputs`;
-            const effect = noChange
-              ? `${label}: no change seen in this window; effect may be elsewhere, check before resending`
-              : `${label}: changed (${rows[0]})`;
-            const observedEffect = {
-              state: noChange ? ("no_change_seen" as const) : ("change_seen" as const),
-              rows,
-            };
-            for (const item of matched) {
-              const entry = state.journal[item.index];
-              if (entry)
-                state.journal[item.index] = {
-                  ...entry,
-                  receipt: { ...entry.receipt, observedEffect },
-                };
-            }
-            value = { ...observation, effect };
-          }
-        }
-      } else if (
-        APP_INPUTS.has(call.method) &&
-        admittedIndex !== undefined &&
-        result.success.observedWindow !== undefined &&
-        result.success.safety.possibleCommit
-      ) {
-        const pending = state.pendingObserved.get(target) ?? [];
-        pending.push({ index: admittedIndex, window: result.success.observedWindow });
-        state.pendingObserved.set(target, pending);
-      }
-    }
+    value = applyObservedEffect(state, call, result.success, admittedIndex, value);
     settle(
       result.success.category,
       "settled",
