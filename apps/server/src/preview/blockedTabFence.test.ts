@@ -123,3 +123,61 @@ it.effect("a blocked visit cuts an input already dispatching", () =>
     ),
   ),
 );
+
+it.effect("a newly blocked current frame cuts an already dispatched input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const fence = yield* makeBlockedTabFence();
+      const threadId = ThreadId.make("blocked-gate-cut");
+      const end = yield* activity.begin(threadId, "run");
+      const control = new SessionControl("agent");
+      const started = yield* Deferred.make<void>();
+      const release = Promise.withResolvers<void>();
+      let cuts = 0;
+      control.onDispatchCut(() => {
+        cuts++;
+      });
+      const action = control.agent("agent", async () => {
+        control.dispatchGate()();
+        Deferred.doneUnsafe(started, Effect.void);
+        await release.promise;
+      });
+      void action.catch(() => undefined);
+      yield* Deferred.await(started);
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
+      const tab = {
+        threadId,
+        tabId: "tab",
+        closing: false,
+        control,
+        page: { frames: () => [{ url: () => "https://blocked.test/" }] },
+      };
+      const refusal = yield* Effect.promise(() =>
+        fence.assertTab(tab, "run").then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(refusal).toMatchObject({ reason: "blocked_url" });
+      expect(cuts).toBe(1);
+      const cut = yield* Effect.promise(() =>
+        action.then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(cut).toMatchObject({ reason: "blocked_url", beforeInput: false });
+      release.resolve();
+      yield* end;
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(PreviewAgentActivity.layer, ServerSettings.layerTest()).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-gate-cut-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);

@@ -96,3 +96,43 @@ it.effect("a refusal before release does not drop on the target", () =>
     }),
   ),
 );
+
+it.effect(
+  "a blocked drag sends only the accepted release at its start, without keys, moves, or drop",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const browser = yield* Effect.acquireRelease(
+          Effect.promise(() => chromium.launch({ headless: true })),
+          (browser) => Effect.promise(() => browser.close()),
+        );
+        const page = yield* Effect.promise(() => browser.newPage());
+        yield* Effect.promise(() =>
+          page.setContent(
+            `<div id="a" draggable="true" style="width:80px;height:80px">a</div><div id="b" style="width:80px;height:80px">b</div><script>window.events=[];for(const type of ['keydown','pointermove','pointerup','drop'])addEventListener(type,e=>events.push([type,e.clientX,e.clientY]),true);b.addEventListener('dragover',e=>e.preventDefault())</script>`,
+          ),
+        );
+        let count = 0;
+        const result = yield* Effect.promise(() =>
+          ServerBrowserPage.drag(
+            page,
+            { from: { x: 40, y: 40 }, to: { x: 40, y: 120 }, steps: 2 },
+            undefined,
+            async () => {
+              if (++count === 5) {
+                await page.evaluate("events=[]");
+                throw new BrowserControlInterrupted("blocked", "blocked_url", false);
+              }
+            },
+          ).then(
+            () => ({ ok: true as const }),
+            (error: unknown) => ({ ok: false as const, error }),
+          ),
+        );
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error).toMatchObject({ reason: "blocked_url" });
+        const events = yield* Effect.promise(() => page.evaluate("events"));
+        expect(events).toEqual([["pointerup", 40, 40]]);
+      }),
+    ),
+);

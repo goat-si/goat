@@ -106,7 +106,10 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
       const entry = runId ? entries.get(entryKey(key, runId)) : undefined;
       const current = await run(settings.getSettings);
       if (check !== pending.get(key)) continue;
-      if (runId && entry?.threadId === tab.threadId && entry.runId === runId) throw blocked();
+      if (runId && entry?.threadId === tab.threadId && entry.runId === runId) {
+        tab.control?.cutBlockedUrl();
+        throw blocked();
+      }
       if (
         tab.page
           .frames()
@@ -120,6 +123,7 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
           active(tab.threadId, runId)
         )
           entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
+        tab.control?.cutBlockedUrl();
         throw blocked();
       }
       return;

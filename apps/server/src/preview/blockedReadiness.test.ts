@@ -59,8 +59,8 @@ it.effect("a fence during readiness prevents scrolling, focus, selection and typ
           (error: unknown) => ({ ok: false as const, error }),
         ),
       );
-      yield* Effect.promise(() => page.evaluate("f.disabled=false"));
       yield* Effect.promise(() => control.system(async () => {}));
+      yield* Effect.promise(() => page.evaluate("f.disabled=false"));
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toMatchObject({ reason: "blocked_url" });
       expect(

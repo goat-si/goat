@@ -30,25 +30,54 @@ export const dragBetween = async (
   deadline: number,
 ) => {
   const steps = input.steps ?? 10;
-  remaining(deadline);
-  await gate();
-  await page.mouse.move(input.from.x, input.from.y);
-  await again(gate, deadline);
-  await page.mouse.down();
+  const cdp = await page.context().newCDPSession(page);
   try {
-    for (let step = 1; step <= steps; step++) {
-      const along = (from: number, to: number) => from + ((to - from) * step) / steps;
-      await again(gate, deadline);
-      await page.mouse.move(along(input.from.x, input.to.x), along(input.from.y, input.to.y));
-    }
+    remaining(deadline);
+    await gate();
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...input.from });
     await again(gate, deadline);
-  } catch (cause) {
-    await page.keyboard.press("Escape");
-    await page.mouse.move(input.from.x, input.from.y);
-    await page.mouse.up();
-    throw cause;
+    await cdp.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      ...input.from,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+    });
+    try {
+      for (let step = 1; step <= steps; step++) {
+        const along = (from: number, to: number) => from + ((to - from) * step) / steps;
+        await again(gate, deadline);
+        await cdp.send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: along(input.from.x, input.to.x),
+          y: along(input.from.y, input.to.y),
+          button: "left",
+          buttons: 1,
+        });
+      }
+      await again(gate, deadline);
+    } catch (cause) {
+      await cdp.send("Input.cancelDragging");
+      // One release at the starting point resets the pressed button after a cut.
+      await cdp.send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        ...input.from,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      throw cause;
+    }
+    await cdp.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      ...input.to,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+    });
+  } finally {
+    await cdp.detach();
   }
-  await page.mouse.up();
 };
 
 /** A real wheel at a point goes to whatever is under it, which page script can zoom on. */
