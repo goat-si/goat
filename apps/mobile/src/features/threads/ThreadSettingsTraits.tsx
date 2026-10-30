@@ -3,13 +3,13 @@ import {
   getDescriptorStringValue,
   resolveEffortStepIndex,
 } from "@goat/client-runtime/model-traits";
+import { stripModelQualifier } from "@goat/client-runtime/model-short-name";
 import type { ProviderOptionDescriptor } from "@goat/contracts";
 import { getProviderOptionCurrentLabel } from "@goat/shared/model";
 import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
 import { Pressable, View } from "react-native";
 
-import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import * as Dialog from "../../components/ui/Dialog";
@@ -125,7 +125,11 @@ export function ThreadSettingsTraits(props: { readonly onOpenModelPicker: () => 
   const reasoningLocked =
     reasoning !== null && reasoning.id === primaryId && session.promptTraits.ultrathinkInBodyText;
   const model = session.appliedModel;
-  const modelLabel = model?.label ?? session.appliedModelSelection?.model ?? "Choose a model";
+  // Same label as the web composer: the short name, without the sub-provider prefix.
+  const modelLabel = model
+    ? stripModelQualifier(model.shortName ?? model.label, model.subtitle)
+    : (session.appliedModelSelection?.model ?? "Choose a model");
+  const fullModelLabel = model ? stripModelQualifier(model.label, model.subtitle) : modelLabel;
   const otherSelects = selects.filter((descriptor) => descriptor !== reasoning);
   const booleans = session.descriptors.filter((descriptor) => descriptor.type === "boolean");
   const selectChoice = (descriptor: SelectDescriptor, id: string) => {
@@ -144,13 +148,13 @@ export function ThreadSettingsTraits(props: { readonly onOpenModelPicker: () => 
   const optionCount = otherSelects.length + booleans.length + 1;
 
   return (
-    <View className="gap-4 px-4 pb-2 pt-5">
-      <View className="items-center gap-1">
+    <View className="gap-3 px-4 pb-1 pt-4">
+      <View className="items-center">
         <View className="flex-row flex-wrap items-center justify-center gap-x-2 gap-y-1">
           <Text
             accessibilityRole="header"
             accessibilityLiveRegion="polite"
-            className="text-center text-xl font-goat-bold text-primary"
+            className="text-center text-lg font-goat-semibold text-primary"
           >
             {reasoning ? (shownStep?.label ?? "") : "Reasoning"}
           </Text>
@@ -162,17 +166,10 @@ export function ThreadSettingsTraits(props: { readonly onOpenModelPicker: () => 
         </View>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Change model, current ${modelLabel}`}
-          className="min-h-11 max-w-full flex-row items-center justify-center gap-1.5 px-2 active:opacity-60"
+          accessibilityLabel={`Change model, current ${fullModelLabel}`}
+          className="min-h-11 max-w-full flex-row items-center justify-center gap-1 px-2 active:opacity-60"
           onPress={props.onOpenModelPicker}
         >
-          {model ? (
-            <ProviderIcon
-              iconUrl={model.providerIconUrl}
-              provider={model.providerDriver}
-              size={15}
-            />
-          ) : null}
           <Text className="shrink text-center text-sm text-foreground-muted">{modelLabel}</Text>
           <SymbolView
             name="chevron.right"

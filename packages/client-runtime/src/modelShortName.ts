@@ -94,3 +94,18 @@ export function resolveModelShortName(
 ): string | undefined {
   return model.shortName || modelShortName(model.name, nativeModelFamilies(driver));
 }
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Drops a leading sub-provider qualifier such as "anthropic/" that the row already implies. */
+export function stripModelQualifier(value: string, qualifier: string | null | undefined): string {
+  const trimmedQualifier = qualifier?.trim();
+  if (!trimmedQualifier) {
+    return value;
+  }
+
+  const pattern = new RegExp(`^${escapeRegExp(trimmedQualifier)}(?:\\s*[.:/-]\\s*|\\s+)`, "iu");
+  return value.replace(pattern, "").trim() || value;
+}

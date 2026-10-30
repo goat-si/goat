@@ -245,16 +245,14 @@ const THREAD_SETTINGS_SHEET_OPTIONS = {
   nativeContentInsetHorizontally: false,
 };
 
-// The composer's reasoning popover, short like the web popover. iOS sized "fitToContents" to
-// zero height here, so it keeps a fixed short detent that can be pulled up for large text.
+// The composer's reasoning popover, as tall as its controls like the web popover.
 const THREAD_TRAITS_SHEET_OPTIONS = {
   gestureEnabled: true,
   headerShown: false,
   presentation: "formSheet" as const,
+  sheetAllowedDetents: "fitToContents" as const,
   sheetGrabberVisible: true,
-  ...(Platform.OS === "android"
-    ? { sheetAllowedDetents: "fitToContents" as const, sheetCornerRadius: 28 }
-    : { sheetAllowedDetents: formSheetDetents(0.45) }),
+  ...(Platform.OS === "android" ? { sheetCornerRadius: 28 } : {}),
 };
 
 // The model catalog opens over the popover and needs the full height for search and groups.
