@@ -22,7 +22,9 @@ export function useNoteSourceEditor(
   // Change events can arrive before a re-render, as during IME composition.
   const viewRef = useRef<EditorView | null>(null);
   const selection = useRef<NoteEditorSelection | null>(null);
-  // React Native reports the Backspace key before the change it makes; forward delete has none.
+  // React Native reports Backspace from soft keyboards before the change. It only matters where two
+  // adjacent line breaks with different endings make a deletion ambiguous; an Android hardware
+  // backspace reports no key there and keeps the first break's ending instead.
   const backspace = useRef(false);
   return {
     value: (body: string) => viewText(view, body),
