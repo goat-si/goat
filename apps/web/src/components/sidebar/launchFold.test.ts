@@ -141,6 +141,21 @@ describe("foldLaunchedThreads", () => {
     ]);
   });
 
+  it("orders a child the user prompted above newer launches in the same state", () => {
+    const at = (minute: number) => `2026-10-27T10:0${minute}:00.000Z`;
+    const result = fold([
+      thread("root"),
+      thread("launched-late", { launchedBy: "root", createdAt: at(5) }),
+      thread("prompted", { launchedBy: "root", createdAt: at(1), promptedAt: at(7) }),
+      thread("launched-early", { launchedBy: "root", createdAt: at(3) }),
+    ]);
+    expect(ids(result.childrenByParentKey.get(key("root")) ?? [])).toEqual([
+      "prompted",
+      "launched-late",
+      "launched-early",
+    ]);
+  });
+
   it("lifts the most urgent descendant state onto every ancestor", () => {
     const result = fold([
       thread("root"),

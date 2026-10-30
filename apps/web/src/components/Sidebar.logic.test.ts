@@ -1984,6 +1984,44 @@ describe("Activity Priority", () => {
     ).toBe(childAttention.id);
   });
 
+  it("an older thread the user just prompted sorts above a newer thread of the same rank", () => {
+    const at = (time: string) => `2026-10-30T${time}:00.000Z`;
+    const thread = (id: string, overrides: ThreadFixtureOverrides) =>
+      makeThread({ id: ThreadId.make(id), ...overrides });
+    const prompted = thread("old-prompted", {
+      createdAt: at("09:00"),
+      latestUserMessageAt: at("11:30"),
+      latestUserAuthoredMessageAt: at("11:30"),
+    });
+    const fresh = thread("new", {
+      createdAt: at("10:00"),
+      latestUserMessageAt: at("10:00"),
+      latestUserAuthoredMessageAt: at("10:00"),
+    });
+    // A wake or agent message moves latestUserMessageAt but is not the user's prompt.
+    const woken = thread("woken", {
+      createdAt: at("10:30"),
+      latestUserMessageAt: at("11:45"),
+      latestUserAuthoredMessageAt: at("10:30"),
+    });
+    // Older servers send no authored time; their latest user message stands in.
+    const legacy = thread("legacy", { createdAt: at("08:00"), latestUserMessageAt: at("11:40") });
+    const asking = thread("asking", { createdAt: at("07:00"), hasPendingUserInput: true });
+    const threads = [fresh, woken, prompted, legacy, asking];
+    const keyOf = (candidate: Thread) =>
+      scopedThreadKey(scopeThreadRef(candidate.environmentId, candidate.id));
+    const ranks = new Map(
+      threads.map((candidate) => [keyOf(candidate), candidate === asking ? 0 : 1]),
+    );
+    expect(sortPriorityThreadsForSidebar(threads, ranks).map((candidate) => candidate.id)).toEqual([
+      "asking",
+      "legacy",
+      "old-prompted",
+      "woken",
+      "new",
+    ]);
+  });
+
   it("uses lifecycle for row actions independently of pinning or Priority", () => {
     expect(resolveSidebarThreadPresentation({ settled: false, snoozed: false })).toEqual({
       action: "settle",
