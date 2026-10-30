@@ -173,7 +173,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     events: options.cursorEvents,
     controlId: options.controlId,
     connectionId: () => lifecycle.current?.connectionId,
-    active: () => finished === undefined && paused === undefined && !idle,
+    active: () =>
+      finished === undefined &&
+      paused === undefined &&
+      !idle &&
+      !personStopPending &&
+      !screenLockPending,
     overlay,
     targetClose: () => unanswered,
   });
@@ -403,7 +408,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       ),
     );
   };
-  const active = () => finished === undefined && paused === undefined && !idle;
+  const active = () =>
+    finished === undefined &&
+    paused === undefined &&
+    !idle &&
+    !personStopPending &&
+    !screenLockPending;
   const lifecycle = yield* makeLeaseProxyLifecycle({
     connectionId: options.connectionId,
     firstGeneration: options.firstGeneration,
@@ -727,21 +737,32 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // holds the lock (#1416), counts as applied: the call never reaches a child.
     let selectedForeground: ComputerUseForegroundGrant | undefined;
     const notSent = (requestId: JsonRpcId) =>
-      unsentCallRefusal(requestId, message?.method, {
-        held: held(),
-        pending: fences.pending(),
-        finished,
-        paused,
-        idle,
-        lastInterruption,
-        foregroundRevoked:
-          selectedForeground !== undefined && !fences.allowsForeground(selectedForeground),
-      });
+      screenLockPending
+        ? refusal(requestId, message?.method, "screen_locked", PAUSE_MESSAGES.screen_locked)
+        : personStopPending
+          ? refusal(requestId, message?.method, "stopped", LEASE_END_MESSAGES.stopped)
+          : unsentCallRefusal(requestId, message?.method, {
+              held: held(),
+              pending: fences.pending(),
+              finished,
+              paused,
+              idle,
+              lastInterruption,
+              foregroundRevoked:
+                selectedForeground !== undefined && !fences.allowsForeground(selectedForeground),
+            });
     const primitiveCurrent = () =>
       primitive === undefined || options.primitiveCancelled?.(primitive.requestId) !== true;
     const primitiveDeadline = primitive?.deadlineMillis ?? Infinity;
     const primitiveAllowed = Clock.currentTimeMillis.pipe(
-      Effect.map((now) => primitiveCurrent() && now < primitiveDeadline && !held()),
+      Effect.map(
+        (now) =>
+          primitiveCurrent() &&
+          now < primitiveDeadline &&
+          !held() &&
+          !personStopPending &&
+          !screenLockPending,
+      ),
     );
     if (expectedConnection !== undefined && lifecycle.current?.connectionId !== expectedConnection)
       return yield* sink.answer(staleGeneration(message.id ?? "", "tools/call"), "not_started");
@@ -830,7 +851,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           return yield* sink.answer(refusal(id, message.method, "wrong_display", WRONG_DISPLAY));
         if (needsProof) yield* proveDisplay(primitiveAllowed);
       }
+      if (screenLockPending || personStopPending) return yield* sink.answer(notSent(id));
       const refused = yield* refuseCall(id, message, primitiveAllowed);
+      if (screenLockPending || personStopPending) return yield* sink.answer(notSent(id));
       if (held()) return yield* sink.answer(notSent(id));
       if (refused !== undefined) return yield* sink.answer(refused);
       if (admitted !== undefined && lifecycle.current !== admitted)
@@ -880,6 +903,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       !unanswered.blocks(current.connectionId) &&
       (expectedConnection === undefined || current.connectionId === expectedConnection) &&
       !idle &&
+      !personStopPending &&
+      !screenLockPending &&
       paused === undefined &&
       finished === undefined &&
       !held() &&

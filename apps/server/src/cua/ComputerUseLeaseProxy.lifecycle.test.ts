@@ -92,6 +92,7 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
       const answer = yield* h.nextToProvider;
       assert.equal(answer.id, 82);
       assert.deepInclude(answer.result, { isError: true });
+      assert.include(JSON.stringify(answer), '"detail":"screen_locked"');
     }),
   );
 
