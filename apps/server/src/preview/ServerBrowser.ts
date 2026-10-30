@@ -95,6 +95,8 @@ import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrows
 import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
+import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import { browserFailure, recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { inputFence } from "./PreviewInputFence.ts";
@@ -347,6 +349,7 @@ const make = Effect.gen(function* () {
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const secretFill = yield* ServerBrowserSecretFill.make;
+  const history = yield* makeComputerUseHistory;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -1548,7 +1551,12 @@ const make = Effect.gen(function* () {
       }
     };
 
-  const recordAction = <A>(tab: ServerTab, action: string, run: () => Promise<A>): Promise<A> => {
+  const recordAction = <A>(
+    tab: ServerTab,
+    action: string,
+    run: () => Promise<A>,
+    details?: { url?: string; typedText?: string },
+  ): Promise<A> => {
     const event: {
       -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
     } = {
@@ -1558,16 +1566,32 @@ const make = Effect.gen(function* () {
       startedAt: new Date().toISOString(),
     };
     pushBounded(tab.actionTimeline, event, ACTION_TIMELINE_LIMIT);
+    const url = details?.url ?? tab.page.url();
+    const record = (outcome: {
+      verdict: "sent" | "refused" | "unknown_outcome";
+      refusalCode?: string;
+    }) =>
+      runPromise(
+        recordBrowserAction(history, {
+          threadId: tab.threadId,
+          url,
+          action,
+          ...outcome,
+          ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
+        }),
+      );
     return run().then(
-      (result) => {
+      async (result) => {
         event.status = "succeeded";
         event.completedAt = new Date().toISOString();
+        await record({ verdict: "sent" });
         return result;
       },
-      (cause: unknown) => {
+      async (cause: unknown) => {
         event.status = "failed";
         event.completedAt = new Date().toISOString();
         event.error = tab.diagnostics.firstLine(cause);
+        await record(browserFailure(cause));
         throw cause;
       },
     );
@@ -1838,13 +1862,18 @@ const make = Effect.gen(function* () {
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
-        await recordAction(tab, "navigate", () =>
-          navigate(
-            tab,
-            resolveNavigationUrl(navigateInput),
-            navigateInput.readiness ?? "load",
-            navigateInput.timeoutMs ?? request.timeoutMs,
-          ),
+        const destination = resolveNavigationUrl(navigateInput);
+        await recordAction(
+          tab,
+          "navigate",
+          () =>
+            navigate(
+              tab,
+              destination,
+              navigateInput.readiness ?? "load",
+              navigateInput.timeoutMs ?? request.timeoutMs,
+            ),
+          { url: destination },
         );
         return statusWithTitle(tab, request.agentSessionId);
       }
@@ -1951,13 +1980,19 @@ const make = Effect.gen(function* () {
         return recordAction(tab, "upload", () =>
           uploadFiles(tab, input as PreviewAutomationUploadInput),
         );
-      case "type":
-        return recordAction(tab, "type", async () => {
-          const gate = actionGate();
-          const aimed = input as PreviewAutomationTypeInput;
-          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
-          return ServerBrowserPage.type(tab.page, timed, gate);
-        });
+      case "type": {
+        const aimed = input as PreviewAutomationTypeInput;
+        return recordAction(
+          tab,
+          "type",
+          async () => {
+            const gate = actionGate();
+            const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+            return ServerBrowserPage.type(tab.page, timed, gate);
+          },
+          { typedText: aimed.text },
+        );
+      }
       case "press":
         return recordAction(tab, "press", () =>
           ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),

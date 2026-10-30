@@ -1,3 +1,5 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import * as NodeEvents from "node:events";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -167,6 +169,7 @@ const asSession = (providerSessionId: string) => ({
 });
 
 const dependencies = Layer.mergeAll(
+  SqlitePersistence.layerMemory,
   Manager.layer,
   Broker.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
@@ -259,6 +262,11 @@ it.live(
         });
         expect(String(snapshot.accessibilityTree).startsWith("@layers none\n")).toBe(true);
         expect(snapshot.actionTimeline.map((entry) => entry.action)).toContain("scrollCollect");
+        const history = yield* makeComputerUseHistory;
+        const entries = yield* history.listForThread(testThread.threadId);
+        expect(entries.map((entry) => [entry.method, entry.tabHost, entry.verdict])).toEqual([
+          ["scrollCollect", "app.example", "sent"],
+        ]);
       }),
     ).pipe(Effect.provide(layer)),
 );

@@ -1,3 +1,4 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - one-time dummy passwords come from node:crypto.
 import * as NodeCrypto from "node:crypto";
 
@@ -112,6 +113,7 @@ const layerFor = (secrets: ReturnType<typeof makeSecrets>) =>
   ServerBrowser.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
+        SqlitePersistence.layerMemory,
         Manager.layer,
         Broker.layer,
         secrets.layer,

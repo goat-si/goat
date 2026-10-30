@@ -1,3 +1,4 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -241,6 +242,7 @@ const asSession = (providerSessionId: string) => ({
   thread: { ...testThread, providerSessionId },
 });
 const dependencies = Layer.mergeAll(
+  SqlitePersistence.layerMemory,
   Broker.layer,
   Manager.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
