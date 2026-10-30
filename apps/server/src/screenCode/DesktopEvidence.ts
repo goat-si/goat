@@ -11,6 +11,7 @@ import * as Option from "effect/Option";
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { driverError, driverValue } from "./DesktopDriverReplies.ts";
+import { hopsOf } from "./DesktopHops.ts";
 import { authoritativeIds, openedWindowIds, windowClosure } from "./DesktopWindowClosure.ts";
 import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import type { ScreenHostContext, ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
@@ -26,6 +27,11 @@ import {
 } from "./DesktopWindows.ts";
 import type { DesktopRow } from "./DesktopObserveRead.ts";
 import type { BoundWindow } from "./DesktopTargetHost.ts";
+
+const hopsPhase = (call: ScreenHostCall) => {
+  const hops = hopsOf(call);
+  return hops === undefined ? {} : { hops };
+};
 
 /** How long a window's main run loop gets to show an input's effect before it is read. */
 const SETTLE_MS = 60;
@@ -60,6 +66,7 @@ export const withoutUnprovenClose = (
  * An input no longer waits for its effect to settle unless it reads the acted element back, so
  * the next read of the window waits instead: a screenshot when its own cap still fits, a tree read
  * whenever a minimal call still fits after the wait. A tree read with less left reads unsettled.
+ * Time already passed since the input returned counts toward the wait.
  */
 export const settleCaptureIfNeeded = Effect.fn("DesktopEvidence.settleCaptureIfNeeded")(function* (
   capture: boolean,
@@ -68,10 +75,15 @@ export const settleCaptureIfNeeded = Effect.fn("DesktopEvidence.settleCaptureIfN
 ) {
   if (bound.needsSettleBeforeCapture !== true) return;
   const now = yield* Clock.currentTimeMillis;
-  const floor = capture ? 7_000 + SETTLE_MS : MIN_CALL_MS + SETTLE_MS;
+  const wait =
+    bound.inputDrivenAt === undefined
+      ? SETTLE_MS
+      : Math.max(0, Math.min(SETTLE_MS, SETTLE_MS - (now - bound.inputDrivenAt)));
+  const floor = (capture ? 7_000 : MIN_CALL_MS) + wait;
   if (callDeadlineMillis - now - CELL_RESERVE_MS >= floor) {
-    yield* Effect.sleep(SETTLE_MS);
+    if (wait > 0) yield* Effect.sleep(wait);
     delete bound.needsSettleBeforeCapture;
+    delete bound.inputDrivenAt;
   }
 });
 
@@ -249,172 +261,230 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
   return driverValue(reply);
 });
 
-export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvidence")(
-  function* (deps: {
-    readonly send: SendFn;
-    readonly call: ScreenHostCall;
-    readonly context: ScreenHostContext;
-    readonly pid: number;
-    readonly windowId: number;
-    readonly connectionGeneration: string;
-    readonly tracker: CellWindowTracker;
-    readonly tool: string;
-    readonly forwarded: Record<string, unknown>;
-    readonly acted: DesktopRow | undefined;
-    readonly rows: ReadonlyArray<DesktopRow>;
-    readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
-    readonly onSettled?: () => void;
-    /** The input should open a window, so its window read waits briefly for one to appear. */
-    readonly opensWindow?: boolean;
-  }) {
-    const { call, context, pid, windowId, tracker, tool, forwarded, acted, runInput } = deps;
-    const intent = windowIntentOf(tool, forwarded, acted);
-    const opening = deps.opensWindow === true || intent === "open";
-    const read = (method: string, args: Record<string, unknown>, reserveAfterMs: number) =>
-      quietRead(deps.send, call, context, deps.connectionGeneration, method, args, reserveAfterMs);
-    const inputCapMs = driverCallCapMs(tool, forwarded);
-    const startedAt = yield* Clock.currentTimeMillis;
-    // A simple key rarely opens or closes a window; the cell's end read still compares windows
-    // against the cell's first baseline, so it reads one only when the cell has none yet.
-    if (!opening && intent === undefined && isSimpleKey(tool, forwarded, acted)) {
-      const seeds = !tracker.hasPid(pid);
-      if (seeds)
-        tracker.recordBefore(
+interface InputEvidenceDeps {
+  readonly send: SendFn;
+  readonly call: ScreenHostCall;
+  readonly context: ScreenHostContext;
+  readonly pid: number;
+  readonly windowId: number;
+  readonly connectionGeneration: string;
+  readonly tracker: CellWindowTracker;
+  readonly tool: string;
+  readonly forwarded: Record<string, unknown>;
+  readonly acted: DesktopRow | undefined;
+  readonly rows: ReadonlyArray<DesktopRow>;
+  readonly runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
+  readonly onSettled?: () => void;
+  /** When the input returned, so the next read of the window counts that time as settling. */
+  readonly onDriven?: (at: number) => void;
+  /** The input should open a window, so its window read waits briefly for one to appear. */
+  readonly opensWindow?: boolean;
+  /** The call asked for evidence: the app's windows and the acted element are read around it. */
+  readonly verify?: boolean;
+  /** The process's windows as this cell's own bind read them: the cell's baseline at no cost. */
+  readonly seedWindows?: ReadonlyArray<WindowEntry> | undefined;
+}
+
+/** Whether an input reads the windows and the acted element around itself. */
+const readsAroundInput = (deps: {
+  readonly verify?: boolean | undefined;
+  readonly opensWindow?: boolean | undefined;
+}): boolean => deps.verify === true || deps.opensWindow === true;
+
+/**
+ * One driver call: no read follows it to turn its verdict into confirmed. The cell's window
+ * baseline comes from its bind or one read for the process's first input; a close stays
+ * unverifiable without a window list.
+ */
+const runInputAlone = Effect.fn("DesktopEvidence.runInputAlone")(function* (
+  deps: InputEvidenceDeps,
+) {
+  const { call, context, pid, tracker, tool, forwarded, acted, runInput } = deps;
+  const intent = windowIntentOf(tool, forwarded, acted);
+  const startedAt = yield* Clock.currentTimeMillis;
+  let baselineRead = false;
+  if (!tracker.hasPid(pid)) {
+    if (deps.seedWindows !== undefined) tracker.recordBefore(pid, deps.seedWindows);
+    else {
+      baselineRead = true;
+      tracker.recordBefore(
+        pid,
+        parseWindowList(
+          yield* quietRead(
+            deps.send,
+            call,
+            context,
+            deps.connectionGeneration,
+            "list_windows",
+            { pid },
+            driverCallCapMs(tool, forwarded),
+          ),
           pid,
-          parseWindowList(yield* read("list_windows", { pid }, inputCapMs), pid),
-        );
-      const sentAt = yield* Clock.currentTimeMillis;
-      const base = yield* runInput;
-      const endedAt = yield* Clock.currentTimeMillis;
-      const timing: InputTiming = {
-        ms: endedAt - startedAt,
-        phases: { ...(seeds ? { preMs: sentAt - startedAt } : {}), driverMs: endedAt - sentAt },
-      };
-      return {
-        ...base,
-        value: fitInputWindows(base.value, undefined, context.limits.returnBytes, [], timing),
-      };
-    }
-    const watched = watchedFor(acted, deps.rows);
-    const verifyArgs = {
-      pid,
-      window_id: windowId,
-      expect: toVerifyExpectations(watched),
-      timeout_ms: 0,
-    };
-    const preRaw = yield* read(
-      "list_windows",
-      { pid },
-      inputCapMs + (watched.length > 0 ? 1500 : 0),
-    );
-    const preWins = parseWindowList(preRaw, pid);
-    tracker.recordBefore(pid, preWins);
-    const preVerifyRaw =
-      watched.length > 0 ? yield* read("verify_state", verifyArgs, inputCapMs) : undefined;
-    const sentAt = yield* Clock.currentTimeMillis;
-    const sent = yield* Effect.result(runInput);
-    // A close that errors after it went out may still have closed the window; the listing decides.
-    if (sent._tag === "Failure" && !(intent === "close" && sent.failure.effectStarted === true))
-      return yield* Effect.fail(sent.failure);
-    const base = sent._tag === "Success" ? sent.success : undefined;
-    // A click by point closes when the driver says it hit the close button.
-    const closing = intent === "close" || hitCloseButton(tool, base?.value);
-    const drivenAt = yield* Clock.currentTimeMillis;
-    // Only a read-back of the acted element waits here; otherwise the next read of the window does.
-    const settles =
-      preVerifyRaw !== undefined &&
-      call.deadlineMillis - drivenAt - CELL_RESERVE_MS >= 1_500 + SETTLE_MS;
-    if (settles) {
-      yield* Effect.sleep(SETTLE_MS);
-      deps.onSettled?.();
-    }
-    const settledAt = yield* Clock.currentTimeMillis;
-    let postRaw = yield* read("list_windows", { pid }, 0);
-    let postWins = parseWindowList(postRaw, pid);
-    const preIds = new Set(preWins?.map((w) => w.window_id));
-    // A window listed off screen first is not yet one a sheet read can follow; a sheet that opens
-    // on a close (an unsaved document) ends the wait as well. A new window in an incomplete
-    // listing is read again while a complete one could still prove it.
-    const changed = () => {
-      if (!preWins) return true;
-      if (!postWins) return !closing;
-      const appeared = postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen);
-      if (closing) return appeared || windowClosure(postRaw, pid, windowId) === "closed";
-      // A sheet a later read follows must be on screen, whatever the id snapshot already shows.
-      if (deps.opensWindow === true) return appeared;
-      if (openedWindowIds(preRaw, postRaw, pid).length > 0) return true;
-      return (
-        appeared &&
-        (authoritativeIds(preRaw, pid) === undefined ||
-          authoritativeIds(postRaw, pid) !== undefined)
+        ),
       );
-    };
-    const rereads = opening || closing ? OPENING_POLLS : 0;
-    for (let polls = 0; polls < rereads; polls++) {
-      if (changed()) break;
-      const now = yield* Clock.currentTimeMillis;
-      if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
-      yield* Effect.sleep(OPENING_POLL_MS);
-      postRaw = yield* read("list_windows", { pid }, 0);
-      postWins = parseWindowList(postRaw, pid);
     }
-    tracker.recordAfter(pid, preWins, postWins);
-    const postVerifyRaw =
-      preVerifyRaw !== undefined ? yield* read("verify_state", verifyArgs, 0) : undefined;
-    const endedAt = yield* Clock.currentTimeMillis;
-    const winDiff = diffInputWindows(
-      preWins,
-      postWins,
-      windowId,
-      windowClosure(postRaw, pid, windowId),
+  }
+  const sentAt = yield* Clock.currentTimeMillis;
+  const base = yield* runInput;
+  const endedAt = yield* Clock.currentTimeMillis;
+  deps.onDriven?.(endedAt);
+  const timing: InputTiming = {
+    ms: endedAt - startedAt,
+    phases: {
+      ...(baselineRead ? { preMs: sentAt - startedAt } : {}),
+      driverMs: endedAt - sentAt,
+      ...hopsPhase(call),
+    },
+  };
+  const unproven =
+    base.category === "confirmed" && (intent === "close" || hitCloseButton(tool, base.value));
+  return {
+    ...base,
+    ...(unproven ? { category: "unverifiable" as const, safety: INDETERMINATE_WRITE } : {}),
+    value: fitInputWindows(base.value, undefined, context.limits.returnBytes, [], timing),
+  };
+});
+
+export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvidence")(function* (
+  deps: InputEvidenceDeps,
+) {
+  if (!readsAroundInput(deps)) return yield* runInputAlone(deps);
+  const { call, context, pid, windowId, tracker, tool, forwarded, acted, runInput } = deps;
+  const intent = windowIntentOf(tool, forwarded, acted);
+  const opening = deps.opensWindow === true || intent === "open";
+  const read = (method: string, args: Record<string, unknown>, reserveAfterMs: number) =>
+    quietRead(deps.send, call, context, deps.connectionGeneration, method, args, reserveAfterMs);
+  const inputCapMs = driverCallCapMs(tool, forwarded);
+  const startedAt = yield* Clock.currentTimeMillis;
+  // A simple key rarely opens or closes a window; the cell's end read still compares windows
+  // against the cell's first baseline.
+  if (!opening && intent === undefined && isSimpleKey(tool, forwarded, acted))
+    return yield* runInputAlone(deps);
+  const watched = watchedFor(acted, deps.rows);
+  const verifyArgs = {
+    pid,
+    window_id: windowId,
+    expect: toVerifyExpectations(watched),
+    timeout_ms: 0,
+  };
+  const [preRaw, preVerifyRaw] = yield* Effect.all(
+    [
+      read("list_windows", { pid }, inputCapMs + (watched.length > 0 ? 1500 : 0)),
+      watched.length > 0 ? read("verify_state", verifyArgs, inputCapMs) : Effect.void,
+    ],
+    { concurrency: 2 },
+  );
+  const preWins = parseWindowList(preRaw, pid);
+  tracker.recordBefore(pid, preWins);
+  const sentAt = yield* Clock.currentTimeMillis;
+  const sent = yield* Effect.result(runInput);
+  // A close that errors after it went out may still have closed the window; the listing decides.
+  if (sent._tag === "Failure" && !(intent === "close" && sent.failure.effectStarted === true))
+    return yield* Effect.fail(sent.failure);
+  const base = sent._tag === "Success" ? sent.success : undefined;
+  // A click by point closes when the driver says it hit the close button.
+  const closing = intent === "close" || hitCloseButton(tool, base?.value);
+  const drivenAt = yield* Clock.currentTimeMillis;
+  deps.onDriven?.(drivenAt);
+  // Only a read-back of the acted element waits here; otherwise the next read of the window does.
+  const settles =
+    preVerifyRaw !== undefined &&
+    call.deadlineMillis - drivenAt - CELL_RESERVE_MS >= 1_500 + SETTLE_MS;
+  if (settles) {
+    yield* Effect.sleep(SETTLE_MS);
+    deps.onSettled?.();
+  }
+  const settledAt = yield* Clock.currentTimeMillis;
+  const [firstPostRaw, postVerifyRaw] = yield* Effect.all(
+    [
+      read("list_windows", { pid }, 0),
+      preVerifyRaw !== undefined ? read("verify_state", verifyArgs, 0) : Effect.void,
+    ],
+    { concurrency: 2 },
+  );
+  let postRaw = firstPostRaw;
+  let postWins = parseWindowList(postRaw, pid);
+  const preIds = new Set(preWins?.map((w) => w.window_id));
+  // A window listed off screen first is not yet one a sheet read can follow; a sheet that opens
+  // on a close (an unsaved document) ends the wait as well. A new window in an incomplete
+  // listing is read again while a complete one could still prove it.
+  const changed = () => {
+    if (!preWins) return true;
+    if (!postWins) return !closing;
+    const appeared = postWins.some((w) => !preIds.has(w.window_id) && w.is_on_screen);
+    if (closing) return appeared || windowClosure(postRaw, pid, windowId) === "closed";
+    // A sheet a later read follows must be on screen, whatever the id snapshot already shows.
+    if (deps.opensWindow === true) return appeared;
+    if (openedWindowIds(preRaw, postRaw, pid).length > 0) return true;
+    return (
+      appeared &&
+      (authoritativeIds(preRaw, pid) === undefined || authoritativeIds(postRaw, pid) !== undefined)
     );
-    const opened = openedWindowIds(preRaw, postRaw, pid);
-    // A close is proven only by the bound window leaving the process's complete id snapshot: a
-    // sheet it opens (an unsaved document) leaves the window open. Any other input is proven by a
-    // window entering that snapshot; a closure it coincides with may have had another cause.
-    const closedByClose = closing && winDiff.report.bound === "closed";
-    if (sent._tag === "Failure" && !closedByClose) return yield* Effect.fail(sent.failure);
-    const proven = closing ? closedByClose : opened.length > 0;
-    const openedEvidence = opened
-      .slice(0, 4)
-      .map((id) => `observed:window_opened:${id}`)
-      .filter((line) => !winDiff.evidence.includes(line));
-    const elDiff =
-      preVerifyRaw !== undefined && postVerifyRaw !== undefined
-        ? diffWatchedEvidence(
-            watched,
-            parseVerifyObservations(preVerifyRaw, watched.length),
-            parseVerifyObservations(postVerifyRaw, watched.length),
-          )
-        : [];
-    const allObserved = [...elDiff, ...winDiff.evidence, ...openedEvidence].slice(0, 16);
-    const timing: InputTiming = {
-      ms: endedAt - startedAt,
-      phases: {
-        preMs: sentAt - startedAt,
-        driverMs: drivenAt - sentAt,
-        ...(settles ? { settleMs: settledAt - drivenAt } : {}),
-        postMs: endedAt - settledAt,
-      },
-    };
-    const upgrade = proven && base?.category !== "confirmed" && base?.category !== "refused";
-    // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
-    const unproven = closing && !closedByClose && base?.category === "confirmed";
-    return {
-      ...base,
-      category: upgrade ? "confirmed" : unproven ? "unverifiable" : (base?.category ?? "confirmed"),
-      ...(upgrade ? { safety: COMPLETED_WRITE } : unproven ? { safety: INDETERMINATE_WRITE } : {}),
-      value: fitInputWindows(
-        base?.value,
-        winDiff.report,
-        context.limits.returnBytes,
-        allObserved,
-        timing,
-      ),
-      evidence: [...(base?.evidence ?? []), ...allObserved].slice(0, 16),
-    };
-  },
-);
+  };
+  const rereads = opening || closing ? OPENING_POLLS : 0;
+  for (let polls = 0; polls < rereads; polls++) {
+    if (changed()) break;
+    const now = yield* Clock.currentTimeMillis;
+    if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
+    yield* Effect.sleep(OPENING_POLL_MS);
+    postRaw = yield* read("list_windows", { pid }, 0);
+    postWins = parseWindowList(postRaw, pid);
+  }
+  tracker.recordAfter(pid, preWins, postWins);
+  const endedAt = yield* Clock.currentTimeMillis;
+  const winDiff = diffInputWindows(
+    preWins,
+    postWins,
+    windowId,
+    windowClosure(postRaw, pid, windowId),
+  );
+  const opened = openedWindowIds(preRaw, postRaw, pid);
+  // A close is proven only by the bound window leaving the process's complete id snapshot: a
+  // sheet it opens (an unsaved document) leaves the window open. Any other input is proven by a
+  // window entering that snapshot; a closure it coincides with may have had another cause.
+  const closedByClose = closing && winDiff.report.bound === "closed";
+  if (sent._tag === "Failure" && !closedByClose) return yield* Effect.fail(sent.failure);
+  const proven = closing ? closedByClose : opened.length > 0;
+  const openedEvidence = opened
+    .slice(0, 4)
+    .map((id) => `observed:window_opened:${id}`)
+    .filter((line) => !winDiff.evidence.includes(line));
+  const elDiff =
+    preVerifyRaw !== undefined && postVerifyRaw !== undefined
+      ? diffWatchedEvidence(
+          watched,
+          parseVerifyObservations(preVerifyRaw, watched.length),
+          parseVerifyObservations(postVerifyRaw, watched.length),
+        )
+      : [];
+  const allObserved = [...elDiff, ...winDiff.evidence, ...openedEvidence].slice(0, 16);
+  const timing: InputTiming = {
+    ms: endedAt - startedAt,
+    phases: {
+      preMs: sentAt - startedAt,
+      driverMs: drivenAt - sentAt,
+      ...(settles ? { settleMs: settledAt - drivenAt } : {}),
+      postMs: endedAt - settledAt,
+      ...hopsPhase(call),
+    },
+  };
+  const upgrade = proven && base?.category !== "confirmed" && base?.category !== "refused";
+  // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
+  const unproven = closing && !closedByClose && base?.category === "confirmed";
+  return {
+    ...base,
+    category: upgrade ? "confirmed" : unproven ? "unverifiable" : (base?.category ?? "confirmed"),
+    ...(upgrade ? { safety: COMPLETED_WRITE } : unproven ? { safety: INDETERMINATE_WRITE } : {}),
+    value: fitInputWindows(
+      base?.value,
+      winDiff.report,
+      context.limits.returnBytes,
+      allObserved,
+      timing,
+    ),
+    evidence: [...(base?.evidence ?? []), ...allObserved].slice(0, 16),
+  };
+});
 
 export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(function* (
   entry: { readonly tracker: CellWindowTracker; readonly connectionGeneration: string } | undefined,

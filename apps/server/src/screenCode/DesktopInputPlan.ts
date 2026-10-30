@@ -116,6 +116,28 @@ export const INPUT_METHODS: ReadonlySet<string> = new Set([
   "launch_app",
 ]);
 
+// Inputs the macOS driver can return from without its 120 ms watch for a new window, menu or
+// dialog: the next observe owns settling, and the driver reports a later change on its next result.
+const NO_WINDOW_WATCH: ReadonlySet<string> = new Set([
+  "click",
+  "right_click",
+  "drag",
+  "scroll",
+  "type_text",
+  "press_key",
+  "set_value",
+]);
+
+/** The input's driver arguments with post_action_wait "none", unless the call asked to verify. */
+export const withoutWindowWatch = (
+  method: string,
+  forwarded: Record<string, unknown>,
+  args: Record<string, unknown>,
+): Record<string, unknown> =>
+  NO_WINDOW_WATCH.has(method) && args.verify !== true
+    ? { ...forwarded, post_action_wait: "none" }
+    : forwarded;
+
 const buildForwardedInput = (
   method: string,
   args: Record<string, unknown>,
@@ -127,6 +149,7 @@ const buildForwardedInput = (
   const forwarded: Record<string, unknown> = { ...args, target, delivery_mode: "background" };
   delete forwarded.elementRef;
   delete forwarded.send;
+  delete forwarded.verify;
   delete forwarded.replace;
   delete forwarded.targetRef;
   delete forwarded.element_token;

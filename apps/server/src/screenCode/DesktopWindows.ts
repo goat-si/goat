@@ -2,6 +2,7 @@ import { tooLargeStep } from "./DesktopObserveRead.ts";
 import {
   COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
   type ComputerUsePrimitiveReply,
+  type ScreenHopTimes,
   type ScreenHostCall,
   type ScreenRunError,
   type ScreenWindowSummary,
@@ -50,6 +51,8 @@ export interface InputTiming {
     readonly driverMs: number;
     readonly settleMs?: number;
     readonly postMs?: number;
+    /** The proxy's step times of the input's own driver call; see ScreenHopTimes. */
+    readonly hops?: ScreenHopTimes;
   };
 }
 

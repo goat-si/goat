@@ -583,13 +583,8 @@ it.live("a guest binds and clicks an app window through the admitted channel", (
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return await app.click({x: 1, y: 2});",
     });
     expect(result.status).toBe("completed");
-    expect(sent.map((entry) => entry.tool)).toEqual([
-      "list_apps",
-      "list_windows",
-      "list_windows",
-      "click",
-      "list_windows",
-    ]);
+    // The click is the only call after the bind: its window baseline is the one the bind read.
+    expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows", "click"]);
     expect(sent.find((entry) => entry.tool === "click")?.args).toMatchObject({
       target: { kind: "window", pid: 42, window_id: 7 },
       x: 1,
@@ -650,12 +645,7 @@ it.live(
         dispatched: false,
         ...refusal,
       });
-      expect(sent.map((entry) => entry.tool)).toEqual([
-        "list_apps",
-        "list_windows",
-        "list_windows",
-        "click",
-      ]);
+      expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows", "click"]);
       yield* service.finishTurn({
         runId: "r",
         turnId: "t",

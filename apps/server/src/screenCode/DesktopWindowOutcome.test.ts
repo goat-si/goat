@@ -96,7 +96,10 @@ const input = (
 ) =>
   Effect.gen(function* () {
     const fiber = yield* host
-      .invoke({ ...call(method, args, ref), deadlineMillis: 10_000 }, context)
+      .invoke(
+        { ...call(method, { ...(args as object), verify: true }, ref), deadlineMillis: 10_000 },
+        context,
+      )
       .pipe(Effect.result, Effect.forkChild);
     yield* Effect.yieldNow;
     yield* TestClock.adjust("2 seconds");
@@ -294,9 +297,9 @@ it.live(
       const result = yield* runCellOn(
         host,
         "const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
-          "const first = await a.press('cmd+a'); const second = await a.press('cmd+w'); " +
+          "const first = await a.press('cmd+a', {verify: true}); const second = await a.press('cmd+w', {verify: true}); " +
           "const b = await screen.app({bundle_id: 'org.example.Editor', window_id: 9}); " +
-          "const third = await b.press('cmd+a'); return [first.verdict, second.verdict, third.verdict];",
+          "const third = await b.press('cmd+a', {verify: true}); return [first.verdict, second.verdict, third.verdict];",
       );
       expect(result.value).toEqual(["unverifiable", "confirmed", "unverifiable"]);
       expect(sent.filter((each) => each.tool === "press_key")).toHaveLength(3);
@@ -463,7 +466,7 @@ it.live(
         const result = yield* runCellOn(
           host,
           "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
-            "return (await Promise.all([app.click('Apply'), app.click('close button')])).map((done) => done.verdict);",
+            "return (await Promise.all([app.click('Apply', {verify: true}), app.click('close button', {verify: true})])).map((done) => done.verdict);",
         );
         verdicts.push(result.value);
         expect(sent.filter((each) => each.tool === "click")).toHaveLength(2);

@@ -26,7 +26,7 @@ The \`cua-driver\` tools act on the computer this GOAT server runs on. Use them 
 ## Results
 - \`confirmed\`: continue. \`suspected_noop\`, \`no_drop\` or \`not_applied\`: it may have done nothing. Observe and decide; do not repeat blindly.
 - An \`effect\` always outranks a \`code\` (which may sit under \`refusal\`). Nothing was sent only when \`effect\` is \`refused\`, or there is no effect and the code is \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\` or \`permission_denied\`.
-- \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Observe and never resend it unchanged; a repeated keystroke can submit twice.
+- \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Read only to see the result; never resend it unchanged (a repeat can submit twice).
 - GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\` (it waits for an answer).
 - \`bounded_resource_outside_manifest\` on an app opened after computer use started: nothing was sent. Call \`computer_use.request\` with its \`bundle_id\`, then retry.
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.

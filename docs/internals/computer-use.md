@@ -53,6 +53,15 @@ provider (Codex, Claude, ...)
 - Most macOS input answers `unverifiable`, and the proxy passes that on without reading the
   window itself. A read of its own would cost every action a tree walk and retire the agent's
   tokens; the agent instead checks a batch with one `since: "latest"` read of its own.
+  `unverifiable` is a success for flow control: the input was sent and its effect was not
+  checked, so nothing waits on it, retries it or reads around it. The one rule it carries is
+  never to resend. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
+  per app input. Only a call that passes `verify: true`, or one that opens a Go to Folder
+  sheet, reads the process's windows and the acted element around the input; those reads run in
+  parallel, and a verdict is upgraded to `confirmed` only by what they show. A cell's window
+  baseline comes from its bind, or from one read for the first input on a process, and its end
+  read compares against it. The next screenshot or tree read after an input waits only for what
+  is left of the 60 ms settle time.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
