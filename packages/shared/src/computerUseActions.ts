@@ -264,6 +264,8 @@ export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
   "window_target_not_found",
   "window_target_resolution_failed",
   "permission_denied",
+  "user_interacting",
+  "screen_locked",
   "invalid_arguments",
   "invalid_action_target",
   "select_menu_would_raise_window",

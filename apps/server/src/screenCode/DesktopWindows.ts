@@ -704,7 +704,13 @@ export const withHolders = Effect.fn("DesktopWindows.withHolders")(function* (
     const affordable =
       call.deadlineMillis - now - CELL_RESERVE_MS >= driverCallCapMs("list_apps", {});
     if (holders.some((holder) => holder.app !== undefined) && affordable) {
-      const apps = yield* request("list_apps", {}, call, context).pipe(Effect.option);
+      const apps = yield* request("list_apps", {}, call, context).pipe(
+        Effect.asSome,
+        Effect.catchIf(
+          (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+          () => Effect.succeedNone,
+        ),
+      );
       const appRows = Option.isSome(apps) ? object(driverValue(apps.value))?.apps : undefined;
       if (Array.isArray(appRows))
         for (const row of appRows) {

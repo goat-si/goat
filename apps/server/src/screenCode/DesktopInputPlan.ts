@@ -476,7 +476,10 @@ type WindowRead = Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
 const listedWindows = (list: WindowRead, pid: number) =>
   list.pipe(
     Effect.map((reply) => parseWindowList(driverValue(reply), pid)),
-    Effect.orElseSucceed(() => undefined),
+    Effect.catchIf(
+      (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+      () => Effect.void,
+    ),
   );
 
 /**
@@ -637,7 +640,10 @@ export const resolveObservedSheet = Effect.fn("DesktopInputPlan.resolveObservedS
           );
           return checked.ok ? { reply, state: checked.state, windowId } : undefined;
         }),
-        Effect.orElseSucceed(() => undefined),
+        Effect.catchIf(
+          (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+          () => Effect.void,
+        ),
       );
     let found = yield* probe(pick.window_id);
     const named = found && sheetParentId(found.state);
