@@ -15,8 +15,8 @@ interface ReadinessGate {
   (): void | Promise<void>;
   readonly signal?: AbortSignal | undefined;
 }
-const abortable = async <A>(work: Promise<A>, signal?: AbortSignal) => {
-  if (!signal) return work;
+const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {
+  if (!signal) return work();
   if (signal.aborted) throw signal.reason;
   let abort: (() => void) | undefined;
   const interrupted = new Promise<never>((_, reject) => {
@@ -24,7 +24,7 @@ const abortable = async <A>(work: Promise<A>, signal?: AbortSignal) => {
     signal.addEventListener("abort", abort, { once: true });
   });
   try {
-    return await Promise.race([work, interrupted]);
+    return await Promise.race([work(), interrupted]);
   } finally {
     if (abort) signal.removeEventListener("abort", abort);
   }
@@ -90,24 +90,28 @@ export const waitUntilWritable = async (
     (await handle.isEditable().catch((cause: unknown) => {
       throw neverWritable(cause);
     }));
-  if (!(await abortable(ready(), gate.signal))) {
+  if (!(await abortable(ready, gate.signal))) {
     readiness.onWaiting?.();
     await abortable(
-      handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+      () => handle.waitForElementState("visible", { timeout: remaining(deadline) }),
       gate.signal,
     );
     await abortable(
-      handle
-        .waitForElementState("editable", { timeout: remaining(deadline) })
-        .catch((cause: unknown) => {
-          throw isTimeout(cause) ? notWritable() : cause;
-        }),
+      () =>
+        handle
+          .waitForElementState("editable", { timeout: remaining(deadline) })
+          .catch((cause: unknown) => {
+            throw isTimeout(cause) ? notWritable() : cause;
+          }),
       gate.signal,
     );
   }
   await revealFramesOf(handle, deadline, gate);
   await gate();
-  await abortable(handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }), gate.signal);
+  await abortable(
+    () => handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
+    gate.signal,
+  );
 };
 
 /**
@@ -126,7 +130,7 @@ export const revealFramesOf = async (
     for (const element of chain) {
       await gate?.();
       await abortable(
-        element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
+        () => element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
         gate?.signal,
       );
     }

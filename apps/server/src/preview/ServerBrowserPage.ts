@@ -751,6 +751,7 @@ export const type = async (
   try {
     if (handle) await waitUntilWritable(handle, deadline, readiness, gate);
     if (handle) await gate();
+    gate.signal?.throwIfAborted();
     const focused =
       handle !== null &&
       (await handle.evaluate((element, clear) => {
@@ -795,6 +796,7 @@ export const type = async (
     if (focused === "range" && handle) {
       remaining(deadline);
       await gate();
+      gate.signal?.throwIfAborted();
       return await setRange(handle, input.text);
     }
     if (focused !== "text" && focused !== "editable") {
@@ -805,6 +807,7 @@ export const type = async (
     }
     if (input.clear && handle) {
       await gate();
+      gate.signal?.throwIfAborted();
       await handle.evaluate((element, textControl) => {
         if (textControl) (element as unknown as { select(): void }).select();
         else
@@ -819,6 +822,7 @@ export const type = async (
     }
     remaining(deadline);
     await gate();
+    gate.signal?.throwIfAborted();
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {

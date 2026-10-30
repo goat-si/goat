@@ -4,8 +4,8 @@ import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { chromium } from "playwright-core";
-import { expect } from "vite-plus/test";
+import { chromium, type ElementHandle } from "playwright-core";
+import { expect, vi } from "vite-plus/test";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
@@ -13,6 +13,35 @@ import { makeBlockedTabFence } from "./blockedTabFence.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { SessionControl } from "./SessionControl.ts";
+import { waitUntilWritable } from "./actionReadiness.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
+
+it.effect("a fence immediately after readiness admission prevents starting scroll", () =>
+  Effect.gen(function* () {
+    const scroll = vi.fn(async () => {});
+    const handle = {
+      isVisible: async () => true,
+      isEditable: async () => true,
+      ownerFrame: async () => null,
+      scrollIntoViewIfNeeded: scroll,
+    } as unknown as ElementHandle;
+    const controller = new AbortController();
+    const gate = Object.assign(
+      () => {
+        controller.abort(new BrowserControlInterrupted("blocked", "blocked_url"));
+      },
+      { signal: controller.signal },
+    );
+    const error = yield* Effect.promise(() =>
+      waitUntilWritable(handle, Infinity, {}, gate).then(
+        () => null,
+        (cause: unknown) => cause,
+      ),
+    );
+    expect(error).toMatchObject({ reason: "blocked_url" });
+    expect(scroll).not.toHaveBeenCalled();
+  }),
+);
 
 it.effect("a fence during readiness prevents scrolling, focus, selection and typing", () =>
   Effect.scoped(
@@ -79,5 +108,73 @@ it.effect("a fence during readiness prevents scrolling, focus, selection and typ
         Layer.provideMerge(NodeServices.layer),
       ),
     ),
+  ),
+);
+
+it.effect("a fence immediately after the focus gate sends no focus", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Effect.acquireRelease(
+        Effect.promise(() => chromium.launch({ headless: true })),
+        (browser) => Effect.promise(() => browser.close()),
+      );
+      const page = yield* Effect.promise(() => browser.newPage());
+      yield* Effect.promise(() =>
+        page.setContent(
+          `<input id="f" value="old"><script>window.focuses=0;f.addEventListener('focus',()=>focuses++)</script>`,
+        ),
+      );
+      const controller = new AbortController();
+      let calls = 0;
+      const gate = Object.assign(
+        () => {
+          if (++calls === 2)
+            controller.abort(new BrowserControlInterrupted("blocked", "blocked_url"));
+        },
+        { signal: controller.signal },
+      );
+      const result = yield* Effect.promise(() =>
+        ServerBrowserPage.type(page, { locator: "#f", text: "x", clear: true }, gate).then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(result).toMatchObject({ reason: "blocked_url" });
+      expect(yield* Effect.promise(() => page.evaluate("focuses"))).toBe(0);
+    }),
+  ),
+);
+
+it.effect("a fence immediately after the selection gate sends no selection", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Effect.acquireRelease(
+        Effect.promise(() => chromium.launch({ headless: true })),
+        (browser) => Effect.promise(() => browser.close()),
+      );
+      const page = yield* Effect.promise(() => browser.newPage());
+      yield* Effect.promise(() =>
+        page.setContent(
+          `<input id="f" value="old"><script>window.selections=0;const original=f.select.bind(f);f.select=()=>{selections++;original()}</script>`,
+        ),
+      );
+      const controller = new AbortController();
+      let calls = 0;
+      const gate = Object.assign(
+        () => {
+          if (++calls === 3)
+            controller.abort(new BrowserControlInterrupted("blocked", "blocked_url"));
+        },
+        { signal: controller.signal },
+      );
+      const result = yield* Effect.promise(() =>
+        ServerBrowserPage.type(page, { locator: "#f", text: "x", clear: true }, gate).then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(result).toMatchObject({ reason: "blocked_url" });
+      expect(yield* Effect.promise(() => page.evaluate("selections"))).toBe(0);
+    }),
   ),
 );
