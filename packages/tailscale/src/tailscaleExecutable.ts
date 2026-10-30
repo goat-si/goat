@@ -6,9 +6,8 @@ import * as PlatformError from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /**
- * Where macOS installs keep the CLI when PATH has none, tried after a bare
- * `tailscale` is not found. Standard CLI locations come first (the app's
- * optional launcher and Homebrew); the app bundle binary is the last resort.
+ * Where macOS installs keep the CLI when PATH has none. Standard CLI locations
+ * (the app's optional launcher, Homebrew) outrank the app bundle binary.
  * https://tailscale.com/docs/reference/tailscale-cli (macOS)
  */
 const MAC_FALLBACK_PATHS = [
@@ -31,12 +30,6 @@ export class TailscaleSpawnFailure extends Data.TaggedError("TailscaleSpawnFailu
 const isNotFound = (failure: TailscaleSpawnFailure): boolean =>
   PlatformError.isPlatformError(failure.cause) && failure.cause.reason._tag === "NotFound";
 
-/**
- * Spawns `command` and, on macOS only, retries the fallback paths when the
- * spawn itself reports the command missing. Any other failure, from the PATH
- * command or a fallback, is returned with the executable that produced it;
- * when every fallback is missing the original PATH failure is returned.
- */
 export const spawnTailscale = Effect.fn("tailscale.spawnTailscale")(function* (
   command: string,
   args: ReadonlyArray<string>,
