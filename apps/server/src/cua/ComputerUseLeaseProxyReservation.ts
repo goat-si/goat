@@ -13,7 +13,7 @@ const decodeAdmission = Schema.decodeUnknownOption(Schema.fromJsonString(Compute
 const encodeReservation = Schema.encodeSync(Schema.fromJsonString(ComputerUseCallReservation));
 
 /** A loaded host's server can stall for several seconds; an admission waits that out. */
-export const ADMISSION_TIMEOUT_MS = 10_000;
+const ADMISSION_TIMEOUT_MS = 10_000;
 /** Release and close are best effort and run under the proxy's lifecycle lock. */
 const RELEASE_TIMEOUT_MS = 2_000;
 
