@@ -187,7 +187,7 @@ describe("computer use skill text", () => {
   it("teaches grouping decided desktop steps while sending individual driver calls", () => {
     for (const guide of [screenCodeSkillFiles()["SKILL.md"] ?? "", SCREEN_TARGET_API]) {
       expect(guide).toContain('await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))');
-      expect(guide).toMatch(/for\`? loop, sends each alone/);
+      expect(guide).toMatch(/for`? loop, sends each alone/);
       expect(guide).toContain("individual driver call");
       expect(guide).toMatch(/after a failed step,\s+later group members are not run/);
     }
