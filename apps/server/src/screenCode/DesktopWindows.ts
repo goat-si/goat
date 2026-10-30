@@ -465,15 +465,15 @@ export const matchBindWindow = (input: {
   readonly bundleId: string | undefined;
   readonly name: string | undefined;
   readonly requestedWindow: number;
-  /** Linux's list_windows `app` filter matches a substring of app_name, never a bundle id. */
-  readonly filterReadsAppName?: boolean;
+  /** The windows came from macOS's list_windows `app` filter, which compares bundle ids. */
+  readonly bundleFiltered?: boolean;
 }): {
   readonly pid?: number;
   readonly app?: Record<string, unknown> | undefined;
   readonly window?: Record<string, unknown>;
   readonly error?: ScreenRunError;
 } => {
-  const { listedApps, listedWindows, bundleId, name, requestedWindow, filterReadsAppName } = input;
+  const { listedApps, listedWindows, bundleId, name, requestedWindow, bundleFiltered } = input;
   if (!Array.isArray(listedWindows)) return { error: fail("downstream_failure") };
   const rows = Array.isArray(listedApps)
     ? listedApps.map(object).filter((app): app is Record<string, unknown> => app !== undefined)
@@ -522,10 +522,10 @@ export const matchBindWindow = (input: {
     (rows !== undefined
       ? (pid !== undefined && pid > 0 && askedPids.has(pid)) ||
         (bundleId === undefined && first.app_name === name)
-      : // A cut app list: macOS and Windows filter by the exact bundle id; Linux's filter
-        // matched a substring of app_name, so only the window's own id or app_name proves it.
+      : // A cut app list: only macOS's filter compared the bundle id; elsewhere only the
+        // window's own bundle id or app_name proves which app it is.
         bundleId !== undefined
-        ? !filterReadsAppName ||
+        ? bundleFiltered === true ||
           first.bundle_id === bundleId ||
           lower(first.app_name) === bundleId.toLowerCase()
         : first.app_name === name);

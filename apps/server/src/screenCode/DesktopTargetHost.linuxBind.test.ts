@@ -184,35 +184,37 @@ it.live("a name no app row carries launches nothing when the window list comes b
   });
 });
 
-it.effect("a cut app list binds a window only by its own app_name or its id", () =>
-  Effect.gen(function* () {
-    // Linux's app filter matches a substring of app_name: "code" also finds "Xcode-helper".
-    const helper = { ...script, pid: 2000, window_id: 4194500, app_name: "Xcode-helper" };
-    const { host } = fixture(
-      {
-        list_apps: cut,
-        list_windows: listWindows([script, thunarWindow, helper]),
-        get_window_state: { ...state, pid: 1555, window_id: 4194307 },
-      },
-      undefined,
-      undefined,
-      undefined,
-      "linux",
-    );
-    const substring = yield* bindResult(host, { bundle_id: "code", window_id: 4194500 });
-    expect(substring._tag === "Failure" && substring.failure.code).toBe("target_missing");
-    const thunar = yield* bindResult(host, { bundle_id: "thunar", window_id: 4194311 });
-    expect(thunar._tag).toBe("Success");
-    const byProcess = yield* bindResult(host, { name: "python3", window_id: 4194307 });
-    expect(byProcess._tag === "Failure" && byProcess.failure.nextStep).toContain(
-      "app list came back incomplete",
-    );
-    for (const args of [
-      { name: "Scratch-cu-window.py", window_id: 4194307 },
-      { window_id: 4194307 },
-    ])
-      expect((yield* bindResult(host, args))._tag).toBe("Success");
-  }),
+it.effect.each(["linux", "win32"] as const)(
+  "a cut app list on %s binds a window only by its own app_name or its id",
+  (platform) =>
+    Effect.gen(function* () {
+      // Linux's and Windows' app filters match a substring: "code" also finds "Xcode-helper".
+      const helper = { ...script, pid: 2000, window_id: 4194500, app_name: "Xcode-helper" };
+      const { host } = fixture(
+        {
+          list_apps: cut,
+          list_windows: listWindows([script, thunarWindow, helper]),
+          get_window_state: { ...state, pid: 1555, window_id: 4194307 },
+        },
+        undefined,
+        undefined,
+        undefined,
+        platform,
+      );
+      const substring = yield* bindResult(host, { bundle_id: "code", window_id: 4194500 });
+      expect(substring._tag === "Failure" && substring.failure.code).toBe("target_missing");
+      const thunar = yield* bindResult(host, { bundle_id: "thunar", window_id: 4194311 });
+      expect(thunar._tag).toBe("Success");
+      const byProcess = yield* bindResult(host, { name: "python3", window_id: 4194307 });
+      expect(byProcess._tag === "Failure" && byProcess.failure.nextStep).toContain(
+        "app list came back incomplete",
+      );
+      for (const args of [
+        { name: "Scratch-cu-window.py", window_id: 4194307 },
+        { window_id: 4194307 },
+      ])
+        expect((yield* bindResult(host, args))._tag).toBe("Success");
+    }),
 );
 
 it.effect("a window id listed for two processes is ambiguous even when one matches the name", () =>
@@ -230,4 +232,57 @@ it.effect("a window id listed for two processes is ambiguous even when one match
     const result = yield* bindResult(host, { name: "python3", window_id: 4194307 });
     expect(result._tag === "Failure" && result.failure.code).toBe("target_ambiguous");
   }),
+);
+
+it.effect(
+  "a window list cut at the cap is read again per process, and window_id alone is refused",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture(
+        {
+          list_apps: { apps: appRows },
+          list_windows: (args: { pid?: number }) =>
+            args.pid === undefined ? cut : listWindows([script, thunarWindow])(args),
+        },
+        undefined,
+        undefined,
+        undefined,
+        "linux",
+      );
+      const thunar = yield* bindResult(host, { bundle_id: "thunar", window_id: 4194311 });
+      expect(thunar._tag).toBe("Success");
+      expect(
+        sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
+      ).toEqual([{}, { pid: 900 }]);
+      const alone = yield* bindResult(host, { window_id: 4194307 });
+      expect(alone._tag === "Failure" && alone.failure.code).toBe("downstream_failure");
+    }),
+);
+
+it.effect(
+  "a window found through another app's filter reads its process's windows as the baseline",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture(
+        {
+          list_apps: cut,
+          list_windows: (args: { pid?: number; app?: string }) =>
+            args.pid === undefined && args.app === undefined
+              ? cut
+              : listWindows([
+                  thunarWindow,
+                  { ...thunarWindow, window_id: 4194312, app_name: "Thunar-bulk" },
+                ])(args),
+        },
+        undefined,
+        undefined,
+        undefined,
+        "linux",
+      );
+      const thunar = yield* bindResult(host, { bundle_id: "thunar", window_id: 4194311 });
+      expect(thunar._tag).toBe("Success");
+      expect(
+        sent.filter((entry) => entry.tool === "list_windows").map((entry) => entry.args),
+      ).toEqual([{}, { app: "thunar" }, { pid: 900 }]);
+    }),
 );
