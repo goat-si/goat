@@ -84,9 +84,19 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   const foreground = input.request.foreground === true;
   const wanted = input.request.apps;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  if (wanted !== undefined && Option.isSome(settings)) {
-    const denied = new Set((yield* settings.value.getSettings).cuaDeniedApps.map(cuaAppKey));
-    const blocked = wanted.filter((app) => denied.has(cuaAppKey(app)));
+  const denied = new Set(
+    Option.isSome(settings) ? (yield* settings.value.getSettings).cuaDeniedApps.map(cuaAppKey) : [],
+  );
+  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+  if (wanted !== undefined && denied.size > 0) {
+    const catalog = Option.isSome(cua) ? yield* cua.value.appCatalog : [];
+    const blocked = wanted.filter(
+      (app) =>
+        denied.has(cuaAppKey(app)) ||
+        catalog.some(
+          (entry) => cuaAppKey(entry.name) === cuaAppKey(app) && denied.has(cuaAppKey(entry.id)),
+        ),
+    );
     if (blocked.length > 0)
       return {
         kind: "refused",
@@ -103,7 +113,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message:
         "Foreground approval supports whole-desktop access only. Omit apps to ask explicitly for the whole desktop, or omit foreground for background-only access to these apps. No app scope has been broadened.",
     } satisfies ComputerUseRequestResult;
-  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   if (Option.isNone(cua) || !(yield* cua.value.enabled)) {
     // Turning it on is refused where the driver cannot run, so the refusal names that first.
     const host = Option.isSome(cua) ? yield* cua.value.computerUse : undefined;

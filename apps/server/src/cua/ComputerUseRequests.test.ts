@@ -51,6 +51,33 @@ it.effect("an organization denial refuses before approval", () =>
   ),
 );
 
+it.effect("an organization-denied bundle is refused when requested by display name", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaDeniedApps: ["com.example.Editor"],
+          });
+          assert.deepInclude(yield* request({ apps: ["Fancy Editor"] }), {
+            kind: "refused",
+            code: "app_not_allowed",
+          });
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "person",
+      undefined,
+      [{ id: "com.example.Editor", name: "Fancy Editor" }],
+    ),
+  ),
+);
+
 it.effect(
   "refuses a window title absent from the host app listing without creating an approval (#1536)",
   () =>
