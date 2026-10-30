@@ -7,6 +7,7 @@
  */
 import * as Effect from "effect/Effect";
 
+import { supportsBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { isBatchTool, MAX_BATCH_SCOPE_APPS } from "./ComputerUseBatchScope.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
@@ -92,8 +93,17 @@ export const makeProxyBatchScope = (
       } as Envelope,
     };
   });
+  const browserSupported = Effect.fn("ComputerUseLeaseProxy.browserSupported")(function* () {
+    const child = current();
+    if (child === undefined) return false;
+    if (!listed.has(child)) {
+      const tools = yield* handshake.listTools(child.driver.send);
+      if (tools !== undefined) listed.set(child, tools);
+    }
+    return current() === child && supportsBrowserClaims(listed.get(child));
+  });
   const grant = (apps: ReadonlyArray<string> | undefined) => {
     grantApps = apps;
   };
-  return { scope, remember, grant };
+  return { scope, remember, grant, browserSupported };
 };

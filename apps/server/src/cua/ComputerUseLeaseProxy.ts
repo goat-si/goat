@@ -796,6 +796,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         lifecycle.current?.connectionId !== expectedConnection
       )
         return yield* sink.answer(staleGeneration(id, message.method), "not_started");
+      if (selectedClaim !== undefined && !(yield* batches.browserSupported()))
+        return yield* sink.answer(
+          refusal(
+            id,
+            message.method,
+            "outside_manifest",
+            "This driver does not support browser claims.",
+          ),
+        );
       const batch = yield* batches.scope(id, line, message, () => notSent(id));
       if ("refused" in batch) return yield* sink.answer(batch.refused);
       ({ line, message } = batch);

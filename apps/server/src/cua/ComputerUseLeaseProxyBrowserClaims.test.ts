@@ -207,6 +207,21 @@ effectIt.effect("the proxy does not send an unclaimed browser call", () =>
   }),
 );
 
+const supportedDriver = Effect.fn(function* (h: Effect.Success<ReturnType<typeof harness>>) {
+  yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }));
+  assert.equal((yield* h.nextToDriver).method, "tools/list");
+  yield* h.reply(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: 99,
+      result: {
+        tools: [{ name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } }],
+      },
+    }),
+  );
+  assert.equal((yield* h.nextToProvider).id, 99);
+});
+
 effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", () =>
   Effect.gen(function* () {
     const h = yield* harness();
@@ -224,6 +239,7 @@ effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", 
       ],
     });
     yield* h.applied;
+    yield* supportedDriver(h);
     yield* h.send(
       call(3, "browser_click", { tab_id: "tab-1", origin_scope: ["https://other.test"] }),
     );
@@ -270,6 +286,7 @@ effectIt.effect("a revoked claim fences a browser call held before dispatch", ()
     };
     yield* h.push({ ...active(), browserClaims: [claim] });
     yield* h.applied;
+    yield* supportedDriver(h);
     yield* h.send(call(1, "browser_click", { tab_id: "tab-1", pid: 42, window_id: 7 }));
     yield* h.reported;
     yield* h.push({ ...active(), browserClaims: [] });
@@ -277,5 +294,41 @@ effectIt.effect("a revoked claim fences a browser call held before dispatch", ()
     yield* Deferred.succeed(gate, undefined);
     assert.equal((yield* h.nextToProvider).id, 1);
     assert.equal(yield* h.driverQueued, 0);
+  }),
+);
+
+effectIt.effect("the proxy refuses a claimed browser call when the driver lacks origin scope", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 1,
+          pid: 42,
+          windowId: 7,
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* h.send(JSON.stringify({ jsonrpc: "2.0", id: 10, method: "tools/list", params: {} }));
+    assert.equal((yield* h.nextToDriver).method, "tools/list");
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 10,
+        result: { tools: [{ name: "get_browser_state", inputSchema: { properties: {} } }] },
+      }),
+    );
+    assert.equal((yield* h.nextToProvider).id, 10);
+    yield* h.send(call(11, "browser_click", { tab_id: "tab-1" }));
+    const result = yield* Effect.raceFirst(
+      h.nextToProvider.pipe(Effect.map(() => "refused")),
+      h.nextToDriver.pipe(Effect.map(() => "sent")),
+    );
+    assert.equal(result, "refused");
   }),
 );
