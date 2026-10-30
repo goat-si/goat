@@ -3,7 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { primaryServerConfigAtom } from "../../state/server";
 import { Badge } from "../ui/badge";
 
-/** A dev server started with GOAT_DEV_SSH=on can reach the developer's real machines. */
+/** The primary environment is a dev server started with GOAT_DEV_SSH=on; it can reach real machines. */
 export function DevSshBadge() {
   const devSsh = useAtomValue(primaryServerConfigAtom)?.environment.devSsh;
   if (devSsh !== "on") return null;
@@ -12,7 +12,7 @@ export function DevSshBadge() {
       <Badge
         variant="warning"
         size="sm"
-        title="GOAT_DEV_SSH=on: this dev server may SSH into your other machines."
+        title="GOAT_DEV_SSH=on: this app's dev server may SSH into your other machines."
       >
         SSH on
       </Badge>
