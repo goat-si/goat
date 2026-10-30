@@ -405,7 +405,10 @@ it.live("adjacent groups for separate windows keep each window's inputs together
     expect(
       sent
         .filter((entry) => entry.tool === "press_key")
-        .map((entry) => (entry.args as { key: string }).key),
+        .map(
+          (entry) =>
+            Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }))(entry.args).key,
+        ),
     ).toEqual(["a", "b", "c", "d"]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
@@ -605,7 +608,10 @@ it.live("a refused window group does not stop the next window's group", () => {
     expect(
       sent
         .filter((entry) => entry.tool === "press_key")
-        .map((entry) => (entry.args as { key: string }).key),
+        .map(
+          (entry) =>
+            Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }))(entry.args).key,
+        ),
     ).toEqual(["a", "c", "d"]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
