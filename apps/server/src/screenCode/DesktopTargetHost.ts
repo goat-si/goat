@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -804,8 +805,8 @@ export const createDesktopTargetHost = (deps: {
     if (refused !== undefined) return refused;
     const first = calls[0];
     const firstBound = first && resolve(first, context);
-    if (first && firstBound)
-      yield* seedBatchBaseline({
+    if (first && firstBound) {
+      const baseline = yield* seedBatchBaseline({
         send,
         calls,
         context,
@@ -814,7 +815,9 @@ export const createDesktopTargetHost = (deps: {
         boundInCellId: firstBound.boundInCellId,
         boundWindows: firstBound.boundWindows,
         tracker: trackerFor(context, firstBound.connectionGeneration),
-      });
+      }).pipe(Effect.result);
+      if (baseline._tag === "Failure") return [Exit.fail(baseline.failure)];
+    }
     return yield* dispatchInTurn(
       calls,
       (each, index) =>

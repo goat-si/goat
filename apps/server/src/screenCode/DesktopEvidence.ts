@@ -246,7 +246,11 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
     connectionGeneration,
   ).pipe(Effect.timeoutOption(effective), Effect.option);
   const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
-  if (!reply || driverError(reply) !== undefined) return undefined;
+  if (!reply) return undefined;
+  const error = driverError(reply);
+  if (error?.code === "user_interacting" || error?.code === "screen_locked")
+    return yield* Effect.fail(error);
+  if (error !== undefined) return undefined;
   return driverValue(reply);
 });
 
@@ -366,7 +370,12 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
   const sentAt = yield* Clock.currentTimeMillis;
   const sent = yield* Effect.result(runInput);
   // A close that errors after it went out may still have closed the window; the listing decides.
-  if (sent._tag === "Failure" && !(intent === "close" && sent.failure.effectStarted === true))
+  if (
+    sent._tag === "Failure" &&
+    (sent.failure.code === "screen_locked" ||
+      sent.failure.code === "user_interacting" ||
+      !(intent === "close" && sent.failure.effectStarted === true))
+  )
     return yield* Effect.fail(sent.failure);
   const base = sent._tag === "Success" ? sent.success : undefined;
   // A click by point closes when the driver says it hit the close button.
@@ -382,10 +391,14 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     deps.onSettled?.();
   }
   const settledAt = yield* Clock.currentTimeMillis;
+  const postRead = (method: string, args: Record<string, unknown>) =>
+    read(method, args, 0).pipe(
+      Effect.mapError((error) => ({ ...error, effectStarted: true, safety: INDETERMINATE_WRITE })),
+    );
   const [firstPostRaw, postVerifyRaw] = yield* Effect.all(
     [
-      read("list_windows", { pid }, 0),
-      preVerifyRaw !== undefined ? read("verify_state", verifyArgs, 0) : Effect.void,
+      postRead("list_windows", { pid }),
+      preVerifyRaw !== undefined ? postRead("verify_state", verifyArgs) : Effect.void,
     ],
     { concurrency: 2 },
   );
@@ -414,7 +427,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     const now = yield* Clock.currentTimeMillis;
     if (call.deadlineMillis - now - CELL_RESERVE_MS < MIN_CALL_MS + OPENING_POLL_MS) break;
     yield* Effect.sleep(OPENING_POLL_MS);
-    postRaw = yield* read("list_windows", { pid }, 0);
+    postRaw = yield* postRead("list_windows", { pid });
     postWins = parseWindowList(postRaw, pid);
   }
   tracker.recordAfter(pid, preWins, postWins);
