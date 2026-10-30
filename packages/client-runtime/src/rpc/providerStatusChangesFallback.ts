@@ -7,23 +7,60 @@ import {
   applyProviderStatusChanges,
   canApplyProviderStatusChanges,
 } from "@goat/shared/providerStatusChanges";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import type * as Rpc from "effect/rpc/Rpc";
+import * as RpcClientError from "effect/rpc/RpcClientError";
 
 type ServerConfigSubscriptionPayload = Rpc.Payload<typeof WsSubscribeServerConfigRpc>;
+
+/** The supervisor's budget for a first config snapshot (synchronizationTimeout in supervisor.ts). */
+const FIRST_SNAPSHOT_TIMEOUT = Duration.seconds(75);
+
+/** Fails a subscription whose first event does not arrive in time, so the session reconnects. */
+const answeredInTime = <E, R>(stream: Stream.Stream<ServerConfigStreamEvent, E, R>) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const answered = yield* Deferred.make<void>();
+      const deadline = Stream.fromEffect(
+        Deferred.await(answered).pipe(
+          Effect.timeoutOrElse({
+            duration: FIRST_SNAPSHOT_TIMEOUT,
+            orElse: () =>
+              Effect.fail(
+                new RpcClientError.RpcClientError({
+                  reason: new RpcClientError.RpcClientDefect({
+                    message: `The config subscription did not answer within ${Duration.toSeconds(FIRST_SNAPSHOT_TIMEOUT)}s after switching to full provider lists.`,
+                    cause: undefined,
+                  }),
+                }),
+              ),
+          }),
+        ),
+      ).pipe(Stream.drain);
+      return stream.pipe(
+        Stream.tap(() => Deferred.succeed(answered, undefined)),
+        Stream.merge(deadline),
+      );
+    }),
+  );
 
 /**
  * Subscribes with providerStatusChanges. A change this client cannot apply ends that
  * subscription and opens it once more without the flag, so the server sends full provider lists
- * for the rest of the session; the new subscription starts with a snapshot.
+ * for the rest of the session; the new subscription starts with a snapshot. An explicit false
+ * keeps full lists from the start.
  */
 export const withProviderStatusChangesOrFullLists = <E, R>(
   open: (input: ServerConfigSubscriptionPayload) => Stream.Stream<ServerConfigStreamEvent, E, R>,
   input: ServerConfigSubscriptionPayload,
-): Stream.Stream<ServerConfigStreamEvent, E, R> =>
-  Stream.unwrap(
+): Stream.Stream<ServerConfigStreamEvent, E | RpcClientError.RpcClientError, R> => {
+  const { providerStatusChanges, ...fullListInput } = input;
+  if (providerStatusChanges === false) return open(input);
+  return Stream.unwrap(
     Effect.gen(function* () {
       // This subscription's own provider list, updated with each event as it is judged.
       const providers = yield* Ref.make<ReadonlyArray<ServerProvider> | undefined>(undefined);
@@ -51,14 +88,17 @@ export const withProviderStatusChangesOrFullLists = <E, R>(
             return { event, usable: true };
         }
       });
-      const changes = open({ ...input, providerStatusChanges: true }).pipe(
+      const changes = open({ ...fullListInput, providerStatusChanges: true }).pipe(
         Stream.mapEffect(judge),
         Stream.takeUntil((judged) => !judged.usable, { excludeLast: true }),
         Stream.map((judged) => judged.event),
       );
       const fullLists = Stream.unwrap(
-        Ref.get(switched).pipe(Effect.map((done) => (done ? open(input) : Stream.empty))),
+        Ref.get(switched).pipe(
+          Effect.map((done) => (done ? answeredInTime(open(fullListInput)) : Stream.empty)),
+        ),
       );
       return Stream.concat(changes, fullLists);
     }),
   );
+};
