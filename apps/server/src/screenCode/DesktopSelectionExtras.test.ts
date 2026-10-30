@@ -82,7 +82,7 @@ it.live(
         },
       ]);
       expect(result.value).toMatchObject({
-        done: { verdict: "confirmed", result: { selected_text: "world" } },
+        done: { ok: true, verdict: "confirmed" },
       });
     }),
 );

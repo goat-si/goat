@@ -59,8 +59,8 @@ provider (Codex, Claude, ...)
   per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
   member, or one that opens a Go to Folder sheet, reads the process's window list around the
   input, and the acted element only when a unique label with text or selection names it (a 60 ms
-  settle follows that read); those reads run in parallel. Element changes are `observed:`
-  evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
+  settle follows that read); those reads run in parallel. Diagnostics are exposed under
+  `result.debug` only with `verify: true` or `screen.debug = true`; element changes are evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
   `unverifiable` even when the driver says done, and the cell's end read lists the new windows
   (flagged unverified when no baseline window is still listed). A cell's window
   baseline comes from its bind, or from one read for the first input on a process, and its end

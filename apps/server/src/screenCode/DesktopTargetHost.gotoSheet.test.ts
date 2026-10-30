@@ -174,14 +174,14 @@ it.live(
     return Effect.gen(function* () {
       const result = yield* cell(
         BIND +
-          "const done = await app.press('cmd+shift+g');" +
+          "screen.debug = true; const done = await app.press('cmd+shift+g');" +
           "const sheet = await app.observe();" +
           'const field = Number(/\\[(\\d+)\\] AXTextField "PathTextField"/.exec(sheet.text)[1]);' +
           "const onSheet = app.windowId;" +
           "await app.setValue(field, '~/Developer/codex/computeruse');" +
           "await app.press('Enter');" +
           "const back = await app.observe();" +
-          "return { observed: done.observed, opened: done.result.windows.opened.map((w) => w.window_id), onSheet, text: sheet.text, backWindow: app.windowId, backTitle: back.title, scope: back.scope };",
+          "return { observed: done.result.debug.value._observed, opened: done.result.debug.value.windows.opened.map((w) => w.window_id), onSheet, text: sheet.text, backWindow: app.windowId, backTitle: back.title, scope: back.scope };",
       );
       expect(result.value).toMatchObject({
         observed: expect.arrayContaining([

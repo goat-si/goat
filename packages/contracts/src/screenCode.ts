@@ -453,6 +453,7 @@ export const ScreenHostReply = strict(
     error: Schema.optionalKey(ScreenRunError),
     /** The call's receipt category, so a Target method can report what the host confirmed. */
     category: Schema.optionalKey(ScreenEffectReceipt.fields.category),
+    evidence: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 export type ScreenHostReply = typeof ScreenHostReply.Type;

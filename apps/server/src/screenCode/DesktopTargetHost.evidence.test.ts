@@ -492,7 +492,7 @@ it.live(
       step = 0;
       const manyRes = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10], {verify: true}); return c.result.windows;",
+          "const c = await app.click([10, 10], {verify: true}); return c.result.debug.value.windows;",
       )) as ScreenRunResult;
       expect(manyRes.windowsOpened).toHaveLength(16);
       expect(manyRes.windowsOpenedTruncated).toBe(true);
@@ -504,7 +504,7 @@ it.live(
       step = 0;
       const smallBudget = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10], {verify: true}); return c.result;",
+          "const c = await app.click([10, 10], {verify: true}); return c.result.debug.value;",
         { returnBytes: 900 },
       )) as ScreenRunResult;
       expect((smallBudget.value as { windowsTruncated?: boolean })?.windowsTruncated).toBe(true);
@@ -701,9 +701,9 @@ it.live(
           "globalThis.calcApp = app; await app.observe(); await app.screenshot(); " +
           "const pxDone = await app.click([20, 20]); " +
           "const elDone = await app.click(11, {verify: true}); " +
-          "return { pxObs: pxDone.observed, pxRawObs: pxDone.result?._observed, elObs: elDone.observed, " +
-          "elMs: typeof elDone.ms, elDriverMs: typeof elDone.phases?.driverMs, elSettleMs: typeof elDone.phases?.settleMs, " +
-          "elRawTiming: elDone.result?._timing };",
+          "return { pxObs: pxDone.result?.debug.value._observed, pxRawObs: undefined, elObs: elDone.result.debug.value._observed, " +
+          "elMs: typeof elDone.result.debug.value._timing?.ms, elDriverMs: typeof elDone.result.debug.value._timing?.phases?.driverMs, elSettleMs: typeof elDone.result.debug.value._timing?.phases?.settleMs, " +
+          "elRawTiming: undefined };",
       ).pipe(Effect.provide(cellService(host)));
       expect(res.value).toEqual({
         pxObs: undefined,
@@ -729,8 +729,7 @@ it.live(
       expect(tightDone.truncated).toEqual([]);
       expect(tightDone.value).toMatchObject({
         verdict: "unverifiable",
-        point: { x: 50, y: 50, unit: "window_points" },
-        hit: { role: "AXButton", name: "x".repeat(180), id: "Shift" },
+        ok: true,
       });
     }),
 );

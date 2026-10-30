@@ -755,6 +755,9 @@ export class ScreenHostBridge {
       callId: call.callId,
       outcome: "ok" as const,
       category: result.success.category,
+      ...(evidence.length
+        ? { evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)) }
+        : {}),
       ...(value === undefined ? {} : { value: value as NonNullable<ScreenHostReply["value"]> }),
     } satisfies ScreenHostReply;
   });

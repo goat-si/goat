@@ -8,6 +8,7 @@ import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
 export const screenTargetPrelude = (methods: ReadonlyArray<string>): string => String.raw`
 var __screenValues = Object.create(null);
 var __screenResults = [];
+let __debug = false;
 const __values = new Proxy(__screenValues, {
   set(target, key, value) {
     const json = JSON.stringify(value);
@@ -169,26 +170,15 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
-    if (reply.v === undefined) return { verdict };
-    const isObj = reply.v !== null && typeof reply.v === 'object' && !Array.isArray(reply.v);
-    const observed = isObj && Array.isArray(reply.v._observed) ? reply.v._observed : undefined;
-    // The host's time for this call rides in _timing and comes out on Done as ms and phases.
-    const timing = isObj && reply.v._timing && typeof reply.v._timing === 'object' ? reply.v._timing : undefined;
-    let cleanResult = reply.v;
-    if (isObj && ('_observed' in reply.v || '_timing' in reply.v || '_noResult' in reply.v)) {
-      const { _observed: _omitted, _timing: _timed, _noResult: _none, ...rest } = reply.v;
-      cleanResult = rest;
-    }
-    const extra =
-      isObj
-        ? {
-            ...(timing ? { ms: timing.ms, phases: timing.phases } : {}),
-            ...(observed && observed.length > 0 ? { observed } : {}),
-            ...('point' in reply.v ? { point: reply.v.point } : {}),
-            ...('hit' in reply.v ? { hit: reply.v.hit } : {}),
-          }
-        : {};
-    return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
+    const value = reply.v;
+    const isObj = value !== null && typeof value === 'object' && !Array.isArray(value);
+    const observed = isObj && Array.isArray(value._observed) ? value._observed : [];
+    const opened = observed.filter((line) => /^observed:window_opened:\d+$/.test(line)).map((line) => line.split(':')[2]);
+    const closed = observed.includes('observed:window_closed') && currentWindowId !== undefined ? [String(currentWindowId)] : [];
+    const note = [opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
+    const debug = __debug || arg.verify === true;
+    return { ok: true, verdict, ...(note ? { note } : {}), ...(debug ? { result: { debug: { value, evidence: reply.e ?? [] } } } : {}) };
+
   };
   const checkEmptyTarget = (target) => {
     if (target === undefined || target === null ||
@@ -544,7 +534,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     back: () => act('back', 'back_tab', {}),
     forward: () => act('forward', 'forward_tab', {}),
     close: () => call('close_tab'),
-    select: (arg = {}) => call('select', arg),
+    select: (arg = {}) => act('select', 'select', arg),
     // The same read as observe({screenshot:true}). Its element list never reaches the caller,
     // so numbers wait for the next observe() instead of silently meaning other elements.
     screenshot: async (arg) => {
@@ -732,6 +722,7 @@ const __launch = async (query = {}) => {
 };
 globalThis.ScreenError = ScreenError;
 globalThis.screen = Object.freeze({ values: __values, state: {},
+  get debug() { return __debug; }, set debug(value) { __debug = value === true; },
   discover: async () => {
     const result = { apps: [], windows: [], tabs: [], unavailable: {} };
     try { result.apps = await __call('list_apps', {}); result.windows = await __call('list_windows', {}); }

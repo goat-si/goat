@@ -68,7 +68,7 @@ it.live("app clicks return a compact Done and expose details only on request", (
     );
     expect(res.value).toMatchObject({
       plain: { ok: true, verdict: "confirmed" },
-      verified: { result: { debug: expect.any(Object) } },
+      verified: { result: { debug: { evidence: expect.arrayContaining(["driver:acted"]) } } },
       debug: { result: { debug: expect.any(Object) } },
     });
     const value = res.value as { plain: unknown };
@@ -99,8 +99,8 @@ it.live(
       const res = yield* runCell(
         host,
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
-          "await app.observe(); const done = await app.click(1); " +
-          "return { verdict: done.verdict, point: done.point, hit: done.hit, resultPoint: done.result.point };",
+          "await app.observe(); screen.debug = true; const done = await app.click(1); " +
+          "return { verdict: done.verdict, point: done.result.debug.value.point, hit: done.result.debug.value.hit, resultPoint: done.result.debug.value.point };",
       );
       expect(res.value).toEqual({
         verdict: "confirmed",

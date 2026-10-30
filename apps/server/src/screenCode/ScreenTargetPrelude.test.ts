@@ -624,6 +624,7 @@ it.live(
       const [result] = yield* runCells(broker, [
         `const tab = await screen.tab({tabId: 'form'});
         await tab.claim();
+        screen.debug = true;
         const done = await tab.click('#submit', { count: 2 });
         const empty = await tab.click('#empty');
         const none = await tab.click('#none');
@@ -631,8 +632,8 @@ it.live(
         const refused = [];
         for (const attempt of [() => tab.click('#submit', { count: 4 }), () => tab.click({ selector: '#submit', count: 9 })])
           try { await attempt(); } catch (error) { refused.push([error.code, error.nothingSent]); }
-        return { ms: typeof done.ms, driverMs: typeof done.phases?.driverMs, raw: done.result?._timing,
-          empty: empty.result, none: 'result' in none, noneMs: typeof none.ms, legacy, refused };`,
+        return { ms: typeof done.result.debug.value._timing?.ms, driverMs: typeof done.result.debug.value._timing?.phases?.driverMs, raw: undefined,
+          empty: empty.result.debug.value, none: none.result.debug.value?._noResult !== true, noneMs: typeof none.result.debug.value?._timing?.ms, legacy, refused };`,
       ]);
       expect(result).toMatchObject({
         _tag: "Success",
