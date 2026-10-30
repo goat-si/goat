@@ -570,6 +570,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    identityEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
      * How many times the host has paused agents, and why last. A pause and its end can both
      * land before the proxy reads the control, so a higher count still ends the call in flight.

@@ -89,6 +89,35 @@ export const targetPid = (args: Readonly<Record<string, unknown>> | undefined) =
   return typeof pid === "number" && Number.isInteger(pid) ? pid : undefined;
 };
 
+const GONE_CODES = new Set([
+  "process_not_found",
+  "process_gone",
+  "target_gone",
+  "targetGone",
+  "window_not_found",
+  "window_id_not_found",
+  "window_target_not_found",
+  "bring_to_front_window_not_found",
+]);
+
+export function forgetGoneApp(value: unknown, args: unknown, listed: Map<number, ListedApp>): void {
+  const hasGoneCode = (input: unknown, depth: number): boolean => {
+    if (depth > 5) return false;
+    if (Array.isArray(input)) return input.some((item) => hasGoneCode(item, depth + 1));
+    const fields = record(input);
+    if (fields === undefined) return false;
+    return Object.entries(fields).some(
+      ([key, item]) =>
+        ((key === "code" || key === "detail" || key === "refused") &&
+          typeof item === "string" &&
+          GONE_CODES.has(item)) ||
+        (typeof item === "object" && item !== null && hasGoneCode(item, depth + 1)),
+    );
+  };
+  const pid = targetPid(record(args));
+  if (pid !== undefined && hasGoneCode(value, 0)) listed.delete(pid);
+}
+
 /**
  * Whether a call takes the screen itself: it brings a window forward, moves the pointer, or
  * delivers input in the foreground. A script or batch cannot be read for that, so it counts
@@ -209,9 +238,7 @@ export const grantedAppId = (app: ListedApp, apps: ReadonlySet<string> | undefin
  * app by the bundle id grants name, or the app name where there is none. Everything else names
  * apps without the bundle id: windows an entry nests, the `processes` list Windows and Linux
  * drivers send beside `apps`, and answers such as list_windows and get_window_state. A display
- * name taken as an id would let a grant naming it reach an app another grant names by bundle
- * id, so outside a listing an answer can only drop a pid whose app it names differently, which
- * also catches a pid reused by another app; the pid is listed again before it is judged.
+ * name is only used to invalidate a cached identity when it changes.
  */
 export function learnApps(
   value: unknown,
@@ -234,10 +261,12 @@ export function learnApps(
         ...(executable === undefined ? {} : { executable }),
       });
     } else {
-      // A reply naming another app or binary for the pid makes it unknown until listed again.
+      // PID reuse by a different bundle with the same display name within one control can retain the old identity.
       const known = into.get(entry.pid);
       if (
-        known?.id !== entry.id ||
+        (entry.bundleId !== undefined
+          ? known?.bundleId !== entry.bundleId
+          : known?.name !== entry.name && known?.id !== entry.id) ||
         (entry.executable !== undefined &&
           known.executable !== undefined &&
           appKey(entry.executable) !== appKey(known.executable))

@@ -316,6 +316,7 @@ export class ComputerUseLeases extends Context.Service<
 
 interface ControlRecord extends ComputerUseControl {
   readonly idleEpoch?: number;
+  readonly identityEpoch: number;
   readonly ended?: ComputerUseControlEnd;
   /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
   readonly uses: number;
@@ -421,8 +422,10 @@ const make = Effect.gen(function* () {
           existing.everyApp === everyApp &&
           DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
         ) {
+          const identityChanged = runId !== undefined && runId !== existing.runId;
           const reused: ControlRecord = {
             ...nextTurn(existing),
+            identityEpoch: existing.identityEpoch + (identityChanged ? 1 : 0),
             nonPersonFullAccess: everyApp !== undefined && nonPerson,
             uses: existing.uses + 1,
             // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
@@ -433,7 +436,9 @@ const make = Effect.gen(function* () {
           const moved =
             DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
           const notice =
-            implyFocus(reused) || existing.idle === true || moved ? changed : Effect.void;
+            implyFocus(reused) || existing.idle === true || moved || identityChanged
+              ? changed
+              : Effect.void;
           return Effect.as(notice, reused as ComputerUseControl);
         }
         const next: ControlRecord = {
@@ -445,6 +450,7 @@ const make = Effect.gen(function* () {
           nonPersonFullAccess: everyApp !== undefined && nonPerson,
           ...(runId === undefined ? {} : { runId }),
           uses: 0,
+          identityEpoch: 0,
         };
         if (existing !== undefined) {
           reservations.forgetClosed(threadId, existing.controlId);
@@ -543,6 +549,7 @@ const make = Effect.gen(function* () {
         expiresAt: record.expiresAt,
         interruptions,
         apps: rememberScope(controls, record, apps),
+        identityEpoch: record.identityEpoch,
         wakeAt: Math.min(validUntil, DateTime.toEpochMillis(now) + recheck),
         validUntil,
         ...focusState,

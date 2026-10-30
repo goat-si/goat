@@ -120,6 +120,7 @@ export type ComputerUseControlState =
       readonly shared?: true;
       readonly idle?: true;
       readonly idleEpoch?: number;
+      readonly identityEpoch?: number;
       readonly foreground?: ReadonlyArray<ComputerUseForegroundGrant>;
     }
   | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }

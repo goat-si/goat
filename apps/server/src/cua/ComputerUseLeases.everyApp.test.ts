@@ -56,6 +56,23 @@ it.effect("updates the origin policy when a full access control is reused", () =
   }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect("increments the app identity epoch when another turn reuses the control", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-cache-epoch");
+    yield* threadIn(owner, "full-access");
+    const first = Option.getOrThrow(
+      yield* leases.everyAppControl(owner, false, { runId: RunId.make("run:first") }),
+    );
+    const before = yield* leases.controlState(owner, first.controlId);
+    yield* leases.everyAppControl(owner, false, { runId: RunId.make("run:second") });
+    const after = yield* leases.controlState(owner, first.controlId);
+    assert.deepInclude(before, { _tag: "active", identityEpoch: 0 });
+    assert.deepInclude(after, { _tag: "active", identityEpoch: 1 });
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect("a new organization denial refuses a pending ticket on validation", () =>
   Effect.gen(function* () {
     yield* runMigrations();

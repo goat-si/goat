@@ -1,6 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
+import {
+  approvedApps,
+  forgetGoneApp,
+  learnApps,
+  type ListedApp,
+  scopeVerdict,
+} from "./ComputerUseScope.ts";
 
 const KAKAO = { pid: 6972, bundle_id: "com.kakao.KakaoTalkMac", name: "KakaoTalk" };
 
@@ -14,6 +20,18 @@ const verdict = (listed: Map<number, ListedApp>) =>
   });
 
 describe("learnApps", () => {
+  it("forgets the pid when a call reports that its target is gone", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [KAKAO] }, listed, true);
+    forgetGoneApp({ structuredContent: { code: "process_not_found" } }, { pid: KAKAO.pid }, listed);
+    assert.equal(listed.has(KAKAO.pid), false);
+  });
+  it("keeps a cached bundle when a reply names the same display name", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [KAKAO] }, listed, true);
+    learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid }, listed, false);
+    assert.deepEqual(verdict(listed), { _tag: "allow" });
+  });
   it("allows reads but refuses unidentified full-access input", () => {
     const common = { apps: undefined, appOf: () => undefined, bundleIds: true };
     assert.deepEqual(
@@ -115,14 +133,12 @@ describe("learnApps", () => {
       );
     }
   });
-  it("lists a pid again after a reply names its app without the bundle id a grant names", () => {
+  it("lists a pid again after a reply names a different app", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed, true);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
-    // get_window_state answers with the app's name and pid but no bundle id.
-    learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid, window_id: 57000 }, listed, false);
+    learnApps({ app_name: "Other", pid: KAKAO.pid, window_id: 57000 }, listed, false);
     assert.deepEqual(verdict(listed), { _tag: "resolve", pid: KAKAO.pid });
-    // The listing the proxy asks for then judges the call by bundle id again.
     learnApps({ apps: [KAKAO] }, listed, true);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
   });

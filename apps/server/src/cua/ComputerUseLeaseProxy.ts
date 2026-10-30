@@ -41,7 +41,13 @@ import { makeLeaseFences, type TakenUpdate } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
-import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
+import {
+  approvedApps,
+  forgetGoneApp,
+  learnApps,
+  type ListedApp,
+  takesScreen,
+} from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
@@ -124,6 +130,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
   let idleEpochSeen: number | undefined;
+  let identityEpochSeen: number | undefined;
   const handshake: Array<string> = [];
   const tokenFirst = makeTokenFirst();
   const outstanding = new Map<string, OutstandingCall>();
@@ -280,6 +287,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
+        forgetGoneApp(message, request.args, listed);
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
@@ -477,6 +485,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     interruptionsSeen = count;
     const nextIdleEpoch = update.idleEpoch ?? 0;
     const missedIdle = idleEpochSeen !== undefined && nextIdleEpoch > idleEpochSeen;
+    const nextIdentityEpoch = update.identityEpoch ?? 0;
+    if (
+      missedIdle ||
+      idle ||
+      (identityEpochSeen !== undefined && nextIdentityEpoch !== identityEpochSeen)
+    )
+      listed.clear();
+    identityEpochSeen = nextIdentityEpoch;
     idleEpochSeen = nextIdleEpoch;
     if (paused !== undefined || idle) {
       paused = undefined;
@@ -533,6 +549,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               : update.state === "idle"
                 ? Effect.sync(() => {
                     idle = true;
+                    listed.clear();
                   }).pipe(
                     Effect.andThen(interrupt(TURN_ENDED)),
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),

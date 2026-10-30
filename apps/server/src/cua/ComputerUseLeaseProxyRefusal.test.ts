@@ -45,6 +45,26 @@ const click = (input: {
   });
 
 describe("an app approved by its executable path", () => {
+  it.effect("reuses a cached app identity after same-name replies without listing again", () =>
+    Effect.gen(function* () {
+      const listed = new Map<number, ListedApp>();
+      learnApps(
+        { apps: [{ pid: PID, bundle_id: "com.example.Editor", name: "Editor" }] },
+        listed,
+        true,
+      );
+      for (let index = 0; index < 2; index++) {
+        assert.isUndefined(
+          yield* click({
+            listed,
+            approved: ["com.example.Editor"],
+            listApps: Effect.die("unexpected lookup"),
+          }),
+        );
+        learnApps({ app_name: "Editor", pid: PID }, listed, false);
+      }
+    }),
+  );
   it.effect("never forwards a full access call to a protected app", () =>
     Effect.gen(function* () {
       for (const app of [
