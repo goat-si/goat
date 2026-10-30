@@ -369,13 +369,24 @@ it.live.each([
       environmentId: "env",
       invocation: context.invocation,
       source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
-        await app.observe(); await app.observe(); const stale = [];
+        const first = await app.observe(); const second = await app.observe(); const stale = [];
         for (const n of ${JSON.stringify(scenario.clicks)}) {
           try { await app.click(n); } catch (e) { stale.push({number:n, code:e.code, nothingSent:e.nothingSent}); }
         }
-        return stale;`,
+        return {first, second, stale};`,
     });
-    expect(result.value).toEqual(
+    const value = result.value as {
+      first: { observationId: string; mode: string };
+      second: { text: string; mode: string };
+      stale: unknown;
+    };
+    expect(value.first.mode).toBe("full");
+    expect(value.second).toMatchObject({
+      mode: "diff",
+      text: `${scenario.diff}\nother numbers unchanged; latest full observation is ${value.first.observationId}`,
+    });
+    expect(value.second.text).not.toContain("element_tokens");
+    expect(value.stale).toEqual(
       scenario.stale.map((number) => ({ number, code: "stale_reference", nothingSent: true })),
     );
     expect(sent.filter((entry) => entry.tool === "click").map((entry) => entry.args)).toEqual(
