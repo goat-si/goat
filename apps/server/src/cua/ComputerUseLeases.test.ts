@@ -36,23 +36,41 @@ const layer = it.layer(
 );
 layer("ComputerUseLeases controls", (it) => {
   it.effect("screen lock pauses the live session with its own reason", () =>
-    Effect.gen(function* () {
-      assert.isTrue(Schema.is(ComputerUsePauseReason)("screen_locked"));
-      yield* runMigrations();
-      const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const owner = ThreadId.make("thread-screen-locked");
-      const control = yield* leases.control(owner, Option.none());
-      const screenLocked = leases.screenLocked;
-      if (screenLocked === undefined) return yield* Effect.die("missing screenLocked");
-      assert.isFalse(yield* screenLocked(owner, "stale-control"));
-      assert.isTrue(yield* screenLocked(owner, control.controlId));
-      assert.deepInclude(yield* leases.controlState(owner, control.controlId), {
-        _tag: "paused",
-        reason: "screen_locked",
-      });
-      yield* leases.resume;
-      yield* leases.stop(owner);
-    }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        assert.isTrue(Schema.is(ComputerUsePauseReason)("screen_locked"));
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const owner = ThreadId.make("thread-screen-locked");
+        yield* Effect.addFinalizer(() => leases.resume.pipe(Effect.andThen(leases.stop(owner))));
+        const control = yield* leases.control(owner, Option.none());
+        yield* leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "driver:lock",
+          callId: "read",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "list_apps",
+          args: {},
+        });
+        const screenLocked = leases.screenLocked;
+        if (screenLocked === undefined) return yield* Effect.die("missing screenLocked");
+        assert.isFalse(yield* screenLocked(owner, "stale-control"));
+        assert.isTrue(yield* screenLocked(owner, control.controlId));
+        assert.deepInclude(yield* leases.controlState(owner, control.controlId), {
+          _tag: "paused",
+          reason: "screen_locked",
+        });
+        yield* run(owner, "run-lock-end", 1, "completed");
+        yield* leases.turnEnded(owner);
+        yield* leases.control(owner, Option.none());
+        const listed = (yield* leases.sessions).find(
+          ({ control: entry }) => entry.controlId === control.controlId,
+        );
+        assert.isTrue(listed?.control.acted === true);
+      }),
+    ),
   );
   it.effect("an Escape report for an expired control cannot stop a later session", () =>
     Effect.gen(function* () {

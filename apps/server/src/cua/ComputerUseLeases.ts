@@ -424,6 +424,7 @@ const make = Effect.gen(function* () {
         ) {
           const reused: ControlRecord = {
             ...nextTurn(existing),
+            ...(paused === "screen_locked" && existing.acted === true ? { acted: true } : {}),
             uses: existing.uses + 1,
             // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
             ...(Option.isSome(lease) ? {} : { expiresAt: controlExpiry(now) }),
