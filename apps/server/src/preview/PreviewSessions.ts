@@ -216,11 +216,13 @@ export const desktopSession = (
     status:
       state._tag === "ended"
         ? "stopped"
-        : waiting || (state._tag === "paused" && state.reason === "human_input")
-          ? "waiting-for-human"
-          : state._tag === "paused"
-            ? "paused"
-            : "acting",
+        : state._tag === "paused" && state.reason === "screen_locked"
+          ? "paused"
+          : waiting || (state._tag === "paused" && state.reason === "human_input")
+            ? "waiting-for-human"
+            : state._tag === "paused"
+              ? "paused"
+              : "acting",
     ...(reason === undefined ? {} : { reason }),
     ...(waiting ? { handoffReason } : {}),
     lease: {

@@ -54,6 +54,14 @@ describe("preview sessions", () => {
   it("shows a browser tab and a desktop control with the same owner, status and controls", () => {
     const browser = browserSession(base, tab)!;
     const desktop = desktopSession(base, control, active, detected)!;
+    const locked = desktopSession(
+      base,
+      control,
+      { _tag: "paused", reason: "screen_locked" },
+      detected,
+      "Sign in",
+    )!;
+    expect([locked.status, previewSessionChip(locked)]).toEqual(["paused", "Screen locked"]);
     for (const session of [browser, desktop]) {
       expect(session.owner).toBe("agent");
       expect(session.status).toBe("acting");
