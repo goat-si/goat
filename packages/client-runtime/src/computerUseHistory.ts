@@ -2,10 +2,19 @@ import type { ComputerUseHistoryEntry } from "@goat/contracts";
 
 type Entry = typeof ComputerUseHistoryEntry.Type;
 
+const timeFormat = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  second: "numeric",
+});
+
 export function historyRows(entries: ReadonlyArray<Entry>) {
   return entries.map((entry) => ({
     id: entry.id,
-    time: new Date(entry.recordedAt).toLocaleString(),
+    time: timeFormat.format(entry.recordedAt),
     target:
       entry.targetKind === "tab"
         ? entry.tabHost || "Unknown host"
