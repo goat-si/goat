@@ -48,6 +48,7 @@ export const markPersonStopped = Effect.fn("Handoffs.markPersonStopped")(functio
     input.action === "cancelled" &&
     record.state === "completed"
   )
+    // The wake reactor must see the stop marker before the handoff transition.
     yield* mark(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
 });
 
