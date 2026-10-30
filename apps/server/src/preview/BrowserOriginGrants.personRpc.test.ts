@@ -88,8 +88,9 @@ it.effect("agent requests use the observed window title and refuse missing windo
           reads++;
           return target.windowId === 7 ? "Observed browser" : undefined;
         }).pipe(
-          Effect.flatMap((title) =>
-            title === undefined ? Effect.fail(new WindowMissing()) : Effect.succeed(title),
+          Effect.filterOrFail(
+            (title): title is "Observed browser" => title !== undefined,
+            () => new WindowMissing(),
           ),
         ),
     });

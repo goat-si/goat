@@ -241,3 +241,22 @@ it("guards standing consent without changing provider-only permissions", () => {
     }),
   ).toEqual(["settings:write", "providers:manage"]);
 });
+
+it("requires settings authority only when a person widens browser access", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsClaim, {})).toEqual([
+    "orchestration:operate",
+    "settings:write",
+  ]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.browserClaimsAnswer, { claimId: "claim:1", approved: true }),
+  ).toEqual(["orchestration:operate", "settings:write"]);
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.browserClaimsAnswer, {
+      claimId: "claim:1",
+      approved: false,
+    }),
+  ).toEqual(["orchestration:operate"]);
+  for (const method of [WS_METHODS.browserClaimsRevoke, WS_METHODS.browserClaimsEnd])
+    expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+  expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsList, {})).toEqual(["orchestration:read"]);
+});

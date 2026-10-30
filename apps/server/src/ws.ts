@@ -26,6 +26,11 @@ import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
 import * as NotesService from "./notes/NotesService.ts";
 import { makeNoteRpcHandlers, ServerWsNotesRpcGroup } from "./notes/NotesRpcHandlers.ts";
+import {
+  makeBrowserClaimsRpcHandlers,
+  ServerWsBrowserClaimsRpcGroup,
+} from "./preview/BrowserClaimsRpcHandlers.ts";
+import { BrowserOriginGrants } from "./preview/BrowserOriginGrantsLayer.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as CodexRoutes from "./provider/CodexRouteService.ts";
 import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
@@ -1316,6 +1321,8 @@ export const layerWsRpc = (
       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const browserClaims = yield* Effect.serviceOption(BrowserOriginGrants);
+      const browserClaimsHandlers = makeBrowserClaimsRpcHandlers(browserClaims, currentSession);
       const handoffs = yield* Handoffs.Handoffs;
       const sshHostSetup = yield* SshHostSetup.SshHostSetup;
       const providerHostSync = yield* ProviderHostSync.ProviderHostSync;
@@ -3466,6 +3473,7 @@ export const layerWsRpc = (
         >(handlers),
         ServerWsChannelRpcGroup.toLayer(channelHandlers),
         ServerWsNotesRpcGroup.toLayer(noteHandlers),
+        ServerWsBrowserClaimsRpcGroup.toLayer(browserClaimsHandlers),
       );
     }),
   ).pipe(Layer.provide(AcpSessionService.layer));
