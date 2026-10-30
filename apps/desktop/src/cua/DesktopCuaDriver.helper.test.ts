@@ -594,6 +594,30 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       ),
   );
 
+  it.effect(
+    "a Stop sent while the agent's apps are listed cancels that listing and starts nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "listing",
+          });
+          yield* test.request("agent");
+          yield* test.listing;
+          yield* test.request("agent", false);
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          assert.isTrue(test.listingCancelled());
+          assert.deepEqual(
+            test.helperLaunches.map(({ verify }) => verify),
+            [true],
+          );
+        }),
+      ),
+  );
+
   it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
     Effect.scoped(
       Effect.gen(function* () {

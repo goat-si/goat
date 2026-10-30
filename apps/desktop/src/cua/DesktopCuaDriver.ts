@@ -333,10 +333,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   ];
 
   // Both request-time listings and manifest refreshes must stay inside the helper's seal check.
-  const helperListing = (engine: Engine) =>
+  const helperListing = (engine: Engine, signal?: AbortSignal) =>
     engine.kind === "helper" &&
     (environment.platform === "darwin" || environment.platform === "win32")
-      ? () => native.helperApps(engine.bundle, environment.platform)
+      ? () => native.helperApps(engine.bundle, environment.platform, signal)
       : undefined;
 
   const handleAppsRequest = makeAppsRequestHandler({
@@ -357,7 +357,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       scope,
       principal: engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId,
     });
-    const listApplications = helperListing(engine);
+    // A Stop of the start being handled cancels its listing.
+    const listApplications = helperListing(engine, requests.signal());
     const manifestInput = {
       binaryPath: enginePath(engine),
       scope,
@@ -863,7 +864,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           // A helper that could not start, such as one whose identity no longer matches, is
           // not the one an earlier check confirmed.
           Effect.andThen(
-            selected.kind === "helper"
+            selected.kind === "helper" && !requests.stopped(request.requestId)
               ? noteHelper((state) =>
                   withoutProof(
                     state,

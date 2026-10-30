@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
+const cancellation = () => new AbortController();
+
 /**
  * Handles requests in order, one at a time under the driver's lock, but notes a Stop as it
  * arrives. A start and its Stop share a request id, so the start a Stop names can be cut short
@@ -11,6 +13,8 @@ import * as Stream from "effect/Stream";
  */
 export const makeStopFirstRequests = () => {
   let handling: string | undefined;
+  // Aborted by the Stop of the start being handled, for work that has no host to retire yet.
+  let cancel: AbortController | undefined;
   const stopped = new Set<string>();
   // Starts handled and not yet stopped, and the newest of them.
   const started = new Set<string>();
@@ -21,6 +25,8 @@ export const makeStopFirstRequests = () => {
   return {
     /** Whether the Stop of this start has arrived. */
     stopped: (requestId: string) => stopped.has(requestId),
+    /** Aborts as the Stop of the start being handled arrives; undefined outside a start. */
+    signal: () => cancel?.signal,
     /**
      * Whether a newer start was handled after this one, however far this one got: its Stop then
      * belongs to a session that is over and must leave the newer one's host alone. A Stop under
@@ -38,7 +44,10 @@ export const makeStopFirstRequests = () => {
         Effect.suspend(() => {
           if (!request.enabled) {
             stopped.add(request.requestId);
-            if (handling === request.requestId) retire();
+            if (handling === request.requestId) {
+              cancel?.abort();
+              retire();
+            }
           }
           // Started at once, so each takes its turn in arrival order: the semaphore wakes waiters
           // in order.
@@ -47,6 +56,7 @@ export const makeStopFirstRequests = () => {
               locked(
                 Effect.suspend(() => {
                   handling = request.enabled ? request.requestId : undefined;
+                  cancel = request.enabled ? cancellation() : undefined;
                   if (request.enabled) {
                     started.add(request.requestId);
                     latest = request.requestId;
@@ -56,6 +66,7 @@ export const makeStopFirstRequests = () => {
                   Effect.ensuring(
                     Effect.sync(() => {
                       handling = undefined;
+                      cancel = undefined;
                       if (request.enabled) return;
                       stopped.delete(request.requestId);
                       started.delete(request.requestId);

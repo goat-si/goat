@@ -13,6 +13,7 @@ import {
   ComputerUseHelperError,
   classifyHelperBundle,
   daemonMismatch,
+  listHelperApplications,
   makeHelperHost,
   openHelperSession,
   type HelperProcess,
@@ -455,6 +456,29 @@ describe("ComputerUseHelper daemon admission", () => {
     assert.equal((await helperError(started)).code, "incompatible_daemon");
     assert.deepEqual(helper.signals, ["SIGKILL"]);
     assert.isUndefined(host.servicePid());
+  });
+
+  it("a cancelled app listing kills its helper and the driver it runs", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // It never answers listApps, as a helper whose driver is slow to list.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const cancel = new AbortController();
+    const listed = listHelperApplications(helper.process, BUNDLE_ID, cancel.signal);
+    await asked.promise;
+    const stopped = new ComputerUseHelperError("aborted", "Computer use stopped.");
+    cancel.abort(stopped);
+    assert.strictEqual(
+      await listed.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+      stopped,
+    );
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
   });
 
   it("a Windows stop while the helper is busy starting its driver kills it instead of asking it to stop", async (context) => {

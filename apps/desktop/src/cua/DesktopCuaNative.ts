@@ -174,6 +174,7 @@ export interface DesktopCuaDriverDependencies {
   readonly helperApps: (
     bundle: HelperBundle,
     platform: NodeJS.Platform,
+    signal?: AbortSignal,
   ) => Promise<ReadonlyArray<CuaDriverListedApp>>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
@@ -271,8 +272,12 @@ export const dependencies: DesktopCuaDriverDependencies = {
     return settings.enableCua === true;
   },
   readManifest: async (path) => (await import("node:fs/promises")).readFile(path, "utf8"),
-  helperApps: (bundle, platform) =>
-    listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
+  helperApps: (bundle, platform, signal) =>
+    listHelperApplications(
+      spawnHelperProcess(bundle.executable, platform),
+      bundle.bundleId,
+      signal,
+    ),
   processId: process.pid,
   executablePath: process.execPath,
 };

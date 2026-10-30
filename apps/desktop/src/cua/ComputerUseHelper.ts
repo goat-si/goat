@@ -412,12 +412,15 @@ export async function openHelperSession(
 export async function listHelperApplications(
   process: HelperProcess,
   expectedBundleId: string,
+  signal?: AbortSignal,
 ): Promise<ReadonlyArray<CuaDriverListedApp>> {
-  const session = await openHelperSession(process, expectedBundleId);
+  const session = await openHelperSession(process, expectedBundleId, signal);
   try {
-    return decodeListedApps(await session.request("listApps")).apps;
+    const listed = session.request("listApps");
+    return decodeListedApps(await (signal ? unlessAborted(listed, signal) : listed)).apps;
   } finally {
-    await session.close();
+    // Cancelled, it is killed with the driver it runs: nothing waits for its apps any more.
+    await session.close({ force: signal?.aborted === true });
   }
 }
 

@@ -116,7 +116,8 @@ export const fixture = Effect.fn(function* (
       | "helperStart"
       | "checkStart"
       | "agentManifest"
-      | "manifestOnly";
+      | "manifestOnly"
+      | "listing";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -170,6 +171,8 @@ export const fixture = Effect.fn(function* (
   const manifestPreparing = yield* Deferred.make<void>();
   let manifestHeld = false;
   const stopSeen = yield* Deferred.make<void>();
+  const listing = yield* Deferred.make<void>();
+  let listingCancelled = false;
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
@@ -463,9 +466,19 @@ export const fixture = Effect.fn(function* (
       if (text === undefined) throw new Error("missing manifest");
       return text;
     },
-    helperApps: async (bundle) => {
+    helperApps: async (bundle, _platform, signal) => {
       helperAppListings.push(bundle.bundleId);
       if (appListingFails) throw new Error("driver_untrusted");
+      // listing holds the first listing until the start it serves is stopped.
+      if (options.hold === "listing" && signal && !listingCancelled) {
+        Deferred.doneUnsafe(listing, Exit.void);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        listingCancelled = true;
+        throw signal.reason;
+      }
       return options.appListing ? options.appListing() : listedApps;
     },
     processId: HOST_PID,
@@ -673,6 +686,9 @@ export const fixture = Effect.fn(function* (
     manifestPreparing: Deferred.await(manifestPreparing),
     /** The driver has seen the first Stop sent to it. */
     stopSeen: Deferred.await(stopSeen),
+    /** The agent manifest's app listing has started. */
+    listing: Deferred.await(listing),
+    listingCancelled: () => listingCancelled,
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),
