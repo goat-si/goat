@@ -105,7 +105,8 @@ export const fixture = Effect.fn(function* (
     development?: { readonly appUserModelId: string };
     denyPermissions?: boolean;
     failFirstStart?: boolean;
-    hold?: "start" | "stop" | "monitor";
+    /** helperStart holds the first agent helper's start until release or that host's stop. */
+    hold?: "start" | "stop" | "monitor" | "helperStart";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -154,6 +155,8 @@ export const fixture = Effect.fn(function* (
   const helperWatches = yield* Queue.unbounded<"watch" | "unwatch">();
   let raise: ((active: boolean, windowId: number) => void) | undefined;
   const starting = yield* Deferred.make<void>();
+  const helperStarting = yield* Deferred.make<void>();
+  let helperStartHeld = false;
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
@@ -285,6 +288,7 @@ export const fixture = Effect.fn(function* (
         approved: true,
       });
       const exit = Promise.withResolvers<void>();
+      const stopped = Promise.withResolvers<boolean>();
       let running = false;
       let readinessClient: ReturnType<typeof createClient> | undefined;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
@@ -336,6 +340,13 @@ export const fixture = Effect.fn(function* (
             };
           }
           Deferred.doneUnsafe(starting, Exit.void);
+          if (options.hold === "helperStart" && !helper.verify && !helperStartHeld) {
+            helperStartHeld = true;
+            Deferred.doneUnsafe(helperStarting, Exit.void);
+            // As makeHelperHost: a stop during the start cancels it.
+            if (await Promise.race([gate.promise.then(() => false), stopped.promise]))
+              throw new Error("Computer use stopped while the helper was starting.");
+          }
           // As makeHelperHost: an agent connection gets the helper's own command, no socket.
           if (helper.direct)
             return {
@@ -368,6 +379,7 @@ export const fixture = Effect.fn(function* (
         stop: async () => {
           stops++;
           running = false;
+          stopped.resolve(true);
           readinessClient?.uniffiDestroy?.();
           readinessClient = undefined;
           exit.resolve();
@@ -622,6 +634,7 @@ export const fixture = Effect.fn(function* (
     next: Queue.take(reports),
     pendingReports: Queue.size(reports),
     starting: Deferred.await(starting),
+    helperStarting: Deferred.await(helperStarting),
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),

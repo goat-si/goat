@@ -44,7 +44,8 @@ const processAlive = (pid: number) => {
  * it serves its claims and stops with the last. One manager serves one bundle id.
  */
 export function makeHelperServiceManager<S extends ServiceSession = HelperSession>(options: {
-  readonly open: (executable: string) => Promise<S>;
+  /** Opens a service; an aborted signal should end a launch that has not answered yet. */
+  readonly open: (executable: string, signal?: AbortSignal) => Promise<S>;
   readonly alive?: (pid: number) => boolean;
 }) {
   interface Running {
@@ -72,8 +73,8 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
     running.stopping ??= running.service.session.close();
     await running.stopping;
   };
-  const start = async (executable: string): Promise<Running> => {
-    const session = await options.open(executable);
+  const start = async (executable: string, signal?: AbortSignal): Promise<Running> => {
+    const session = await options.open(executable, signal);
     let ended = false;
     void session.ended.then(() => {
       ended = true;
@@ -92,9 +93,18 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
     return running;
   };
   return {
-    /** An observing claim gets a service no other observer holds. */
-    claim: (executable: string, owner: string, claimOptions: { readonly observe?: boolean } = {}) =>
+    /**
+     * An observing claim gets a service no other observer holds. A claim whose signal aborts
+     * first rejects with its reason and holds nothing; a service it started is closed.
+     */
+    claim: (
+      executable: string,
+      owner: string,
+      claimOptions: { readonly observe?: boolean; readonly signal?: AbortSignal } = {},
+    ) =>
       serialized(async (): Promise<HelperServiceClaim<S>> => {
+        const signal = claimOptions.signal;
+        signal?.throwIfAborted();
         let running = current;
         if (
           running &&
@@ -107,7 +117,11 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
           await stopIfUnclaimed(running);
           running = undefined;
         }
-        running ??= await start(executable);
+        running ??= await start(executable, signal);
+        if (signal?.aborted) {
+          await stopIfUnclaimed(running);
+          signal.throwIfAborted();
+        }
         const owned = running;
         const token = NodeCrypto.randomBytes(32).toString("base64url");
         const claim: HelperServiceClaim<S> = {
@@ -137,3 +151,17 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
 }
 
 export type HelperServiceManager = ReturnType<typeof makeHelperServiceManager<HelperSession>>;
+
+/** One manager per channel (bundle id), made on its first claim and kept for the next. */
+export const managerPerChannel = <B extends { readonly bundleId: string }>(
+  make: (bundle: B) => HelperServiceManager,
+) => {
+  const managers = new Map<string, HelperServiceManager>();
+  return (bundle: B) => {
+    const known = managers.get(bundle.bundleId);
+    if (known) return known;
+    const made = make(bundle);
+    managers.set(bundle.bundleId, made);
+    return made;
+  };
+};

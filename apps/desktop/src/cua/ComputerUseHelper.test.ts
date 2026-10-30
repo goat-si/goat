@@ -7,6 +7,7 @@ import * as NodeStream from "node:stream";
 import * as NodeReadline from "node:readline";
 
 import { assert, describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import {
   ComputerUseHelperError,
@@ -16,13 +17,16 @@ import {
   openHelperSession,
   type HelperProcess,
 } from "./ComputerUseHelper.ts";
-import { makeHelperServiceManager } from "./ComputerUseHelperService.ts";
+import { type HelperServiceManager, makeHelperServiceManager } from "./ComputerUseHelperService.ts";
 
 const BUNDLE_ID = "si.goat.desktop.dev.computer-use";
 
-/** A scripted helper on in-memory pipes: greets, then answers each request with reply(). */
+/**
+ * A scripted helper on in-memory pipes: greets, then answers each request with reply(). A null
+ * greeting never greets, as a helper stuck before its hello.
+ */
 function fakeHelper(options: {
-  readonly greeting?: object;
+  readonly greeting?: object | null;
   /** write sends an unrequested line before the reply goes out; after() runs once it has. */
   readonly reply?: (
     request: { id: string; method: string; params: unknown },
@@ -36,6 +40,7 @@ function fakeHelper(options: {
   const stdin = new NodeStream.PassThrough();
   const stdout = new NodeStream.PassThrough();
   const received: Array<{ method: string; params: unknown }> = [];
+  const signals: Array<NodeJS.Signals> = [];
   let exit!: () => void;
   const exited = new Promise<void>((resolve) => (exit = resolve));
   let stdinEnded = false;
@@ -55,24 +60,28 @@ function fakeHelper(options: {
     if (answer) stdout.write(JSON.stringify({ id: request.id, ...answer }) + "\n");
     options.after?.(request, write);
   });
-  stdout.write(
-    JSON.stringify(
-      options.greeting ?? {
-        type: "hello",
-        protocol: 1,
-        pid: 99,
-        bundleId: BUNDLE_ID,
-        version: "1",
-      },
-    ) + "\n",
-  );
+  if (options.greeting !== null)
+    stdout.write(
+      JSON.stringify(
+        options.greeting ?? {
+          type: "hello",
+          protocol: 1,
+          pid: 99,
+          bundleId: BUNDLE_ID,
+          version: "1",
+        },
+      ) + "\n",
+    );
   const process: HelperProcess = {
     stdin,
     stdout,
-    kill: () => die(),
+    kill: (signal) => {
+      signals.push(signal);
+      die();
+    },
     exited,
   };
-  return { process, received, die, stdinEnded: () => stdinEnded };
+  return { process, received, die, signals, stdinEnded: () => stdinEnded };
 }
 
 const helperError = async (promise: Promise<unknown>) => {
@@ -307,8 +316,8 @@ describe("ComputerUseHelper daemon admission", () => {
     assert.isTrue(spawned[1]?.stdinEnded());
   });
 
-  it("a stop that lands while the host is starting still releases the helper it opens", async () => {
-    const helper = fakeHelper({});
+  it("a stop that lands while the host is starting cancels it and leaves no helper running", async () => {
+    const spawned: Array<ReturnType<typeof fakeHelper>> = [];
     const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
     const host = makeHelperHost({
       bundle: {
@@ -320,14 +329,87 @@ describe("ComputerUseHelper daemon admission", () => {
       driverVersion: CUA_DRIVER_VERSION,
       capabilityManifestPath: "/state/cua-driver/agents.yaml",
       environment: [],
-      spawn: () => helper.process,
+      spawn: () => {
+        const helper = fakeHelper({});
+        spawned.push(helper);
+        return helper.process;
+      },
       readMetadata: () => Promise.reject(new Error("no daemon to read")),
       direct: true,
     });
     const started = host.start();
-    await Promise.all([started, host.stop()]);
-    assert.isTrue(helper.stdinEnded());
+    await host.stop();
+    assert.equal((await helperError(started)).code, "aborted");
+    assert.isTrue(spawned.every((helper) => helper.stdinEnded()));
     assert.isUndefined(host.servicePid());
+  });
+
+  const directHost = (spawn: () => HelperProcess, service?: HelperServiceManager) => {
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    return makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [],
+      spawn,
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+      ...(service ? { service } : {}),
+    });
+  };
+
+  it("a stop before the helper greets ends its process group at once instead of waiting out the hello deadline", async (context) => {
+    // Frozen timers: only the stop itself can end this start.
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const helper = fakeHelper({ greeting: null });
+    const spawned = Promise.withResolvers<void>();
+    const host = directHost(() => {
+      spawned.resolve();
+      return helper.process;
+    });
+    const started = host.start();
+    await spawned.promise;
+    await host.stop();
+    assert.equal((await helperError(started)).code, "aborted");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+    assert.isUndefined(host.servicePid());
+  });
+
+  it("a start after a stop opens its own helper instead of the one that stop ends", async () => {
+    const spawned: Array<ReturnType<typeof fakeHelper>> = [];
+    const spawn = () => {
+      const pid = 100 + spawned.length;
+      const helper = fakeHelper({
+        greeting: { type: "hello", protocol: 1, pid, bundleId: BUNDLE_ID, version: "1" },
+      });
+      spawned.push(helper);
+      return helper.process;
+    };
+    const service = makeHelperServiceManager({
+      open: (_executable, signal) => openHelperSession(spawn(), BUNDLE_ID, signal),
+      alive: () => true,
+    });
+    const host = directHost(spawn, service);
+    const first = host.start().catch((error: unknown) => error);
+    const stopped = host.stop();
+    const second = host.start();
+    await Promise.all([first, stopped]);
+    const connection = await second;
+    // Whatever the stopped start opened is gone; the helper handed out is the newest, alive.
+    assert.equal(connection.pid, 100 + spawned.length - 1);
+    assert.isFalse(spawned.at(-1)?.stdinEnded());
+    assert.isTrue(spawned.slice(0, -1).every((helper) => helper.stdinEnded()));
+    assert.equal(host.servicePid(), connection.pid);
+    await host.stop();
+    assert.isTrue(spawned.at(-1)?.stdinEnded());
   });
 
   const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: CUA_DRIVER_VERSION };

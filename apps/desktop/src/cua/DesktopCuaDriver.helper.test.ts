@@ -465,6 +465,29 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       }),
     ),
   );
+
+  it.effect("a Stop sent while the agent helper is still starting ends that start and stops", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          hold: "helperStart",
+        });
+        yield* test.request("agent");
+        yield* test.helperStarting;
+        // No clock moves: the Stop must not wait out the start's deadline behind it.
+        yield* test.request("stop", false);
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.equal((yield* test.next).status, "stopped");
+        const { starts, stops } = test.counts();
+        // The readiness check's helper and the agent's both started, and both were stopped.
+        assert.deepEqual({ starts, stops }, { starts: 2, stops: 2 });
+        yield* test.request("again");
+        assert.equal((yield* test.next).status, "ready");
+      }),
+    ),
+  );
 });
 
 describe("DesktopCuaDriver readiness on Windows", () => {

@@ -37,8 +37,9 @@ import {
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
-import { ComputerUseHelperError, helperBundle, type HelperBundle } from "./ComputerUseHelper.ts";
-import type { HelperServiceManager } from "./ComputerUseHelperService.ts";
+import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
+import { managerPerChannel } from "./ComputerUseHelperService.ts";
+import { handleStopFirst } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -130,15 +131,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const crashes = yield* Queue.unbounded<OwnedHost>();
   let owned: OwnedHost | undefined;
   /** This environment's helper service per channel; generations of the host claim it in turn. */
-  const helperServices = new Map<string, HelperServiceManager>();
-  const helperServiceOf = (bundle: HelperBundle) => {
-    let service = helperServices.get(bundle.bundleId);
-    if (service === undefined) {
-      service = native.helperService(bundle);
-      helperServices.set(bundle.bundleId, service);
-    }
-    return service;
-  };
+  const helperServiceOf = managerPerChannel(native.helperService);
   let currentRequest: DesktopCuaDriverRequest | undefined;
   let closed = false;
   // The server learns the helper's readiness from these reports; only a helper build sends them.
@@ -234,14 +227,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
     });
 
-  // UniFFI calls can outlive cancellation. Retain the host until every native
-  // promise settles, even after the public shutdown deadline has elapsed.
+  // UniFFI calls can outlive cancellation, so a native start settles before its stop; a helper
+  // host's stop cancels its start. Either way the host is retained until every promise settles.
   const retire = (entry: OwnedHost): Promise<void> => {
     if (!entry.cleanup) {
       entry.cleanup = (async () => {
-        await settle(entry.started);
+        if (!entry.helper) await settle(entry.started);
         entry.abort.abort();
         await settle(Promise.resolve().then(() => entry.host.stop()));
+        await settle(entry.started);
         if (entry.monitor) await entry.monitor;
         entry.host.uniffiDestroy();
         if (owned === entry) owned = undefined;
@@ -845,10 +839,13 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         }
         if (!(yield* spawn(selected, "agents"))) return;
       }
-      const entry = owned!;
+      const entry = owned;
+      if (!entry) return yield* unavailable(request.requestId);
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),
       );
+      // A Stop retired this start meanwhile; its own report follows.
+      if (entry.cleanup) return yield* unavailable(request.requestId);
       const mcp = yield* decodeMcp({
         ...connection.mcp,
         ...(connection.socketPath === "" ? {} : { socketPath: connection.socketPath }),
@@ -938,7 +935,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* Stream.runForEach(publisher.cuaAppsRequests, handleAppsRequest).pipe(
         Effect.forkScoped,
       );
-      yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
+      yield* handleStopFirst(publisher.cuaRequests, handleRequest, () => {
+        if (owned && !owned.cleanup) void retire(owned).catch(() => undefined);
+      }).pipe(Effect.forkScoped);
       yield* publisher.cuaWatchApps.pipe(
         Stream.runForEach((apps) =>
           mutex.withPermits(1)(
