@@ -38,8 +38,12 @@ export const deniedCallApp = (
       return "unidentified app";
   }
   const scope = batchAppScope(call.name, call.args);
-  if (isBatchTool(call.name) && (denied.length > 0 || nonPersonFullAccess))
-    return scope?.apps[0] ?? "unscoped batch";
+  if (isBatchTool(call.name)) {
+    if (scope === undefined) return "unscoped batch";
+    const resolved = new Set((call.safetyApps ?? []).map(cuaAppKey));
+    const unresolved = scope.apps.find((app) => !resolved.has(cuaAppKey(app)));
+    if (unresolved !== undefined) return unresolved;
+  }
   const apps = [call.app, ...(call.safetyApps ?? []), ...named, ...(scope?.apps ?? [])];
   return apps.find(
     (app) =>

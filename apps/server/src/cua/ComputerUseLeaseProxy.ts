@@ -268,6 +268,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const listing = own
           ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
           : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
+        if (listing) listed.clear();
         learnApps(message.result, listed, listing, options.executableOf, labels);
         if (own) {
           const waiter = ownAnswers.get(message.id);
@@ -457,6 +458,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       (yield* Deferred.isDone(confirmed)) &&
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
+    if (
+      (apps === undefined) !== (next === undefined) ||
+      (apps !== undefined &&
+        next !== undefined &&
+        (apps.size !== next.size || [...apps].some((app) => !next.has(app))))
+    )
+      listed.clear();
     apps = next;
     batches.grant(update.apps);
     shared = update.shared === true;
@@ -738,6 +746,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         options.manifestStamp === undefined || lifecycle.current === undefined || !active()
           ? undefined
           : yield* refreshManifest;
+      if (refreshed !== undefined) listed.clear();
       if (refreshed !== undefined) admitted = refreshed;
       if (
         expectedConnection !== undefined &&

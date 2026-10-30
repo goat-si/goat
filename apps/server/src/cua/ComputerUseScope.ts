@@ -147,10 +147,19 @@ export function scopeVerdict(input: {
   }
   if (
     pid !== undefined &&
-    target === undefined &&
+    (target === undefined || (input.bundleIds && target.bundleId === undefined)) &&
     (typeof input.name !== "string" || !OPAQUE_TOOLS.has(input.name))
   )
     return { _tag: "resolve", pid };
+  if (
+    approved === undefined &&
+    input.name === "launch_app" &&
+    (!input.bundleIds ||
+      text(args?.bundle_id) === undefined ||
+      text(args?.name) !== undefined ||
+      text(args?.app_name) !== undefined)
+  )
+    return { _tag: "refuse", reason: "app_not_allowed" };
   // Input without an identifiable target can land in any app, including one the policy denies.
   if (approved === undefined && pid === undefined && input.name !== "launch_app")
     return { _tag: "refuse", reason: "app_not_allowed" };

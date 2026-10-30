@@ -25,6 +25,30 @@ describe("learnApps", () => {
       reason: "app_not_allowed",
     });
   });
+  it("does not treat a macOS display name as a bundle identity for input", () => {
+    assert.deepEqual(
+      scopeVerdict({
+        name: "click",
+        args: { pid: 42 },
+        apps: undefined,
+        appOf: () => ({ id: "Editor", name: "Editor" }),
+        bundleIds: true,
+      }),
+      { _tag: "resolve", pid: 42 },
+    );
+  });
+  it("refuses a full-access launch whose real app identity is unknown", () => {
+    assert.deepInclude(
+      scopeVerdict({
+        name: "launch_app",
+        args: { name: "Editor" },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      }),
+      { _tag: "refuse", reason: "app_not_allowed" },
+    );
+  });
   it("allows app discovery with a pid filter without resolving the target", () => {
     assert.deepEqual(
       scopeVerdict({

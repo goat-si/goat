@@ -8,6 +8,7 @@ import * as Scheduler from "effect/Scheduler";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
+import { batchAppScope } from "./ComputerUseBatchScope.ts";
 import {
   appKey,
   takesScreen,
@@ -99,6 +100,18 @@ interface ProxyCallCheck {
 export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (
   input: ProxyCallCheck,
 ) {
+  const batch = batchAppScope(input.message.params?.name, input.message.params?.arguments);
+  const unresolvedBatch = () =>
+    batch?.apps.find(
+      (wanted) =>
+        ![...input.listed.values()].some(
+          (app) =>
+            (!input.host.bundleIds || app.bundleId !== undefined) &&
+            [app.id, app.name, app.executable].some(
+              (value) => value !== undefined && appKey(value) === appKey(wanted),
+            ),
+        ),
+    );
   const judge = () =>
     scopeVerdict({
       name: input.message.params?.name,
@@ -119,6 +132,15 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     return running !== undefined && appKey(running) === appKey(executable);
   };
   let verdict = judge();
+  if (
+    verdict._tag === "allow" &&
+    unresolvedBatch() !== undefined &&
+    input.finished() === undefined &&
+    input.paused() === undefined
+  ) {
+    yield* input.listApps;
+    verdict = judge();
+  }
   if (
     (verdict._tag === "resolve" || !confirmed(verdict, () => false)) &&
     input.finished() === undefined &&
@@ -154,6 +176,15 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   const toFile = input.toFile();
   if (toFile !== undefined)
     return refusal(input.id, input.message.method, "desktop_capture_off", toFile);
+  const missing = verdict._tag === "allow" ? unresolvedBatch() : undefined;
+  if (missing !== undefined)
+    return refusal(
+      input.id,
+      input.message.method,
+      "app_not_allowed",
+      scopeMessage("app_not_allowed", missing),
+      missing,
+    );
   if (verdict._tag === "resolve")
     return refusal(
       input.id,

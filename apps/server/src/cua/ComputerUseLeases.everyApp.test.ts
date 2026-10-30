@@ -539,3 +539,32 @@ it.effect(
       yield* leases.stopAll;
     }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
 );
+
+it.effect(
+  "permits a verified ordinary batch but rejects a terminal batch for a remote origin",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-remote-batch");
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(
+        yield* leases.everyAppControl(owner, false, { nonPerson: true }),
+      );
+      for (const app of ["com.example.Editor", "com.apple.Terminal"]) {
+        const result = yield* leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "connection",
+          callId: app,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "run_steps",
+          args: { app_scope: { apps: [app], delivery: "background" }, steps: [] },
+          safetyApps: [app],
+        });
+        assert.equal(result.status, app === "com.apple.Terminal" ? "refused" : "admitted");
+        if (result.status === "refused") assert.equal(result.detail, "app_not_allowed");
+      }
+    }).pipe(Effect.provide(everyAppLayer)),
+);

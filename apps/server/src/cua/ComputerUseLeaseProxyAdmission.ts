@@ -9,6 +9,8 @@ import { callApp, type Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import { grantedAppId, targetPid, type ListedApp } from "./ComputerUseScope.ts";
 import type { AppLabels } from "./ComputerUseAppLabels.ts";
+import { batchAppScope } from "./ComputerUseBatchScope.ts";
+import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 
 export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(function* (
   options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId" | "bundleIds">,
@@ -40,6 +42,33 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
   const known = callApp(name, args, listed) ?? (pid === undefined ? undefined : listed.get(pid));
   const app = known === undefined ? undefined : grantedAppId(known, apps);
   const appLabel = input.scope.labels?.forCall(args);
+  const batch = batchAppScope(name, args);
+  const scopeApps =
+    batch?.apps.flatMap((wanted) => {
+      const entry = [...listed.values()].find(
+        (app) =>
+          (!options.bundleIds || app.bundleId !== undefined) &&
+          [app.id, app.name, app.executable].some(
+            (value) => value !== undefined && cuaAppKey(value) === cuaAppKey(wanted),
+          ),
+      );
+      return entry === undefined
+        ? []
+        : [entry.id, entry.name, entry.executable].filter(
+            (value): value is string =>
+              value !== undefined && value.length > 0 && value.length <= 500,
+          );
+    }) ?? [];
+  const identities = [
+    ...new Set([
+      ...(known === undefined
+        ? []
+        : [known.id, known.name, known.executable].filter(
+            (id): id is string => id !== undefined && id.length > 0 && id.length <= 500,
+          )),
+      ...scopeApps,
+    ]),
+  ];
   const decision = yield* options.reservation({
     action: "reserve",
     controlId: options.controlId,
@@ -53,13 +82,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     name,
     args,
     ...(app === undefined ? {} : { app }),
-    ...(known === undefined
-      ? {}
-      : {
-          safetyApps: [known.id, known.name, known.executable].filter(
-            (id): id is string => id !== undefined && id.length > 0 && id.length <= 500,
-          ),
-        }),
+    ...(identities.length === 0 ? {} : { safetyApps: identities }),
     ...(appLabel === undefined ? {} : { appLabel }),
   });
   const admission = proxyCallAdmission(

@@ -774,7 +774,7 @@ export const ComputerUseCallReservation = Schema.Union([
     app: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(500))),
     safetyApps: Schema.optionalKey(
       Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(500))).check(
-        Schema.isMaxLength(4),
+        Schema.isMaxLength(100),
       ),
     ),
     appLabel: Schema.optionalKey(ComputerUseCallAppLabel),

@@ -26,6 +26,15 @@ describe("computer use call safety", () => {
       "unscoped batch",
     );
   });
+  it("permits a verified ordinary batch but refuses a terminal batch in non-person full access", () => {
+    const call = (app: string) => ({
+      name: "run_script",
+      args: { app_scope: { apps: [app] } },
+      safetyApps: [app],
+    });
+    expect(deniedCallApp(call("com.example.Editor"), [], true)).toBeUndefined();
+    expect(deniedCallApp(call("com.apple.Terminal"), [], true)).toBe("com.apple.Terminal");
+  });
   it("refuses terminal for non-person full access but allows a person's terminal", () => {
     const call = { name: "click", args: {}, app: "com.apple.Terminal" };
     expect(deniedCallApp(call, [], true)).toBe("com.apple.Terminal");
