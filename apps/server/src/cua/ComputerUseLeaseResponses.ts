@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Constructs raw MCP JSON-RPC response lines.
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import {
+  type ActionOutcomeSafety,
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
   computerUseRefusalReason,
@@ -108,9 +109,9 @@ export const cutOff = (
     status: "indeterminate",
     dispatched: true,
   });
-  const safety =
+  const safety: ActionOutcomeSafety =
     cause._tag === "end" && cause.reason === "stopped"
-      ? { ...outcomeSafety, retryClass: "never" as const }
+      ? { ...outcomeSafety, retryClass: "never" }
       : outcomeSafety;
   const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
   const detail = interruptionDetail(cause);
