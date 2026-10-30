@@ -36,16 +36,24 @@ export const MEMORY_WS_METHODS = {
 const MemoryRpcErrors = Schema.Union([Memory.MemoryRpcError, EnvironmentAuthorizationError]);
 const siteNoteSuccess = Schema.Struct({ ok: Schema.Literal(true) });
 const WsSiteNotesListRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesList, {
-  payload: Schema.Struct({}), success: Schema.Array(SiteNotes.SiteNoteListEntry), error: MemoryRpcErrors,
+  payload: Schema.Struct({}),
+  success: Schema.Array(SiteNotes.SiteNoteListEntry),
+  error: MemoryRpcErrors,
 });
 const WsSiteNotesWriteRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesWrite, {
-  payload: SiteNotes.SiteNoteWriteInput, success: siteNoteSuccess, error: MemoryRpcErrors,
+  payload: SiteNotes.SiteNoteWriteInput,
+  success: siteNoteSuccess,
+  error: MemoryRpcErrors,
 });
 const WsSiteNotesDeleteRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesDelete, {
-  payload: SiteNotes.SiteNoteOriginInput, success: siteNoteSuccess, error: MemoryRpcErrors,
+  payload: SiteNotes.SiteNoteOriginInput,
+  success: siteNoteSuccess,
+  error: MemoryRpcErrors,
 });
 const WsSiteNotesRestoreSeedRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesRestoreSeed, {
-  payload: SiteNotes.SiteNoteOriginInput, success: siteNoteSuccess, error: MemoryRpcErrors,
+  payload: SiteNotes.SiteNoteOriginInput,
+  success: siteNoteSuccess,
+  error: MemoryRpcErrors,
 });
 const MemoryImportRpcErrors = Schema.Union([
   Memory.MemoryRpcError,

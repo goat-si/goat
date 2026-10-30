@@ -632,7 +632,12 @@ const isSiteNoteError = Schema.is(SiteNotes.SiteNoteError);
 const siteNoteRpcError = (error: unknown) =>
   isSiteNoteError(error)
     ? new MemoryRpcError({
-        code: error.reason === "secret" ? "secret_detected" : error.reason === "too_large" ? "payload_too_large" : "unsupported_operation",
+        code:
+          error.reason === "secret"
+            ? "secret_detected"
+            : error.reason === "too_large"
+              ? "payload_too_large"
+              : "unsupported_operation",
       })
     : memoryError(error);
 const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
@@ -1454,19 +1459,22 @@ export const layerWsRpc = (
       const hubNodesHandlers = yield* makeHubNodesHandlers;
       const memoryHandlers = WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).of({
         [WS_METHODS.siteNotesList]: () =>
-          memoryRead.pipe(Effect.map(() => siteNotes.list()), Effect.mapError(memoryError)),
+          memoryRead.pipe(
+            Effect.map(() => siteNotes.list()),
+            Effect.mapError(memoryError),
+          ),
         [WS_METHODS.siteNotesWrite]: (input) =>
-          siteNotes.write({ ...input, author: "person" }, memoryWrite).pipe(
-            Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError),
-          ),
+          siteNotes
+            .write({ ...input, author: "person" }, memoryWrite)
+            .pipe(Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError)),
         [WS_METHODS.siteNotesDelete]: (input) =>
-          siteNotes.delete(input.origin, memoryWrite).pipe(
-            Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError),
-          ),
+          siteNotes
+            .delete(input.origin, memoryWrite)
+            .pipe(Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError)),
         [WS_METHODS.siteNotesRestoreSeed]: (input) =>
-          siteNotes.restoreSeed(input.origin, memoryWrite).pipe(
-            Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError),
-          ),
+          siteNotes
+            .restoreSeed(input.origin, memoryWrite)
+            .pipe(Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError)),
         [WS_METHODS.memoryProjectBindingGet]: (input) =>
           memory.getProjectBinding(input, memoryWrite).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryProjectBindingUpdate]: (input) =>

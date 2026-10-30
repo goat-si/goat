@@ -3,7 +3,8 @@ import { BROWSER_SKILL_CORE } from "./browser.ts";
 export const BROWSER_SKILL_DIRECTORY = "browser";
 export const BROWSER_SKILL_FILE = "SKILL.md";
 
-const loopbackGuide = "Loopback (localhost, 127.0.0.1, [::1] and ::1) points at the GOAT environment. For a dev server, use the environment-port target with the reported port.";
+const loopbackGuide =
+  "Loopback (localhost, 127.0.0.1, [::1] and ::1) points at the GOAT environment. For a dev server, use the environment-port target with the reported port.";
 
 const guide = `## Use
 Use GOAT's browser for web pages, including scripted ones, and UI checks. Prefer an API or CLI when it can do the job. Other browsers only when the user or a skill names one, or the same step fails twice; quote the error. A closed preview alone is no reason to switch browsers. No tab: \`goat_preview_open\`.
@@ -148,4 +149,3 @@ export function makeBrowserGuide(
     return lines.length === 0 ? undefined : lines.join("\n");
   };
 }
-

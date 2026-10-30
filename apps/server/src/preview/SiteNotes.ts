@@ -34,13 +34,22 @@ export class SiteNotes extends Context.Service<
   {
     readonly noteFor: (origin: string) => Note | undefined;
     readonly list: () => ReadonlyArray<ListEntry>;
-    readonly write: (input: Write, permit?: Permit) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
+    readonly write: (
+      input: Write,
+      permit?: Permit,
+    ) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
     readonly writeAgent: (
       threadId: string,
       input: { readonly origin: string; readonly text: string },
     ) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
-    readonly delete: (origin: string, permit?: Permit) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
-    readonly restoreSeed: (origin: string, permit?: Permit) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
+    readonly delete: (
+      origin: string,
+      permit?: Permit,
+    ) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
+    readonly restoreSeed: (
+      origin: string,
+      permit?: Permit,
+    ) => Effect.Effect<void, SiteNoteError | SqlError | MemoryAccessError>;
     readonly deliverOnce: (threadId: string, url: string) => string | undefined;
     readonly hasTouched: (threadId: string, origin: string) => boolean;
   }
@@ -86,7 +95,10 @@ const make = Effect.gen(function* () {
       ? undefined
       : { origin, text, author: "seed", updatedAt: null };
   };
-  const write = Effect.fn("SiteNotes.write")(function* (input: Write, permit: Permit = Effect.void) {
+  const write = Effect.fn("SiteNotes.write")(function* (
+    input: Write,
+    permit: Permit = Effect.void,
+  ) {
     const origin = originOf(input.origin);
     if (origin === undefined) return yield* new SiteNoteError({ reason: "invalid_origin" });
     if (new TextEncoder().encode(input.text).length > 1024)
@@ -108,7 +120,10 @@ const make = Effect.gen(function* () {
       ),
     );
   });
-  const remove = Effect.fn("SiteNotes.delete")(function* (value: string, permit: Permit = Effect.void) {
+  const remove = Effect.fn("SiteNotes.delete")(function* (
+    value: string,
+    permit: Permit = Effect.void,
+  ) {
     const origin = originOf(value);
     if (origin === undefined) return yield* new SiteNoteError({ reason: "invalid_origin" });
     yield* mutex.withPermit(
@@ -128,7 +143,10 @@ const make = Effect.gen(function* () {
       ),
     );
   });
-  const restoreSeed = Effect.fn("SiteNotes.restoreSeed")(function* (value: string, permit: Permit = Effect.void) {
+  const restoreSeed = Effect.fn("SiteNotes.restoreSeed")(function* (
+    value: string,
+    permit: Permit = Effect.void,
+  ) {
     const origin = originOf(value);
     if (origin === undefined) return yield* new SiteNoteError({ reason: "invalid_origin" });
     if (browserSiteSeeds[origin] === undefined)
@@ -155,7 +173,8 @@ const make = Effect.gen(function* () {
   ) {
     const origin = originOf(input.origin);
     if (origin === undefined) return yield* new SiteNoteError({ reason: "invalid_origin" });
-    if (!touched.get(threadId)?.has(origin)) return yield* new SiteNoteError({ reason: "untouched" });
+    if (!touched.get(threadId)?.has(origin))
+      return yield* new SiteNoteError({ reason: "untouched" });
     yield* write({ ...input, origin, author: "agent" });
   });
   return SiteNotes.of({
@@ -163,8 +182,20 @@ const make = Effect.gen(function* () {
     list: () =>
       [...new Set([...Object.keys(browserSiteSeeds), ...stored.keys()])].flatMap((origin) => {
         const seed = browserSiteSeeds[origin];
-        const note = noteFor(origin) ?? (seed === undefined ? undefined : { origin, text: seed, author: "seed" as const, updatedAt: null });
-        return note === undefined ? [] : [{ ...note, seed: seed !== undefined, hidden: hidden.has(origin) && !stored.has(origin) }];
+        const note =
+          noteFor(origin) ??
+          (seed === undefined
+            ? undefined
+            : { origin, text: seed, author: "seed" as const, updatedAt: null });
+        return note === undefined
+          ? []
+          : [
+              {
+                ...note,
+                seed: seed !== undefined,
+                hidden: hidden.has(origin) && !stored.has(origin),
+              },
+            ];
       }),
     write,
     writeAgent,

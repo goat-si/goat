@@ -63,7 +63,16 @@ const PreviewToolFailure = Schema.Union([PreviewAutomationError, OrchestratorMcp
 const SiteNoteReadTool = Tool.make(agentSurfaceRegistry["browser_site_note.read"].name, {
   description: agentSurfaceRegistry["browser_site_note.read"].description,
   parameters: Schema.Struct({ origin: Schema.String }),
-  success: Schema.Struct({ note: Schema.NullOr(Schema.Struct({ origin: Schema.String, text: Schema.String, author: Schema.Literals(["agent", "person", "seed"]), updatedAt: Schema.NullOr(Schema.String) })) }),
+  success: Schema.Struct({
+    note: Schema.NullOr(
+      Schema.Struct({
+        origin: Schema.String,
+        text: Schema.String,
+        author: Schema.Literals(["agent", "person", "seed"]),
+        updatedAt: Schema.NullOr(Schema.String),
+      }),
+    ),
+  }),
   failure: PreviewToolFailure,
   failureMode: "return",
   dependencies,

@@ -90,11 +90,18 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
       yield* runMigrations();
       yield* Effect.gen(function* () {
         const notes = yield* SiteNotes.SiteNotes;
-        const first = browserGuideFor(undefined, "guide-first", "https://github.com", notes.deliverOnce);
+        const first = browserGuideFor(
+          undefined,
+          "guide-first",
+          "https://github.com",
+          notes.deliverOnce,
+        );
         assert.include(first ?? "", "Site notes for https://github.com");
         assert.isUndefined(notes.deliverOnce("guide-first", "https://github.com"));
         assert.isDefined(notes.deliverOnce("screen-first", "https://github.com"));
-        assert.isUndefined(browserGuideFor(undefined, "screen-first", "https://github.com", notes.deliverOnce));
+        assert.isUndefined(
+          browserGuideFor(undefined, "screen-first", "https://github.com", notes.deliverOnce),
+        );
       }).pipe(Effect.provide(SiteNotes.layer));
     }),
   );
@@ -118,7 +125,9 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
       yield* Effect.gen(function* () {
         const notes = yield* SiteNotes.SiteNotes;
         const permit = Effect.fail(new MemoryAccessError({ code: "unavailable" }));
-        const result = yield* Effect.result(notes.write({ origin: "https://denied.example", text: "note", author: "person" }, permit));
+        const result = yield* Effect.result(
+          notes.write({ origin: "https://denied.example", text: "note", author: "person" }, permit),
+        );
         assert.strictEqual(result._tag, "Failure");
         assert.isUndefined(notes.noteFor("https://denied.example"));
       }).pipe(Effect.provide(SiteNotes.layer));

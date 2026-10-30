@@ -5,7 +5,9 @@ import { screenTargetNote } from "./ScreenTargetNotes.ts";
 
 describe("notes a bound target carries", () => {
   it("keeps app guidance and does not inject static site notes", () => {
-    expect(screenTargetNote("app", "Finder")).toBe(computerUseAppNote(HostProcess.Platform.defaultValue(), "Finder"));
+    expect(screenTargetNote("app", "Finder")).toBe(
+      computerUseAppNote(HostProcess.Platform.defaultValue(), "Finder"),
+    );
     expect(screenTargetNote("site", "https://www.naver.com")).toBeUndefined();
     expect(screenTargetNote("app", "")).toBeUndefined();
   });

@@ -302,10 +302,16 @@ const handlers = {
       const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
       const notes = yield* requireSiteNotes;
       yield* notes.writeAgent(scope.thread.threadId, input).pipe(
-        Effect.mapError((error) => new OrchestratorMcpFailure({
-          code: error._tag === "SiteNoteError" ? "invalid_request" : "orchestration_error",
-          message: error._tag === "SiteNoteError" ? `Site note rejected: ${error.reason}.` : "Site note storage failed.",
-        })),
+        Effect.mapError(
+          (error) =>
+            new OrchestratorMcpFailure({
+              code: error._tag === "SiteNoteError" ? "invalid_request" : "orchestration_error",
+              message:
+                error._tag === "SiteNoteError"
+                  ? `Site note rejected: ${error.reason}.`
+                  : "Site note storage failed.",
+            }),
+        ),
       );
       return { ok: true as const };
     }),

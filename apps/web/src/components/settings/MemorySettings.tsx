@@ -198,7 +198,11 @@ function MemoryDestination({
           />
         </SettingsSection>
       ) : target.section === "sites" ? (
-        <MemorySitesSettings key={`${identity.key}:${canRead}`} environmentId={environmentId} canRead={canRead} />
+        <MemorySitesSettings
+          key={`${identity.key}:${canRead}`}
+          environmentId={environmentId}
+          canRead={canRead}
+        />
       ) : (
         <MemoryDestinationContent
           key={`${identity.key}:${canRead}`}
@@ -284,9 +288,25 @@ function MemoryDestinationContent({
   return (
     <>
       <SettingsSection title="Sites">
-        <SettingsRow id="memory-sites" title="Site notes" description="View and manage browser notes by site." control={
-          <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/settings/memory", search: validateMemorySettingsSearch({ environmentId, section: "sites" }) })}>Open Sites</Button>
-        } />
+        <SettingsRow
+          id="memory-sites"
+          title="Site notes"
+          description="View and manage browser notes by site."
+          control={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                void navigate({
+                  to: "/settings/memory",
+                  search: validateMemorySettingsSearch({ environmentId, section: "sites" }),
+                })
+              }
+            >
+              Open Sites
+            </Button>
+          }
+        />
       </SettingsSection>
       <MemoryGenerationSettings environmentId={environmentId} />
       <MemoryAgentAccessSettings environmentId={environmentId} />
