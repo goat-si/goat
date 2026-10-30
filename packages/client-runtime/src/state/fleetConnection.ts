@@ -2,11 +2,9 @@ import type { BoatMachineIdentity } from "../cloudMachines.ts";
 import type { EnvironmentConnectionPresentation } from "../connection/presentation.ts";
 
 /**
- * What the Fleet graph shows about a machine's connection from this client.
- * It reads the same presentation as Settings > Connections, so the SSH
- * classification (unreachable host, blocked login, host key, proxy) arrives
- * already decided: an unreachable host is `reconnecting` with `unreachable`,
- * and a failure only a person can fix is `error` with the fix in `error`.
+ * A machine's connection as Fleet shows it, read from the same presentation as Connections, so
+ * SSH failures arrive classified: an unreachable host is `reconnecting` with `unreachable`, and
+ * a failure only a person can fix is `error` with the fix in `error`.
  */
 export type FleetConnectionState =
   | "connected"

@@ -57,8 +57,9 @@ function sameEnvironments(
   return (
     left.length === right.length &&
     left.every((environment, index) => {
-      const other = right[index]!;
+      const other = right[index];
       return (
+        other !== undefined &&
         environment.environmentId === other.environmentId &&
         environment.label === other.label &&
         environment.sshAliases.join("\n") === other.sshAliases.join("\n") &&
