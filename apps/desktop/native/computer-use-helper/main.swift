@@ -179,39 +179,58 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
 
 /// SIGKILL to every other process in this launcher's group, so a driver that handles or ignores
 /// SIGTERM cannot outlive its service; killpg would end this launcher too, before it reports
-/// the service's exit status. A pid is signalled only while it is still in this group. Passes
-/// repeat until every member but this launcher is a zombie, so a child forked before its parent's
-/// SIGKILL landed is listed and signalled in a later pass. If the group cannot be listed or does
-/// not settle within about a second, the whole group, this launcher with it, is killed instead:
-/// cleanup matters more than the exit status.
+/// the service's exit status. A pid is signalled only while it is still in this group. It settles
+/// only on a complete listing whose every member but this launcher was already a zombie at the
+/// previous pass's check: a zombie cannot fork, so no living process can be missing from that
+/// listing, whatever forked while an earlier SIGKILL was pending. If the group cannot be listed
+/// or does not settle within about a second, the whole group, this launcher with it, is killed
+/// instead: cleanup matters more than the exit status.
 func killGroupMembers() {
   let group = getpgrp()
+  /// Members seen as zombies by the previous pass's check. A gone pid is never kept here, so a
+  /// pid the kernel reuses for a new member is never taken for settled.
+  var zombies = Set<pid_t>()
   for _ in 0..<100 {
     let size = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
     // Room for members started while the list is read.
-    var pids = [pid_t](repeating: 0, count: max(0, Int(size)) / MemoryLayout<pid_t>.size + 32)
+    let capacity = max(0, Int(size)) / MemoryLayout<pid_t>.size + 32
+    var pids = [pid_t](repeating: 0, count: capacity)
     let filled =
       size > 0
       ? proc_listpids(
         UInt32(PROC_PGRP_ONLY), UInt32(group), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
       : -1
     guard filled > 0 else { break }
-    let living = pids.prefix(Int(filled) / MemoryLayout<pid_t>.size)
-      .filter { $0 > 0 && $0 != getpid() && !isZombie($0) }
-    if living.isEmpty { return }
-    for pid in living where getpgid(pid) == group { kill(pid, SIGKILL) }
+    let count = Int(filled) / MemoryLayout<pid_t>.size
+    let members = pids.prefix(count).filter { $0 > 0 && $0 != getpid() }
+    // A full buffer may have cut the listing short, so it never settles anything.
+    if count < capacity && members.allSatisfy(zombies.contains) { return }
+    zombies = []
+    for pid in members {
+      switch processState(pid) {
+      case .zombie: zombies.insert(pid)
+      case .gone: break
+      case .living: if getpgid(pid) == group { kill(pid, SIGKILL) }
+      }
+    }
     // A SIGKILLed process takes a moment to become a zombie; this runs only after a crash.
     usleep(10_000)
   }
   killpg(group, SIGKILL)
 }
 
-/// Whether a process has exited and waits only to be reaped; a pid that is gone counts too.
-func isZombie(_ pid: pid_t) -> Bool {
-  var info = proc_bsdinfo()
-  let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-  guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return true }
-  return info.pbi_status == UInt32(SZOMB)
+enum ProcessState { case living, zombie, gone }
+
+/// A zombie has exited and waits only to be reaped; a gone pid names no process now. Read with
+/// sysctl: proc_pidinfo cannot read a zombie, which has no task left.
+func processState(_ pid: pid_t) -> ProcessState {
+  var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+  var info = kinfo_proc()
+  var size = MemoryLayout<kinfo_proc>.size
+  // A failed read keeps it living, so it is signalled and listed again rather than trusted.
+  guard sysctl(&name, UInt32(name.count), &info, &size, nil, 0) == 0 else { return .living }
+  if size == 0 { return .gone }
+  return info.kp_proc.p_stat == SZOMB ? .zombie : .living
 }
 
 /// An agent connection's helper ends with the proxy that started it, however that proxy ends:
