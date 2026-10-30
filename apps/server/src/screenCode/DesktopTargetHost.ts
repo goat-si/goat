@@ -114,6 +114,7 @@ export interface BoundWindow {
   snapshotId?: string;
   diffBaseline?: boolean;
   fullObservationId?: string;
+  structuralDiff?: boolean;
   lastReadCut?: boolean;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
   pointsStale?: "input" | "restart";
@@ -311,6 +312,7 @@ export const createDesktopTargetHost = (deps: {
     delete bound.snapshotId;
     delete bound.diffBaseline;
     delete bound.fullObservationId;
+    delete bound.structuralDiff;
     delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;

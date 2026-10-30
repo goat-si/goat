@@ -50,7 +50,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
           since_status: status,
           tree_diff:
             status === "diff"
-              ? '~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nRows and indices are as before; use snapshot_id in element_tokens (s2:N).'
+              ? '+ [1] AXButton "New"\n- [2] AXButton "Old"\n~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nRows and indices are as before; use snapshot_id in element_tokens (s2:N).'
               : `no change since ${args.since}. Rows and indices are as before; use snapshot_id in element_tokens (s2:N).`,
         };
       },
@@ -71,7 +71,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     expect(sent.at(-1)?.args).toMatchObject({ since: "s1", tree_format: "both" });
     expect(diff).toMatchObject({
       mode: "diff",
-      indexedText: `~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged; latest full observation is ${full.observationId}`,
+      indexedText: `+ [1] AXButton "New"\n- [2] AXButton "Old"\n~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged since ${full.observationId}; observe({diff:false}) lists every current number`,
     });
     yield* host.invoke(call("click", { elementRef: refAt(diff, 1) }, ref), context);
     expect(sent.at(-1)).toMatchObject({ tool: "click", args: { element_token: "s2:1" } });
@@ -79,7 +79,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     const unchanged = yield* observe({ mode: "diff", baseObservationId: diff.observationId });
     expect(unchanged).toMatchObject({
       mode: "diff",
-      indexedText: `no change; numbers unchanged; latest full observation is ${full.observationId}`,
+      indexedText: `no change since ${diff.observationId}; numbers as in that observation`,
     });
     status = "unknown_snapshot";
     const before = reads;
@@ -154,6 +154,8 @@ it.effect(
               "since s1: 0 added, 2 changed, 0 removed. Use element_tokens s2:N for + and ~ rows and unchanged rows; - ids are from s1.",
               '~ AXStaticText = "8"',
               '~ [1] AXButton "Apply" [actions=[press,name:move',
+              "since s1: 0 added this is row continuation",
+              "Rows and indices are as before continuation",
               "target:0x0]]",
             ].join("\n"),
           };
@@ -174,6 +176,8 @@ it.effect(
         [
           '~ AXStaticText = "8"',
           '~ [1] AXButton "Apply" [actions=[press,name:move',
+          "since s1: 0 added this is row continuation",
+          "Rows and indices are as before continuation",
           "target:0x0]]",
           `other numbers unchanged; latest full observation is ${full.observationId}`,
         ].join("\n"),
@@ -440,7 +444,7 @@ it.live.each([
     expect(value.first.mode).toBe("full");
     expect(value.second).toMatchObject({
       mode: "diff",
-      text: `${scenario.diff}\nother numbers unchanged; latest full observation is ${value.first.observationId}`,
+      text: `${scenario.diff}\n${scenario.label === "unchanged" ? `other numbers unchanged; latest full observation is ${value.first.observationId}` : `other numbers unchanged since ${value.first.observationId}; observe({diff:false}) lists every current number`}`,
     });
     expect(value.second.text).not.toContain("element_tokens");
     expect(value.stale).toEqual(
@@ -456,6 +460,160 @@ it.live.each([
     Effect.provide(
       ScreenRunService.layerWithRuntime({
         dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
+it.effect(
+  "incomplete reindexing triggers one full read and preserves focus on later no-change",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const { host, sent } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          const full = { ...goat2WindowState(args), snapshot_id: `s${++reads}` };
+          if (args.since === undefined) return full;
+          const { tree_markdown: _tree, ...diff } = full;
+          return reads === 2
+            ? {
+                ...diff,
+                since_status: "diff",
+                tree_diff:
+                  "+ [1] AXButton\nreindexed: more shifted ranges not listed; pass full_output",
+              }
+            : {
+                ...diff,
+                since_status: "no_change",
+                tree_diff: `no change since ${args.since}; focused element is [1]. Rows and indices are as before; use snapshot_id in element_tokens`,
+              };
+        },
+      });
+      const ref = (yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      )).value as ScreenTargetRef;
+      const observe = (args: Record<string, string>) =>
+        host
+          .observe(call("get_accessibility_tree", args, ref), context)
+          .pipe(Effect.map((result) => result.value as Observed & { resetReason?: string }));
+      const first = yield* observe({});
+      const fallback = yield* observe({ mode: "diff", baseObservationId: first.observationId });
+      expect(reads).toBe(3);
+      expect(sent.filter((entry) => entry.tool === "get_window_state")[2]?.args).not.toHaveProperty(
+        "since",
+      );
+      expect(fallback).toMatchObject({
+        mode: "full",
+        resetReason: "full read: too many rows moved",
+      });
+      const unchanged = yield* observe({ mode: "diff", baseObservationId: fallback.observationId });
+      expect(unchanged.indexedText).toBe(
+        `no change; numbers unchanged; latest full observation is ${fallback.observationId}; focused element is [1]`,
+      );
+    }),
+);
+
+it.effect("changed rows followed by no change retain the full baseline", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const { host } = fixture({
+      get_window_state: (args: Record<string, unknown>) => {
+        const full = { ...goat2WindowState(args), snapshot_id: `s${++reads}` };
+        if (args.since === undefined) return full;
+        const { tree_markdown: _tree, ...diff } = full;
+        return {
+          ...diff,
+          since_status: reads === 2 ? "diff" : "no_change",
+          tree_diff:
+            reads === 2
+              ? '~ [1] AXButton "Apply"'
+              : `no change since ${args.since}. Rows and indices are as before; use snapshot_id in element_tokens`,
+        };
+      },
+    });
+    const ref = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const observe = (args: Record<string, string>) =>
+      host
+        .observe(call("get_accessibility_tree", args, ref), context)
+        .pipe(Effect.map((result) => result.value as Observed));
+    const first = yield* observe({});
+    const diff = yield* observe({ mode: "diff", baseObservationId: first.observationId });
+    const unchanged = yield* observe({ mode: "diff", baseObservationId: diff.observationId });
+    expect(unchanged.indexedText).toBe(
+      `no change; numbers unchanged; latest full observation is ${first.observationId}`,
+    );
+  }),
+);
+
+it.live("a failed sheet probe rereads the original window without since", () => {
+  let opened = false;
+  let reads = 0;
+  const window = (id: number, title: string) => ({
+    pid: 42,
+    window_id: id,
+    title,
+    app_name: "Editor",
+    bounds: { x: 0, y: 0, width: 800, height: 600 },
+    is_on_screen: true,
+    on_current_space: true,
+  });
+  const { host, sent } = fixture({
+    list_windows: () => ({
+      windows: [
+        window(7, "Document"),
+        ...(opened
+          ? [{ ...window(8, ""), bounds: { x: 430, y: 300, width: 460, height: 183 } }]
+          : []),
+      ],
+    }),
+    press_key: () => {
+      opened = true;
+      return { effect: "unverifiable" };
+    },
+    get_window_state: (args: Record<string, unknown>) => {
+      if (args.window_id === 8) return { pid: 42, window_id: 8, elements: [], tree_markdown: "" };
+      const full = { ...goat2WindowState(args), snapshot_id: `s${++reads}` };
+      if (args.since === undefined) return full;
+      const { tree_markdown: _tree, ...diff } = full;
+      return {
+        ...diff,
+        since_status: "no_change",
+        tree_diff: `no change since ${args.since}. Rows and indices are as before; use snapshot_id in element_tokens`,
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor',window_id:7}); await app.observe(); await app.press('cmd+shift+g'); return await app.observe();`,
+    });
+    const value = result.value as { mode: string; text: string };
+    const calls = sent.filter((entry) => entry.tool === "get_window_state");
+    expect(calls).toHaveLength(4);
+    expect(calls[1]?.args).toMatchObject({ since: "s1" });
+    expect(calls[2]?.args).not.toHaveProperty("since");
+    expect(calls[3]?.args).not.toHaveProperty("since");
+    expect(value.mode).toBe("full");
+    expect(value.text).not.toContain("undefined");
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        desktopHost: host,
         invocation: {
           command: process.execPath,
           entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
