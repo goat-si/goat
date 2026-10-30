@@ -21,6 +21,24 @@ import {
 
 type Bridge = NonNullable<typeof previewBridge>;
 
+const siteOrigin = (text: string): string | null => {
+  try {
+    const url = new URL(text.trim());
+    const web = url.protocol === "http:" || url.protocol === "https:";
+    return web && !url.username && !url.password ? url.origin : null;
+  } catch {
+    return null;
+  }
+};
+
+const failureCopy = (cause: unknown): string => {
+  const text = String(cause);
+  const reason =
+    BrowserImportFailureReason.literals.find((value) => text.includes(`failed: ${value}.`)) ??
+    "readFailed";
+  return BROWSER_IMPORT_FAILURE_COPY[reason];
+};
+
 type Props = {
   readonly profile: BrowserProfile;
   readonly source: NonNullable<BrowserProfile["importSource"]>;
@@ -60,37 +78,27 @@ export function BrowserRefreshDialog({ profile, source, environmentId, bridge, o
   }, [bridge, environmentId, profile.id]);
 
   const addOrigin = () => {
-    try {
-      const url = new URL(origin.trim());
-      if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password)
-        throw new Error();
-      setSelected((current) => [...new Set([...current, url.origin])]);
-      setOrigin("");
-      setMessage(null);
-    } catch {
+    const site = siteOrigin(origin);
+    if (site === null) {
       setMessage("Enter a valid HTTP or HTTPS site address.");
+      return;
     }
+    setSelected((current) => [...new Set([...current, site])]);
+    setOrigin("");
+    setMessage(null);
   };
-  const refresh = async () => {
+  const refresh = () => {
     setBusy(true);
     setMessage(null);
-    try {
-      const refreshed = await bridge.importBrowserCookies({
+    void bridge
+      .importBrowserCookies({
         environmentId,
         ...source,
         targetProfileId: profile.id,
         origins: selected,
-      });
-      setResult(refreshed);
-    } catch (cause) {
-      const text = String(cause);
-      const reason =
-        BrowserImportFailureReason.literals.find((value) => text.includes(`failed: ${value}.`)) ??
-        "readFailed";
-      setMessage(BROWSER_IMPORT_FAILURE_COPY[reason]);
-    } finally {
-      setBusy(false);
-    }
+      })
+      .then(setResult, (cause: unknown) => setMessage(failureCopy(cause)))
+      .then(() => setBusy(false));
   };
 
   return (
@@ -163,7 +171,7 @@ export function BrowserRefreshDialog({ profile, source, environmentId, bridge, o
             {result ? "Done" : "Cancel"}
           </Button>
           {!result ? (
-            <Button disabled={busy || selected.length === 0} onClick={() => void refresh()}>
+            <Button disabled={busy || selected.length === 0} onClick={refresh}>
               {busy ? "Refreshing…" : "Refresh"}
             </Button>
           ) : null}

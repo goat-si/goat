@@ -4,6 +4,7 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as BrowserSession from "../BrowserSession.ts";
 import * as BrowserImport from "./BrowserImport.ts";
@@ -142,6 +143,59 @@ describe("BrowserImport.writeCookies", () => {
     assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://b.test"]), false);
     assert.equal(BrowserImport.refreshHasUnreadableCookies(read, ["https://other.test"]), true);
   });
+
+  it.effect("skips an expired source cookie but still clears the stale target cookie", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(2_000_000_000_000);
+      const removed: Array<string> = [];
+      const written: Array<string> = [];
+      const result = yield* BrowserImport.refreshCookies(
+        {
+          cookies: {
+            get: () =>
+              Promise.resolve([
+                {
+                  domain: "a.example.com",
+                  hostOnly: true,
+                  name: "sid",
+                  path: "/",
+                  secure: true,
+                  httpOnly: true,
+                  sameSite: "lax" as const,
+                },
+              ]),
+            set: (details) => {
+              (details.expirationDate === 1 ? removed : written).push(details.name ?? "");
+              return Promise.resolve();
+            },
+            flushStore: () => Promise.resolve(),
+          },
+        },
+        {
+          cookies: [
+            {
+              ...cookie,
+              url: "https://a.example.com/",
+              name: "sid",
+              expirationDate: 1_000_000_000,
+            },
+            {
+              ...cookie,
+              url: "https://a.example.com/",
+              name: "live",
+              expirationDate: 3_000_000_000,
+            },
+          ],
+          undecryptable: 0,
+          undecryptableHosts: [],
+        },
+        ["https://a.example.com"],
+      );
+      assert.deepEqual(removed, ["sid"]);
+      assert.deepEqual(written, ["live"]);
+      assert.equal(result.imported, 1);
+    }),
+  );
 
   it.effect("replaces all matching target cookies and reports shared domains", () =>
     Effect.gen(function* () {

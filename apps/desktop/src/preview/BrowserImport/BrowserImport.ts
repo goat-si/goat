@@ -5,6 +5,7 @@ import type {
   BrowserImportUnavailableReason,
 } from "@goat/contracts";
 import { BrowserImportFailureReason } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type { Session } from "electron";
 import * as Effect from "effect/Effect";
@@ -188,15 +189,18 @@ export const refreshCookies = Effect.fn("BrowserImport.refreshCookies")(function
   originStrings: ReadonlyArray<string>,
 ) {
   const origins = [...new Set(originStrings)].map((origin) => new URL(origin));
-  const chosen = read.cookies.filter((cookie) =>
-    origins.some((origin) =>
-      matchesOrigin(
-        cookie.domain ?? new URL(cookie.url).hostname,
-        cookie.domain === undefined,
-        cookie.secure,
-        origin,
+  const nowSeconds = (yield* Clock.currentTimeMillis) / 1000;
+  const chosen = read.cookies.filter(
+    (cookie) =>
+      (cookie.expirationDate === undefined || cookie.expirationDate > nowSeconds) &&
+      origins.some((origin) =>
+        matchesOrigin(
+          cookie.domain ?? new URL(cookie.url).hostname,
+          cookie.domain === undefined,
+          cookie.secure,
+          origin,
+        ),
       ),
-    ),
   );
   const sharedDomains = new Set<string>();
   const existing = yield* Effect.tryPromise(() => session.cookies.get({}));
