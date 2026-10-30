@@ -1574,7 +1574,7 @@ const make = Effect.gen(function* () {
       runPromise(
         recordBrowserAction(history, {
           threadId: tab.threadId,
-          url,
+          url: action === "back" || action === "forward" ? tab.page.url() : url,
           action,
           ...outcome,
           ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
