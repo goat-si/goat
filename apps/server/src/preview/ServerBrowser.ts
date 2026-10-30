@@ -1687,7 +1687,6 @@ const make = Effect.gen(function* () {
               : "The requested server preview tab does not exist.",
           );
         }
-        // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
         const existing =
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
@@ -1708,13 +1707,14 @@ const make = Effect.gen(function* () {
                 'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
                 "dialogPending",
               );
-            if (existing) {
-              if (url) await navigate(tab, url, "load", navigationTimeout);
-            } else {
-              await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
-                throw unloadedOpen(tab.tabId, cause);
-              });
-            }
+            const loading = () =>
+              existing && url
+                ? navigate(tab, url, "load", navigationTimeout)
+                : (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
+                    throw unloadedOpen(tab.tabId, cause);
+                  });
+            if (url) await recordAction(tab, "navigate", loading, { url });
+            else if (!existing) await loading();
             const reveal = open.open ?? open.show;
             if (reveal !== false) {
               await runPromise(

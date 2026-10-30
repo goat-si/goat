@@ -267,6 +267,28 @@ it.live(
         expect(entries.map((entry) => [entry.method, entry.tabHost, entry.verdict])).toEqual([
           ["scrollCollect", "app.example", "sent"],
         ]);
+        const first = yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          operation: "open",
+          input: {
+            url: "https://first.example/path?secret=x",
+            reuseExistingTab: false,
+            show: false,
+          },
+        });
+        yield* broker.invoke<PreviewAutomationStatus>({
+          scope,
+          tabId: PreviewTabId.make(first.tabId!),
+          operation: "open",
+          input: { url: "https://second.example/private?secret=y", show: false },
+        });
+        const navigations = (yield* history.listForThread(testThread.threadId)).filter(
+          (entry) => entry.method === "navigate",
+        );
+        expect(navigations.map((entry) => entry.tabHost)).toEqual([
+          "second.example",
+          "first.example",
+        ]);
       }),
     ).pipe(Effect.provide(layer)),
 );
