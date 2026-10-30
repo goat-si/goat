@@ -38,7 +38,9 @@ provider (Codex, Claude, ...)
   helper must be the driver's parent, not a sibling and not a LaunchServices launch.
 - The driver runs as `cua-driver mcp --direct --embedded` (lead decision D3 amendment, #1210): one
   stdio process that owns the driver runtime and listens on nothing, so no provider and no other
-  process of the user ever gets a socket path. Spawned by the helper it reports host attribution
+  process of the user ever gets a driver socket. The one listener is the shared service's agent
+  session socket (ADR-0023 D3 amendment 3), which hands a connection to a driver only after the
+  peer check and both tokens, and kills that driver when the connection ends. Spawned by the helper it reports host attribution
   and the helper as its parent application, exactly as `serve --embedded` does. Agent calls reach
   it only through the helper, which brokers them in the #1207 envelope. Signed desktop artifacts
   carry this helper (#1351).

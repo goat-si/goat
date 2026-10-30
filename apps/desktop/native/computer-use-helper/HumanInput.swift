@@ -67,6 +67,8 @@ final class InputActivity {
   private var tap: CFMachPort?
   private var timer: DispatchSourceTimer?
   private var polled: [(source: String, types: [CGEventType], kind: PolledKind)] = []
+  private var stopped = false
+  private var tapLoop: CFRunLoop?
 
   /// `at` is on `InputActivity.now()`'s clock, so a later writer can say how long ago it was.
   init(report: @escaping (_ source: String, _ at: Double) -> Void) {
@@ -75,6 +77,21 @@ final class InputActivity {
 
   /// Seconds on a clock that never steps back with the wall clock.
   static func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
+
+  /// Stops listening; nothing is reported after it returns, and it is safe to call again.
+  func stop() {
+    let loop: CFRunLoop? = queue.sync {
+      stopped = true
+      timer?.cancel()
+      timer = nil
+      return tapLoop
+    }
+    if let tap {
+      CGEvent.tapEnable(tap: tap, enable: false)
+      CFMachPortInvalidate(tap)
+    }
+    if let loop { CFRunLoopStop(loop) }
+  }
 
   func start() {
     let tapped = startTap()
@@ -108,7 +125,12 @@ final class InputActivity {
       let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
       CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
       CGEvent.tapEnable(tap: tap, enable: true)
-      CFRunLoopRun()
+      let loop = CFRunLoopGetCurrent()
+      let stopped: Bool = self.queue.sync {
+        self.tapLoop = loop
+        return self.stopped
+      }
+      if !stopped { CFRunLoopRun() }
     }
     thread.name = "si.goat.computer-use.pointer-tap"
     thread.start()
@@ -124,6 +146,7 @@ final class InputActivity {
     }
     let at = Self.now()
     queue.async { [self] in
+      guard !stopped else { return }
       if let at = PointerTap.report(type, userData: userData, at: at) { report("pointer", at) }
     }
   }
@@ -139,6 +162,7 @@ final class InputActivity {
 
   private func startPolling(_ kinds: [(source: String, types: [CGEventType])]) {
     queue.async { [self] in
+      guard !stopped else { return }
       let now = Self.now()
       polled = kinds.map {
         ($0.source, $0.types, PolledKind(newestAtStart: Self.newest($0.types, now: now)))
@@ -154,6 +178,7 @@ final class InputActivity {
   }
 
   private func poll() {
+    guard !stopped else { return }
     let now = Self.now()
     for index in polled.indices {
       let at = Self.newest(polled[index].types, now: now)

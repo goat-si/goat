@@ -13,8 +13,22 @@ const UPDATED =
  * Launches from the gatedFrom-th on wait for the gate.
  */
 function fakeServices(
-  options: { readonly gate?: Promise<void>; readonly gatedFrom?: number } = {},
+  options: {
+    readonly gate?: Promise<void>;
+    readonly gatedFrom?: number;
+    /** Every openSession waits for it. */
+    readonly sessionGate?: Promise<void>;
+    readonly sessionsFail?: boolean;
+  } = {},
 ) {
+  /** What each service was asked about agent sessions, in order. */
+  const sessionCalls: Array<{
+    readonly pid: number;
+    readonly method: "open" | "stop" | "close";
+    readonly sessionId: string;
+    readonly token?: string;
+  }> = [];
+  const sessionOpening = Promise.withResolvers<void>();
   const launched: Array<{
     readonly executable: string;
     readonly pid: number;
@@ -47,12 +61,42 @@ function fakeServices(
         closed = true;
         ended.resolve();
       },
+      openSession: async (params: {
+        readonly sessionId: string;
+        readonly token: string;
+        readonly capabilityManifestPath: string;
+      }) => {
+        sessionOpening.resolve();
+        await options.sessionGate;
+        if (options.sessionsFail) throw new Error("The service refused the session.");
+        sessionCalls.push({
+          pid,
+          method: "open",
+          sessionId: params.sessionId,
+          token: params.token,
+        });
+        return {
+          sessionId: params.sessionId,
+          socketPath: "/private/tmp/goat-cu.test/s",
+          launch: "launch-" + pid,
+          servicePid: pid,
+        };
+      },
+      stopSession: async (sessionId: string) => {
+        sessionCalls.push({ pid, method: "stop", sessionId });
+      },
+      closeSession: async (sessionId: string) => {
+        sessionCalls.push({ pid, method: "close", sessionId });
+      },
     };
   };
   return {
     launched,
     dead,
     open,
+    sessionCalls,
+    /** Settles once a service is asked to open a session. */
+    sessionOpening: sessionOpening.promise,
     opening: opening.promise,
     alive: (pid: number) => !dead.has(pid),
   };
@@ -262,4 +306,112 @@ describe("computer use helper service", () => {
     const next = await manager.claim(HELPER, "desktop", { observe: true });
     assert.equal(next.service.pid, 501);
   });
+
+  const AGENT = { capabilityManifestPath: "/state/cua-driver/agents.yaml", environment: [] };
+
+  it.effect("hosts racing agent sessions on one service, each under its own id and token", () =>
+    Effect.gen(function* () {
+      const services = fakeServices();
+      const manager = makeHelperServiceManager(services);
+      const sessions = Array.from({ length: 5 }, (_, index) =>
+        manager.openAgentSession(HELPER, "thread-" + index, AGENT),
+      );
+      const opened = yield* Effect.promise(() => Promise.all(sessions.map((s) => s.opened)));
+      assert.lengthOf(services.launched, 1);
+      assert.equal(new Set(opened.map((d) => d.sessionId)).size, 5);
+      assert.equal(new Set(opened.map((d) => d.token)).size, 5);
+      // The service holds each session's own token, the one only its descriptor carries.
+      for (const descriptor of opened)
+        assert.deepInclude(services.sessionCalls, {
+          pid: 500,
+          method: "open",
+          sessionId: descriptor.sessionId,
+          token: descriptor.token,
+        });
+      assert.isTrue(opened.every((d) => d.servicePid === 500 && d.launch === "launch-500"));
+    }),
+  );
+
+  it.effect("stops only the agent session asked, and keeps every session on the service", () =>
+    Effect.gen(function* () {
+      const services = fakeServices();
+      const manager = makeHelperServiceManager(services);
+      const a = manager.openAgentSession(HELPER, "thread-a", AGENT);
+      const b = manager.openAgentSession(HELPER, "thread-b", AGENT);
+      const [first] = yield* Effect.promise(() => Promise.all([a.opened, b.opened]));
+      yield* Effect.promise(() => a.stop());
+      assert.deepEqual(
+        services.sessionCalls.filter((call) => call.method !== "open"),
+        [{ pid: 500, method: "stop", sessionId: first.sessionId }],
+      );
+      assert.isFalse(services.launched[0]?.closed());
+    }),
+  );
+
+  it.effect("ends the service with its last agent session, not before", () =>
+    Effect.gen(function* () {
+      const services = fakeServices();
+      const manager = makeHelperServiceManager(services);
+      const a = manager.openAgentSession(HELPER, "thread-a", AGENT);
+      const b = manager.openAgentSession(HELPER, "thread-b", AGENT);
+      const [first, second] = yield* Effect.promise(() => Promise.all([a.opened, b.opened]));
+      yield* Effect.promise(() => a.close());
+      yield* Effect.promise(() => a.close());
+      assert.isFalse(services.launched[0]?.closed());
+      yield* Effect.promise(() => b.close());
+      assert.isTrue(services.launched[0]?.closed());
+      assert.deepEqual(
+        services.sessionCalls.filter((call) => call.method === "close"),
+        [
+          { pid: 500, method: "close", sessionId: first.sessionId },
+          { pid: 500, method: "close", sessionId: second.sessionId },
+        ],
+      );
+    }),
+  );
+
+  it.effect(
+    "closes an agent session still opening without waiting for it, and undoes the open",
+    () =>
+      Effect.gen(function* () {
+        const sessionGate = Promise.withResolvers<void>();
+        const services = fakeServices({ sessionGate: sessionGate.promise });
+        const manager = makeHelperServiceManager(services);
+        const keeper = yield* Effect.promise(() => manager.claim(HELPER, "desktop"));
+        const session = manager.openAgentSession(HELPER, "thread-a", AGENT);
+        const opened = session.opened.then(
+          () => "opened",
+          () => "rejected",
+        );
+        // The open is waiting on the service; closing now must finish without it.
+        yield* Effect.promise(() => services.sessionOpening);
+        yield* Effect.promise(() => session.close());
+        assert.equal(yield* Effect.promise(() => opened), "rejected");
+        const closing = services.sessionCalls.filter((call) => call.method === "close");
+        assert.lengthOf(closing, 1);
+        // A stop of a session that never opened has nothing to end.
+        yield* Effect.promise(() => session.stop());
+        assert.isFalse(services.sessionCalls.some((call) => call.method === "stop"));
+        yield* Effect.sync(() => sessionGate.resolve());
+        yield* Effect.promise(() => keeper.release());
+        assert.isTrue(services.launched[0]?.closed());
+      }),
+  );
+
+  it.effect("releases the claim of an agent session the service refused", () =>
+    Effect.gen(function* () {
+      const services = fakeServices({ sessionsFail: true });
+      const manager = makeHelperServiceManager(services);
+      const session = manager.openAgentSession(HELPER, "thread-a", AGENT);
+      const outcome = yield* Effect.promise(() =>
+        session.opened.then(
+          () => "opened",
+          (error: Error) => error.message,
+        ),
+      );
+      assert.equal(outcome, "The service refused the session.");
+      yield* Effect.promise(() => session.close());
+      assert.isTrue(services.launched[0]?.closed());
+    }),
+  );
 });

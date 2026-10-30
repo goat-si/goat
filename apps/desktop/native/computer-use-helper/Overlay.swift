@@ -309,64 +309,111 @@ final class AgentOverlay {
   }
 }
 
-/// Runs the overlay when the proxy opened fd 3 for it, and never returns then: AppKit needs the
-/// main run loop, which also serves the main dispatch queue. Returns when there is no channel,
-/// so the caller keeps its plain dispatchMain().
-func runOverlayIfConnected() {
-  let channel: Int32 = 3
-  var info = stat()
-  guard fstat(channel, &info) == 0, (info.st_mode & S_IFMT) == S_IFSOCK else { return }
-  // A write to a proxy that is gone must not kill this process. Ignoring SIGPIPE would pass on
-  // to the driver it starts, so only this socket stops raising it.
-  var on: Int32 = 1
-  setsockopt(channel, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-  let overlay = AgentOverlay()
-  retained.append(overlay)
-  let ack = { (seq: Int) in
-    let line = Array("{\"ack\":\(seq)}\n".utf8)
-    _ = line.withUnsafeBytes { write(channel, $0.baseAddress, $0.count) }
-  }
-  // A person's input goes to the proxy on the same channel, written from the main queue like
-  // every ack, so two lines never interleave. Its age is taken as it is written: time spent
-  // waiting for the main queue must not make the event look newer than it was.
-  let input = InputActivity { source, at in
-    DispatchQueue.main.async {
-      let ageMs = max(0, Int(((InputActivity.now() - at) * 1000).rounded()))
-      let line = Array("{\"humanInput\":{\"source\":\"\(source)\",\"ageMs\":\(ageMs)}}\n".utf8)
-      _ = line.withUnsafeBytes { write(channel, $0.baseAddress, $0.count) }
-    }
-  }
-  retained.append(input)
-  input.start()
-  DispatchQueue.global().async {
-    var buffer = [UInt8]()
-    var chunk = [UInt8](repeating: 0, count: 4096)
-    while true {
-      let count = read(channel, &chunk, chunk.count)
-      if count < 0 && errno == EINTR { continue }
-      if count <= 0 {
-        DispatchQueue.main.async { overlay.hide() }
-        return
+/// One overlay channel: commands in, acks and a person's input out, for one agent connection.
+/// Every write goes through one serial queue off the main thread, so a peer that stops reading
+/// stalls only its own channel, and the descriptor closes on that queue after the last write.
+final class OverlayChannel: SessionOverlay {
+  private let channel: Int32
+  private let closesChannel: Bool
+  private let writes = DispatchQueue(label: "si.goat.computer-use.overlay-writes")
+  private var closed = false
+  /// Guards closed and ended across the reader, the writer queue, main and end().
+  private let state = NSLock()
+  private var ended = false
+  private let overlay: AgentOverlay
+  private var input: InputActivity?
+
+  private var isEnded: Bool { state.lock(); defer { state.unlock() }; return ended }
+
+  /// Call on the main thread. native names the session whose work a pausing hide interrupts.
+  init(channel: Int32, closesChannel: Bool, native: @escaping () -> McpNativeSession?) {
+    self.channel = channel
+    self.closesChannel = closesChannel
+    overlay = AgentOverlay()
+    // A write to a proxy that is gone must not kill this process.
+    var on: Int32 = 1
+    setsockopt(channel, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+    // A person's input is dated as it is written: time spent queued must not make it look newer.
+    let input = InputActivity { [weak self] source, at in
+      self?.write {
+        let ageMs = max(0, Int(((InputActivity.now() - at) * 1000).rounded()))
+        return "{\"humanInput\":{\"source\":\"\(source)\",\"ageMs\":\(ageMs)}}\n"
       }
-      buffer.append(contentsOf: chunk[0..<count])
-      while let end = buffer.firstIndex(of: 0x0A) {
-        let line = Data(buffer[0..<end])
-        buffer.removeSubrange(0...end)
-        guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-          let seq = message["seq"] as? Int, let command = message["command"] as? [String: Any]
-        else { continue }
-        // Cancellation reaches native observations before a busy AppKit queue can delay it.
-        interruptNativeMcp(command)
-        DispatchQueue.main.async {
-          overlay.apply(command)
-          // Hand the change to the window server now, and answer on the next turn of the main
-          // loop, after it has been committed.
-          CATransaction.flush()
-          DispatchQueue.main.async { ack(seq) }
+    }
+    self.input = input
+    input.start()
+    let overlay = self.overlay
+    Thread.detachNewThread { [self] in
+      var buffer = [UInt8]()
+      var chunk = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = read(channel, &chunk, chunk.count)
+        if count < 0 && errno == EINTR { continue }
+        if count <= 0 { break }
+        buffer.append(contentsOf: chunk[0..<count])
+        while let end = buffer.firstIndex(of: 0x0A) {
+          let line = Data(buffer[0..<end])
+          buffer.removeSubrange(0...end)
+          guard let message = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+            let seq = message["seq"] as? Int, let command = message["command"] as? [String: Any]
+          else { continue }
+          // Cancellation reaches native observations before a busy AppKit queue can delay it.
+          interruptNativeMcp(command, session: native())
+          if isEnded { continue }
+          DispatchQueue.main.async {
+            // end() queues its hide after setting ended, so no show can follow that hide.
+            guard !self.isEnded else { return }
+            overlay.apply(command)
+            // Hand the change to the window server now, and answer on the next turn of the
+            // main loop, after it has been committed.
+            CATransaction.flush()
+            DispatchQueue.main.async { self.write { "{\"ack\":\(seq)}\n" } }
+          }
+        }
+      }
+      end()
+      // Only this reader closes the descriptor, after its last read and the queued writes, and
+      // under the lock end() shuts it down with, so no shutdown reaches a reused number.
+      if closesChannel {
+        writes.async { [self] in
+          state.lock(); closed = true; close(channel); state.unlock()
         }
       }
     }
   }
+
+  private func write(_ line: @escaping () -> String) {
+    writes.async { [self] in
+      // closed changes only on this queue, so it cannot change during the write below.
+      guard !closed, !isEnded else { return }
+      let bytes = Array(line().utf8)
+      _ = bytes.withUnsafeBytes { Darwin.write(channel, $0.baseAddress, $0.count) }
+    }
+  }
+
+  /// Hides the overlay, stops reporting input and ends the channel's reads; idempotent. The
+  /// shutdown happens here, never behind a write blocked on a peer that stopped reading, and
+  /// it unblocks that write.
+  func end() {
+    state.lock()
+    let first = !ended
+    ended = true
+    if first && closesChannel && !closed { shutdown(channel, SHUT_RDWR) }
+    state.unlock()
+    guard first else { return }
+    input?.stop()
+    DispatchQueue.main.async { [overlay] in overlay.hide() }
+  }
+}
+
+/// Runs the overlay when the proxy opened fd 3 for it, and never returns then: AppKit needs the
+/// main run loop, which also serves the main dispatch queue. Returns when there is no channel,
+/// so the caller keeps its plain dispatchMain().
+func runOverlayIfConnected(native: McpNativeSession) {
+  let channel: Int32 = 3
+  var info = stat()
+  guard fstat(channel, &info) == 0, (info.st_mode & S_IFMT) == S_IFSOCK else { return }
+  retained.append(OverlayChannel(channel: channel, closesChannel: false, native: { native }))
   NSApplication.shared.setActivationPolicy(.accessory)
   NSApplication.shared.run()
 }

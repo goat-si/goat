@@ -51,8 +51,8 @@
   a 0700 directory, with a token minted per launch and per session and a peer code-signature
   check; frames stay on that socket and are never relayed through the server. It lands in three
   stages: (a) the desktop's service manager with its start, reuse and cleanup rules, (b) sessions
-  in the Swift service, (c) proxies connecting to it. The Engine and Channel bullets below state
-  the decision and what is in force.
+  in the Swift service, (c) proxies connecting to it. Stages a and b are in force; the Engine and
+  Channel bullets below state the decision, what is in force and what stage c must meet.
 - Related: [ADR-0004](ADR-0004-electron-shell.md), [ADR-0014](ADR-0014-desktop-runtime-identity.md)
 
 ## Decision record
@@ -130,11 +130,29 @@
     instead of waiting it out: it does not queue behind that start, every helper the start
     launched (its host, grant, listing, capture and agent-route probes) ends with it, a
     cancelled claim holds nothing, and a late Stop of a session a newer one followed leaves the
-    newer one running. Each agent connection's proxy
-    still starts its own helper with `--mcp` for its driver and Stop ends the pair (D3 amendment
-    2); the desktop's readiness check starts its own helper with `--mcp` the same way. Staged
-    for b and c: agent sessions claim the shared service, which runs a driver per session as its
-    direct child, so Stop or a pause ends that session's driver and no other. Direct mode has no driver cursor overlay, so the helper draws
+    newer one running. In force since stage b: the shared service hosts agent sessions
+    (`AgentSessions.swift`, `SessionSocket.swift`). The desktop opens one with
+    `openAgentSession` on the channel's manager, which claims the service like any session, so
+    racing opens share one service and its last close ends it. Each MCP connection that attaches
+    to a session runs a fresh driver as the service's direct child with that session's
+    capability manifest, its own native MCP session, and an overlay channel bound to that driver,
+    with its own acks and input reports; a pausing hide interrupts only its own session's native
+    work. A session runs one driver at a time. The connection's end is the Stop boundary: the
+    service watches for it apart from the relay, so the driver is killed at once, mid-action or
+    not, even while it has stopped reading its input. A desktop `stopSession` does the same and
+    refuses every connection that reached the socket before it, accepted or still waiting, so a
+    Stop that crosses an attach still wins; a driver whose start a Stop overtakes is killed, and
+    one session's slow start never holds up another's Stop. An overlay command still queued when
+    its channel ends is dropped, so nothing shows after the hide. `closeSession` also forgets the
+    session and its token. Drivers are reaped by the one object that signals them, so no signal
+    reaches a reused pid, and a service that exits cleanly first waits for its drivers to be reaped.
+    When the service dies alone and anything of its group still runs, its launcher ends the whole
+    group with one SIGKILL, itself included, so drivers that ignore SIGTERM go too and no other
+    process is ever signalled; only a group with nothing left running keeps the service's exit
+    status. Until stage c, each agent connection's
+    proxy still starts its own helper with `--mcp` for its driver and Stop ends the pair (D3
+    amendment 2); the desktop's readiness check starts its own helper with `--mcp` the same
+    way. Direct mode has no driver cursor overlay, so the helper draws
     the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
     driver changes in the fork with recorded provenance, never in a rewritten driver.
   - **Driver fork (D15).** `goat-si/cua-driver` is a `git subtree split` of trycua/cua
@@ -150,16 +168,39 @@
     `cargo deny`, pass the 0.37.0 protocol-compatibility test and one live check per OS, then tag
     and bump GOAT's pin.
   - **Channel.** The desktop's helper talks to its launcher over line-delimited JSON on stdio for
-    readiness, app listing and watches; an agent connection's helper passes MCP straight between
-    its launcher and the driver until stage c moves sessions onto the shared service's socket. A release helper serves only a parent
-    signed by GOAT's team with the GOAT app identifier, and its service half only its own
-    launcher; any socket, as in the fallback, adds a per-launch token and an audit-token peer
-    check. The hello negotiates `clientApiVersion` and `serverApiVersion`, every request has a
+    readiness, app listing, watches and agent sessions; an agent connection's helper passes MCP
+    straight between its launcher and the driver until stage c moves sessions onto the shared
+    service's socket. A release helper serves only a parent signed by GOAT's team with the GOAT
+    app identifier, and its service half only its own launcher. The session socket reuses that
+    trust instead of adding a control listener: sessions are opened only over the launcher-checked
+    stdio channel, which carries the session's token in and this launch's token out. The socket
+    lives in a fresh 0700 directory per launch (under the user's temporary directory, or `/tmp`
+    when that path is too long for a socket), and serves a peer only when its uid is this user's
+    and, in a release helper, the kernel's audit token for the connection names code signed by
+    GOAT's team, the same policy as the parent check. Each connection is challenged and must
+    answer with one auth line (session, launch token, session token, channel) of at most 4 KiB
+    within two seconds of its accept, the peer check included (a check still running at the
+    deadline is not interrupted, but the connection is then closed); at most eight are
+    unauthenticated at once. Tokens are compared in constant time,
+    never logged, and die with the session or the launch.
+
+    Stage c switches the proxies and must meet these criteria: the proxy gets the session
+    descriptor (`AgentSessionDescriptor`: socket path, both tokens, service pid and generation)
+    from the desktop over GOAT's existing authenticated paths, never in a URL, log or environment
+    the agent can read; it connects to the socket itself, so frames never pass through the
+    server (A2 stays out); it checks the attached reply's service pid against the descriptor and
+    treats a refused attach, a replaced service or a closed socket as a Stop; it closes its
+    connection to stop or pause and attaches again to resume, opening the overlay channel only
+    after the MCP channel is attached; Stop, stop all, takeover, lease expiry and the
+    private-field pause keep ending the transport at once; and before it ships, captures of one
+    session must keep other sessions' overlays out (each session's hide covers only its own
+    panel today, as with one `--mcp` helper per connection). The hello negotiates `clientApiVersion` and `serverApiVersion`, every request has a
     deadline, and replies are bound to the helper's executable, pid and generation, so late
     replies after a Stop are quarantined. Agents reach the helper only through GOAT's MCP surface. Every MCP result
     puts screenshots in `content` image blocks; `structuredContent` never carries image payloads,
     and screenshots keep their request, generation and destination thread through to the
     transcript.
+
   - **Observation.** Window-scoped screenshot plus accessibility tree. The first observation is
     full; later ones are diffs keyed by element refs that survive re-reads. A target is PID,
     window id and an epoch naming the window, its Space and display; a new epoch invalidates refs,

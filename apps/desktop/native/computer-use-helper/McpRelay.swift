@@ -61,74 +61,45 @@ func runMcp() -> Never {
     flag + 1 < arguments.count, arguments[flag + 1].hasPrefix("/")
   else { mcpFail(64, "--mcp needs --capability-manifest with an absolute path.") }
   let service = DriverService()
-  guard let driverPath = service.driverPath, FileManager.default.isExecutableFile(atPath: driverPath)
-  else { mcpFail(79, "The helper bundle has no Cua Driver.") }
-  if let refusal = service.driverRefusal(driverPath) { mcpFail(79, refusal) }
-
-  // Only the knobs a host may set come from this process's environment; the rest is fixed.
-  let settable = ProcessInfo.processInfo.environment.filter { DriverEnvironment.hostSettableNames.contains($0.key) }
-    .map { ["name": $0.key, "value": $0.value] }
-  var environment = service.driverEnvironment(settable)
-  environment["CUA_DRIVER_CAPABILITY_MANIFEST_FILE"] = arguments[flag + 1]
-  environment["CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED"] = "1"
-  environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
-
-  let driverArguments: [String] =
-    [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", service.bundleId]
-  let argv = driverArguments.map { strdup($0) } + [nil]
-  let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
-  var child: pid_t = 0
-  let requests = Pipe()
-  let replies = Pipe()
-  // Only the driver ends of these pipes and stderr survive into the direct child.
-  var actions: posix_spawn_file_actions_t?
-  guard posix_spawn_file_actions_init(&actions) == 0 else {
-    mcpFail(78, "Could not prepare Cua Driver's pipes.")
-  }
-  defer { posix_spawn_file_actions_destroy(&actions) }
-  guard
-    posix_spawn_file_actions_adddup2(&actions, requests.fileHandleForReading.fileDescriptor, STDIN_FILENO) == 0,
-    posix_spawn_file_actions_adddup2(&actions, replies.fileHandleForWriting.fileDescriptor, STDOUT_FILENO) == 0,
-    posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO) == 0
-  else { mcpFail(78, "Could not prepare Cua Driver's pipes.") }
-  var attributes: posix_spawnattr_t?
-  guard posix_spawnattr_init(&attributes) == 0 else {
-    mcpFail(78, "Could not prepare Cua Driver's spawn attributes.")
-  }
-  defer { posix_spawnattr_destroy(&attributes) }
-  guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0 else {
-    mcpFail(78, "Could not isolate Cua Driver's descriptors.")
-  }
   // Readiness binds the driver's reported parent to this service. Send our identity before
   // the driver can write to shared stderr; stdout remains exclusively MCP.
   let greeting: [String: Any] = [
     "type": "hello", "protocol": protocolVersion, "pid": Int(getpid()),
     "bundleId": service.bundleId,
   ]
-  if let data = try? JSONSerialization.data(withJSONObject: greeting) {
-    try? FileHandle.standardError.write(contentsOf: data + Data([0x0A]))
-  }
-  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
-  argv.forEach { free($0) }
-  envp.forEach { free($0) }
-  guard status == 0 else { mcpFail(78, "Could not start Cua Driver (\(status)).") }
-  try? requests.fileHandleForReading.close()
-  try? replies.fileHandleForWriting.close()
+  let launched: SessionDriver
+  do {
+    // Only the knobs a host may set come from this process's environment; the rest is fixed.
+    launched = try launchDriver(
+      service, manifestPath: arguments[flag + 1],
+      settable: ProcessInfo.processInfo.environment.map { ["name": $0.key, "value": $0.value] },
+      beforeSpawn: {
+        if let data = try? JSONSerialization.data(withJSONObject: greeting) {
+          try? FileHandle.standardError.write(contentsOf: data + Data([0x0A]))
+        }
+      })
+  } catch let error as HelperError {
+    mcpFail(["driver_missing", "driver_untrusted"].contains(error.code) ? 79 : 78, error.message)
+  } catch { mcpFail(78, "Could not start Cua Driver.") }
+  let child = launched.pid
   signal(SIGPIPE, SIG_IGN)
   let terminal = NSLock()
   let terminate: (Int32, String) -> Never = { code, reason in
     terminal.lock()
     kill(child, SIGKILL)
+    // Exit only once the driver has: a launcher that found it still running would end its whole
+    // group, and the proxy would see a signal instead of this typed code.
+    var info = siginfo_t()
+    while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
     mcpFail(code, reason)
   }
-  let driverWire = McpWire(requests.fileHandleForWriting, failure: { terminate($0, $1) })
+  let driverWire = McpWire(launched.input, failure: { terminate($0, $1) })
   let providerWire = McpWire(FileHandle.standardOutput, failure: { terminate($0, $1) })
   let native = McpNativeSession(
     driver: driverWire, provider: providerWire,
     manifest: readNativeManifest(arguments[flag + 1]), fail: { terminate($0, $1) })
-  registerNativeMcpSession(native)
   let outputDrained = relayMcp(
-    toDriver: requests.fileHandleForWriting, fromDriver: replies.fileHandleForReading,
+    toDriver: launched.input, fromDriver: launched.output,
     native: native, fail: terminate)
   // A launcher that dies alone (a crash, a stray SIGKILL) no longer watches the proxy, so this
   // service ends the driver it started. The driver is waited on without reaping below, so
@@ -159,6 +130,66 @@ func runMcp() -> Never {
     exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   // The cursor overlay (Overlay.swift) runs AppKit's loop when the proxy opened its channel.
-  runOverlayIfConnected()
+  runOverlayIfConnected(native: native)
   dispatchMain()
+}
+
+/// Starts the bundled driver as this service's direct child through GOAT-owned pipes, after the
+/// bundle's seal check, with one capability manifest. Only the driver's pipe ends and stderr
+/// survive into it, and only host-settable knobs come from settable.
+func launchDriver(
+  _ service: DriverService, manifestPath: String, settable: [[String: Any]],
+  beforeSpawn: () -> Void = {}
+) throws -> SessionDriver {
+  guard let driverPath = service.driverPath, FileManager.default.isExecutableFile(atPath: driverPath)
+  else { throw HelperError(code: "driver_missing", message: "The helper bundle has no Cua Driver.") }
+  if let refusal = service.driverRefusal(driverPath) {
+    throw HelperError(code: "driver_untrusted", message: refusal)
+  }
+  let allowed = settable.filter {
+    ($0["name"] as? String).map(DriverEnvironment.hostSettableNames.contains) == true
+  }
+  var environment = service.driverEnvironment(allowed)
+  environment["CUA_DRIVER_CAPABILITY_MANIFEST_FILE"] = manifestPath
+  environment["CUA_DRIVER_CAPABILITY_MANIFEST_APPROVED"] = "1"
+  environment["CUA_DRIVER_PERMISSION_MODE"] = "standard"
+  let failed = { (message: String) in HelperError(code: "spawn_failed", message: message) }
+  let driverArguments: [String] =
+    [driverPath, "mcp", "--direct", "--embedded", "--host-bundle-id", service.bundleId]
+  let requests = Pipe()
+  let replies = Pipe()
+  var actions: posix_spawn_file_actions_t?
+  guard posix_spawn_file_actions_init(&actions) == 0 else {
+    throw failed("Could not prepare Cua Driver's pipes.")
+  }
+  defer { posix_spawn_file_actions_destroy(&actions) }
+  guard
+    posix_spawn_file_actions_adddup2(&actions, requests.fileHandleForReading.fileDescriptor, STDIN_FILENO) == 0,
+    posix_spawn_file_actions_adddup2(&actions, replies.fileHandleForWriting.fileDescriptor, STDOUT_FILENO) == 0,
+    posix_spawn_file_actions_addinherit_np(&actions, STDERR_FILENO) == 0
+  else { throw failed("Could not prepare Cua Driver's pipes.") }
+  var attributes: posix_spawnattr_t?
+  guard posix_spawnattr_init(&attributes) == 0 else {
+    throw failed("Could not prepare Cua Driver's spawn attributes.")
+  }
+  defer { posix_spawnattr_destroy(&attributes) }
+  guard posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0 else {
+    throw failed("Could not isolate Cua Driver's descriptors.")
+  }
+  beforeSpawn()
+  let argv = driverArguments.map { strdup($0) } + [nil]
+  let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+  var child: pid_t = 0
+  let status = posix_spawn(&child, driverPath, &actions, &attributes, argv, envp)
+  argv.forEach { free($0) }
+  envp.forEach { free($0) }
+  try? requests.fileHandleForReading.close()
+  try? replies.fileHandleForWriting.close()
+  guard status == 0 else {
+    try? requests.fileHandleForWriting.close()
+    try? replies.fileHandleForReading.close()
+    throw failed("Could not start Cua Driver (\(status)).")
+  }
+  return SessionDriver(
+    pid: child, input: requests.fileHandleForWriting, output: replies.fileHandleForReading)
 }

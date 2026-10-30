@@ -106,6 +106,13 @@ const Started = Schema.Struct({
   hostBundleId: Schema.String,
 });
 const decodeStarted = Schema.decodeUnknownSync(Started);
+const OpenedSession = Schema.Struct({
+  sessionId: Schema.String,
+  socketPath: Schema.String,
+  launch: Schema.String,
+  servicePid: Schema.Number,
+});
+const decodeOpenedSession = Schema.decodeUnknownSync(OpenedSession);
 
 /** A typed failure from the helper or from talking to it; code names the cause for logs and UI. */
 export class ComputerUseHelperError extends Error {
@@ -221,6 +228,22 @@ export interface HelperSession {
   readonly close: (options?: { readonly force?: boolean }) => Promise<void>;
   /** Settles when the driver exits on its own or the helper goes away. */
   readonly ended: Promise<void>;
+  /** Whether this service hosts agent sessions on its socket (ADR-0023 D3 amendment 3). */
+  readonly canHostSessions: boolean;
+  /**
+   * Registers an agent session: the service runs a driver of its own for each connection that
+   * attaches with the session's token and the launch token the reply carries.
+   */
+  readonly openSession: (params: {
+    readonly sessionId: string;
+    readonly token: string;
+    readonly capabilityManifestPath: string;
+    readonly environment: ReadonlyArray<{ readonly name: string; readonly value: string }>;
+  }) => Promise<typeof OpenedSession.Type>;
+  /** Ends the session's running driver and fences connections already accepted. */
+  readonly stopSession: (sessionId: string) => Promise<void>;
+  /** Stops the session and forgets it with its token; idempotent. */
+  readonly closeSession: (sessionId: string) => Promise<void>;
 }
 
 const HELLO_TIMEOUT_MS = 10_000;
@@ -404,6 +427,14 @@ export async function openHelperSession(
     },
     close,
     ended,
+    canHostSessions: hello.features?.includes("sessions") === true,
+    openSession: async (params) => decodeOpenedSession(await request("openSession", params)),
+    stopSession: async (sessionId) => {
+      await request("stopSession", { sessionId });
+    },
+    closeSession: async (sessionId) => {
+      await request("closeSession", { sessionId });
+    },
   };
 }
 

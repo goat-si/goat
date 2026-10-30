@@ -4,10 +4,15 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { agentRouteFailure, probeAgentRoute } from "./agentRouteProbe.ts";
+
+// The probe runs only on macOS (DesktopCuaDriver), and its Stop relies on POSIX signals and
+// process groups: on Windows a SIGTERM ends the process outright, with no handler to answer.
+const posix = HostProcess.Platform.defaultValue() !== "win32";
 
 /** A stand-in helper run by this Node: answers the handshake, refuses its parent, or crashes. */
 function standIn(body: string) {
@@ -62,7 +67,7 @@ describe("agent route probe (real subprocesses)", () => {
       });
     }),
   );
-  it.live("a stopped probe ends the helper it started and says so", () =>
+  it.live.skipIf(!posix)("a stopped probe ends the helper it started and says so", () =>
     Effect.promise(async () => {
       // It records its pid and never answers, as a helper stuck before its handshake.
       using helper = standIn(

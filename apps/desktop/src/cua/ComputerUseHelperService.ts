@@ -4,7 +4,10 @@ import * as NodeCrypto from "node:crypto";
 import type { HelperSession } from "./ComputerUseHelper.ts";
 
 /** What the manager needs of an open helper service. */
-type ServiceSession = Pick<HelperSession, "pid" | "ended" | "close">;
+type ServiceSession = Pick<
+  HelperSession,
+  "pid" | "ended" | "close" | "openSession" | "stopSession" | "closeSession"
+>;
 
 /** One running helper service of a channel, the parent of the drivers it starts. */
 export interface HelperService<S extends ServiceSession = HelperSession> {
@@ -27,6 +30,47 @@ export interface HelperServiceClaim<S extends ServiceSession = HelperSession> {
   /** Idempotent. A service ends with its last claim. */
   readonly release: () => Promise<void>;
 }
+
+/**
+ * What an agent connection needs to attach to its session on the channel's service (stage c):
+ * the socket, this launch's token and the session's own, and the service it must find there.
+ */
+export interface AgentSessionDescriptor {
+  readonly sessionId: string;
+  readonly socketPath: string;
+  readonly launch: string;
+  readonly token: string;
+  readonly servicePid: number;
+  readonly generation: number;
+  readonly executable: string;
+}
+
+/** One agent session's hold on the channel's service. */
+export interface AgentSession {
+  /** Rejects when the session could not be opened, or was closed first. */
+  readonly opened: Promise<AgentSessionDescriptor>;
+  /**
+   * Ends the driver the session runs, and no other session's; the session may attach again. Before
+   * it has opened nothing runs, so it returns at once.
+   */
+  readonly stop: () => Promise<void>;
+  /** Idempotent. Cancels an open still running, forgets the session and releases its claim. */
+  readonly close: () => Promise<void>;
+}
+
+const unlessAborted = async <A>(promise: Promise<A>, signal: AbortSignal): Promise<A> => {
+  let cancel: () => void = () => undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    cancel = () => reject(signal.reason);
+    if (signal.aborted) cancel();
+    else signal.addEventListener("abort", cancel, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+};
 
 const processAlive = (pid: number) => {
   try {
@@ -92,7 +136,7 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
     current = running;
     return running;
   };
-  return {
+  const manager = {
     /**
      * An observing claim gets a service no other observer holds. A claim whose signal aborts
      * first rejects with its reason and holds nothing. Waiting for its turn, it rejects at once
@@ -177,7 +221,63 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
     },
     /** The live claim a token names, or undefined. */
     sessionFor: (token: string) => sessions.get(token),
+    /**
+     * Opens an agent session on the channel's service, claimed like any other session, so racing
+     * opens share one service and its last close ends it. The session's token is its claim's.
+     */
+    openAgentSession: (
+      executable: string,
+      owner: string,
+      params: Pick<Parameters<S["openSession"]>[0], "capabilityManifestPath" | "environment">,
+    ): AgentSession => {
+      const abort = new AbortController();
+      const sessionId = NodeCrypto.randomBytes(16).toString("base64url");
+      let held: HelperServiceClaim<S> | undefined;
+      let descriptor: AgentSessionDescriptor | undefined;
+      let closing: Promise<void> | undefined;
+      const opened = (async (): Promise<AgentSessionDescriptor> => {
+        const claim = await manager.claim(executable, owner, { signal: abort.signal });
+        held = claim;
+        abort.signal.throwIfAborted();
+        const session = await unlessAborted(
+          claim.service.session.openSession({ sessionId, token: claim.token, ...params }),
+          abort.signal,
+        );
+        descriptor = {
+          sessionId,
+          socketPath: session.socketPath,
+          launch: session.launch,
+          token: claim.token,
+          servicePid: session.servicePid,
+          generation: claim.service.generation,
+          executable,
+        };
+        return descriptor;
+      })();
+      const close = () =>
+        (closing ??= (async () => {
+          abort.abort(new Error("The agent session was closed."));
+          await opened.catch(() => undefined);
+          const claim = held;
+          if (!claim) return;
+          // Sent even when the open failed or was cancelled: the service reads its channel in
+          // order, so this undoes an open that is still on its way.
+          await claim.service.session.closeSession(sessionId).catch(() => undefined);
+          await claim.release();
+        })());
+      // An open that fails holds nothing.
+      void opened.catch(close);
+      return {
+        opened,
+        stop: async () => {
+          if (descriptor === undefined || closing !== undefined || held === undefined) return;
+          await held.service.session.stopSession(sessionId);
+        },
+        close,
+      };
+    },
   };
+  return manager;
 }
 
 export type HelperServiceManager = ReturnType<typeof makeHelperServiceManager<HelperSession>>;

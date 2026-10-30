@@ -6,6 +6,7 @@
 // through GOAT-owned pipes. The driver is this service's child, so macOS attributes its grants to
 // this bundle. The host supplies the capability manifest and a fixed set of tuning knobs.
 
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Darwin
@@ -105,18 +106,49 @@ func satisfies(_ code: SecCode, _ requirementText: String) -> Bool {
 /// the whole framework, and could only refuse every signed GOAT today. Closing this (a separate
 /// runtime for those, the fuses off, checked when the app is packaged) is #1352.
 func parentRefusal(_ parent: pid_t) -> String? {
-  if Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true {
-    return nil
-  }
+  codeRefusal(allowsAnyParent ? nil : parentCode(parent), "launched the helper")
+}
+
+/// A dev helper (GOATComputerUseAllowAnyParent) serves any process of this user.
+let allowsAnyParent =
+  Bundle.main.object(forInfoDictionaryKey: "GOATComputerUseAllowAnyParent") as? Bool == true
+
+/// The one signing policy for whoever reaches the helper, a parent or a session socket's peer:
+/// signed by this helper's own Developer ID team (see parentRefusal for what that leaves open).
+func codeRefusal(_ code: SecCode?, _ role: String) -> String? {
+  if allowsAnyParent { return nil }
   guard let own = selfStaticCode(), let team = signingTeam(own) else {
-    return "This helper has no Developer ID team, so it cannot verify who launched it."
+    return "This helper has no Developer ID team, so it cannot verify who \(role)."
   }
-  guard let parent = parentCode(parent),
-    satisfies(parent, "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"")
+  guard let code,
+    satisfies(code, "anchor apple generic and certificate leaf[subject.OU] = \"\(team)\"")
   else {
-    return "The process that launched the helper is not signed by GOAT's team \(team)."
+    return "The process that \(role) is not signed by GOAT's team \(team)."
   }
   return nil
+}
+
+/// A session socket's peer: this user, and, in a release helper, code signed by GOAT's team,
+/// read from the kernel's audit token for the connection (LOCAL_PEERTOKEN), never from a pid.
+func socketPeerRefusal(_ fd: Int32) -> String? {
+  var uid: uid_t = 0
+  var gid: gid_t = 0
+  guard getpeereid(fd, &uid, &gid) == 0, uid == geteuid() else {
+    return "The connection does not come from this user."
+  }
+  if allowsAnyParent { return nil }
+  var token = audit_token_t()
+  var length = socklen_t(MemoryLayout<audit_token_t>.size)
+  guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &length) == 0,
+    length == socklen_t(MemoryLayout<audit_token_t>.size)
+  else { return "The connection's peer cannot be identified." }
+  let data = Data(bytes: &token, count: MemoryLayout<audit_token_t>.size)
+  var code: SecCode?
+  let attributes = [kSecGuestAttributeAudit: data] as CFDictionary
+  guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess else {
+    return "The connection's peer cannot be identified."
+  }
+  return codeRefusal(code, "connected")
 }
 
 /// The service half accepts only its own launcher as a parent, so setting the disclaimed
@@ -143,6 +175,71 @@ func refuse(_ reason: String, _ message: String, _ code: Int32) -> Never {
   }
   emit(["type": "refused", "reason": reason, "message": message])
   exit(code)
+}
+
+/// Ends whatever of this launcher's group outlived its service, a driver that ignores SIGTERM
+/// included. The only signal is killpg: it names the group, which no other process can take while
+/// this launcher leads it, so nothing outside the group is ever signalled. When a member still
+/// runs, the whole group goes with SIGKILL, this launcher included, since cleanup matters more
+/// than the exit status. The launcher returns to report that status only once a complete listing
+/// shows nothing but zombies already seen, with the same start times, by the previous pass: a
+/// zombie cannot fork, so nothing living can be missing from that listing.
+func endGroupRemains() {
+  let group = getpgrp()
+  /// Members seen as zombies by the previous pass's check, each with its start time. A pid the
+  /// kernel reaps and hands to a new member in between starts later, so it never counts.
+  var zombies: [pid_t: ProcessStart] = [:]
+  for _ in 0..<100 {
+    let size = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(group), nil, 0)
+    // Room for members started while the list is read.
+    let capacity = max(0, Int(size)) / MemoryLayout<pid_t>.size + 32
+    var pids = [pid_t](repeating: 0, count: capacity)
+    let filled =
+      size > 0
+      ? proc_listpids(
+        UInt32(PROC_PGRP_ONLY), UInt32(group), &pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+      : -1
+    guard filled > 0 else { break }
+    let count = Int(filled) / MemoryLayout<pid_t>.size
+    let members = pids.prefix(count).filter { $0 > 0 && $0 != getpid() }
+    var seen: [pid_t: ProcessStart] = [:]
+    var living = false
+    for pid in members {
+      switch processState(pid) {
+      case .zombie(let start): seen[pid] = start
+      case .gone: break
+      case .living: living = true
+      }
+    }
+    if living { break }
+    // A full buffer may have cut the listing short, so it never settles anything.
+    let settled = members.allSatisfy { pid in seen[pid] != nil && seen[pid] == zombies[pid] }
+    if count < capacity && settled { return }
+    zombies = seen
+  }
+  killpg(group, SIGKILL)
+}
+
+/// When a process started, which tells it apart from a later process given the same pid.
+struct ProcessStart: Equatable {
+  let seconds: Int
+  let microseconds: Int32
+}
+
+enum ProcessState { case living, zombie(ProcessStart), gone }
+
+/// A zombie has exited and waits only to be reaped; a gone pid names no process now. Read with
+/// sysctl: proc_pidinfo cannot read a zombie, which has no task left.
+func processState(_ pid: pid_t) -> ProcessState {
+  var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+  var info = kinfo_proc()
+  var size = MemoryLayout<kinfo_proc>.size
+  // A failed read keeps it living, so it is signalled and listed again rather than trusted.
+  guard sysctl(&name, UInt32(name.count), &info, &size, nil, 0) == 0 else { return .living }
+  if size == 0 { return .gone }
+  guard info.kp_proc.p_stat == SZOMB else { return .living }
+  let started = info.kp_proc.p_starttime
+  return .zombie(ProcessStart(seconds: started.tv_sec, microseconds: started.tv_usec))
 }
 
 /// An agent connection's helper ends with the proxy that started it, however that proxy ends:
@@ -219,11 +316,10 @@ func runLauncher() -> Never {
     // every signal forwarded to it above, can never reach a recycled process.
     var info = siginfo_t()
     while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 && errno == EINTR {}
-    // A service that died alone (a crash, a stray SIGKILL) leaves its driver behind. This launcher
-    // still leads the connection's group and is alive, so the group id is still this group's.
-    if CommandLine.arguments.contains("--mcp") && getpgrp() == getpid() {
-      killpg(getpid(), SIGTERM)
-    }
+    // A service that died alone (a crash, a stray SIGKILL) leaves its drivers behind: one for an
+    // agent connection, one per session for the shared service. This launcher still leads the
+    // group and is alive, so the group id is still this group's.
+    if getpgrp() == getpid() { endGroupRemains() }
     exit(info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status)
   }
   dispatchMain()
@@ -245,6 +341,14 @@ final class DriverService {
   let privateMode = PrivateModeWatch()
   let frames = FrameCapture()
   let bundleId = Bundle.main.bundleIdentifier ?? ""
+  /// Agent sessions (ADR-0023 D3 amendment 3); the socket opens with the first one.
+  lazy var sessions = AgentSessions(
+    launchToken: Data(randomToken().utf8),
+    launch: { [unowned self] spec in
+      try launchDriver(self, manifestPath: spec.manifestPath, settable: spec.settable)
+    },
+    report: { emit($0) })
+  private var listener: SessionListener?
 
   var driverPath: String? {
     Bundle.main.resourceURL?.appendingPathComponent("cua-driver/cua-driver").path
@@ -315,6 +419,9 @@ final class DriverService {
       case "listApps": result = try listApps()
       case "watch": result = try privateMode.watch(params)
       case "unwatch": result = try privateMode.unwatch(params)
+      case "openSession": result = try openSession(params)
+      case "stopSession": result = ["stopped": stopSession(params)]
+      case "closeSession": result = closeSession(params)
       case "frames":
         guard frameCaptureAvailable else {
           throw HelperError(code: "unknown_method", message: "This macOS cannot capture windows.")
@@ -506,8 +613,102 @@ final class DriverService {
     queue.sync {
       privateMode.end()
       frames.end()
+      sessions.closeAll()
+      // Reaped here, so a clean exit leaves its launcher nothing to kill and its status stands.
+      sessions.awaitDrivers()
+      listener?.remove()
     }
     exit(0)
+  }
+
+  // MARK: Agent sessions
+
+  /// Registers a session the desktop opened for an agent connection. Its token arrives here, on
+  /// the launcher-checked stdio channel, and the reply carries this launch's token; neither is
+  /// ever logged or written anywhere else.
+  func openSession(_ params: [String: Any]) throws -> [String: Any] {
+    guard let id = params["sessionId"] as? String, (1...128).contains(id.utf8.count),
+      id.utf8.allSatisfy({ $0 == 0x2D || $0 == 0x5F || (0x30...0x39).contains($0)
+        || (0x41...0x5A).contains($0) || (0x61...0x7A).contains($0) }),
+      let token = params["token"] as? String, (32...512).contains(token.utf8.count),
+      let manifest = params["capabilityManifestPath"] as? String, manifest.hasPrefix("/")
+    else {
+      throw HelperError(
+        code: "bad_request",
+        message: "openSession needs a sessionId, a token and an absolute capabilityManifestPath.")
+    }
+    let settable = (params["environment"] as? [[String: Any]] ?? []).filter {
+      ($0["name"] as? String).map(DriverEnvironment.hostSettableNames.contains) == true
+    }
+    if listener == nil {
+      listener = try SessionListener(
+        peerRefusal: socketPeerRefusal,
+        serve: { [unowned self] fd, sequence, request in serveSession(fd, sequence, request) })
+      sessions.fenceAccepts = { [listener] in listener?.fence() ?? 0 }
+    }
+    try sessions.open(
+      id: id, token: Data(token.utf8), spec: AgentSessions.Spec(manifestPath: manifest, settable: settable))
+    return [
+      "sessionId": id, "socketPath": listener?.path ?? "", "servicePid": Int(getpid()),
+      "launch": String(decoding: sessions.launchToken, as: UTF8.self),
+    ]
+  }
+
+  func stopSession(_ params: [String: Any]) -> Bool {
+    guard let id = params["sessionId"] as? String else { return false }
+    return sessions.stop(id: id)
+  }
+
+  func closeSession(_ params: [String: Any]) -> [String: Any] {
+    if let id = params["sessionId"] as? String { sessions.close(id: id) }
+    return [:]
+  }
+
+  /// One authenticated connection: MCP runs the session's driver, overlay draws its cursor.
+  func serveSession(_ fd: Int32, _ sequence: UInt64, _ request: [String: Any]) {
+    let refuse = { (refusal: AgentSessions.Refusal) in
+      sessionLine(fd, ["type": "refused", "reason": refusal.rawValue])
+      close(fd)
+    }
+    switch request["channel"] as? String {
+    case "mcp":
+      let attached = sessions.attachMcp(request, sequence: sequence, connection: fd) {
+        [sessions] attachment, driver, manifest in
+        let end = { (_: Int32, _: String) in sessions.end(attachment) }
+        // The provider writer owns a duplicate, closed with it, so a late native write can never
+        // reach a descriptor number the relay already closed and the kernel reused.
+        let provider = FileHandle(fileDescriptor: dup(fd), closeOnDealloc: true)
+        return McpNativeSession(
+          driver: McpWire(driver.input, failure: end),
+          provider: McpWire(provider, failure: end),
+          manifest: manifest, fail: end)
+      }
+      switch attached {
+      case .failure(let refusal): refuse(refusal)
+      case .success(let attachment):
+        sessionLine(fd, [
+          "type": "attached", "channel": "mcp", "servicePid": Int(getpid()),
+          "driverPid": Int(attachment.driver?.pid ?? 0), "generation": Int(attachment.generation),
+          "bundleId": bundleId,
+        ])
+        relaySession(attachment, sessions: sessions)
+      }
+    case "overlay":
+      let attached = sessions.attachOverlay(request, sequence: sequence, connection: fd) {
+        [sessions] attachment in
+        sessionLine(fd, [
+          "type": "attached", "channel": "overlay", "servicePid": Int(getpid()),
+          "driverPid": Int(attachment.driver?.pid ?? 0), "generation": Int(attachment.generation),
+        ])
+        return DispatchQueue.main.sync {
+          OverlayChannel(channel: fd, closesChannel: true) { [weak sessions] in
+            sessions?.native(of: attachment)
+          }
+        }
+      }
+      if case .failure(let refusal) = attached { refuse(refusal) }
+    default: refuse(.invalid)
+    }
   }
 }
 
@@ -666,7 +867,8 @@ func runService() -> Never {
     // Agent connections already report a person's input (InputActivity), but "humanInput" is
     // not advertised until a signed helper has been checked live on a real Mac (#1235, D7):
     // advertising it lets unattended turns run.
-    "features": frameCaptureAvailable ? ["watch", "frames", "captureCheck"] : ["watch"],
+    "features": (frameCaptureAvailable ? ["watch", "frames", "captureCheck"] : ["watch"])
+      + ["sessions"],
     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
       ?? "",
   ])
@@ -689,7 +891,21 @@ func runService() -> Never {
     }
     service.shutDown()
   }
+  // Session overlays are AppKit panels, so the service runs AppKit's loop, which also serves
+  // the main dispatch queue the signal sources above use.
+  NSApplication.shared.setActivationPolicy(.accessory)
+  NSApplication.shared.run()
   dispatchMain()
+}
+
+/// 32 bytes from the system CSPRNG, base64url without padding.
+func randomToken() -> String {
+  var bytes = [UInt8](repeating: 0, count: 32)
+  guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+    fatalError("The system random source failed.")
+  }
+  return Data(bytes).base64EncodedString().replacingOccurrences(of: "+", with: "-")
+    .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
 }
 
 WindowServer.startHelper(

@@ -1,4 +1,5 @@
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -54,6 +55,9 @@ int main(void) {
     } else if (strstr(line, "fixture/hold")) {
       fputs("holding\n", stderr);
       for (;;) pause();
+    } else if (strstr(line, "fixture/ignore-term")) {
+      signal(SIGTERM, SIG_IGN);
+      fputs("ignoring-term\n", stderr);
     } else if (strstr(line, "fixture/scalar-reply")) {
       puts("{\"text\":\"\\ud800\",\"low\":\"\\udc00\",\"value\":1e400}");
       fflush(stdout);
