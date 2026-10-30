@@ -798,6 +798,7 @@ it.live.each([
 ])("first app observation records $label after input", (scenario) => {
   let reads = 0;
   const { host, sent } = fixture({
+    click: { effect: "unverifiable" },
     get_window_state: (args: Record<string, unknown>) => {
       const snapshot = `s${++reads}`;
       const old = goat2WindowState(args);
