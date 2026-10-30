@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
 
 it.effect("does not bind before approval and hides a mismatch as a decline", () =>
@@ -129,5 +131,43 @@ it.effect("does not grant a noncanonical origin or use an unsupported driver", (
     assert.equal(invalid.status, "refused");
     if (invalid.status === "refused") assert.equal(invalid.code, "invalid_origin");
     assert.equal(published, 0);
+  }),
+);
+
+it.effect("serializes a revoke behind an in-flight bind", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+        ),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending request");
+    const answer = yield* service.answer(request.claimId, true).pipe(Effect.forkChild);
+    yield* Deferred.await(started);
+    const revoked = yield* service.revoke(threadId, "https://example.test").pipe(Effect.forkChild);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(answer);
+    yield* Fiber.join(revoked);
+    assert.deepEqual(yield* service.list(threadId), { grants: [], claims: [] });
   }),
 );
