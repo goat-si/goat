@@ -87,6 +87,8 @@ export type ThreadSettingsSessionValue = {
   /** The pending model, else the applied one. */
   readonly displayedModel: ModelOption | null;
   readonly recentModelKeys: ReadonlyArray<string>;
+  /** Drops the pending model, even when the applied one is hidden or no longer listed. */
+  readonly keepAppliedModel: () => void;
   readonly favoriteKeys: ReadonlySet<string>;
   readonly favoritesLoaded: boolean;
   readonly toggleFavorite: (option: ModelOption) => void;
@@ -433,6 +435,10 @@ export function ThreadSettingsSessionProvider(
     appliedModel,
     displayedModel,
     recentModelKeys: recents.keys,
+    keepAppliedModel: () => {
+      setPendingModel(null);
+      setPendingPrompt(null);
+    },
     manageHidden,
     setManageHidden,
     toggleHidden,

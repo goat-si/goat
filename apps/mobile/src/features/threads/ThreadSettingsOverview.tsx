@@ -111,26 +111,18 @@ function OverviewModelRow(props: {
 }
 
 function quickPickModels(session: ThreadSettingsSessionValue): ReadonlyArray<ModelOption> {
-  // While a switch is pending, the thread's own model stays one tap away.
-  const leading =
-    session.pendingModel && session.appliedModel && !session.appliedModel.isHidden
-      ? [session.appliedModel]
-      : [];
   const excludeKeys = new Set(
     [session.displayedModel?.key, session.appliedModel?.key].filter(
       (key): key is string => key !== undefined,
     ),
   );
-  return [
-    ...leading,
-    ...buildModelQuickPicks({
-      models: session.providerGroups.flatMap((group) => group.models),
-      excludeKeys,
-      favoriteKeys: session.favoriteKeys,
-      recentKeys: session.recentModelKeys,
-      limit: QUICK_PICK_LIMIT - leading.length,
-    }).map((pick) => pick.model),
-  ];
+  return buildModelQuickPicks({
+    models: session.providerGroups.flatMap((group) => group.models),
+    excludeKeys,
+    favoriteKeys: session.favoriteKeys,
+    recentKeys: session.recentModelKeys,
+    limit: QUICK_PICK_LIMIT,
+  }).map((pick) => pick.model);
 }
 
 export function ThreadSettingsOverview(props: {
@@ -180,15 +172,29 @@ export function ThreadSettingsOverview(props: {
           </Text>
           {fallbackModelName ? (
             <Text className="text-xs text-foreground-muted">
-              No provider on this environment lists this model.
+              Not in this environment's available models right now.
             </Text>
           ) : null}
         </View>
       )}
-      {session.pendingModel && session.appliedModel ? (
-        <Text className="px-5 pt-2 text-xs text-foreground-muted">
-          {`Save to switch from ${session.appliedModel.label}.`}
-        </Text>
+      {session.pendingModel ? (
+        <View className="flex-row items-center gap-2 px-5 pt-1">
+          <Text className="min-w-0 flex-1 text-xs text-foreground-muted">
+            {`Save to switch from ${
+              session.appliedModel?.label ??
+              session.reportedModelSelection?.model ??
+              "the current model"
+            }.`}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            className="min-h-11 justify-center active:opacity-60"
+            hitSlop={8}
+            onPress={session.keepAppliedModel}
+          >
+            <Text className="text-xs font-goat-medium text-primary">Keep current</Text>
+          </Pressable>
+        </View>
       ) : null}
 
       <ThreadSettingsReasoning session={session} slider={slider} />
