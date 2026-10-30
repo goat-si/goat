@@ -163,7 +163,6 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   return context;
 }
 
-// Runs the real encoder script against fake canvas and MediaRecorder globals.
 function makeEncoderPage() {
   const canvas = {
     width: 0,
@@ -1632,7 +1631,6 @@ it.live("agents read a human's tab with no arguments and act on it only while no
         input: {},
       });
       expect(diagnostics.console.entries[0]?.text).toBe("human tab evidence");
-      // Acting is refused while the user controls the tab.
       const refused = yield* broker
         .invoke<void>({
           scope,
