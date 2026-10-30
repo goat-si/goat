@@ -115,6 +115,27 @@ it.effect("an approved foreground request lets this turn's control take the fore
 );
 
 it.effect.each(["remote", "schedule"] as const)(
+  "refuses a terminal request in a %s full-access turn",
+  (from) =>
+    withWaiting(
+      ({ request, leases, runId }) =>
+        Effect.gen(function* () {
+          yield* leases.everyAppControl(threadId, from === "schedule", { runId });
+          for (const app of ["com.apple.Terminal", "com.googlecode.iterm2"]) {
+            const result = yield* request({ apps: [app] }, Duration.zero);
+            assert.deepInclude(result, {
+              kind: "refused",
+              reason: "unknown_app",
+              code: "app_not_allowed",
+            });
+          }
+        }),
+      undefined,
+      from,
+    ),
+);
+
+it.effect.each(["remote", "schedule"] as const)(
   "D16: a full access turn from %s takes the foreground without asking",
   (from) =>
     withWaiting(
@@ -252,6 +273,7 @@ it.effect(
       Effect.gen(function* () {
         yield* leases.everyAppControl(threadId, false, { runId });
         assert.equal((yield* request({ apps: [APP] }, WAIT)).kind, "available");
+        assert.equal((yield* request({ apps: ["com.apple.Terminal"] }, WAIT)).kind, "available");
         assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
         assert.deepInclude(yield* request({ foreground: true, apps: [APP] }, WAIT), {
           kind: "refused",

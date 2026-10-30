@@ -179,6 +179,26 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     yield* leases.attached(input.threadId),
     (control) => run !== undefined && control.runId === run.id,
   );
+  if (
+    origin._tag === "unattended" &&
+    Option.isSome(current) &&
+    current.value.everyApp &&
+    wanted !== undefined
+  ) {
+    const terminals = wanted.filter((app) =>
+      ["com.apple.terminal", "com.googlecode.iterm2", "terminal", "iterm", "iterm2"].includes(
+        cuaAppKey(app),
+      ),
+    );
+    if (terminals.length > 0)
+      return {
+        kind: "refused",
+        reason: "unknown_app",
+        code: "app_not_allowed",
+        unknownApps: terminals,
+        message: `Full access from a non-person origin cannot control ${terminals.join(", ")}. Ask the person to perform this step.`,
+      } satisfies ComputerUseRequestResult;
+  }
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.
   const granted = Option.isSome(own) ? own.value.apps : [];
