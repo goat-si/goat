@@ -132,6 +132,10 @@ export function scopeVerdict(input: {
   );
   if (protectedApp !== undefined)
     return { _tag: "refuse", reason: "app_not_allowed", app: protectedApp };
+  if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name)) {
+    const denied = batchAppScope(input.name, input.args)?.apps.find(isExcludedCuaApplication);
+    if (denied !== undefined) return { _tag: "refuse", reason: "app_not_allowed", app: denied };
+  }
   if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name) && approved === undefined) {
     const scope = batchAppScope(input.name, input.args);
     return scope !== undefined && !scope.apps.some(isExcludedCuaApplication)

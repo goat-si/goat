@@ -50,6 +50,24 @@ describe("learnApps", () => {
       "refuse",
     );
   });
+
+  it("refuses protected apps in batch scopes even when the grant names them", () => {
+    for (const apps of [undefined, approvedApps(["com.apple.systempreferences"])]) {
+      assert.deepInclude(
+        scopeVerdict({
+          name: "run_script",
+          args: {
+            script: "click()",
+            app_scope: { apps: ["com.apple.systempreferences"], delivery: "background" },
+          },
+          apps,
+          appOf: () => undefined,
+          bundleIds: true,
+        }),
+        { _tag: "refuse", reason: "app_not_allowed" },
+      );
+    }
+  });
   it("lists a pid again after a reply names its app without the bundle id a grant names", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed, true);
