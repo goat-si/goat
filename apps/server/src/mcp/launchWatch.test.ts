@@ -22,6 +22,7 @@ import {
   settleRun,
   skipRun,
   type WatchedRun,
+  watchExpired,
   wentOnFrom,
 } from "./launchWatch.ts";
 
@@ -467,4 +468,35 @@ it("holds a retry that lands before a look attributed its run, so a stale look c
     heldRuns: [],
     armedAt: 70,
   });
+});
+
+it("reports a retried run however the thread went on, and keeps the watch while it awaits a look", () => {
+  const [run1, run2, run3] = ["run-1", "run-2", "run-3"].map((id) => RunId.make(id));
+  const watch = { ...settleRun(makeWatch(), run1!, 0), seen: { runId: run1!, ordinal: 1 } };
+  // run-2 failed with run-3 queued behind it, so it was skipped; retried, it ends after run-3.
+  const looked = discoverRuns(
+    watch,
+    [
+      watchedRun(run2!, 2, { requestedAt: 20, completedAt: 40 }),
+      watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+    ],
+    100,
+  );
+  const retried = rearmRetriedRun(settleEnd(looked, run3!, "end-3", 110), run2!, 200);
+  const again = [
+    watchedRun(run2!, 2, { requestedAt: 20, completedAt: 260 }),
+    watchedRun(run3!, 3, { requestedAt: 30, completedAt: 50 }),
+  ];
+  const followed = discoverRuns(retried, again, 300);
+  expect(followed).toMatchObject({ pendingRuns: [run2], discoveredRuns: [] });
+  expect(wentOnFrom(followed, run2!, again)).toBe(false);
+  // A launcherless watch is kept past its deadline until a look decides whose the retry is.
+  const day = 24 * 60 * 60_000;
+  const outside = { ...watch, launcherThreadId: null, armedAt: 0, updatedAt: 0 };
+  const held = rearmRetriedRun(outside, run2!, 7 * day - 60_000);
+  expect(watchExpired(held, 7 * day + 60_000)).toBe(false);
+  const send = "message:mcp:client%3Abot-b:thread-send:request-1";
+  const decided = discoverRuns(held, [watchedRun(run2!, 2, { trigger: send })], 7 * day + 60_000);
+  expect(decided).toMatchObject({ heldRuns: [], heldSince: null, skippedRuns: [run2] });
+  expect(watchExpired(decided, 7 * day + 60_000)).toBe(true);
 });
