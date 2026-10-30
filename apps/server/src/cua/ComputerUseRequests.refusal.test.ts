@@ -10,6 +10,39 @@ import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
 
+it.effect("declining Editor preserves an earlier mention of Other", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Initial"] });
+        if (first.kind !== "needs_human") return assert.fail("expected prior approval");
+        yield* handoffs.respond(
+          { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+          sessionId,
+        );
+        const card = yield* request({ apps: ["com.example.Editor"] });
+        if (card.kind !== "needs_human") return assert.fail("expected pending card");
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("other-before-decline"),
+          threadId,
+          messageId: MessageId.make("message:other-before-decline"),
+          text: "Use com.example.Other",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* handoffs.respond(
+          { threadId, handoffId: card.handoff.handoffId, action: "declined" },
+          sessionId,
+        );
+        assert.equal((yield* request({ apps: ["com.example.Other"] })).kind, "available");
+      }),
+    ),
+  ),
+);
+
 it.effect.each(["declined", "cancelled", "expired", "late-completed"] as const)(
   "a pending request that is %s retires prior mentions but accepts a new one",
   (action) =>
@@ -137,13 +170,13 @@ it.effect("declining a pending card ends an earlier automatic grant", () =>
           commandId: CommandId.make("auto-before-decline"),
           threadId,
           messageId: MessageId.make("message:auto-before-decline"),
-          text: "Use com.example.Automatic",
+          text: "Use com.example.Editor",
           attachments: [],
           dispatchMode: { type: "queue_after_active" },
           createdBy: "user",
           creationSource: "web",
         });
-        assert.equal((yield* request({ apps: ["com.example.Automatic"] })).kind, "available");
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
         const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
         const grant = records.turnItems.find(
           (item) => item.type === "human_handoff" && item.handoff.computerUseScope === "standing",

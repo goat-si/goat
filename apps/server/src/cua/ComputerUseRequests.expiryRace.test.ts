@@ -64,7 +64,7 @@ it.effect("expiry between a response's check and commit retires the earlier ment
   }),
 );
 
-it.effect("approval retires older mentions but admits its app and a newly named app", () =>
+it.effect("approval preserves an older mention for a different app", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
       Effect.gen(function* () {
@@ -91,7 +91,7 @@ it.effect("approval retires older mentions but admits its app and a newly named 
           sessionId,
         );
         assert.isTrue(Option.isSome(yield* leases.active(threadId)));
-        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
         yield* orchestrator.dispatch({
           type: "message.dispatch",
           commandId: CommandId.make("after-approval-name"),

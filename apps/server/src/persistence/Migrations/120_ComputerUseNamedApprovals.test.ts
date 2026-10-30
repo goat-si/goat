@@ -15,6 +15,27 @@ it.effect("the first-message index excludes assistant revisions", () =>
 );
 import { runMigrations } from "../Migrations.ts";
 
+it.effect("app watermarks are isolated by thread and app", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* runMigrations({ toMigrationInclusive: 120 });
+    yield* sql`INSERT INTO computer_use_app_revocation_watermarks (thread_id, app_key, sequence) VALUES ('t', 'a', 3), ('t', 'b', 4), ('u', 'a', 5)`;
+    const rows = yield* sql<{
+      thread_id: string;
+      app_key: string;
+      sequence: number;
+    }>`SELECT thread_id, app_key, sequence FROM computer_use_app_revocation_watermarks ORDER BY thread_id, app_key`;
+    assert.deepEqual(
+      rows.map((row) => [row.thread_id, row.app_key, row.sequence]),
+      [
+        ["t", "a", 3],
+        ["t", "b", 4],
+        ["u", "a", 5],
+      ],
+    );
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
 it.effect.each(["client", "server"] as const)(
   "backfills a past %s approval from the event history",
   (actor) =>

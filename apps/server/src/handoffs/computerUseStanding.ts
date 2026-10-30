@@ -99,7 +99,8 @@ export const makeComputerUseStanding = (deps: {
     const saved = yield* sql<{
       app_key: string;
     }>`SELECT app_key FROM computer_use_session_approvals WHERE thread_id = ${threadId}
-      AND consent_sequence > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks WHERE scope IN ('', ${threadId})), 0)`;
+      AND consent_sequence > MAX(COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks WHERE scope IN ('', ${threadId})), 0),
+        COALESCE((SELECT sequence FROM computer_use_app_revocation_watermarks AS watermark WHERE watermark.thread_id = ${threadId} AND watermark.app_key = computer_use_session_approvals.app_key), 0))`;
     const session = new Set(saved.map((row) => row.app_key));
     const always = new Set(list.map(cuaAppKey));
     return apps.every(
@@ -197,6 +198,13 @@ export const makeComputerUseStanding = (deps: {
         )
           return Option.none();
         const standing = yield* allowed(input.requestedBy.threadId, apps, list);
+        const appWatermarks = yield* sql<{
+          app_key: string;
+          sequence: number;
+        }>`SELECT app_key, sequence FROM computer_use_app_revocation_watermarks WHERE thread_id = ${input.requestedBy.threadId}`.pipe(
+          Effect.mapError(unavailable),
+        );
+        const appCutoffs = new Map(appWatermarks.map((row) => [row.app_key, row.sequence]));
         const named: Array<{
           readonly app: string;
           readonly messageId: string;
@@ -248,6 +256,8 @@ export const makeComputerUseStanding = (deps: {
               )
                 continue;
               const key = cuaAppKey(entry.app);
+              if ((originals.get(entry.messageId)?.sequence ?? 0) <= (appCutoffs.get(key) ?? 0))
+                continue;
               const entries = evidence.get(key) ?? [];
               entries.push(entry);
               evidence.set(key, entries);
@@ -278,7 +288,8 @@ export const makeComputerUseStanding = (deps: {
           app_key: string;
           consent_sequence: number;
         }>`SELECT app_key, consent_sequence FROM computer_use_session_approvals WHERE thread_id = ${input.requestedBy.threadId}
-          AND consent_sequence > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks WHERE scope IN ('', ${input.requestedBy.threadId})), 0)`.pipe(
+          AND consent_sequence > MAX(COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks WHERE scope IN ('', ${input.requestedBy.threadId})), 0),
+            COALESCE((SELECT sequence FROM computer_use_app_revocation_watermarks AS watermark WHERE watermark.thread_id = ${input.requestedBy.threadId} AND watermark.app_key = computer_use_session_approvals.app_key), 0))`.pipe(
           Effect.mapError(unavailable),
         );
         const alwaysRows = yield* sql<{
@@ -303,7 +314,15 @@ export const makeComputerUseStanding = (deps: {
         }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM computer_use_revocation_watermarks WHERE scope IN ('', ${input.requestedBy.threadId})`.pipe(
           Effect.mapError(unavailable),
         );
-        if (sequences.some((sequence) => sequence <= (watermark[0]?.sequence ?? 0)))
+        if (
+          sequences.some((sequence, index) => {
+            const app = apps[index];
+            return (
+              app === undefined ||
+              sequence <= Math.max(watermark[0]?.sequence ?? 0, appCutoffs.get(cuaAppKey(app)) ?? 0)
+            );
+          })
+        )
           return Option.none();
         if (
           Option.isSome(leases) &&
@@ -428,6 +447,17 @@ export const makeComputerUseStanding = (deps: {
         FROM computer_use_revocation_watermarks WHERE scope IN ('', ${grant.threadId})`.pipe(
         Effect.mapError(unavailable),
       );
+      const appWatermarks = yield* sql<{
+        app_key: string;
+        sequence: number;
+      }>`SELECT app_key, sequence FROM computer_use_app_revocation_watermarks WHERE thread_id = ${grant.threadId}`.pipe(
+        Effect.mapError(unavailable),
+      );
+      const keys = new Set(handoff.apps.map(cuaAppKey));
+      const appCutoff = Math.max(
+        0,
+        ...appWatermarks.filter((row) => keys.has(row.app_key)).map((row) => row.sequence),
+      );
       const consent =
         handoff.computerUseScope === "standing"
           ? (handoff.computerUseConsentSequence ?? 0)
@@ -438,7 +468,7 @@ export const makeComputerUseStanding = (deps: {
               Effect.mapError(unavailable),
             ))[0]?.sequence ?? 0);
       if (
-        consent > (watermark[0]?.sequence ?? 0) &&
+        consent > Math.max(watermark[0]?.sequence ?? 0, appCutoff) &&
         (yield* allowed(grant.threadId, handoff.apps, list))
       )
         continue;
@@ -512,20 +542,38 @@ export const makeComputerUseStanding = (deps: {
     handoffId: Handoff["handoffId"],
     releaseCard = true,
   ) {
-    yield* clear(threadId);
+    const card = releaseCard ? undefined : yield* deps.read(threadId, handoffId);
+    const keys = new Set((card?.apps ?? []).map(cuaAppKey));
+    if (releaseCard) yield* clear(threadId);
+    else
+      yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            for (const app of keys) {
+              yield* sql`INSERT INTO computer_use_app_revocation_watermarks (thread_id, app_key, sequence) VALUES (${threadId}, ${app}, (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events)) ON CONFLICT(thread_id, app_key) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)`;
+              yield* sql`DELETE FROM computer_use_session_approvals WHERE thread_id = ${threadId} AND app_key = ${app} AND consent_sequence <= (SELECT sequence FROM computer_use_app_revocation_watermarks WHERE thread_id = ${threadId} AND app_key = ${app})`;
+            }
+          }),
+        )
+        .pipe(Effect.mapError(unavailable));
     if (Option.isSome(leases)) {
       if (releaseCard) yield* leases.value.release([handoffId]);
-      const cutoff = yield* sql<{
-        sequence: number;
-      }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM computer_use_revocation_watermarks WHERE scope = ${threadId}`.pipe(
-        Effect.mapError(unavailable),
-      );
+      const cutoff = yield* (
+        releaseCard
+          ? sql<{
+              sequence: number;
+            }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM computer_use_revocation_watermarks WHERE scope = ${threadId}`
+          : sql<{
+              sequence: number;
+            }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM computer_use_app_revocation_watermarks WHERE thread_id = ${threadId} AND app_key IN (SELECT value FROM json_each(${encodeIds([...keys])}))`
+      ).pipe(Effect.mapError(unavailable));
       const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
       for (const grant of grants) {
         if (grant.threadId !== threadId || grant.handoffId === handoffId) continue;
         const handoff = yield* deps.read(threadId, grant.handoffId);
         if (
           handoff.computerUseScope !== "standing" ||
+          (!releaseCard && !(handoff.apps ?? []).some((app) => keys.has(cuaAppKey(app)))) ||
           (handoff.computerUseConsentSequence ?? 0) > (cutoff[0]?.sequence ?? 0)
         )
           continue;

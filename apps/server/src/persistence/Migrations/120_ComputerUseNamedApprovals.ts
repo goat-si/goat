@@ -25,6 +25,10 @@ export default Effect.gen(function* () {
   yield* sql`CREATE TABLE computer_use_revocation_watermarks (
     scope TEXT PRIMARY KEY, sequence INTEGER NOT NULL
   )`;
+  yield* sql`CREATE TABLE computer_use_app_revocation_watermarks (
+    thread_id TEXT NOT NULL, app_key TEXT NOT NULL, sequence INTEGER NOT NULL,
+    PRIMARY KEY (thread_id, app_key)
+  )`;
   yield* sql`CREATE TABLE computer_use_allowed_apps_snapshot (app_key TEXT PRIMARY KEY)`;
   yield* sql`CREATE TABLE computer_use_always_approval_consents (app_key TEXT PRIMARY KEY, consent_sequence INTEGER NOT NULL)`;
   yield* sql`CREATE INDEX computer_use_first_message_event
