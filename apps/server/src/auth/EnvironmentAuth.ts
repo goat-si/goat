@@ -56,11 +56,12 @@ import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { MCP_CLIENT_SUBJECT } from "./mcpClientSubject.ts";
 import { mcpClientScopes } from "./mcpClientScopes.ts";
+import { ADMINISTRATIVE_BOOTSTRAP_SUBJECT, canDelegateHubProxy } from "./hubProxyDelegation.ts";
 
 export { mcpClientScopes };
 
 const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
-export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
+export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = ADMINISTRATIVE_BOOTSTRAP_SUBJECT;
 
 export interface IssuedPairingLink {
   readonly id: string;
@@ -866,6 +867,12 @@ export const make = Effect.gen(function* () {
             ...authScopeResponse(session.scopes),
             sessionMethod: session.method,
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
+            ...(canDelegateHubProxy({
+              subject: session.subject,
+              holds: (scope) => session.scopes.includes(scope),
+            })
+              ? { canDelegateHubProxy: true }
+              : {}),
           }) satisfies AuthSessionState,
       ),
       Effect.catchIf(isServerAuthCredentialError, () =>

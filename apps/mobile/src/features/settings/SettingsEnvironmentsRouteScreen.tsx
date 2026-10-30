@@ -20,6 +20,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { selectHubEnvironmentId } from "../connection/hubEnvironment";
 import { useStoredHubEnvironment } from "../connection/useStoredHubEnvironment";
+import { HubAccessNotice } from "./HubAccessNotice";
 import { useConnectionsReady } from "../../state/workspace";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { relayEnvironmentDiscovery } from "../../state/relay";
@@ -191,6 +192,13 @@ export function SettingsEnvironmentsRouteScreen() {
           </Pressable>
           {savedHub.error ? (
             <Text className="px-4 text-sm text-danger-foreground">{savedHub.error}</Text>
+          ) : null}
+          {hub ? (
+            <HubAccessNotice
+              environmentId={hub.environmentId}
+              label={hub.environmentLabel}
+              only="no-access"
+            />
           ) : null}
         </View>
         {localEnvironments.length > 0 ? (

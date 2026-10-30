@@ -21,6 +21,7 @@ type Target = {
     settings: {
       hub: { enabled: boolean; autoJoinCloudMachines: boolean; connectDevicesHubProxy?: boolean };
     };
+    environment?: { capabilities: { hubProxy?: boolean } };
   };
 };
 const state = vi.hoisted(() => ({
@@ -29,6 +30,8 @@ const state = vi.hoisted(() => ({
   environments: [] as Target[],
   selectedTargets: [] as Target[],
   selectedIds: null as Set<string> | null,
+  sessionPermissions: null as string[] | null,
+  navigate: vi.fn(),
   hosts: [] as HostStatusEntry[],
   hostsError: null as string | null,
   refreshHosts: vi.fn(),
@@ -129,6 +132,26 @@ vi.mock("../../state/query", () => ({
   },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: (command: unknown) => command }));
+vi.mock("../../state/session", async () => {
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  return {
+    environmentSession: {
+      sessionStateAtom: () =>
+        Atom.make(
+          state.sessionPermissions === null
+            ? AsyncResult.initial(true)
+            : AsyncResult.success({
+                authenticated: true,
+                scopes: [],
+                permissions: state.sessionPermissions,
+              }),
+        ),
+    },
+  };
+});
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({ navigate: state.navigate }),
+}));
 
 import { SettingsHubNodesRouteScreen } from "./SettingsHubNodesRouteScreen";
 
@@ -161,6 +184,8 @@ beforeEach(() => {
   state.environments = [first, second];
   state.selectedTargets = [first, second];
   state.selectedIds = null;
+  state.sessionPermissions = null;
+  state.navigate.mockReset();
   state.hosts = [];
   state.hostsError = null;
   state.refreshHosts.mockReset();
@@ -531,4 +556,31 @@ it("keeps reading status while a linked Child verifies, without starting another
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("explains why a pairing without hub access shows no hub devices, and opens the scanner to fix it", async () => {
+  const hub = {
+    ...first,
+    serverConfig: {
+      settings: { hub: { enabled: true, autoJoinCloudMachines: true } },
+      environment: { capabilities: { hubProxy: true } },
+    },
+  };
+  state.environments = [hub];
+  state.selectedTargets = [hub];
+  state.sessionPermissions = ["orchestration:read"];
+  await render();
+  expect(container.textContent).toContain("These devices do not open on this phone");
+  expect(container.textContent).toContain("Also open hub devices");
+  await act(async () => button("Scan new QR").click());
+  expect(state.navigate).toHaveBeenCalledWith("SettingsEnvironmentNew", {
+    routeFor: "hub-a",
+    preferRoute: true,
+  });
+
+  state.sessionPermissions = ["orchestration:read", "hub:proxy"];
+  act(() => root.unmount());
+  root = createRoot(container);
+  await render();
+  expect(container.textContent).not.toContain("These devices do not open on this phone");
 });

@@ -2,6 +2,7 @@ import {
   authScopeRequiredResponse,
   AuthAccessReadScope,
   AuthAccessWriteScope,
+  AuthHubProxyScope,
   AuthStandardClientScopes,
   AuthGrantScope,
   EnvironmentAuthInvalidError,
@@ -24,6 +25,7 @@ import { causeErrorTag } from "@goat/shared/observability";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Cookies from "effect/http/Cookies";
@@ -33,6 +35,8 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { hubProxyDelegationRefusal } from "./hubProxyDelegation.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { legacyScopedSessionCookieName, deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -133,7 +137,9 @@ export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope
   );
 }
 
-function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_allowed") {
+function failEnvironmentOperationForbidden(
+  reason: "current_session_revoke_not_allowed" | "hub_off",
+) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
@@ -463,6 +469,28 @@ export const layer = HttpApiBuilder.group(
               return yield* failEnvironmentInvalidRequest("invalid_scope");
             }
             for (const delegatedScope of delegatedScopes) {
+              // Held or not, hub:proxy is the owner's to grant, and only while the hub is on.
+              if (delegatedScope === AuthHubProxyScope) {
+                // Read on demand so routes that never grant hub access need no settings service.
+                const settings = yield* Effect.serviceOption(ServerSettingsService);
+                if (Option.isNone(settings))
+                  return yield* failEnvironmentInternal("pairing_credential_issuance_failed");
+                const hub = yield* settings.value.getSettings.pipe(
+                  Effect.map((current) => current.hub.enabled),
+                  Effect.catch((error) =>
+                    failEnvironmentInternal("pairing_credential_issuance_failed", error),
+                  ),
+                );
+                const refusal = hubProxyDelegationRefusal(
+                  { subject: session.subject, holds: (scope) => session.scopes.has(scope) },
+                  hub,
+                );
+                if (refusal?._tag === "ScopeRequired")
+                  return yield* failEnvironmentScopeRequired(refusal.scope);
+                if (refusal?._tag === "HubOff")
+                  return yield* failEnvironmentOperationForbidden("hub_off");
+                continue;
+              }
               if (!session.scopes.has(delegatedScope)) {
                 return yield* failEnvironmentScopeRequired(delegatedScope);
               }

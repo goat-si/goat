@@ -54,6 +54,7 @@ export function withoutPairingTarget(state: LinkState | undefined): LinkState | 
         return nested === route.state ? route : { ...route, state: nested };
       const {
         routeFor: _routeFor,
+        preferRoute: _preferRoute,
         intent: _intent,
         replaceEnvironmentId: _replace,
         ...params

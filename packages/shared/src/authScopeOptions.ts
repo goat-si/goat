@@ -6,6 +6,7 @@ import {
   AuthFilesystemReadScope,
   AuthFilesystemWriteScope,
   type AuthGrantScope,
+  AuthHubProxyScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
@@ -102,5 +103,11 @@ export const AUTH_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthRelayWriteScope,
     title: "Manage relay",
     description: "Change managed tunnel connectivity.",
+  },
+  {
+    scope: AuthHubProxyScope,
+    title: "Open hub devices",
+    description:
+      "Open threads on the machines this hub lists, within what the hub allows on each. Only the hub's owner can grant this.",
   },
 ];

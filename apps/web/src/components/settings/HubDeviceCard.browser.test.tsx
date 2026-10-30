@@ -1,5 +1,6 @@
 import {
   AuthAccessWriteScope,
+  AuthHubProxyScope,
   AuthStandardClientScopes,
   EnvironmentId,
   type AdvertisedEndpoint,
@@ -295,4 +296,30 @@ it("keeps web informational without issuing pairing credentials", async () => {
   expect(document.querySelectorAll("button")).toHaveLength(0);
   expect(state.createCredential).not.toHaveBeenCalled();
   expect(payload()).toBeNull();
+});
+
+it("asks before granting hub access and sends it only while the switch is on", async () => {
+  await render({ delegatableScopes: [...AuthStandardClientScopes, AuthHubProxyScope] });
+  await act(async () => button("Show phone QR").click());
+  expect(state.createCredential).not.toHaveBeenCalled();
+  const hubSwitch = () =>
+    document.querySelector<HTMLElement>('[aria-label="Also open hub devices"]');
+  expect(hubSwitch()?.getAttribute("aria-checked")).toBe("true");
+  await act(async () => button("Create phone QR").click());
+  expect(state.createCredential).toHaveBeenLastCalledWith({
+    label: "Phone",
+    scopes: [...AuthStandardClientScopes, AuthHubProxyScope],
+  });
+  expect(document.body.textContent).toContain("This QR also opens the hub's devices.");
+
+  await act(async () => button("Done").click());
+  await act(async () => button("Show phone QR").click());
+  await act(async () => hubSwitch()?.click());
+  expect(hubSwitch()?.getAttribute("aria-checked")).toBe("false");
+  await act(async () => button("Create phone QR").click());
+  expect(state.createCredential).toHaveBeenLastCalledWith({
+    label: "Phone",
+    scopes: [...AuthStandardClientScopes],
+  });
+  expect(document.body.textContent).toContain("This QR opens only this computer.");
 });

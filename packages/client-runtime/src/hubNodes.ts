@@ -1,4 +1,11 @@
-import type { HubNode, HubNodeRoute, HubNodesRemoveInput } from "@goat/contracts";
+import {
+  AuthHubProxyScope,
+  sessionGrantsScope,
+  type AuthSessionState,
+  type HubNode,
+  type HubNodeRoute,
+  type HubNodesRemoveInput,
+} from "@goat/contracts";
 
 export const HUB_NODE_IMPORT_NOTICE =
   "Saved devices on this desktop couldn't be unlocked, so none were imported. Add your devices here.";
@@ -63,4 +70,49 @@ export function isHubNodesUnsupportedError(error: unknown): boolean {
     }
   }
   return false;
+}
+
+/** Why a phone does not show a hub's devices as environments of their own, or "ready" when it does. */
+export type HubDeviceAccess = "ready" | "hub-off" | "update-hub" | "no-access";
+
+export function hubDeviceAccess(input: {
+  readonly hubEnabled: boolean;
+  readonly hubProxySupported: boolean;
+  readonly session: AuthSessionState;
+}): HubDeviceAccess {
+  if (!input.hubProxySupported) return "update-hub";
+  // A pairing that already has hub access keeps it while the hub is off.
+  if (input.session.authenticated && sessionGrantsScope(input.session, AuthHubProxyScope))
+    return "ready";
+  if (!input.hubEnabled) return "hub-off";
+  return "no-access";
+}
+
+/** What to tell the person, naming the hub; null when nothing needs explaining. */
+export function hubDeviceAccessNotice(
+  access: HubDeviceAccess,
+  hub: string,
+): { readonly title: string; readonly body: string; readonly repairs: boolean } | null {
+  switch (access) {
+    case "ready":
+      return null;
+    case "update-hub":
+      return {
+        title: "Update GOAT on the hub",
+        body: `${hub} runs a GOAT that cannot open its devices for this phone. Update GOAT there, then pair again with hub access.`,
+        repairs: false,
+      };
+    case "hub-off":
+      return {
+        title: `${hub} is not a hub`,
+        body: `Its devices open on this phone only through a hub. On ${hub}, turn on Settings → Hub → This machine is the hub, then pair again with hub access.`,
+        repairs: false,
+      };
+    case "no-access":
+      return {
+        title: "These devices do not open on this phone",
+        body: `This phone's pairing reaches only ${hub}. On ${hub}, open Settings → Connections → Show phone QR with Also open hub devices on, then scan the new code. Without the desktop app, create a link under Authorized clients with Open hub devices.`,
+        repairs: true,
+      };
+  }
 }

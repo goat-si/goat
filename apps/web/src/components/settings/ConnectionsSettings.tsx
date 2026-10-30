@@ -66,6 +66,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
 
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { useDelegatableScopes } from "./hubAccessGrant";
 import {
   revokeOtherServerClientSessions,
   revokeServerClientSession,
@@ -164,9 +165,7 @@ export function ConnectionsSettings() {
   const primaryEnvironment = usePrimaryEnvironment();
   const primaryEnvironmentId = primaryEnvironment?.environmentId ?? null;
   const primarySessionState = usePrimarySessionState();
-  const currentSessionScopes = primarySessionState.data?.authenticated
-    ? (primarySessionState.data.permissions ?? primarySessionState.data.scopes ?? null)
-    : null;
+  const currentSessionScopes = useDelegatableScopes(primarySessionState.data);
   const currentAuthPolicy = desktopBridge ? null : (primarySessionState.data?.auth.policy ?? null);
   const savedEnvironments = environments.filter(
     (environment) => environment.entry.target._tag !== "PrimaryConnectionTarget",
@@ -1056,7 +1055,7 @@ export function ConnectionsSettings() {
               control={
                 canWriteAccess ? (
                   <AuthorizedClientsHeaderAction
-                    delegatableScopes={currentSessionScopes ?? []}
+                    delegatableScopes={currentSessionScopes}
                     onPairingLinkCreated={handlePairingLinkCreated}
                     connectFlow={
                       desktopBridge ? pairingLinkConnectFlow.slot(connectProps) : undefined
@@ -1386,7 +1385,7 @@ export function ConnectionsSettings() {
         isDesktop={desktopBridge !== undefined}
         canWriteAccess={canWriteAccess}
         canManageLocalBackend={canManageLocalBackend}
-        delegatableScopes={currentSessionScopes ?? []}
+        delegatableScopes={currentSessionScopes}
         endpoints={visibleDesktopAdvertisedEndpoints}
         exposureState={connectProps.state}
         connectActions={connectProps.actions}

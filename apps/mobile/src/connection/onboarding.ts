@@ -22,6 +22,7 @@ export const connectPairingUrl = createRuntimeCommand(connectionAtomRuntime, {
   execute: (input: {
     readonly pairingUrl: string;
     readonly expectedEnvironmentId?: EnvironmentId;
+    readonly preferRoute?: boolean;
   }) =>
     ConnectionOnboarding.ConnectionOnboarding.pipe(
       Effect.flatMap((onboarding) => onboarding.registerPairing(input)),

@@ -60,9 +60,10 @@ export const AuthMemoryReadScope = "memory:read" as const;
 export const AuthMemoryWriteScope = "memory:write" as const;
 export const AuthMemorySyncScope = "memory:sync" as const;
 /**
- * Reaches hub nodes within their scope ceiling, via explicit `goat pair --hub-proxy` or
- * Connect hub standing consent. Strict signed-scope decoding rejects credentials carrying
- * this scope on rollback to a build without it; ordinary default client scopes exclude it.
+ * Reaches hub nodes within their scope ceiling. Granted only on explicit request: `goat pair
+ * --hub-proxy`, the hub owner's choice when pairing a device while the hub is on, or Connect hub
+ * standing consent. Strict signed-scope decoding rejects credentials carrying this scope on
+ * rollback to a build without it; ordinary default client scopes exclude it.
  */
 export const AuthHubProxyScope = "hub:proxy" as const;
 export const AuthEnvironmentScope = Schema.Literals([
@@ -431,6 +432,11 @@ export const AuthSessionState = Schema.Struct({
    * clients hide the rest instead of offering what the hub will refuse.
    */
   proxiedByHub: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The hub owner's session, which may grant `hub:proxy` to a new pairing without holding it.
+   * The server also requires the hub to be on when it issues one.
+   */
+  canDelegateHubProxy: Schema.optionalKey(Schema.Boolean),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
 

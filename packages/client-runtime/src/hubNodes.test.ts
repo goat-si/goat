@@ -1,7 +1,38 @@
 import * as Cause from "effect/Cause";
 import { RpcClientError } from "effect/rpc";
 import { describe, expect, it } from "vite-plus/test";
-import { isHubNodesUnsupportedError } from "./hubNodes.ts";
+import { hubDeviceAccess, isHubNodesUnsupportedError } from "./hubNodes.ts";
+
+describe("hubDeviceAccess", () => {
+  const session = (permissions: ReadonlyArray<"orchestration:read" | "hub:proxy">) => ({
+    authenticated: true,
+    auth: {
+      policy: "remote-reachable" as const,
+      bootstrapMethods: ["one-time-token" as const],
+      sessionMethods: ["bearer-access-token" as const],
+      sessionCookieName: "goat_session",
+    },
+    scopes: [],
+    permissions,
+  });
+  it("names the one fix a phone needs before a hub's devices appear", () => {
+    const base = { hubEnabled: true, hubProxySupported: true };
+    expect(hubDeviceAccess({ ...base, session: session(["orchestration:read"]) })).toBe(
+      "no-access",
+    );
+    expect(hubDeviceAccess({ ...base, session: session(["hub:proxy"]) })).toBe("ready");
+    expect(
+      hubDeviceAccess({ ...base, hubEnabled: false, session: session(["orchestration:read"]) }),
+    ).toBe("hub-off");
+    // Turning the hub off leaves existing hub pairings working, so there is nothing to fix.
+    expect(hubDeviceAccess({ ...base, hubEnabled: false, session: session(["hub:proxy"]) })).toBe(
+      "ready",
+    );
+    expect(
+      hubDeviceAccess({ ...base, hubProxySupported: false, session: session(["hub:proxy"]) }),
+    ).toBe("update-hub");
+  });
+});
 
 describe("isHubNodesUnsupportedError", () => {
   it("recognizes Effect RPC unknown request tag defects and their wrappers", () => {
