@@ -574,3 +574,39 @@ it.live("a refused drag prevents its concurrent group from sending", () => {
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live("a refused window group does not stop the next window's group", () => {
+  const { host, sent } = fixture({
+    list_windows: {
+      windows: [
+        { pid: 42, window_id: 7, title: "First" },
+        { pid: 42, window_id: 8, title: "Second" },
+      ],
+    },
+    press_key: (args: { key: string }) =>
+      args.key === "a"
+        ? new DriverError({
+            effect: "refused",
+            refusal: { code: "user_interacting", retry_after_ms: 750 },
+          })
+        : { effect: "confirmed" },
+  });
+  return Effect.gen(function* () {
+    const result =
+      yield* runCell(`const a = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+      const b = await screen.app({bundle_id:'org.example.Editor', window_id:8});
+      const clicks = [a.press('a'), a.press('b'), b.press('c'), b.press('d')]; ${SETTLED}`);
+    expect(result.value).toEqual([
+      "user_interacting:true",
+      "not_run:true",
+      "confirmed",
+      "confirmed",
+    ]);
+    expect(
+      sent
+        .filter((entry) => entry.tool === "press_key")
+        .map((entry) => (entry.args as { key: string }).key),
+    ).toEqual(["a", "c", "d"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
