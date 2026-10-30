@@ -75,6 +75,7 @@ import { liftedThreadListV2Status, type LaunchLift } from "./threadListV2LaunchF
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { ThreadListV2RowOrigin, ThreadListV2WorkingSpinner } from "./thread-list-v2-row-meta";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -1028,17 +1029,27 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </Pressable>
           ) : statusLabel ? (
             <View className="flex-row items-center gap-1">
-              <SymbolView
-                name={statusLabel.icon}
-                size={13}
-                tintColorClassName={
-                  selected
-                    ? selectedThreadRowColors.iconTintClassName
-                    : statusLabel.iconTintClassName
-                }
-                type="monochrome"
-                weight="semibold"
-              />
+              {status === "working" ? (
+                <ThreadListV2WorkingSpinner
+                  tintClassName={
+                    selected
+                      ? selectedThreadRowColors.iconTintClassName
+                      : statusLabel.iconTintClassName
+                  }
+                />
+              ) : (
+                <SymbolView
+                  name={statusLabel.icon}
+                  size={13}
+                  tintColorClassName={
+                    selected
+                      ? selectedThreadRowColors.iconTintClassName
+                      : statusLabel.iconTintClassName
+                  }
+                  type="monochrome"
+                  weight="semibold"
+                />
+              )}
               <Text
                 className={cn(
                   "text-xs font-goat-bold",
@@ -1093,33 +1104,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {thread.runtime.lastError}
           </Text>
-        ) : props.environmentLabel ? (
-          <View className="min-w-0 flex-1 flex-row items-center gap-1">
-            {props.environmentMachine ? (
-              <EnvironmentMachineSymbol
-                kind={props.environmentMachine}
-                size={11}
-                tintColorClassName={
-                  selected
-                    ? selectedThreadRowColors.mutedIconTintClassName
-                    : rowAppearance.tertiaryIconTintClassName
-                }
-              />
-            ) : null}
-            <Text
-              className={cn(
-                "shrink text-xs",
-                selected
-                  ? selectedThreadRowColors.mutedForegroundClassName
-                  : rowAppearance.tertiaryForegroundClassName,
-              )}
-              numberOfLines={1}
-            >
-              {props.environmentLabel}
-            </Text>
-          </View>
         ) : (
-          <View className="flex-1" />
+          <ThreadListV2RowOrigin
+            thread={thread}
+            project={props.project}
+            className={cn(
+              "min-w-0 flex-1",
+              selected
+                ? selectedThreadRowColors.mutedForegroundClassName
+                : rowAppearance.tertiaryForegroundClassName,
+            )}
+          />
         )}
         {pr ? (
           <Pressable
@@ -1160,6 +1155,32 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               {pr.label}
             </Text>
           </Pressable>
+        ) : null}
+        {props.environmentLabel ? (
+          <View className="min-w-0 max-w-[40%] flex-row items-center gap-1">
+            {props.environmentMachine ? (
+              <EnvironmentMachineSymbol
+                kind={props.environmentMachine}
+                size={11}
+                tintColorClassName={
+                  selected
+                    ? selectedThreadRowColors.mutedIconTintClassName
+                    : rowAppearance.tertiaryIconTintClassName
+                }
+              />
+            ) : null}
+            <Text
+              className={cn(
+                "shrink text-xs",
+                selected
+                  ? selectedThreadRowColors.mutedForegroundClassName
+                  : rowAppearance.tertiaryForegroundClassName,
+              )}
+              numberOfLines={1}
+            >
+              {props.environmentLabel}
+            </Text>
+          </View>
         ) : null}
         {providerInstance ? (
           <View className="flex-row items-center">
@@ -1291,6 +1312,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ? "Archived, restores on open"
                   : "Tool history deleted"}
               </Text>
+            ) : !props.searchMatch ? (
+              <ThreadListV2RowOrigin
+                thread={thread}
+                project={props.project}
+                className={
+                  selected
+                    ? selectedThreadRowColors.mutedForegroundClassName
+                    : rowAppearance.tertiaryForegroundClassName
+                }
+              />
             ) : null}
             {props.searchMatch ? (
               <ThreadSearchMatchExcerpt
