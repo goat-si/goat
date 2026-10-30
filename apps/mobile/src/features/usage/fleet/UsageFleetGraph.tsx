@@ -23,6 +23,8 @@ import { EnvironmentMachineSymbol } from "../../../components/EnvironmentMachine
 import { GoatWordmark } from "../../../components/GoatWordmark";
 import { ProviderIcon } from "../../../components/ProviderIcon";
 import { AppText as Text } from "../../../components/ui/AppText";
+import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
+import { FLEET_GRAPH_LABEL_MAX_SCALE, fleetGraphLabelStyle } from "./fleetGraphText";
 import { FleetMachineDot } from "./usageFleetRows";
 
 type Work = Pick<FleetMachine, "running" | "attention" | "reported">;
@@ -75,6 +77,7 @@ export function UsageFleetGraph(props: {
 }) {
   const [width, setWidth] = useState(0);
   const colors = useToneColors();
+  const labelStyle = fleetGraphLabelStyle(useAppearancePreferences().appearance.baseFontSize);
   const border = useResolveClassNames("border-border").borderColor;
   const orbitColor = typeof border === "string" ? border : colors.away;
   const height = compactGraphHeight(width);
@@ -209,6 +212,7 @@ export function UsageFleetGraph(props: {
                 connection={machine === undefined ? undefined : props.connections.get(machine.id)}
                 selected={machineId !== null && machineId === props.selectedMachineId}
                 colors={colors}
+                labelStyle={labelStyle}
                 onPress={machineId === null ? null : () => props.onSelectMachine(machineId)}
               />,
               ...agents,
@@ -231,6 +235,7 @@ function MachineNode(props: {
   readonly connection: FleetConnection | undefined;
   readonly selected: boolean;
   readonly colors: Record<Tone, string>;
+  readonly labelStyle: ReturnType<typeof fleetGraphLabelStyle>;
   readonly onPress: (() => void) | null;
 }) {
   const { machine, radius } = props;
@@ -283,14 +288,14 @@ function MachineNode(props: {
         )}
       </Pressable>
       <Text
-        textRole="footnote"
         pointerEvents="none"
         accessibilityElementsHidden
         importantForAccessibility="no"
         className={props.selected ? "font-goat-bold text-foreground" : "text-foreground-muted"}
         numberOfLines={1}
-        maxFontSizeMultiplier={1.2}
+        maxFontSizeMultiplier={FLEET_GRAPH_LABEL_MAX_SCALE}
         style={{
+          ...props.labelStyle,
           position: "absolute",
           left: props.x - LABEL_WIDTH / 2,
           top: props.y + radius,
