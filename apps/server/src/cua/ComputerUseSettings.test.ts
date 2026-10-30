@@ -107,6 +107,20 @@ it.effect("retains an organization app deny list in settings", () =>
   }).pipe(Effect.provide(base)),
 );
 
+it.effect("loads an organization deny list from settings.json", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    yield* fs.writeFileString(
+      config.settingsPath,
+      JSON.stringify({ cuaDeniedApps: ["com.example.Blocked"] }),
+    );
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.start;
+    expect((yield* settings.getSettings).cuaDeniedApps).toEqual(["com.example.Blocked"]);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
 it.effect("persists allowed apps and rejects protected apps without changing the file", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
