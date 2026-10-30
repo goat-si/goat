@@ -21,6 +21,7 @@ import {
 } from "./DesktopTreeText.ts";
 
 export type DesktopRow = ScreenObservationDraft["elements"][number] & {
+  readonly pairingTitle?: string;
   /** True when the element had no label of its own and took text written under it. */
   readonly lifted?: boolean;
   /** Raw action names as the driver reported them, before custom-action trimming. */

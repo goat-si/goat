@@ -649,7 +649,7 @@ it.effect("a value edit at the same number keeps the full observation baseline",
             element_token: `${snapshot}:1`,
             role: "AXTextField",
             label: "Name",
-            value: reads === 1 ? "a" : "ab",
+            value: reads <= 2 ? "a" : "ab",
           },
         ];
         return {
@@ -660,7 +660,9 @@ it.effect("a value edit at the same number keeps the full observation baseline",
           elements,
           ...(args.since === undefined
             ? { tree_markdown: '- [0] AXWindow "Document"\n- [1] AXTextField "Name" = "a"' }
-            : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
+            : reads === 2
+              ? { since_status: "no_change", tree_diff: "no change since s1" }
+              : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
         };
       },
     });
@@ -670,12 +672,103 @@ it.effect("a value edit at the same number keeps the full observation baseline",
     )).value as ScreenTargetRef;
     const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
       .value as Observed;
-    const second = (yield* host.observe(
+    const unchanged = (yield* host.observe(
       call("get_accessibility_tree", { mode: "diff", baseObservationId: first.observationId }, ref),
+      context,
+    )).value as Observed;
+    const second = (yield* host.observe(
+      call(
+        "get_accessibility_tree",
+        { mode: "diff", baseObservationId: unchanged.observationId },
+        ref,
+      ),
       context,
     )).value as Observed;
     expect(second.indexedText).toBe(
       `~ [1] AXTextField "Name" = "ab"\nother numbers unchanged; latest full observation is ${first.observationId}`,
     );
+  }),
+);
+
+it.effect("value labels cannot identify edited or moved fields, while identifiers can", () =>
+  Effect.gen(function* () {
+    for (const scenario of ["value-edit", "moved-value", "identified"] as const) {
+      let reads = 0;
+      const { host } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          const snapshot = `s${++reads}`;
+          const old = reads === 1;
+          const value = scenario === "moved-value" ? (old ? "other" : "same") : old ? "a" : "ab";
+          const elements = [
+            {
+              element_index: 0,
+              element_token: `${snapshot}:0`,
+              role: "AXWindow",
+              label: "Document",
+            },
+            ...(scenario === "moved-value" && old
+              ? [
+                  {
+                    element_index: 1,
+                    element_token: `${snapshot}:1`,
+                    role: "AXTextField",
+                    label: "same",
+                    value: "same",
+                  },
+                ]
+              : []),
+            {
+              element_index: scenario === "moved-value" && old ? 2 : 1,
+              element_token: `${snapshot}:${scenario === "moved-value" && old ? 2 : 1}`,
+              role: "AXTextField",
+              label: value,
+              value,
+              ...(scenario === "identified" ? { identifier: "field" } : {}),
+            },
+          ];
+          return {
+            pid: 42,
+            window_id: 7,
+            snapshot_id: snapshot,
+            elements_complete: false,
+            elements,
+            ...(args.since === undefined
+              ? {
+                  tree_markdown:
+                    scenario === "moved-value"
+                      ? '- [0] AXWindow "Document"\n- [1] AXTextField = "same"\n- [2] AXTextField = "other"'
+                      : `- [0] AXWindow "Document"\n- [1] AXTextField = "a"${scenario === "identified" ? " [id=field]" : ""}`,
+                }
+              : {
+                  since_status: "diff",
+                  tree_diff: `~ [1] AXTextField = "${value}"${scenario === "identified" ? " [id=field]" : ""}`,
+                }),
+          };
+        },
+      });
+      const ref = (yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      )).value as ScreenTargetRef;
+      const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+        .value as Observed;
+      const second = (yield* host.observe(
+        call(
+          "get_accessibility_tree",
+          { mode: "diff", baseObservationId: first.observationId },
+          ref,
+        ),
+        context,
+      )).value as Observed;
+      if (scenario === "identified") {
+        expect(second.indexedText).toContain(
+          `other numbers unchanged; latest full observation is ${first.observationId}`,
+        );
+      } else {
+        expect(second.indexedText).toContain(
+          `other numbers unchanged since ${first.observationId};`,
+        );
+      }
+    }
   }),
 );
