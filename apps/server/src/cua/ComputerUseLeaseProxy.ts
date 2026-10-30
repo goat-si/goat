@@ -311,7 +311,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
-          finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
+          finished !== undefined ||
+          personStopPending ||
+          screenLockPending ||
+          lifecycle.current !== current ||
+          !outstanding.has(key);
         sink = request.sink;
         // The marked line is the driver's reply from here on, screenshot rule included.
         if (request.method === "tools/call") {

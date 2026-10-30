@@ -123,6 +123,30 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
     }),
   );
 
+  it.effect("Escape withholds a late driver reply while its stop report is in flight", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ personStop: true, personStopGate: gate });
+      yield* h.push(active());
+      yield* h.send(call(91, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.nextToDriver;
+      yield* h.escape;
+      yield* h.escapeReported;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 91,
+          result: { content: [{ type: "text", text: "late success" }] },
+        }),
+      );
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }));
+      assert.equal((yield* h.nextToProvider).method, "notifications/message");
+      yield* Deferred.succeed(gate, undefined);
+      yield* h.killed;
+      assert.include(JSON.stringify(yield* h.nextToProvider), '"code":"stopped_by_person"');
+    }),
+  );
+
   it.effect("Escape stops the local driver when the server cannot accept the report", () =>
     Effect.gen(function* () {
       const h = yield* harness({ personStop: true, personStopAccepted: false });

@@ -101,6 +101,7 @@ export const harness = Effect.fn(function* (
     readonly humanInput?: boolean;
     readonly personStop?: boolean;
     readonly personStopAccepted?: boolean;
+    readonly personStopGate?: Deferred.Deferred<void>;
     readonly screenLock?: boolean;
     readonly onHumanInput?: (
       events: ReadonlyArray<{
@@ -232,6 +233,11 @@ export const harness = Effect.fn(function* (
       ? {
           onPersonStop: () =>
             Queue.offer(escapeReports, undefined).pipe(
+              Effect.andThen(
+                options.personStopGate === undefined
+                  ? Effect.void
+                  : Deferred.await(options.personStopGate),
+              ),
               Effect.as(options.personStopAccepted ?? true),
             ),
         }
