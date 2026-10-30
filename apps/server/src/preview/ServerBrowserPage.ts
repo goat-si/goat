@@ -238,10 +238,10 @@ const noPointer: PointerReporter = async () => {};
 
 /** A gate rechecks authority after target waits; linger covers input still draining after return. */
 export interface DispatchGate {
-  (): void;
+  (): void | Promise<void>;
   readonly linger?: (work: Promise<unknown>) => void;
   /** The gate's checks, including control changes since the action began, without dispatching. */
-  readonly check?: () => void;
+  readonly check?: () => void | Promise<void>;
   /** When the caller stops waiting, on the performance.now() clock; no input goes out after it. */
   readonly deadline?: number;
 }
@@ -723,7 +723,7 @@ export const click = async (
   const watch = await watchClick(page, aim.frame);
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
-  const press = (count: number) => {
+  const press = async (count: number) => {
     // A dialog the page opened before the press is not the click's, and holds the page: send nothing.
     if (dialogBeforePress)
       throw new BrowserControlInterrupted(
@@ -738,7 +738,7 @@ export const click = async (
         "PreviewAutomationTimeoutError",
         "The click's deadline passed after its first press; the later presses were not sent.",
       );
-    gate();
+    await gate();
     sent = true;
     if (count === 1)
       return locator === null
@@ -844,7 +844,7 @@ export const type = async (
       }, input.clear === true));
     if (focused === "range" && handle) {
       remaining(deadline);
-      gate();
+      await gate();
       return await setRange(handle, input.text);
     }
     if (focused !== true) {
@@ -854,7 +854,7 @@ export const type = async (
       );
     }
     remaining(deadline);
-    gate();
+    await gate();
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {
@@ -880,13 +880,13 @@ export const hover = async (
   await pointer(await targetPoint(page, locator, input, deadline), "move");
   if (locator === null) {
     remaining(deadline);
-    gate();
+    await gate();
     await page.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
   await settled(locator, deadline, false);
   remaining(deadline);
-  gate();
+  await gate();
   await locator.hover(dispatched(deadline));
 };
 
@@ -942,7 +942,7 @@ export const select = async (
         { beforeInput: true },
       );
     remaining(deadline);
-    gate();
+    await gate();
     // What Playwright's selectOption does once the options exist, without its wait for them.
     const selected = await handle.evaluate((element, chosen) => {
       const select = element as unknown as {
@@ -991,7 +991,7 @@ export const drag = async (
   const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
   if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
   remaining(deadline);
-  gate();
+  await gate();
   await source.dragTo(target, dispatched(deadline));
 };
 
@@ -1000,7 +1000,7 @@ export const press = async (
   input: PreviewAutomationPressInput,
   gate: DispatchGate = open,
 ) => {
-  gate();
+  await gate();
   await page.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
 };
 
@@ -1018,14 +1018,14 @@ export const scroll = async (
   }
   const locator = targetLocator(page, input);
   if (locator === null) {
-    gate();
+    await gate();
     // Page-side code is passed as source: the server compiles without DOM types.
     await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
     return { settled: await settleScroll(page, undefined, gate.deadline) };
   }
   const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS);
   try {
-    gate();
+    await gate();
     await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
     return { settled: await settleScroll(page, { element: handle }, gate.deadline) };
   } finally {

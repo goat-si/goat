@@ -6,6 +6,7 @@ import * as Ref from "effect/Ref";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
+import type { DispatchGate } from "./ServerBrowserPage.ts";
 
 interface Tab {
   readonly threadId: string;
@@ -75,6 +76,28 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   };
   const setRun = (threadId: string, tabId: string, runId: string) =>
     tabRuns.set(`${threadId}\u0000${tabId}`, runId);
+  const gate = (tab: Tab, runId: string | undefined, base: DispatchGate): DispatchGate => {
+    let passed = false;
+    const check = async () => {
+      try {
+        await assertTab(tab, runId);
+        await base.check?.();
+      } catch (cause) {
+        if (passed && cause instanceof BrowserControlInterrupted && cause.beforeInput)
+          throw new BrowserControlInterrupted(cause.message, cause.reason, false);
+        throw cause;
+      }
+    };
+    return Object.assign(
+      async () => {
+        await check();
+        await base();
+        passed = true;
+      },
+      { check },
+      base.linger ? { linger: base.linger } : {},
+    );
+  };
   const drop = (threadId: string, tabId: string) => {
     const key = `${threadId}\u0000${tabId}`;
     tabRuns.delete(key);
@@ -90,5 +113,5 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
       );
     void (check ?? Promise.resolve()).then(clear, clear);
   };
-  return { assertTab, assertUrl, observe, setRun, drop };
+  return { assertTab, assertUrl, observe, setRun, drop, gate };
 });
