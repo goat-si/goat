@@ -93,6 +93,7 @@ import { openTerminalLinkInPreview } from "./preview/openTerminalLinkInPreview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { preventTerminalCloseShortcut } from "../lib/terminalCloseShortcut";
 import { observeResize } from "../lib/observeResize";
+import { openEnvironmentUrlExternally } from "../browser/openEnvironmentUrl";
 import {
   consumePendingTerminalFocus,
   focusTerminal,
@@ -935,7 +936,7 @@ function TerminalSessionViewport({
             return;
           }
           const fallbackToBrowser = () => {
-            void localApi.shell.openExternal(text).catch((error: unknown) => {
+            void openEnvironmentUrlExternally(environmentId, text).catch((error: unknown) => {
               writeSystemMessage(
                 latestTerminal,
                 error instanceof Error ? error.message : "Unable to open link",

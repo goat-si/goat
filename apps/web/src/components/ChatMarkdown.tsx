@@ -202,6 +202,13 @@ import {
   nodeToPlainText,
 } from "./chat/MarkdownCodeBlock.logic";
 import { reportMarkdownActionFailure } from "./chat/markdownActionFailure";
+import {
+  handleMarkdownLinkAuxClick,
+  markdownLinkNeedsEnvironmentRoute,
+  openMarkdownLinkExternally,
+  openMarkdownLinkInSystemBrowser,
+  reportMarkdownExternalOpenFailure,
+} from "./chat/markdownExternalLink";
 import { ARTIFACT_TEMPLATE_ICON_BY_KIND } from "./chat/artifactTemplateIcons";
 
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
@@ -1151,17 +1158,14 @@ const CHAT_MARKDOWN_COMPONENTS = {
               }) !== "app"
             ) {
               // Open desktop Alt-clicks before Chromium downloads them so link routers can read the held key.
-              if (isElectron && event.altKey) {
+              // A remote environment's loopback link needs its address, which native navigation skips.
+              if (
+                (isElectron && event.altKey) ||
+                markdownLinkNeedsEnvironmentRoute(environmentId, href)
+              ) {
                 event.preventDefault();
                 event.stopPropagation();
-                void readLocalApi()
-                  ?.shell.openExternal(href)
-                  .catch((cause) =>
-                    reportMarkdownActionFailure(
-                      { operation: "open-link-external", target: href },
-                      cause,
-                    ),
-                  );
+                openMarkdownLinkInSystemBrowser(environmentId, href);
               }
               return;
             }
@@ -1174,8 +1178,12 @@ const CHAT_MARKDOWN_COMPONENTS = {
                 result.cause,
               );
               if (squashAtomCommandFailure(result) instanceof BrowserSettingsReadError) return;
-              void readLocalApi()?.shell.openExternal(href);
+              openMarkdownLinkInSystemBrowser(environmentId, href);
             });
+          }}
+          onAuxClick={(event) => {
+            props.onAuxClick?.(event);
+            handleMarkdownLinkAuxClick(event, environmentId, href);
           }}
           onContextMenu={(event) => {
             if (!href || !faviconHost) return;
@@ -1205,11 +1213,13 @@ const CHAT_MARKDOWN_COMPONENTS = {
                   );
                 }
               },
-              openExternal: (target) => api.shell.openExternal(target),
+              openExternal: (target) => openMarkdownLinkExternally(environmentId, target),
               copyLink: (target) => writeTextToClipboard(target, "link"),
               updateThreadLink: updateThreadPullRequestLink,
               reportFailure: (operation, cause) => {
-                reportMarkdownActionFailure({ operation, target: href }, cause);
+                if (operation === "open-link-external")
+                  reportMarkdownExternalOpenFailure(href, cause);
+                else reportMarkdownActionFailure({ operation, target: href }, cause);
                 if (
                   operation === "link-pull-request-to-thread" ||
                   operation === "unlink-pull-request-from-thread"
