@@ -367,6 +367,15 @@ it.live.each([
     stale: [],
   },
   {
+    label: "changed and moved",
+    old: ["A", "B", "C"],
+    current: ["B", "A", "C"],
+    diff: '~ [1] AXButton "B" = "changed"\n~ [2] AXButton "A" = "changed"',
+    clicks: [1, 2],
+    tokens: ["s2:1", "s2:2"],
+    stale: [],
+  },
+  {
     label: "reindexed",
     old: ["A", "B", "C"],
     current: ["New", "A", "B", "C"],
@@ -608,6 +617,9 @@ it.live("a failed sheet probe rereads the original window without since", () => 
     expect(calls[2]?.args).not.toHaveProperty("since");
     expect(calls[3]?.args).not.toHaveProperty("since");
     expect(value.mode).toBe("full");
+    expect(value).toMatchObject({
+      resetReason: "full read: sheet probe retired the previous observation",
+    });
     expect(value.text).not.toContain("undefined");
   }).pipe(
     Effect.provide(
@@ -623,3 +635,47 @@ it.live("a failed sheet probe rereads the original window without since", () => 
     ),
   );
 });
+
+it.effect("a value edit at the same number keeps the full observation baseline", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const { host } = fixture({
+      get_window_state: (args: Record<string, unknown>) => {
+        const snapshot = `s${++reads}`;
+        const elements = [
+          { element_index: 0, element_token: `${snapshot}:0`, role: "AXWindow", label: "Document" },
+          {
+            element_index: 1,
+            element_token: `${snapshot}:1`,
+            role: "AXTextField",
+            label: "Name",
+            value: reads === 1 ? "a" : "ab",
+          },
+        ];
+        return {
+          pid: 42,
+          window_id: 7,
+          snapshot_id: snapshot,
+          elements_complete: false,
+          elements,
+          ...(args.since === undefined
+            ? { tree_markdown: '- [0] AXWindow "Document"\n- [1] AXTextField "Name" = "a"' }
+            : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
+        };
+      },
+    });
+    const ref = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+      .value as Observed;
+    const second = (yield* host.observe(
+      call("get_accessibility_tree", { mode: "diff", baseObservationId: first.observationId }, ref),
+      context,
+    )).value as Observed;
+    expect(second.indexedText).toBe(
+      `~ [1] AXTextField "Name" = "ab"\nother numbers unchanged; latest full observation is ${first.observationId}`,
+    );
+  }),
+);
