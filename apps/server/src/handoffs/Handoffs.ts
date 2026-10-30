@@ -43,7 +43,7 @@ import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
-import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
+import { CONSUMED, expiredAt, makeComputerUseContinuations } from "./computerUseContinuations.ts";
 import { makeExpiryHolds } from "./expiryHolds.ts";
 import { makeComputerUseStanding, type CreateInput } from "./computerUseStanding.ts";
 import { startComputerUseSettingsObserver } from "./computerUseSettingsObserver.ts";
@@ -271,6 +271,8 @@ const make = Effect.gen(function* () {
   const environment = yield* Effect.serviceOption(Environment.ServerEnvironment);
   const secrets = yield* SecretRequests.SecretRequests;
   const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const withAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Option.isSome(computerUseLeases) ? computerUseLeases.value.serializeAdmission(effect) : effect;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const key = yield* store
     .getOrCreateRandom("handoff-encryption-key", 32)
@@ -358,8 +360,12 @@ const make = Effect.gen(function* () {
   });
   const continuations = yield* makeComputerUseContinuations({
     lock,
+    serializeAdmission: withAdmission,
     read,
-    expire: (input) => transition(input, "expired", { type: "server" }),
+    expire: (input) =>
+      standing
+        .end(input.threadId, input.handoffId)
+        .pipe(Effect.andThen(transition(input, "expired", { type: "server" }))),
     cancelAsAgent: (input) =>
       transition(input, "cancelled", { type: "agent", threadId: input.threadId }),
     recordKind: (id) =>
@@ -462,7 +468,13 @@ const make = Effect.gen(function* () {
       }
       const endsApproved =
         isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
-      if (endsApproved) yield* standing.end(input.threadId, input.handoffId);
+      const refusesPending =
+        isComputerUseGrant &&
+        isHandoffPending(record.state) &&
+        (input.action === "declined" ||
+          input.action === "cancelled" ||
+          expiredAt(record, yield* DateTime.now));
+      if (endsApproved || refusesPending) yield* standing.end(input.threadId, input.handoffId);
       // Recorded before the transition commits, so the wake reactor never sees the end without
       // it; a repeated cancel keeps it.
       if (endsApproved)
@@ -494,10 +506,7 @@ const make = Effect.gen(function* () {
     },
     lock.withPermits(1),
     // A computer use grant's holder check and commit must not straddle an unattended claim.
-    (effect) =>
-      Option.isSome(computerUseLeases)
-        ? computerUseLeases.value.serializeAdmission(effect)
-        : effect,
+    withAdmission,
   );
   const respond = Effect.fn("Handoffs.respond")(function* (
     input: HandoffRespondInput,
@@ -624,7 +633,7 @@ const make = Effect.gen(function* () {
       return handoffSummary(handoff);
     });
   const create: Handoffs["Service"]["create"] = (input) =>
-    createUnlocked(input).pipe(lock.withPermits(1));
+    withAdmission(createUnlocked(input).pipe(lock.withPermits(1)));
   const standing = makeComputerUseStanding({
     sql,
     lock,
@@ -672,8 +681,7 @@ const make = Effect.gen(function* () {
       const handoff = yield* decodeHandoff(row.handoff_json).pipe(Effect.mapError(unavailable));
       const runStatus = yield* decodeRunStatus(row.run_status).pipe(Effect.mapError(unavailable));
       if (
-        (handoff.expiresAt !== null &&
-          DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)) ||
+        expiredAt(handoff, now) ||
         (endsWithItsRun(handoff) &&
           (runStatus === null || ThreadManagement.isTerminalRunStatus(runStatus)))
       ) {
@@ -681,6 +689,8 @@ const make = Effect.gen(function* () {
           threadId: row.thread_id,
           handoffId: row.turn_item_id,
         }).pipe(Effect.mapError(unavailable));
+        if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
+          yield* standing.end(input.threadId, input.handoffId);
         yield* transition(input, "expired", { type: "server" });
         if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
           yield* continuations.answered(input.handoffId);
@@ -920,7 +930,6 @@ const make = Effect.gen(function* () {
       }
     }
   });
-  const sweep = sweepUnlocked.pipe(lock.withPermits(1));
   const answerSecret = Effect.fn("Handoffs.answerSecret")(function* (
     input: SecretRequestAnswerInput,
     sessionId: AuthSessionId,
@@ -950,7 +959,7 @@ const make = Effect.gen(function* () {
     read,
     open,
     respond,
-    sweep,
+    sweep: withAdmission(sweepUnlocked.pipe(lock.withPermits(1))),
     holdExpiry: expiryHolds.hold,
     matchesArgs: (handoff, args) => matchesArgs(key, handoff, args),
     answerSecret,
