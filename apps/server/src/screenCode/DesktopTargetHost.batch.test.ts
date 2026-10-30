@@ -556,7 +556,13 @@ it.live("app group inputs use the pinned driver schemas", () => {
     const check = validator.getValidator({
       type: "object",
       additionalProperties: false,
-      properties: Object.fromEntries(spec.keys.map((key) => [key, properties[key]])),
+      properties: Object.fromEntries(
+        spec.keys.map((key) => {
+          const property = properties[key];
+          if (property === undefined) throw new Error(`Missing schema property ${key}`);
+          return [key, property];
+        }),
+      ),
       required: spec.required,
     });
     return (args: Record<string, unknown>) => {
