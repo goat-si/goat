@@ -16,6 +16,7 @@ const make = Effect.gen(function* () {
   const service = yield* makeBrowserOriginGrants({
     environmentId,
     supported: () => supported && Option.isSome(manifest),
+    bindAvailable: () => Option.isSome(bind),
     publish: (union) => (Option.isSome(manifest) ? manifest.value.publish(union) : Effect.void),
     bind: (request) =>
       Option.isSome(bind)

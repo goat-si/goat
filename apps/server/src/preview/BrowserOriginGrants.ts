@@ -31,6 +31,7 @@ export interface Union {
 interface Dependencies {
   readonly environmentId: EnvironmentId;
   readonly supported: () => boolean;
+  readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<void, Error>;
   readonly bind: (input: Request) => Effect.Effect<
     {
@@ -129,6 +130,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         if (entry === undefined || !approved || !deps.supported()) {
           pending.delete(claimId);
           return { agentResult: decline };
+        }
+        if (deps.bindAvailable?.() === false) {
+          pending.delete(claimId);
+          return { agentResult: unavailable };
         }
         const grantKey = key(entry.threadId, entry.origin);
         const existed = grants.has(grantKey);
