@@ -315,6 +315,8 @@ interface ControlRecord extends ComputerUseControl {
   readonly named?: ReadonlyArray<string>;
   /** The run whose attachment last took this control up. */
   readonly runId?: RunId;
+  /** Idled while a run waited, keeping its approvals until nothing of the thread is open. */
+  readonly waitHeld?: boolean;
 }
 
 /** Whether an agent can act on the screen through this control now. */
@@ -791,7 +793,11 @@ const make = Effect.gen(function* () {
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>
       Effect.forEach(
-        [...controls.values()].filter(acting).map((record) => record.threadId),
+        [...controls.values()]
+          .filter(
+            (record) => acting(record) || (record.ended === undefined && record.waitHeld === true),
+          )
+          .map((record) => record.threadId),
         (threadId) =>
           turnEnded(threadId).pipe(
             Effect.catch((cause) =>

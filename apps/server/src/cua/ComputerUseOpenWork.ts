@@ -14,7 +14,7 @@ export const IMPLIED_RECHECK_MS = 2_000;
 
 /**
  * "open" while a provider turn, a native subagent or a run that is not waiting could call the
- * driver; "waiting" when only runs waiting on a person or a child remain, which start a new turn
+ * driver; "waiting" when only waiting runs remain, whose agent turn is over, so a new turn starts
  * before they act. Native subagents use the parent's control and can resume without its turn, so
  * any open one counts; delegated tasks hold controls of their own.
  */
@@ -108,6 +108,7 @@ interface RunEndControl {
   readonly ended?: unknown;
   readonly idle?: boolean;
   readonly idleEpoch?: number;
+  readonly waitHeld?: boolean;
 }
 
 /** What ComputerUseLeases does when a turn ends, over its controls and foreground state. */
@@ -142,13 +143,25 @@ export const makeRunEnd = <C extends RunEndControl, E>(options: {
     if (
       after?.controlId !== before.controlId ||
       after.uses !== before.uses ||
-      after.ended !== undefined ||
-      after.idle === true
+      after.ended !== undefined
     )
       return false;
+    if (after.idle === true) {
+      // Approvals a waiting run kept end with the thread's last open run.
+      if (after.waitHeld !== true || open !== "none") return false;
+      foreground.revokeControl(threadId, after.controlId);
+      controls.set(threadId, { ...after, waitHeld: false });
+      yield* changed;
+      return false;
+    }
     // A waiting run keeps its approvals for the turn that resumes it; only its driver stops.
     if (open === "none") foreground.revokeControl(threadId, after.controlId);
-    controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
+    controls.set(threadId, {
+      ...after,
+      idle: true,
+      idleEpoch: (after.idleEpoch ?? 0) + 1,
+      waitHeld: open === "waiting",
+    });
     options.idled(threadId, after.controlId, now);
     yield* changed;
     return true;

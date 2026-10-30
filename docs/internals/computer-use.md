@@ -67,10 +67,12 @@ provider (Codex, Claude, ...)
   several direct runtimes side by side; if they cannot coexist, that changes this decision and
   is recorded as an amendment to ADR-0023.
 - A session's driver runs only while a turn can call it. When a turn ends and the thread has no
-  open run, or only runs waiting on a person or a child, its control goes idle and the proxy
-  kills the driver; a waiting run keeps its approvals. The next turn takes the same control and
-  starts a new driver. A provider turn, a queued or starting run, or any open native subagent
-  keeps the driver, since a native subagent can resume without a turn of its thread.
+  open run, or only waiting runs (their agent turn is over; they wait for a checkpoint or a
+  wake), its control goes idle and the proxy kills the driver. Approvals stay while a run
+  waits and end with the thread's last open run. A later turn reuses the control while it is
+  unexpired and its admission unchanged, and starts a new driver. A provider turn, a queued or
+  starting run, or any open native subagent keeps the driver, since a native subagent can
+  resume without a turn of its thread.
 - Stop, stop all, lease end, or computer use turned off end the session at every
   hop. The proxy refuses new calls and exits. The server marks the session ended and tells the
   helper over the control channel. The helper kills that session's driver process, releases the

@@ -4,7 +4,12 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../persistence/Migrations.ts";
-import { foregroundProxy, foregroundProxyLayer } from "./ComputerUseForeground.testkit.ts";
+import {
+  controlWithForeground,
+  foregroundGrant,
+  foregroundProxy,
+  foregroundProxyLayer,
+} from "./ComputerUseForeground.testkit.ts";
 import { call } from "./ComputerUseLeaseProxy.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
@@ -76,4 +81,23 @@ it.effect.each([
     );
     assert.isUndefined(listed?.control.idle);
   }).pipe(Effect.provide(foregroundProxyLayer)),
+);
+
+it.effect(
+  "approvals a waiting run kept end with the run, so a later run of the thread does not inherit them",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      const thread = ThreadId.make("thread:waiting-then-done");
+      const { leases } = yield* controlWithForeground(thread);
+      yield* foregroundGrant(thread, "handoff:waiting-then-done");
+      yield* run(thread, "run:waiting-then-done", 1, "waiting");
+      assert.isTrue(yield* leases.turnEnded(thread));
+      assert.isTrue(yield* leases.foregroundAvailable(thread, "Check the build status"));
+      yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed'
+        WHERE run_id = 'run:waiting-then-done'`;
+      yield* leases.settle;
+      assert.isFalse(yield* leases.foregroundAvailable(thread, "Check the build status"));
+    }).pipe(Effect.provide(foregroundProxyLayer)),
 );

@@ -1,6 +1,6 @@
 /**
  * Ends computer use controls that no turn can use any more: when a thread's last open run ends
- * or only runs waiting on a person or a child remain, and when a person turns computer use off.
+ * or only waiting runs remain, and when a person turns computer use off.
  * Without this a finished thread's control stays active until it expires, and its session reads
  * "Agent controlling" for up to an hour (#1360).
  *
