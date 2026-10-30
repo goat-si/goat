@@ -53,6 +53,7 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
                 tool: "click",
                 app: { id: "fixture.app", name: "Fixture" },
                 verdict: "sent",
+                typed: { length: 6, text: "secret", fieldKind: "normal" },
               }),
             }),
             services,
@@ -62,9 +63,20 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       assert.equal(wrong.status, 409);
       const right = yield* send(f.first.controlId);
       assert.equal(right.status, 204);
-      assert.equal((yield* history.listForThread(f.a)).length, 1);
+      const entries = yield* history.listForThread(f.a);
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0]?.typedLength, 6);
+      assert.isNull(entries[0]?.typedText);
       assert.deepEqual(yield* history.listForThread(f.b), []);
       yield* Effect.promise(() => dispose());
     }),
-  ).pipe(Effect.provide(Layer.mergeAll(database, serviceLayer, ServerSettings.layerTest({})))),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        database,
+        serviceLayer,
+        ServerSettings.layerTest({ computerUseKeepTypedText: true }),
+      ),
+    ),
+  ),
 );

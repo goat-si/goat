@@ -218,17 +218,11 @@ export const reportLayer = HttpRouter.add(
         return HttpServerResponse.empty({ status: 409 });
       const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
       if (Option.isNone(sql)) return HttpServerResponse.empty({ status: 503 });
-      const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-      const keep = Option.isSome(settings)
-        ? yield* settings.value.getSettings.pipe(
-            Effect.map((value) => value.computerUseKeepTypedText),
-            Effect.orElseSucceed(() => false),
-          )
-        : false;
       const history = yield* makeComputerUseHistory.pipe(
         Effect.provideService(SqlClient.SqlClient, sql.value),
       );
-      const saved = yield* recordCallOutcome(history, threadId, value, keep).pipe(Effect.option);
+      // The shared thread credential cannot attest that the target field is non-secret.
+      const saved = yield* recordCallOutcome(history, threadId, value, false).pipe(Effect.option);
       return HttpServerResponse.empty({ status: Option.isSome(saved) ? 204 : 503 });
     }
     if ("humanInput" in value) {
