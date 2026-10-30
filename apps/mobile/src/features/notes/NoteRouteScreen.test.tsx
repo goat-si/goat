@@ -32,6 +32,10 @@ const { mocks, Children } = vi.hoisted(() => ({
     restore: vi.fn(),
     flush: vi.fn(),
     serialize: (markdown: string): string | Promise<string> => markdown,
+    inputProps: null as null | {
+      onChangeSelection: (selection: { start: number; end: number }) => void;
+      onChangeState: (state: unknown) => void;
+    },
   },
 }));
 vi.mock("react-native", () => ({
@@ -115,7 +119,10 @@ vi.mock("react-native-enriched-markdown", () => ({
     defaultValue: string;
     editable: boolean;
     onChangeText: (text: string) => void;
+    onChangeSelection: (selection: { start: number; end: number }) => void;
+    onChangeState: (state: unknown) => void;
   }) => {
+    mocks.inputProps = props;
     const element = useRef<HTMLTextAreaElement>(null);
     const [initial] = useState(props.defaultValue);
     // The native input reads defaultValue once; a DOM defaultValue would reset typed text.
@@ -560,6 +567,7 @@ describe("visual note editor", () => {
     expect(
       container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.disabled,
     ).toBe(true);
+    expect(button("B").disabled).toBe(true);
     await act(async () => button("Save on phone").click());
     await act(async () => read.resolve("edited"));
     expect(mocks.enqueue).toHaveBeenCalledOnce();
@@ -602,6 +610,41 @@ describe("visual note editor", () => {
           container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.value,
         ).toBe("mine"),
       ),
+    );
+  });
+
+  it("a formatting-only change from the native menu counts as an unsaved edit", async () => {
+    await act(async () => render());
+    await edit();
+    const style = (bold: boolean) => ({
+      bold: { isActive: bold },
+      italic: { isActive: false },
+      underline: { isActive: false },
+      strikethrough: { isActive: false },
+      spoiler: { isActive: false },
+      link: { isActive: false, destination: "" },
+      heading: { isActive: false, level: 1 },
+      unorderedList: { isActive: false, depth: 0 },
+      orderedList: { isActive: false, depth: 0 },
+    });
+    act(() => {
+      mocks.inputProps?.onChangeSelection({ start: 0, end: 4 });
+      mocks.inputProps?.onChangeState(style(false));
+    });
+    expect(container.textContent).not.toContain("Unsaved edits");
+    act(() => mocks.inputProps?.onChangeState(style(true)));
+    expect(container.textContent).toContain("Unsaved edits");
+  });
+
+  it("offers undo right after typing and restores the opened text", async () => {
+    await act(async () => render());
+    await edit();
+    expect(button("↶").disabled).toBe(true);
+    act(() => type("typed"));
+    expect(button("↶").disabled).toBe(false);
+    await act(async () => button("↶").click());
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.value).toBe(
+      "mine",
     );
   });
 

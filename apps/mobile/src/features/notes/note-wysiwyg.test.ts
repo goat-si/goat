@@ -37,6 +37,14 @@ describe("visual note editor eligibility", () => {
     expect(visualEditorBlocker("A __strong__ word\n")).toBe("underscore formatting");
     expect(visualEditorBlocker("A *safe* and **safe** word\n")).toBeNull();
   });
+
+  it("refuses formatting that spans lines, whose closing marker an edit could move", () => {
+    expect(visualEditorBlocker("**a\nb**\n")).toBe("formatting that spans lines");
+    expect(visualEditorBlocker("[a\nb](https://example.com)\n")).toBe(
+      "formatting that spans lines",
+    );
+    expect(visualEditorBlocker("**a**\nb\n")).toBeNull();
+  });
 });
 
 describe("saving from the visual editor", () => {

@@ -23,10 +23,10 @@ export interface NoteVisualEditorHandle {
 }
 
 const HISTORY_LIMIT = 30;
-const HISTORY_PAUSE_MS = 600;
-// The fork's serializer costs lines × blocks (about 1 ms at 200 list items, 120 ms at 2,000 on
-// an M-series Mac), so long notes take undo snapshots only at toolbar taps and undo.
-const PAUSE_SNAPSHOT_MAX_LINES = 400;
+const MIN_PAUSE_MS = 600;
+// The fork's serializer costs lines × blocks (about 1 ms at 200 list items, 120 ms at 2,000 on an
+// M-series Mac), so the typing pause before a snapshot grows with what the last one cost.
+const PAUSE_PER_SNAPSHOT_MS = 20;
 const NO_STATE = "";
 
 /** Loaded lazily from the note screen, so the rich input costs nothing until a note is edited. */
@@ -47,10 +47,12 @@ export default function NoteVisualEditor(props: {
   const [canUndo, setCanUndo] = useState(false);
   const history = useRef([session.text]);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [pauseSnapshots] = useState(
-    () => session.text.split("\n").length <= PAUSE_SNAPSHOT_MAX_LINES,
-  );
+  const pauseMs = useRef(MIN_PAUSE_MS);
+  const selection = useRef("");
+  const lastFormat = useRef({ selection: "", key: "" });
+  const undoing = useRef<Promise<void> | null>(null);
   const onFallback = useEffectEvent((reason: string) => props.onFallback(reason));
+  const canEdit = ready && props.editable;
 
   // oxlint-disable-next-line goat/react-effect-budget -- checks the native serializer once, after the input mounts
   useEffect(() => {
@@ -84,27 +86,37 @@ export default function NoteVisualEditor(props: {
   const snapshot = async () => {
     if (pending.current) clearTimeout(pending.current);
     pending.current = null;
+    const started = Date.now();
     const markdown = await input.current?.getMarkdown();
+    pauseMs.current = Math.max(MIN_PAUSE_MS, (Date.now() - started) * PAUSE_PER_SNAPSHOT_MS);
     const stack = history.current;
-    if (markdown === undefined || markdown === stack.at(-1)) return;
-    stack.push(markdown);
-    if (stack.length > HISTORY_LIMIT) stack.shift();
+    if (markdown !== undefined && markdown !== stack.at(-1)) {
+      stack.push(markdown);
+      if (stack.length > HISTORY_LIMIT) stack.shift();
+    }
     setCanUndo(stack.length > 1);
   };
-  // Typing only flags the change; serializing waits for a pause, and long notes skip it.
+  // Typing only flags the change; serializing waits for a pause. Undo is offered at once and
+  // snapshots first, so it works before a long note's pause has passed.
   const changed = () => {
     props.onChange();
+    setCanUndo(true);
     if (pending.current) clearTimeout(pending.current);
-    pending.current = pauseSnapshots ? setTimeout(() => void snapshot(), HISTORY_PAUSE_MS) : null;
+    pending.current = setTimeout(() => void snapshot(), pauseMs.current);
   };
-  const command = async (run: (target: EnrichedMarkdownTextInputInstance) => void) => {
-    if (!input.current || !ready) return;
-    await snapshot();
-    if (!input.current) return;
+  // Synchronous, so a save read that starts after the tap always sees the command's edit.
+  const command = (run: (target: EnrichedMarkdownTextInputInstance) => void) => {
+    if (!input.current || !canEdit) return;
     run(input.current);
     changed();
   };
-  const undo = async () => {
+  const undo = () => {
+    if (!canEdit || undoing.current) return;
+    undoing.current = restorePrevious().then(() => {
+      undoing.current = null;
+    });
+  };
+  const restorePrevious = async () => {
     await snapshot();
     const stack = history.current;
     const previous = stack.at(-2);
@@ -120,6 +132,8 @@ export default function NoteVisualEditor(props: {
     props.handleRef,
     () => ({
       body: async () => {
+        // A save that starts while undo is snapshotting reads the restored text.
+        await undoing.current;
         const markdown = await input.current?.getMarkdown();
         if (markdown === undefined) throw new Error("The editor closed before the note was read.");
         return visualNoteBody(session, markdown);
@@ -155,15 +169,15 @@ export default function NoteVisualEditor(props: {
           label="B"
           name="Bold"
           selected={active("bold")}
-          disabled={!ready}
-          onPress={() => void command((target) => target.toggleBold())}
+          disabled={!canEdit}
+          onPress={() => command((target) => target.toggleBold())}
         />
         <ToolbarButton
           label="I"
           name="Italic"
           selected={active("italic")}
-          disabled={!ready}
-          onPress={() => void command((target) => target.toggleItalic())}
+          disabled={!canEdit}
+          onPress={() => command((target) => target.toggleItalic())}
         />
         {([1, 2, 3] as const).map((level) => (
           <ToolbarButton
@@ -171,30 +185,25 @@ export default function NoteVisualEditor(props: {
             label={`H${level}`}
             name={`Heading ${level}`}
             selected={active(`h${level}`)}
-            disabled={!ready}
-            onPress={() => void command((target) => target.toggleHeading(level))}
+            disabled={!canEdit}
+            onPress={() => command((target) => target.toggleHeading(level))}
           />
         ))}
         <ToolbarButton
           label="•"
           name="Bulleted list"
           selected={active("bullet")}
-          disabled={!ready}
-          onPress={() => void command((target) => target.toggleUnorderedList())}
+          disabled={!canEdit}
+          onPress={() => command((target) => target.toggleUnorderedList())}
         />
         <ToolbarButton
           label="1."
           name="Numbered list"
           selected={active("numbered")}
-          disabled={!ready}
-          onPress={() => void command((target) => target.toggleOrderedList())}
+          disabled={!canEdit}
+          onPress={() => command((target) => target.toggleOrderedList())}
         />
-        <ToolbarButton
-          label="↶"
-          name="Undo"
-          disabled={!ready || !canUndo}
-          onPress={() => void undo()}
-        />
+        <ToolbarButton label="↶" name="Undo" disabled={!canEdit || !canUndo} onPress={undo} />
       </View>
       {ready ? null : <Text className="text-xs text-foreground-muted">Checking this note…</Text>}
       <View className="rounded-xl border border-input-border bg-input px-4 py-3">
@@ -214,9 +223,19 @@ export default function NoteVisualEditor(props: {
           selectionColor={nativeTextStyle.linkColor}
           markdownStyle={markdownStyle}
           onChangeText={changed}
+          onChangeSelection={({ start, end }) => {
+            selection.current = `${start}:${end}`;
+          }}
           onChangeState={(state) => {
             const next = styleStateKey(state);
             if (next !== styleKey) setStyleKey(next);
+            // Context-menu and keyboard formatting change styles without a text change;
+            // a style change on the same selection is an edit.
+            const format = formatKey(state);
+            const previous = lastFormat.current;
+            lastFormat.current = { selection: selection.current, key: format };
+            if (ready && previous.selection === selection.current && previous.key !== format)
+              changed();
           }}
           style={{
             height: Math.min(Math.max(height * 0.5, 280), 720),
@@ -240,6 +259,20 @@ function styleStateKey(state: StyleState): string {
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function formatKey(state: StyleState): string {
+  return JSON.stringify([
+    state.bold.isActive,
+    state.italic.isActive,
+    state.underline.isActive,
+    state.strikethrough.isActive,
+    state.spoiler.isActive,
+    state.link.isActive && state.link.destination,
+    state.heading.isActive && state.heading.level,
+    state.unorderedList.isActive && state.unorderedList.depth,
+    state.orderedList.isActive && state.orderedList.depth,
+  ]);
 }
 
 function ToolbarButton(props: {

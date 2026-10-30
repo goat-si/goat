@@ -34,6 +34,13 @@ function inlineBlocker(text: string, children: ReadonlyArray<RootContent>): stri
       text[child.position?.start.offset ?? -1] === "_"
     )
       return "underscore formatting";
+    // An edit inside such a range can move its closing marker onto the untouched line.
+    if (
+      child.type !== "text" &&
+      child.type !== "break" &&
+      text.slice(child.position?.start.offset, child.position?.end.offset).includes("\n")
+    )
+      return "formatting that spans lines";
     const found = "children" in child ? inlineBlocker(text, child.children) : null;
     if (found) return found;
   }
