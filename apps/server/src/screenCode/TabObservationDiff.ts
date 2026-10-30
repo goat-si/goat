@@ -2,8 +2,15 @@ import type { ScreenObservationDraft } from "./ScreenObservations.ts";
 
 type Element = ScreenObservationDraft["elements"][number];
 
+const nativeRef = (token: string) => token.replace(/^aria-ref=t3-\d+-/, "aria-ref=");
+
+export const hasFrameRefs = (draft: ScreenObservationDraft) =>
+  draft.elements.some((element) => /^aria-ref=f\d+e\d+$/.test(nativeRef(element.driverToken)));
+
 const identity = (element: Element) =>
-  JSON.stringify([element.role, element.name, element.driverToken]);
+  JSON.stringify([element.role, element.name, nativeRef(element.driverToken)]);
+
+const comparableLine = (line: string) => line.trim().replace(/\[ref=[^\]]+\]/, "[ref]");
 
 const rows = (draft: ScreenObservationDraft) => {
   const elements = new Map(draft.elements.map((element) => [element.driverToken, element]));
@@ -60,7 +67,7 @@ export const diffTabObservation = (
   for (const [key, row] of next.byIdentity) {
     const prior = old.byIdentity.get(key);
     if (!prior) changed.push(`+ ${row.line}`);
-    else if (prior.line.trim() !== row.line.trim()) changed.push(`~ ${row.line}`);
+    else if (comparableLine(prior.line) !== comparableLine(row.line)) changed.push(`~ ${row.line}`);
   }
   const count = (lines: string[]) => {
     const counts = new Map<string, number>();

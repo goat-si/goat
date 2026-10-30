@@ -37,7 +37,7 @@ interface Observation extends ReadTime { text: string; observationId: string; sn
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
   scope: string; complete: boolean; truncated: boolean; loading: boolean;
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
-  resetReason?: string; // a diff that could not be compared came back full, never as "no change"
+  resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
   title?: string; url?: string; image?: Shot } // image: with screenshot: true
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;

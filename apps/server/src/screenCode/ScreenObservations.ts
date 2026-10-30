@@ -7,7 +7,7 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import type { PreviewAutomationSnapshot } from "@goat/contracts";
-import { diffTabObservation } from "./TabObservationDiff.ts";
+import { diffTabObservation, hasFrameRefs } from "./TabObservationDiff.ts";
 import {
   cutDetail,
   cutTreeText,
@@ -160,6 +160,7 @@ export interface ScreenObservationDraft {
   readonly title?: string;
   readonly url?: string;
   readonly lineage?: string;
+  readonly tabDocumentKnown?: boolean;
   /** Regions the source left out, such as frames it could not read. */
   readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
   /** The window's screen bounds, for app reads: elements outside them go before visible ones. */
@@ -389,6 +390,7 @@ export class ScreenObservations {
       targetRef: input.targetRef,
       targetGeneration: input.targetGeneration,
       surfaceGeneration: generation.generation,
+      tabDocumentKnown: typeof input.documentGeneration === "number",
       lineage: `${input.connectionId}\u0000${input.controlGeneration}\u0000${input.documentGeneration ?? ""}\u0000${snapshot.url}`,
       indexedText: tree,
       complete: snapshot.treeComplete === true && validGeneration,
@@ -489,26 +491,17 @@ export class ScreenObservations {
         !draft.truncated &&
         old.draft.lineage === draft.lineage &&
         old.draft.targetGeneration === draft.targetGeneration &&
-        old.draft.surfaceGeneration === draft.surfaceGeneration;
-      if (valid) {
+        (old.draft.surfaceGeneration === draft.surfaceGeneration ||
+          (old.draft.tabDocumentKnown === true && draft.tabDocumentKnown === true));
+      if (valid && (hasFrameRefs(old.draft) || hasFrameRefs(draft))) {
+        resetReason = "frame_refs";
+      } else if (valid) {
         const diff = diffTabObservation(old.draft, draft, old.observation.observationId);
         if (diff) {
           renderedText = diff.text;
           selected = diff.elements;
         } else resetReason = "ambiguous_rows";
-      } else if (
-        old &&
-        old.observation.observationId === input.baseObservationId &&
-        old.observation.complete &&
-        !old.observation.truncated &&
-        draft.complete &&
-        !draft.truncated &&
-        old.draft.lineage === draft.lineage &&
-        old.draft.targetGeneration === draft.targetGeneration &&
-        old.draft.surfaceGeneration !== draft.surfaceGeneration
-      )
-        resetReason = "surface_generation_changed";
-      else resetReason = "lineage_or_completeness_changed";
+      } else resetReason = "lineage_or_completeness_changed";
       if (resetReason) mode = "full";
     }
     const observationId = NodeCrypto.randomUUID();
