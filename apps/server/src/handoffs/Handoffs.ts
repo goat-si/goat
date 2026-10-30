@@ -9,6 +9,7 @@ import {
   CommandId,
   Handoff,
   HandoffError,
+  type ServerSettingsError,
   HandoffHuman,
   MessageId,
   handoffSummary,
@@ -136,6 +137,10 @@ export class Handoffs extends Context.Service<
       patch: { readonly enableCua?: boolean; readonly cuaAllowedApps?: ReadonlyArray<string> },
       update: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | HandoffError, R>;
+    readonly removeComputerUseAllowedApp: (
+      app: string,
+      authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
+    ) => Effect.Effect<void, HandoffError | ServerSettingsError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** A computer use request's answer for its waiting call; see computerUseContinuations. */
     readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
@@ -581,6 +586,9 @@ const make = Effect.gen(function* () {
           : { type: "agent", threadId: input.requestedBy.threadId },
         ...(automatic ? { resolvedAt: now } : {}),
         ...(automatic ? { computerUseScope: "standing" as const } : {}),
+        ...(automatic && input.computerUseConsentSequence !== undefined
+          ? { computerUseConsentSequence: input.computerUseConsentSequence }
+          : {}),
         ...(input.apps === undefined ? {} : { apps: input.apps }),
         ...(input.computerUseForeground === undefined
           ? {}
@@ -636,7 +644,11 @@ const make = Effect.gen(function* () {
       }),
   });
   if (Option.isSome(settings))
-    yield* startComputerUseSettingsObserver(settings.value, standing.observeSettings);
+    yield* startComputerUseSettingsObserver(
+      settings.value,
+      standing.observeSettings,
+      standing.invalidate,
+    );
 
   const expiryHolds = makeExpiryHolds();
   const expirePending = Effect.fn("Handoffs.expirePending")(function* (threadId?: string) {
@@ -934,6 +946,7 @@ const make = Effect.gen(function* () {
     revalidateComputerUse: standing.revalidate,
     withComputerUseToggle: standing.toggle,
     withComputerUseSettings: standing.withSettings,
+    removeComputerUseAllowedApp: standing.removeAllowedApp,
     read,
     open,
     respond,

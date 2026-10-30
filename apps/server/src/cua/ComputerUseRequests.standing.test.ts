@@ -276,31 +276,33 @@ it.effect("a named denied app is refused after a person's approval", () =>
   ),
 );
 
-it.effect("automatic approvals do not count as a person's first approval", () =>
-  withHarness(({ orchestrator }) =>
-    Effect.gen(function* () {
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make("auto-not-person"),
-        threadId,
-        messageId: MessageId.make("message:auto-not-person"),
-        text: "Use com.example.Editor",
-        attachments: [],
-        dispatchMode: { type: "queue_after_active" },
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* withRequests(orchestrator, supported, ({ request }) =>
-        Effect.gen(function* () {
-          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
-            cuaAllowedApps: ["com.example.Other"],
-          });
-          assert.equal((yield* request({ apps: ["com.example.Other"] })).kind, "available");
-          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
-        }),
-      );
-    }),
-  ),
+it.effect(
+  "an allowed-app entry without recorded consent does not count as a person's first approval",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("auto-not-person"),
+          threadId,
+          messageId: MessageId.make("message:auto-not-person"),
+          text: "Use com.example.Editor",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* withRequests(orchestrator, supported, ({ request }) =>
+          Effect.gen(function* () {
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaAllowedApps: ["com.example.Other"],
+            });
+            assert.equal((yield* request({ apps: ["com.example.Other"] })).kind, "needs_human");
+            assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+          }),
+        );
+      }),
+    ),
 );
 
 it.effect("a person's approval survives a handoff service restart for named apps", () =>
@@ -595,7 +597,7 @@ it.effect("removing an always choice ends its current admission", () =>
   ),
 );
 
-it.effect("Stop does not remove an always choice", () =>
+it.effect("Stop keeps the always choice but requires fresh consent for the ended session", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
       Effect.gen(function* () {
@@ -611,7 +613,11 @@ it.effect("Stop does not remove an always choice", () =>
           sessionId,
         );
         yield* stopComputerUse(Option.some(leases), handoffs, sessionId, threadId);
-        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        assert.deepEqual(
+          (yield* (yield* ServerSettings.ServerSettingsService).getSettings).cuaAllowedApps,
+          ["com.example.Editor"],
+        );
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
       }),
     ),
   ),
@@ -669,10 +675,21 @@ it.effect(
         yield* withRequests(
           orchestrator,
           supported,
-          ({ request }) =>
+          ({ request, handoffs }) =>
             Effect.gen(function* () {
               const settings = yield* ServerSettings.ServerSettingsService;
-              yield* settings.updateSettings({ cuaAllowedApps: ["com.example.Editor"] });
+              const approval = yield* request({ apps: ["com.example.Editor"] });
+              if (approval.kind !== "needs_human") return assert.fail("expected approval");
+              yield* handoffs.respond(
+                {
+                  threadId,
+                  handoffId: approval.handoff.handoffId,
+                  action: "completed",
+                  computerUseScope: "always",
+                },
+                sessionId,
+              );
+              yield* TestClock.adjust("31 minutes");
               const first = yield* request({ apps: ["com.example.Editor"] }).pipe(Effect.forkChild);
               yield* Deferred.await(entered);
               const remove = yield* settings

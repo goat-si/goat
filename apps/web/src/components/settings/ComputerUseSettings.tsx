@@ -27,6 +27,9 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
   const allowedApps = useEnvironmentSettings(environmentId, (settings) => settings.cuaAllowedApps);
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const removeAllowed = useAtomCommand(serverEnvironment.removeComputerUseAllowedApp, {
+    reportFailure: false,
+  });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
   const refreshVisible = useEffectEvent(() => {
     if (!query.isPending && document.visibilityState !== "hidden") query.refresh();
@@ -66,6 +69,13 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     query.refresh();
     return result._tag === "Success" ? null : "Could not save the setting. Try again.";
   };
+  const removeApp = async (app: string): Promise<string | null> => {
+    if (!registry.get(serverEnvironment.removeComputerUseAllowedApp.permissionAtom(environmentId)))
+      return "This connection cannot change settings on this host.";
+    const result = await removeAllowed({ environmentId, input: { app } });
+    query.refresh();
+    return result._tag === "Success" ? null : "Could not save the setting. Try again.";
+  };
   return {
     enabled,
     disabledSkills,
@@ -77,6 +87,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     localMac,
     localCheck,
     save,
+    removeApp,
     refresh: query.refresh,
   };
 }
@@ -201,7 +212,7 @@ function ComputerUseControls({
                 onClick={() => {
                   setRemoving(true);
                   void host
-                    .save({ cuaAllowedApps: host.allowedApps.filter((item) => item !== app) })
+                    .removeApp(app)
                     .then(setRemoveError)
                     .finally(() => setRemoving(false));
                 }}

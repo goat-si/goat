@@ -52,6 +52,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.handoffsRespond]: AuthOrchestrationOperateScope,
   [WS_METHODS.computerUseStop]: AuthOrchestrationOperateScope,
   [WS_METHODS.computerUseStopAll]: AuthOrchestrationOperateScope,
+  [WS_METHODS.computerUseRemoveAllowedApp]: AuthSettingsWriteScope,
   [WS_METHODS.computerUseResume]: AuthOrchestrationOperateScope,
   [WS_METHODS.previewSessionsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.computerUseStatusChanges]: AuthOrchestrationReadScope,

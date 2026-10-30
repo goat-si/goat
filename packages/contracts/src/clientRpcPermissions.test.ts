@@ -22,6 +22,12 @@ it("lets readers follow computer use status without granting control", () => {
   ])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
 });
+
+it("requires settings authority to remove a computer-use allowed app", () => {
+  expect(
+    clientRpcRequiredScopes(WS_METHODS.computerUseRemoveAllowedApp, { app: "com.example.Editor" }),
+  ).toEqual(["settings:write"]);
+});
 it("a desktop window's live picture needs the same read grant as a browser tab's stream", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.previewSessionsFrames, {})).toEqual([
     "orchestration:read",

@@ -42,6 +42,8 @@ import {
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   planMobileBuiltInSkillToggle,
   planMobileBuiltInSkillProjectPatch,
@@ -261,6 +263,10 @@ function ServerSettingsDetail(props: {
       ? skillOn(reference, "screen-code")
       : null;
   const writeSettings = useSettingsWriter();
+  const removeAllowedApp = useAtomCommand(serverEnvironment.removeComputerUseAllowedApp, {
+    label: "remove allowed app",
+    reportFailure: true,
+  });
   const write = (patch: ServerSettingsPatch) => {
     if (writeInFlight.current) {
       const queued = queuedPatch.current;
@@ -615,7 +621,19 @@ function ServerSettingsDetail(props: {
                       <AllowedApps
                         targets={displayTargets}
                         disabled={disabledFor("cuaAllowedApps")}
-                        onRemove={writeEach}
+                        onRemove={(environmentId, app) => {
+                          if (
+                            writeInFlight.current ||
+                            !readEnvironmentScope(environmentId, AuthSettingsWriteScope)
+                          )
+                            return;
+                          writeInFlight.current = true;
+                          setPendingWrites((count) => count + 1);
+                          void removeAllowedApp({ environmentId, input: { app } }).finally(() => {
+                            writeInFlight.current = false;
+                            setPendingWrites((count) => count - 1);
+                          });
+                        }}
                       />
                     ) : null}
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
