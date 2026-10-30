@@ -319,13 +319,14 @@ function NoteContent(props: NoteParams) {
     );
   };
   /** Saves what the live editor holds now, after it confirms React Native has all of it. */
-  const saveCurrent = async (nextStatus: NoteStatus = localStatus.current) => {
-    const editor = liveEditor.current;
-    if (editor && liveUnavailable === null && !(await editor.sync())) {
+  const saveCurrent = async (nextStatus?: NoteStatus) => {
+    const editor = liveUnavailable === null ? liveEditor.current : null;
+    const synced = editor ? await editor.sync() : true;
+    if (!synced) {
       setError("The editor did not answer, so nothing was saved. Try Save again.");
       return;
     }
-    await save(localBody.current, nextStatus);
+    await save(localBody.current, nextStatus ?? localStatus.current);
   };
   const support = noteEditorSupport(body);
   const liveEditing = editing && surface === "live";

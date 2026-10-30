@@ -127,7 +127,9 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
           ref={page}
           uri={uri}
           {...props}
-          uncertain={uncertain}
+          onUncertain={(value) => {
+            uncertain.current = value;
+          }}
           onUnavailable={(reason) => {
             ended();
             props.onUnavailable(reason);
@@ -162,7 +164,7 @@ function NoteEditorPage({
 }: NoteLiveEditorProps & {
   readonly uri: string;
   readonly onTerminated: () => void;
-  readonly uncertain: { current: boolean };
+  readonly onUncertain: (uncertain: boolean) => void;
 }) {
   const webView = useRef<WebView<object>>(null);
   const [ready, setReady] = useState(false);
@@ -171,9 +173,9 @@ function NoteEditorPage({
   const waiters = useRef<Array<(synced: boolean) => void>>([]);
   const notePending = () => {
     if (!bridge.pending) {
-      if (!focused.current) props.uncertain.current = false;
+      if (!focused.current) props.onUncertain(false);
       for (const resolve of waiters.current.splice(0)) resolve(true);
-    } else props.uncertain.current = true;
+    } else props.onUncertain(true);
     if (bridge.pending === resyncing) return;
     setResyncing(bridge.pending);
     props.onPendingChange(bridge.pending);
@@ -277,7 +279,7 @@ function NoteEditorPage({
       }
       case "focus":
         focused.current = message.focused;
-        if (message.focused) props.uncertain.current = true;
+        if (message.focused) props.onUncertain(true);
         // Leaving the editor confirms the copy, so a later crash need not warn.
         else barrier();
         props.onFocusChange(message.focused);
