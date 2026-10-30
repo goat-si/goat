@@ -14,6 +14,9 @@ import * as DateTime from "effect/DateTime";
 
 const MAX_THREADS = 20;
 const MAX_TRANSITIONS = 12;
+const MAX_ROWS = 8;
+// A streaming reply is among the newest rows; a deeper miss is reported as missing, not searched.
+const REPLY_LOOKUP_ROWS = 64;
 
 export type ThreadStreamStart =
   | "http snapshot"
@@ -39,12 +42,18 @@ export interface ThreadStreamReply {
   readonly messageId: string;
   readonly receivedVia: "event" | "http snapshot" | "socket snapshot";
   readonly receivedLength: number | null;
-  readonly receivedAt: number;
+  /** When that body length arrived; a later deduplicated update does not move it. */
+  readonly receivedAt: number | null;
   readonly appliedLength: number | null;
-  readonly rowLength: number | null;
-  readonly rowVisible: boolean | null;
-  readonly rowMounted: boolean;
-  readonly rowAt: number | null;
+  readonly updatedAt: number;
+}
+
+/** The last time a feed row committed a reply, kept apart from which reply is selected. */
+export interface ThreadFeedReplyRow {
+  readonly length: number;
+  readonly visible: boolean;
+  readonly committedAt: number;
+  readonly unmountedAt: number | null;
 }
 
 type ReceivedReply = Pick<ThreadStreamReply, "messageId" | "receivedLength" | "appliedLength">;
@@ -68,6 +77,7 @@ export interface ThreadStreamDiagnostic {
   readonly lastEventAt: number | null;
   readonly lastEventType: string | null;
   readonly reply: ThreadStreamReply | null;
+  readonly replyRow: ThreadFeedReplyRow | null;
   readonly transitions: ReadonlyArray<ThreadStreamTransition>;
 }
 
@@ -75,6 +85,7 @@ type MutableDiagnostic = {
   -readonly [Key in keyof ThreadStreamDiagnostic]: ThreadStreamDiagnostic[Key];
 } & {
   transitions: ThreadStreamTransition[];
+  rows: Map<string, ThreadFeedReplyRow>;
   awaitingFirstItem: boolean;
   phase: EventPhase;
   pendingStart: ThreadStreamStart | null;
@@ -114,7 +125,9 @@ function freshRecord(environmentId: string, threadId: string): MutableDiagnostic
     lastEventAt: null,
     lastEventType: null,
     reply: null,
+    replyRow: null,
     transitions: [],
+    rows: new Map(),
     awaitingFirstItem: false,
     phase: "live",
     pendingStart: null,
@@ -253,7 +266,7 @@ export function noteThreadStreamEvents(
     record.hasError = input.hasError;
     transition(record, input.hasError ? `${input.status} with error` : input.status);
   }
-  if (listeners.size > 0) notify();
+  notify();
 }
 
 export function noteThreadStreamStatus(
@@ -276,21 +289,19 @@ function setReply(
   via: ThreadStreamReply["receivedVia"],
 ): void {
   const previous = record.reply?.messageId === reply.messageId ? record.reply : null;
+  const now = clock();
   record.reply = {
     messageId: reply.messageId,
     receivedVia: via,
     // A deduplicated body arrives empty and refers to text received earlier.
     receivedLength: reply.receivedLength ?? previous?.receivedLength ?? null,
-    receivedAt: clock(),
+    receivedAt: reply.receivedLength === null ? (previous?.receivedAt ?? null) : now,
     appliedLength: reply.appliedLength,
-    rowLength: previous?.rowLength ?? null,
-    rowVisible: previous?.rowVisible ?? null,
-    rowMounted: previous?.rowMounted ?? false,
-    rowAt: previous?.rowAt ?? null,
+    updatedAt: now,
   };
 }
 
-/** A feed row committed this reply; only the newest received reply is tracked. */
+/** A feed row committed (or, with null, unmounted) a reply. Any reply's row is kept. */
 export function noteThreadFeedReplyRow(
   environmentId: string,
   threadId: string,
@@ -298,19 +309,27 @@ export function noteThreadFeedReplyRow(
   row: { readonly length: number; readonly visible: boolean } | null,
 ): void {
   const record = records.get(keyOf(environmentId, threadId));
-  if (record?.reply?.messageId !== messageId) return;
-  const reply = record.reply;
-  record.reply =
-    row === null
-      ? { ...reply, rowMounted: false, rowAt: clock() }
-      : {
-          ...reply,
-          rowLength: row.length,
-          rowVisible: row.visible,
-          rowMounted: true,
-          rowAt: clock(),
-        };
-  if (listeners.size > 0) notify();
+  if (record === undefined) return;
+  const previous = record.rows.get(messageId);
+  if (row === null) {
+    if (previous === undefined) return;
+    record.rows.set(messageId, { ...previous, unmountedAt: clock() });
+  } else {
+    if (
+      previous?.length === row.length &&
+      previous.visible === row.visible &&
+      previous.unmountedAt === null
+    )
+      return;
+    record.rows.delete(messageId);
+    record.rows.set(messageId, { ...row, committedAt: clock(), unmountedAt: null });
+    while (record.rows.size > MAX_ROWS) {
+      const oldest = record.rows.keys().next().value;
+      if (oldest === undefined) break;
+      record.rows.delete(oldest);
+    }
+  }
+  notify();
 }
 
 type EventItem = Extract<OrchestrationV2ThreadStreamItem, { kind: "event" }>;
@@ -320,7 +339,8 @@ function appliedReplyLength(
   messageId: string,
 ): number | null {
   const rows = projection?.visibleTurnItems ?? [];
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
+  const stop = Math.max(0, rows.length - REPLY_LOOKUP_ROWS);
+  for (let index = rows.length - 1; index >= stop; index -= 1) {
     const item = rows[index]?.item;
     if (item?.type === "assistant_message" && item.messageId === messageId) return item.text.length;
   }
@@ -376,8 +396,9 @@ export function snapshotReply(projection: OrchestrationV2ThreadProjection): Rece
 
 export function readThreadStreamDiagnostics(): ReadonlyArray<ThreadStreamDiagnostic> {
   return [...records.values()]
-    .map(({ awaitingFirstItem: _a, phase: _r, pendingStart: _p, ...record }) => ({
+    .map(({ awaitingFirstItem: _a, phase: _r, pendingStart: _p, rows, ...record }) => ({
       ...record,
+      replyRow: record.reply === null ? null : (rows.get(record.reply.messageId) ?? null),
       transitions: [...record.transitions],
     }))
     .reverse();
@@ -399,16 +420,16 @@ function formatTime(at: number | null): string {
   return at === null ? "never" : `${DateTime.formatIso(DateTime.makeUnsafe(at)).slice(11, 19)} UTC`;
 }
 
-function formatReply(reply: ThreadStreamReply | null): string {
+function formatReply(reply: ThreadStreamReply | null, row: ThreadFeedReplyRow | null): string {
   if (reply === null) return "  latest reply: none received while open";
-  const row =
-    reply.rowLength === null
-      ? "row not committed yet"
-      : `row committed ${reply.rowLength} at ${formatTime(reply.rowAt)}, ${reply.rowMounted ? (reply.rowVisible ? "on screen" : "offscreen") : "since unmounted"}`;
+  const rowText =
+    row === null
+      ? "row not committed while open"
+      : `row committed ${row.length} at ${formatTime(row.committedAt)}, ${row.visible ? "on screen" : "offscreen"}${row.unmountedAt === null ? "" : `, unmounted at ${formatTime(row.unmountedAt)}`}`;
   return [
     `  latest reply ${reply.messageId} via ${reply.receivedVia}: received ${reply.receivedLength ?? "unknown"} chars at ${formatTime(reply.receivedAt)}`,
-    `in state ${reply.appliedLength ?? "missing"}`,
-    row,
+    `in state ${reply.appliedLength ?? "missing from the newest rows"}`,
+    rowText,
   ].join(", ");
 }
 
@@ -424,7 +445,7 @@ export function formatThreadStreamReport(
         `  subscriptions: ${d.subscriptions}, last ${formatTime(d.lastSubscribedAt)}, started by ${d.lastStart ?? "nothing yet"}`,
         `  events: ${d.replayedEvents} replayed, ${d.liveEvents} live, ${d.unclearEvents} unclear, ${d.unknownEvents} unknown types; last #${d.lastSequence ?? "-"} ${d.lastEventType ?? ""} at ${formatTime(d.lastEventAt)}`,
         `  snapshots: ${d.snapshots}`,
-        formatReply(d.reply),
+        formatReply(d.reply, d.replyRow),
         `  recent: ${d.transitions.map((t) => `${t.what} ${formatTime(t.at)}`).join(", ")}`,
       ].join("\n"),
     )

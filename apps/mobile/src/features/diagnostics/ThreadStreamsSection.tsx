@@ -4,16 +4,31 @@ import {
   subscribeThreadStreamDiagnostics,
   threadStreamDiagnosticsVersion,
 } from "@goat/client-runtime/state/thread-stream-diagnostics";
+import { useIsFocused } from "@react-navigation/native";
 import { useSyncExternalStore } from "react";
 import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { SettingsSection } from "../settings/components/SettingsSection";
 
-/** Re-renders only while this screen is mounted and a stream records something. */
-export function useThreadStreamDiagnostics() {
-  useSyncExternalStore(subscribeThreadStreamDiagnostics, threadStreamDiagnosticsVersion);
+const subscribeNever = () => () => {};
+
+// Takes the version so React Compiler re-reads the store when it changes instead of memoizing.
+function readAt(_version: number) {
   return readThreadStreamDiagnostics();
+}
+
+/**
+ * Re-renders only while this screen has focus and a stream records something. A covered screen
+ * stays mounted in the stack; on return, React re-reads the store and catches up.
+ */
+export function useThreadStreamDiagnostics() {
+  const focused = useIsFocused();
+  const version = useSyncExternalStore(
+    focused ? subscribeThreadStreamDiagnostics : subscribeNever,
+    threadStreamDiagnosticsVersion,
+  );
+  return readAt(version);
 }
 
 export function ThreadStreamsSection(props: {

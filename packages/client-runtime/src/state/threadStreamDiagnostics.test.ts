@@ -11,6 +11,7 @@ import {
   noteThreadStreamSubscribed,
   noteThreadStreamSynchronized,
   readThreadStreamDiagnostics,
+  replyProgress,
   resetThreadStreamDiagnosticsForTest,
   subscribeThreadStreamDiagnostics,
 } from "./threadStreamDiagnostics.ts";
@@ -101,22 +102,54 @@ describe("thread stream diagnostics", () => {
     },
   );
 
-  it("keeps the received length when a deduplicated body arrives empty", () => {
-    const { thread } = setup();
+  it("keeps the length and receipt time of a body a deduplicated update refers to", () => {
+    const { thread, advance } = setup();
     noteThreadStreamEvents("env", "thread", events(1, { reply: [12, 12] }));
+    advance(5_000);
     noteThreadStreamEvents("env", "thread", events(2, { reply: [null, 12] }));
-    expect(thread()?.reply).toMatchObject({ receivedLength: 12, appliedLength: 12 });
+    expect(thread()?.reply).toMatchObject({
+      receivedLength: 12,
+      receivedAt: 1_000,
+      updatedAt: 6_000,
+    });
+  });
+
+  it("reports a row committed before its reply was selected", () => {
+    const { report } = setup();
+    noteThreadFeedReplyRow("env", "thread", "message-1", { length: 12, visible: true });
+    noteThreadStreamEvents("env", "thread", events(1, { reply: [12, 12] }));
+    expect(report()).toContain("row committed 12 at 00:00:01 UTC, on screen");
+  });
+
+  it("looks for the reply only among the newest rows", () => {
+    const row = (index: number, messageId: string) => ({
+      item: { type: "assistant_message", messageId, text: "x".repeat(index) },
+    });
+    const projection = {
+      visibleTurnItems: [row(3, "deep"), ...Array.from({ length: 100 }, (_, i) => row(i, `m${i}`))],
+    } as unknown as Parameters<typeof replyProgress>[1];
+    const message = (id: string) =>
+      ({
+        event: { type: "message.updated", payload: { id, role: "assistant", text: "abc" } },
+      }) as unknown as Parameters<typeof replyProgress>[0][number];
+    expect(replyProgress([message("m99")], projection)?.appliedLength).toBe(99);
+    expect(replyProgress([message("deep")], projection)).toMatchObject({
+      receivedLength: 3,
+      appliedLength: null,
+    });
   });
 
   it("tracks a reply that only a snapshot delivered, and a row that left the list", () => {
-    const { thread, report } = setup();
+    const { thread, report, advance } = setup();
     const reply = { messageId: "message-1", receivedLength: 7, appliedLength: 7 };
     noteThreadStreamSnapshot("env", "thread", { sequence: 3, source: "socket", reply });
     noteThreadFeedReplyRow("env", "thread", "message-1", { length: 7, visible: true });
-    expect(thread()?.reply).toMatchObject({ receivedVia: "socket snapshot", rowMounted: true });
+    expect(thread()?.reply?.receivedVia).toBe("socket snapshot");
+    advance(2_000);
     noteThreadFeedReplyRow("env", "thread", "message-1", null);
-    expect(report()).toContain("row committed 7");
-    expect(report()).toContain("since unmounted");
+    expect(report()).toContain(
+      "row committed 7 at 00:00:01 UTC, on screen, unmounted at 00:00:03 UTC",
+    );
   });
 
   it("keeps error text out of the report", () => {
