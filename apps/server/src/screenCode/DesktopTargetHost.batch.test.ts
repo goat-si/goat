@@ -301,3 +301,68 @@ it.live(
     }).pipe(Effect.provide(cellService(host)));
   },
 );
+
+it.live("concurrent app press, scroll and click are admitted as one ordered group", () => {
+  const { host, sent } = fixture({
+    list_windows: {
+      windows: [
+        {
+          pid: 42,
+          window_id: 7,
+          title: "Document",
+          bounds: { x: 10, y: 20, width: 100, height: 100 },
+        },
+      ],
+    },
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} const clicks = [app.press('a'), app.scroll(null, 'down'), app.click('Apply')]; ${SETTLED}`,
+    );
+    expect(result.value).toEqual(["confirmed", "confirmed", "confirmed"]);
+    expect(
+      sent
+        .filter((entry) => ["press_key", "scroll", "click"].includes(entry.tool))
+        .map((entry) => entry.tool),
+    ).toEqual(["press_key", "scroll", "click"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.live(
+  "a guarded press refuses its whole concurrent group without sending the earlier click",
+  () => {
+    const { host, sent } = fixture({
+      list_apps: { apps: [{ pid: 42, name: "KakaoTalk", bundle_id: "com.kakao.KakaoTalkMac" }] },
+    });
+    return Effect.gen(function* () {
+      const result = yield* runCell(
+        `const app = await screen.app({bundle_id: 'com.kakao.KakaoTalkMac', window_id: 7}); await app.observe(); const clicks = [app.click('Apply'), app.press('Enter', 'Apply')]; ${SETTLED}`,
+      );
+      expect(result.value).toEqual(["not_run:true", "permission_denied:true"]);
+      expect(sent.filter((entry) => ["press_key", "click"].includes(entry.tool))).toEqual([]);
+      yield* finish;
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);
+
+it.live("a user interacting refusal stops subsequent concurrent app inputs", () => {
+  const { host, sent } = fixture({
+    press_key: new DriverError({
+      effect: "refused",
+      refusal: { code: "user_interacting", retry_after_ms: 750 },
+    }),
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} const clicks = [app.click('Apply'), app.press('a'), app.click('Apply')]; ${SETTLED}`,
+    );
+    expect(result.value).toEqual(["confirmed", "user_interacting:true", "not_run:true"]);
+    expect(
+      sent
+        .filter((entry) => ["press_key", "click"].includes(entry.tool))
+        .map((entry) => entry.tool),
+    ).toEqual(["click", "press_key"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
