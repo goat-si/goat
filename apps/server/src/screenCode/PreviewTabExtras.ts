@@ -101,3 +101,32 @@ export const fillTabSecret = Effect.fn("PreviewTargetHost.fillSecret")(function*
   const value = yield* invoke(input);
   return { value, category: "unverifiable" as const, evidence: ["Secret fill completed"] };
 });
+
+export function dispatchTabExtra(
+  method: string,
+  arg: Record<string, unknown>,
+  invalidatePoints: () => void,
+  invoke: (
+    operation: "logs" | "fillSecret" | "dialog" | "evaluate" | "upload",
+    input: unknown,
+    documentGeneration?: number,
+  ) => Effect.Effect<unknown, ScreenRunError>,
+  upload?: { locator: string | undefined; documentGeneration: number | undefined },
+) {
+  if (method === "tab_logs") return readTabLogs(arg, (input) => invoke("logs", input));
+  if (method === "tab_upload") {
+    if (!upload) return undefined;
+    invalidatePoints();
+    return uploadTab(arg, upload.locator, (input) =>
+      invoke("upload", input, upload.documentGeneration),
+    );
+  }
+  if (method === "tab_fill_secret" || method === "tab_dialog" || method === "tab_evaluate") {
+    invalidatePoints();
+    if (method === "tab_fill_secret")
+      return fillTabSecret(arg, (input) => invoke("fillSecret", input));
+    if (method === "tab_dialog") return answerDialog(arg, (input) => invoke("dialog", input));
+    return evaluateTab(arg, (input) => invoke("evaluate", input));
+  }
+  return undefined;
+}

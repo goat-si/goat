@@ -24,13 +24,7 @@ import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
-import {
-  answerDialog,
-  evaluateTab,
-  fillTabSecret,
-  readTabLogs,
-  uploadTab,
-} from "./PreviewTabExtras.ts";
+import { dispatchTabExtra } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
@@ -396,8 +390,22 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       );
       if (call.method === "tab_status")
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
-      if (call.method === "tab_logs")
-        return yield* readTabLogs(arg, (input) => invoke(bound, context, "logs", input));
+      const extra = (upload?: {
+        locator: string | undefined;
+        documentGeneration: number | undefined;
+      }) =>
+        dispatchTabExtra(
+          call.method,
+          arg,
+          () => observations.index.invalidatePoints(bound.ref.id),
+          (operation, input, documentGeneration) =>
+            invoke(bound, context, operation, input, undefined, documentGeneration),
+          upload,
+        );
+      if (call.method === "tab_logs") {
+        const logs = extra();
+        if (logs) return yield* logs;
+      }
       if (call.method === "read_page") {
         const scope = cellScope(arg.scope, observations);
         const read = cellReadInput(arg, observationReplyBudget(call, context.limits));
@@ -562,17 +570,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ),
         );
       }
-      if (["tab_fill_secret", "tab_dialog", "tab_evaluate"].includes(call.method))
-        observations.index.invalidatePoints(bound.ref.id);
-      if (call.method === "tab_fill_secret")
-        return yield* fillTabSecret(arg, (input) => invoke(bound, context, "fillSecret", input));
-      if (call.method === "tab_dialog")
-        return yield* answerDialog(arg, (input) => invoke(bound, context, "dialog", input));
-      if (call.method === "tab_evaluate")
-        return yield* evaluateTab(arg, (input) => invoke(bound, context, "evaluate", input));
-      // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
+      const earlyExtra = call.method === "tab_upload" ? undefined : extra();
+      if (earlyExtra) return yield* earlyExtra;
       const selector = stringField(arg, "selector");
-      // A ref acts only through the binding that observed it, which holds its document and gate.
       if (
         [arg.ref, arg.sourceRef, arg.destinationRef].some(
           (ref) =>
@@ -611,8 +611,6 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           : undefined;
       if (arg.point && (!point || point.targetId !== bound.ref.id))
         return yield* Effect.fail(fail("stale_reference", "Observe the current screenshot again."));
-      // The page may have moved on by itself (a redirect, a route change, a reload); a pixel from
-      // the earlier document could land on anything.
       if (point && bound.documentGeneration !== current.documentGeneration)
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that screenshot. Observe it again."),
@@ -631,8 +629,6 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ),
           );
       }
-      // A ref from an incomplete tree is held to its document the same way: the browser's ref
-      // table alone was never relied on for those.
       const documentBound =
         bound.incompleteObservationId !== undefined &&
         [arg.ref, arg.sourceRef, arg.destinationRef].some(
@@ -646,19 +642,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that observation. Observe it again."),
         );
-      if (call.method === "tab_upload") {
-        observations.index.invalidatePoints(bound.ref.id);
-        return yield* uploadTab(arg, locator, (input) =>
-          invoke(
-            bound,
-            context,
-            "upload",
-            input,
-            cellBudgetMs,
-            documentBound ? bound.documentGeneration : undefined,
-          ),
-        );
-      }
+      const upload =
+        call.method === "tab_upload"
+          ? extra({
+              locator,
+              documentGeneration: documentBound ? bound.documentGeneration : undefined,
+            })
+          : undefined;
+      if (upload) return yield* upload;
       if (point?.kind === "document")
         return yield* Effect.fail(
           fail(
@@ -670,7 +661,6 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return yield* Effect.fail(
           fail("invalid_argument", "Use a point from the current screenshot."),
         );
-      // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
       if (point && !["click", "right_click", "hover", "drag", "scroll"].includes(call.method))
         return yield* Effect.fail(
           fail("invalid_argument", "Click the point first, or name an element or selector."),
