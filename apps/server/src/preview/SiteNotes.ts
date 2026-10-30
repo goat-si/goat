@@ -64,6 +64,13 @@ const originOf = (value: string): string | undefined => {
   }
 };
 
+const hasCredentialValue = (text: string) =>
+  Array.from(
+    text.matchAll(
+      /\b(?:password|passwd|passcode|pin|token|secret|api[_ -]?key|access[ -]key|private[ -]key)\b\s*(?:[:=]|\s+is\b)\s*(\S+)/gi,
+    ),
+  ).some(([, value]) => value !== undefined && (value.length >= 16 || /[^a-z]/i.test(value)));
+
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const mutex = yield* Semaphore.make(1);
@@ -106,7 +113,8 @@ const make = Effect.gen(function* () {
     if (
       scanMemoryValue(input.text).kind === "blocked" ||
       redactGoatCredentials(input.text) !== input.text ||
-      /^\s*(?:password|passwd|token|secret|api[_ -]?key)\s*[:=]\s*\S/im.test(input.text)
+      /^\s*(?:password|passwd|token|secret|api[_ -]?key)\s*[:=]\s*\S/im.test(input.text) ||
+      hasCredentialValue(input.text)
     )
       return yield* new SiteNoteError({ reason: "secret" });
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
