@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
+import { ProviderIcon } from "../../components/ProviderIcon";
 import { cn } from "../../lib/cn";
 import type { ModelOption } from "../../lib/modelOptions";
 
@@ -14,6 +15,8 @@ export type ModelRowProps = {
   readonly onToggleFavorite: () => void;
   readonly onToggleHidden?: () => void;
   readonly hiddenUpdatePending?: boolean;
+  /** Rows outside a provider section name their provider with its icon. */
+  readonly showProviderIcon?: boolean;
   readonly isFirst: boolean;
   readonly isLast: boolean;
 };
@@ -50,7 +53,17 @@ export function ModelRowContent(
       )}
     >
       <Pressable
-        accessibilityLabel={[props.option.label, props.option.subtitle].filter(Boolean).join(", ")}
+        accessibilityLabel={[
+          props.option.label,
+          props.option.subtitle,
+          props.showProviderIcon ? props.option.providerLabel : undefined,
+          props.option.isDefault ? "Default" : undefined,
+          props.option.isLegacy ? "Legacy" : undefined,
+          props.option.isHidden ? "Hidden" : undefined,
+          props.option.isUnavailable ? "Unavailable" : undefined,
+        ]
+          .filter(Boolean)
+          .join(", ")}
         accessibilityRole="radio"
         accessibilityState={{
           checked: props.selected,
@@ -61,6 +74,13 @@ export function ModelRowContent(
         onPress={props.onPress}
       >
         {props.leadingSelection}
+        {props.showProviderIcon ? (
+          <ProviderIcon
+            iconUrl={props.option.providerIconUrl}
+            provider={props.option.providerDriver}
+            size={18}
+          />
+        ) : null}
         <View className="min-w-0 flex-1">
           <View className="flex-row items-center gap-2">
             <Text

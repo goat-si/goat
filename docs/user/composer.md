@@ -131,6 +131,14 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Thread settings on mobile
+
+Thread settings opens with the current model, a reasoning slider, and the runtime mode. The
+slider offers only the levels the model supports and marks the provider default; a model without
+reasoning levels says so instead. **Switch model** lists your favorites and the models your recent
+threads used, and **All models** opens the full catalog with search, provider filters, hidden
+models, and pull to refresh. A different model takes effect when you tap **Save**.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose

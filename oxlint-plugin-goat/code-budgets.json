@@ -90,7 +90,6 @@
   "apps/mobile/src/features/threads/ThreadQueueControl.tsx": { "nonNull": 2 },
   "apps/mobile/src/features/threads/ThreadRouteScreen.tsx": { "lines": 1141, "nonNull": 2 },
   "apps/mobile/src/features/threads/ThreadScreenHost.tsx": { "nonNull": 3 },
-  "apps/mobile/src/features/threads/ThreadSettingsSheet.tsx": { "lines": 1553 },
   "apps/mobile/src/features/threads/markdownImageSize.ts": { "nonNull": 4 },
   "apps/mobile/src/features/threads/new-task-flow-provider.tsx": { "lines": 1220 },
   "apps/mobile/src/features/threads/thread-list-v2-items.tsx": { "lines": 1423, "nonNull": 11 },
