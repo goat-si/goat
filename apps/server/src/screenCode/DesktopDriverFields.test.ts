@@ -172,14 +172,17 @@ it.live.each([
 it.live("a focus restoration panic warns on the next app observation without debug", () =>
   Effect.gen(function* () {
     const { host } = fixture({
-      get_window_state: {
-        ...state,
-        focus_restoration: { status: "abandoned", reason: "panic", prior_pid: 123 },
-      },
-      click: {
-        effect: "confirmed",
-        focus_restoration: { status: "abandoned", reason: "panic", prior_pid: 123 },
-      },
+      get_window_state: new DriverSuccess(
+        { ...state, focus_restoration: { status: "abandoned", reason: "panic", prior_pid: 123 } },
+        'focus_restoration: {"status":"abandoned","reason":"panic","prior_pid":123}',
+      ),
+      click: new DriverSuccess(
+        {
+          effect: "confirmed",
+          focus_restoration: { status: "abandoned", reason: "panic", prior_pid: 123 },
+        },
+        'focus_restoration: {"status":"abandoned","reason":"panic","prior_pid":123}',
+      ),
     });
     const result = yield* runCell(
       host,
