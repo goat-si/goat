@@ -32,7 +32,7 @@ import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type * as RpcSession from "../rpc/session.ts";
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import { createRemoteLauncherFamilies } from "../../../../apps/web/src/components/sidebar/remoteLauncherFamilies.ts";
-import { foldLaunchedThreads } from "../../../../apps/web/src/components/sidebar/launchFold.ts";
+import { foldLaunchedThreads } from "./launchFold.ts";
 import { projectSettledLaunchShelf } from "../../../../apps/web/src/components/sidebar/settledLaunchShelf.ts";
 import { foldsUnderLauncher } from "@goat/shared/threadLaunchState";
 import { scoreThreadSearch } from "@goat/shared/paletteSearch";

@@ -28,7 +28,11 @@ import {
 } from "../Sidebar.logic";
 import { foldedPriorityMember, wakesBeforeFold } from "./foldedPriority";
 import { withoutBotThreads } from "./botVisibility";
-import { foldLaunchedThreads, foldedSections, liftedPriorityRank } from "./launchFold";
+import {
+  foldLaunchedThreads,
+  foldedSections,
+  liftedPriorityRank,
+} from "@goat/client-runtime/state/launch-fold";
 
 export const inboxReturns = createInboxReturnTracker();
 export type SidebarOptimisticDrop = {

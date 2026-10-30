@@ -240,7 +240,7 @@ import {
   launchRootKey,
   liftedChildAttention,
   type LaunchFold,
-} from "./sidebar/launchFold";
+} from "@goat/client-runtime/state/launch-fold";
 import { SidebarLaunchGroup } from "./sidebar/SidebarLaunchGroup";
 import { useLaunchGroups } from "./sidebar/useLaunchGroups";
 import { withoutBotThreads } from "./sidebar/botVisibility";

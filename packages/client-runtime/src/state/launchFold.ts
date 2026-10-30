@@ -1,8 +1,4 @@
-import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { EnvironmentId } from "@goat/contracts";
-import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
-import { threadLastPromptAt } from "@goat/client-runtime/state/thread-sort";
 import {
   foldsUnderLauncher,
   type LaunchChildState,
@@ -14,7 +10,12 @@ import {
   staysFoldedUnderLauncher,
 } from "@goat/shared/threadLaunchState";
 
-export type { LaunchChildState, LaunchLift };
+import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
+import type { EnvironmentThreadShell } from "./models.ts";
+import { effectiveSnoozed } from "./threadSettled.ts";
+import { threadLastPromptAt } from "./threadSort.ts";
+
+export type { LaunchAttention, LaunchChildState, LaunchLift };
 
 export type LaunchFoldThread = Pick<
   EnvironmentThreadShell,
@@ -52,6 +53,11 @@ export interface LaunchFold<T> {
 
 const STATE_RANK: Record<LaunchChildState, number> = { attention: 0, working: 1, finished: 2 };
 
+/** Rows a launch group lists before "+N more". */
+export const LAUNCH_GROUP_CHILD_LIMIT = 5;
+
+type LaunchOwnerThread = Pick<LaunchFoldThread, "environmentId" | "id" | "lineage">;
+
 const keyOf = (thread: Pick<LaunchFoldThread, "environmentId" | "id">) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
@@ -66,7 +72,7 @@ function launcherKeyOf(thread: LaunchFoldThread): string | null {
 }
 
 // Subagents never have rows; the row that owns one stands in for it, as for the open subagent.
-function subagentOwnerKeyOf(thread: LaunchFoldThread): string | null {
+function subagentOwnerKeyOf(thread: LaunchOwnerThread): string | null {
   const parentId = thread.lineage.parentThreadId;
   return thread.lineage.relationshipToParent === "subagent" && parentId !== null
     ? scopedThreadKey(scopeThreadRef(thread.environmentId, parentId))
@@ -97,7 +103,8 @@ const ownLiftOf = (
  */
 export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   readonly visible: readonly T[];
-  readonly all: readonly LaunchFoldThread[];
+  /** Every thread a launcher may be, subagents included, to find the row that owns one. */
+  readonly all: readonly LaunchOwnerThread[];
   readonly now: string;
   /** Projects view folds only within one project. */
   readonly sameList?: (child: T, parent: T) => boolean;
@@ -105,42 +112,74 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   readonly delegatedAttentionByKey?: ReadonlyMap<string, LaunchAttention>;
   /** A finished thread that would sit in Priority on its own row; folded, it lifts its launcher. */
   readonly unseen?: (thread: T) => boolean;
+  /** The thread's lifecycle as the list places it; defaults to its stored settled and snoozed state. */
+  readonly settled?: (thread: T) => boolean;
+  readonly snoozed?: (thread: T) => boolean;
 }): LaunchFold<T> {
+  const settled = input.settled ?? ((thread: T) => thread.settledOverride === "settled");
+  const snoozed = input.snoozed ?? ((thread: T) => effectiveSnoozed(thread, { now: input.now }));
   const visibleByKey = new Map(input.visible.map((thread) => [keyOf(thread), thread] as const));
   const subagentOwnerByKey = new Map<string, string | null>();
   for (const thread of input.all) subagentOwnerByKey.set(keyOf(thread), subagentOwnerKeyOf(thread));
+  // The first visible row up a launcher's subagent owner chain; null past the list or on a loop.
+  const resolved = new Map<string, string | null>();
+  const resolveRow = (start: string): string | null => {
+    const path: string[] = [];
+    const onPath = new Set<string>();
+    let at: string | null = start;
+    let found: string | null = null;
+    while (at !== null) {
+      if (visibleByKey.has(at)) {
+        found = at;
+        break;
+      }
+      const known = resolved.get(at);
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      if (onPath.has(at)) break;
+      onPath.add(at);
+      path.push(at);
+      at = subagentOwnerByKey.get(at) ?? null;
+    }
+    for (const key of path) resolved.set(key, found);
+    return found;
+  };
   const candidateParent = new Map<string, string>();
   for (const thread of input.visible) {
     const own = keyOf(thread);
-    let candidate = launcherKeyOf(thread);
-    if (candidate === null) continue;
-    const seen = new Set([own]);
-    while (candidate !== null && !seen.has(candidate) && !visibleByKey.has(candidate)) {
-      seen.add(candidate);
-      candidate = subagentOwnerByKey.get(candidate) ?? null;
-    }
-    if (candidate === null || seen.has(candidate)) continue;
+    const launcher = launcherKeyOf(thread);
+    if (launcher === null) continue;
+    const candidate = resolveRow(launcher);
+    if (candidate === null || candidate === own) continue;
     const parent = visibleByKey.get(candidate);
     if (parent === undefined || input.sameList?.(thread, parent) === false) continue;
     candidateParent.set(own, candidate);
   }
   // Launch records cannot form a loop, but copied databases can; every thread on one keeps its row.
   const onLoop = new Set<string>();
+  const walked = new Set<string>();
   for (const start of candidateParent.keys()) {
     const path: string[] = [];
+    const onPath = new Set<string>();
     let at: string | undefined = start;
-    while (at !== undefined && !path.includes(at) && !onLoop.has(at)) {
+    while (at !== undefined && !onPath.has(at) && !walked.has(at)) {
       path.push(at);
+      onPath.add(at);
       at = candidateParent.get(at);
     }
-    if (at !== undefined && path.includes(at)) {
+    if (at !== undefined && onPath.has(at)) {
       for (const key of path.slice(path.indexOf(at))) onLoop.add(key);
     }
+    for (const key of path) walked.add(key);
   }
   for (const key of onLoop) candidateParent.delete(key);
   const candidateChildren = new Map<string, string[]>();
   for (const [child, parent] of candidateParent) {
-    candidateChildren.set(parent, [...(candidateChildren.get(parent) ?? []), child]);
+    const siblings = candidateChildren.get(parent);
+    if (siblings === undefined) candidateChildren.set(parent, [child]);
+    else siblings.push(child);
   }
   // Decide edges bottom-up, so whether a thread is live includes what stays folded under it.
   const parentKeyByKey = new Map<string, string>();
@@ -160,9 +199,9 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
       if (
         !staysFoldedUnderLauncher({
           childLift,
-          childSettled: child.settledOverride === "settled",
-          launcherSnoozed: effectiveSnoozed(thread, { now: input.now }),
-          launcherSettled: thread.settledOverride === "settled",
+          childSettled: settled(child),
+          launcherSnoozed: snoozed(thread),
+          launcherSettled: settled(thread),
         })
       )
         continue;
@@ -191,7 +230,9 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
   for (const [childKey, parentKey] of parentKeyByKey) {
     const child = visibleByKey.get(childKey);
     if (child === undefined) continue;
-    childrenByParentKey.set(parentKey, [...(childrenByParentKey.get(parentKey) ?? []), child]);
+    const siblings = childrenByParentKey.get(parentKey);
+    if (siblings === undefined) childrenByParentKey.set(parentKey, [child]);
+    else siblings.push(child);
   }
   // People first, then running work, then finished; last prompted or launched first within each.
   const rank = (thread: T) => STATE_RANK[stateByKey.get(keyOf(thread)) ?? "finished"];
@@ -254,6 +295,37 @@ export function summarizeLaunchGroup(states: readonly LaunchChildState[]): {
     attention: states.filter((state) => state === "attention").length,
     states,
   };
+}
+
+/** A launch group's fold line: "3 threads · 1 running · 1 needs you". */
+export function launchGroupSummaryText(summary: ReturnType<typeof summarizeLaunchGroup>): string {
+  return [
+    `${summary.count} ${summary.count === 1 ? "thread" : "threads"}`,
+    summary.running > 0 ? `${summary.running} running` : null,
+    summary.attention > 0
+      ? `${summary.attention} ${summary.attention === 1 ? "needs" : "need"} you`
+      : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
+}
+
+/**
+ * The children an expanded group lists: up to the limit, or all once shown in full. The child on
+ * the open thread's path stays listed however far down it sorts.
+ */
+export function shownLaunchChildren<T extends Pick<LaunchFoldThread, "environmentId" | "id">>(
+  children: readonly T[],
+  options: {
+    readonly expanded: boolean;
+    readonly showAll: boolean;
+    readonly routeKeys: ReadonlySet<string>;
+  },
+): readonly T[] {
+  if (!options.expanded) return [];
+  if (options.showAll) return children;
+  const routeIndex = children.findIndex((child) => options.routeKeys.has(keyOf(child)));
+  return children.slice(0, Math.max(LAUNCH_GROUP_CHILD_LIMIT, routeIndex + 1));
 }
 
 /** A launcher row carries its folded threads' urgency: a request ranks first, work as working. */

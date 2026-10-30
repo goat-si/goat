@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { foldLaunchedThreads, launchAncestorKeys, summarizeLaunchGroup } from "./launchFold";
-import { HOME, NOW, OTHER, ids, key, thread } from "./launchFold.fixtures";
-import type { LaunchFoldThread } from "./launchFold";
+import { foldLaunchedThreads, launchAncestorKeys, summarizeLaunchGroup } from "./launchFold.ts";
+import { HOME, NOW, OTHER, ids, key, thread } from "./launchFold.fixtures.ts";
+import type { LaunchFoldThread } from "./launchFold.ts";
 
 function fold(visible: readonly LaunchFoldThread[], hidden: readonly LaunchFoldThread[] = []) {
   return foldLaunchedThreads({ visible, all: [...visible, ...hidden], now: NOW });
@@ -211,5 +211,44 @@ describe("foldLaunchedThreads", () => {
     const shown = fold([session, coding, unrelated], [observer]);
     expect(shown.parentKeyByKey.get(key("coding"))).toBe(key("goat-bot-session:s"));
     expect(shown.liftByKey.get(key("goat-bot-session:s"))).toBe("approval");
+  });
+
+  it("folds every thread launched by subagents of one owner, however deep the subagent chain", () => {
+    const chain = Array.from({ length: 50 }, (_, index) =>
+      thread(`agent-${index}`, { subagentOf: index === 0 ? "owner" : `agent-${index - 1}` }),
+    );
+    const launched = chain.map((agent) => thread(`work-${agent.id}`, { launchedBy: agent.id }));
+    const result = fold([thread("owner"), ...launched], chain);
+    expect(ids(result.roots)).toEqual(["owner"]);
+    expect(result.childrenByParentKey.get(key("owner"))).toHaveLength(50);
+  });
+
+  it("nests a long launch chain level by level without dropping a thread", () => {
+    const depth = 2_000;
+    const threads = Array.from({ length: depth }, (_, index) =>
+      thread(
+        `level-${index}`,
+        index === 0 ? { status: "running" } : { launchedBy: `level-${index - 1}` },
+      ),
+    );
+    const result = fold(threads);
+    expect(ids(result.roots)).toEqual(["level-0"]);
+    expect(result.folded).toHaveLength(depth - 1);
+    expect(result.parentKeyByKey.get(key(`level-${depth - 1}`))).toBe(key(`level-${depth - 2}`));
+  });
+
+  it("places threads by the lifecycle the list gives them when it overrides stored state", () => {
+    const launcher = thread("launcher", { settled: true });
+    // Stored as settled, but the list shows the child as active (a queued message, say).
+    const child = thread("child", { launchedBy: "launcher", settled: true });
+    const stored = foldLaunchedThreads({ visible: [launcher, child], all: [], now: NOW });
+    expect(stored.parentKeyByKey.get(key("child"))).toBe(key("launcher"));
+    const listed = foldLaunchedThreads({
+      visible: [launcher, child],
+      all: [],
+      now: NOW,
+      settled: (entry) => entry.id !== child.id && entry.settledOverride === "settled",
+    });
+    expect(ids(listed.roots)).toEqual(["launcher", "child"]);
   });
 });

@@ -3,14 +3,17 @@ import * as Schema from "effect/Schema";
 import { useEffect, useSyncExternalStore } from "react";
 
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { launchAncestorKeys, type LaunchFold, type LaunchFoldThread } from "./launchFold";
+import {
+  launchAncestorKeys,
+  shownLaunchChildren,
+  type LaunchFold,
+  type LaunchFoldThread,
+} from "@goat/client-runtime/state/launch-fold";
 
 const EXPANDED_KEY = "goat:sidebar:launch-groups-expanded";
 const ExpandedRecord = Schema.Record(Schema.String, Schema.Boolean);
 const NO_EXPANDED: Readonly<Record<string, boolean>> = {};
 const NO_KEYS: ReadonlySet<string> = new Set();
-/** Children a group lists before "+N more". */
-const LAUNCH_GROUP_CHILD_LIMIT = 5;
 
 // Every list that draws or orders launch groups reads one session state, so "+N more" and a
 // collapse made while a folded thread is open agree between the rows and keyboard order.
@@ -88,14 +91,12 @@ export function useLaunchGroups<T extends LaunchFoldThread>(
     routeAncestors.includes(parentKey)
       ? !routeCollapsed.has(parentKey)
       : stored[parentKey] === true;
-  const shownChildren = (parentKey: string): readonly T[] => {
-    const children = fold.childrenByParentKey.get(parentKey) ?? [];
-    if (!isExpanded(parentKey)) return [];
-    if (showAllKeys.has(parentKey)) return children;
-    // The child on the routed thread's path stays listed, however deep the route is.
-    const routeIndex = children.findIndex((child) => routePath.has(keyOf(child)));
-    return children.slice(0, Math.max(LAUNCH_GROUP_CHILD_LIMIT, routeIndex + 1));
-  };
+  const shownChildren = (parentKey: string): readonly T[] =>
+    shownLaunchChildren(fold.childrenByParentKey.get(parentKey) ?? [], {
+      expanded: isExpanded(parentKey),
+      showAll: showAllKeys.has(parentKey),
+      routeKeys: routePath,
+    });
   return {
     ancestorKeys: (key) => launchAncestorKeys(fold, key),
     isExpanded,

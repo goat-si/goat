@@ -29,7 +29,7 @@ import {
   withSidebarChildRequest,
 } from "../Sidebar.logic";
 import { withoutBotThreads } from "./botVisibility";
-import { foldLaunchedThreads } from "./launchFold";
+import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
 import { useBotThreadKeys } from "./useBotThreadKeys";
 
 function resolveProjectThreadStatus(

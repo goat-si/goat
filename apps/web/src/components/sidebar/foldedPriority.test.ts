@@ -7,7 +7,11 @@ import { makeThreadFixture, type ThreadFixtureOverrides } from "../../test-fixtu
 import type { Thread } from "../../types";
 import { countVisibleSidebarPriorityThreads, resolveSidebarPriorityRank } from "../Sidebar.logic";
 import { foldedPriorityMember, wakesBeforeFold, withFoldedUnseen } from "./foldedPriority";
-import { foldLaunchedThreads, foldedUnseenUnder, liftedPriorityRank } from "./launchFold";
+import {
+  foldLaunchedThreads,
+  foldedUnseenUnder,
+  liftedPriorityRank,
+} from "@goat/client-runtime/state/launch-fold";
 import { markSidebarPriorityRead, selectSidebarPriorityClear } from "./priorityRead";
 
 const local = EnvironmentId.make("environment-local");
