@@ -326,7 +326,7 @@ export const harness = Effect.fn(function* (
                   id: request.id,
                   result: {
                     structuredContent: {
-                      apps: [1, 4, 6, 7, 8, 10, 42, 900].map((pid) => ({
+                      apps: [1, 4, 5, 6, 7, 8, 10, 42, 900].map((pid) => ({
                         pid,
                         bundle_id: pid === 42 ? "com.apple.calculator" : `com.example.app${pid}`,
                         name: `App ${pid}`,
