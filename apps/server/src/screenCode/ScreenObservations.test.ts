@@ -157,7 +157,7 @@ it("returns a diff only for consecutive complete same-lineage trees, carrying ev
     limits: { treeBytes: 4096 },
   });
   const diff = observations.renderObservation({
-    draft: tabDraft("heading\nbutton Save [ref=a]\nbutton Cancel [ref=b]"),
+    draft: tabDraft("heading\nbutton Save [ref=a]\nbutton Cancel [ref=b]", 2),
     mode: "diff",
     baseObservationId: base.observationId,
     limits: { treeBytes: 4096 },
