@@ -32,6 +32,11 @@ const { mocks, Children } = vi.hoisted(() => ({
     restore: vi.fn(),
     flush: vi.fn(),
     serialize: (markdown: string): string | Promise<string> => markdown,
+    dispatch: vi.fn(),
+    preventRemove: null as null | {
+      enabled: boolean;
+      callback: (event: { data: { action: unknown } }) => void;
+    },
     inputProps: null as null | {
       onChangeSelection: (selection: { start: number; end: number }) => void;
       onChangeState: (state: unknown) => void;
@@ -57,8 +62,13 @@ vi.mock("../../components/ui/ScreenScrollView", () => ({
 vi.mock("react-native-keyboard-controller", () => ({ KeyboardAvoidingView: Children }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));
 vi.mock("@react-navigation/native", () => ({
-  useNavigation: () => ({ goBack: mocks.goBack, dispatch: vi.fn(), navigate: vi.fn() }),
-  usePreventRemove: () => undefined,
+  useNavigation: () => ({ goBack: mocks.goBack, dispatch: mocks.dispatch, navigate: vi.fn() }),
+  usePreventRemove: (
+    enabled: boolean,
+    callback: (event: { data: { action: unknown } }) => void,
+  ) => {
+    mocks.preventRemove = { enabled, callback };
+  },
 }));
 vi.mock("../../components/ui/AppBar", () => ({ AppBar: () => null }));
 vi.mock("../../components/ui/AppText", () => ({
@@ -240,6 +250,8 @@ beforeEach(() => {
   mocks.restore.mockReset().mockResolvedValue(undefined);
   mocks.flush.mockReset().mockResolvedValue(undefined);
   mocks.serialize = (markdown: string): string | Promise<string> => markdown;
+  mocks.dispatch.mockReset();
+  mocks.preventRemove = null;
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -613,27 +625,51 @@ describe("visual note editor", () => {
     );
   });
 
-  it("a formatting-only change from the native menu counts as an unsaved edit", async () => {
+  it("leaving the visual editor asks first when only native formatting changed the note", async () => {
     await act(async () => render());
     await edit();
-    const style = (bold: boolean) => ({
-      bold: { isActive: bold },
-      italic: { isActive: false },
-      underline: { isActive: false },
-      strikethrough: { isActive: false },
-      spoiler: { isActive: false },
-      link: { isActive: false, destination: "" },
-      heading: { isActive: false, level: 1 },
-      unorderedList: { isActive: false, depth: 0 },
-      orderedList: { isActive: false, depth: 0 },
-    });
-    act(() => {
-      mocks.inputProps?.onChangeSelection({ start: 0, end: 4 });
-      mocks.inputProps?.onChangeState(style(false));
-    });
     expect(container.textContent).not.toContain("Unsaved edits");
-    act(() => mocks.inputProps?.onChangeState(style(true)));
-    expect(container.textContent).toContain("Unsaved edits");
+    mocks.serialize = () => "**mine**";
+    expect(mocks.preventRemove?.enabled).toBe(true);
+    await act(async () => mocks.preventRemove?.callback({ data: { action: "back" } }));
+    expect(mocks.alert).toHaveBeenCalledWith("Unsaved note", expect.any(String), expect.any(Array));
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("leaving an unchanged visual editor goes straight back", async () => {
+    await act(async () => render());
+    await edit();
+    expect(mocks.preventRemove?.enabled).toBe(true);
+    await act(async () => mocks.preventRemove?.callback({ data: { action: "back" } }));
+    expect(mocks.alert).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledWith("back");
+  });
+
+  it("typing that arrives while undo reads the note is kept", async () => {
+    await act(async () => render());
+    await edit();
+    act(() => type("first"));
+    const read = Promise.withResolvers<string>();
+    mocks.serialize = () => read.promise;
+    await act(async () => button("↶").click());
+    act(() => type("first and more"));
+    await act(async () => read.resolve("first"));
+    expect(container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]')?.value).toBe(
+      "first and more",
+    );
+  });
+
+  it("saving before the open check finishes keeps the original bytes", async () => {
+    const opening = Promise.withResolvers<string>();
+    mocks.serialize = () => opening.promise;
+    await act(async () => render());
+    await act(async () => button("Edit").click());
+    await act(() =>
+      vi.waitFor(() => expect(container.textContent).toContain("Checking this note")),
+    );
+    mocks.serialize = () => "- rewritten";
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "mine" }));
   });
 
   it("offers undo right after typing and restores the opened text", async () => {

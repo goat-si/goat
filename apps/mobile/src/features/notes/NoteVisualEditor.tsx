@@ -18,8 +18,10 @@ import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { openVisualNote, visualEditorBlocker, visualNoteBody } from "./note-wysiwyg";
 
 export interface NoteVisualEditorHandle {
-  /** The note body to save: the original bytes when nothing changed. */
+  /** The note body to save: the original bytes when nothing changed or the check has not passed. */
   readonly body: () => Promise<string>;
+  /** Whether the editor still holds the note it opened with, formatting included. */
+  readonly unchanged: () => Promise<boolean>;
 }
 
 const HISTORY_LIMIT = 30;
@@ -45,14 +47,14 @@ export default function NoteVisualEditor(props: {
   const [ready, setReady] = useState(false);
   const [styleKey, setStyleKey] = useState(NO_STATE);
   const [canUndo, setCanUndo] = useState(false);
+  const [undoing, setUndoing] = useState(false);
   const history = useRef([session.text]);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pauseMs = useRef(MIN_PAUSE_MS);
-  const selection = useRef("");
-  const lastFormat = useRef({ selection: "", key: "" });
-  const undoing = useRef<Promise<void> | null>(null);
+  const version = useRef(0);
+  const undoRun = useRef<Promise<void> | null>(null);
   const onFallback = useEffectEvent((reason: string) => props.onFallback(reason));
-  const canEdit = ready && props.editable;
+  const canEdit = ready && props.editable && !undoing;
 
   // oxlint-disable-next-line goat/react-effect-budget -- checks the native serializer once, after the input mounts
   useEffect(() => {
@@ -62,11 +64,13 @@ export default function NoteVisualEditor(props: {
       return;
     }
     let active = true;
+    const started = Date.now();
     void input.current
       ?.getMarkdown()
       .then((markdown) => {
         if (!active) return;
         if (markdown === session.text) {
+          pauseMs.current = Math.max(MIN_PAUSE_MS, (Date.now() - started) * PAUSE_PER_SNAPSHOT_MS);
           setReady(true);
           input.current?.focus();
         } else
@@ -99,6 +103,7 @@ export default function NoteVisualEditor(props: {
   // Typing only flags the change; serializing waits for a pause. Undo is offered at once and
   // snapshots first, so it works before a long note's pause has passed.
   const changed = () => {
+    version.current++;
     props.onChange();
     setCanUndo(true);
     if (pending.current) clearTimeout(pending.current);
@@ -111,16 +116,20 @@ export default function NoteVisualEditor(props: {
     changed();
   };
   const undo = () => {
-    if (!canEdit || undoing.current) return;
-    undoing.current = restorePrevious().then(() => {
-      undoing.current = null;
+    if (!canEdit || undoRun.current) return;
+    setUndoing(true);
+    undoRun.current = restorePrevious().then(() => {
+      undoRun.current = null;
+      setUndoing(false);
     });
   };
   const restorePrevious = async () => {
+    const started = version.current;
     await snapshot();
     const stack = history.current;
     const previous = stack.at(-2);
-    if (previous === undefined || !input.current) return;
+    // Typing that reached the input after undo started wins over the restore.
+    if (previous === undefined || !input.current || version.current !== started) return;
     stack.pop();
     // iOS echoes setValue as a change and Android does not; a duplicate snapshot is skipped either way.
     input.current.setValue(previous);
@@ -132,14 +141,20 @@ export default function NoteVisualEditor(props: {
     props.handleRef,
     () => ({
       body: async () => {
-        // A save that starts while undo is snapshotting reads the restored text.
-        await undoing.current;
+        // Before the open check passes nothing could be edited, and the serializer may rewrite.
+        if (!ready) return session.source;
+        await undoRun.current;
         const markdown = await input.current?.getMarkdown();
         if (markdown === undefined) throw new Error("The editor closed before the note was read.");
         return visualNoteBody(session, markdown);
       },
+      unchanged: async () => {
+        if (!ready) return true;
+        await undoRun.current;
+        return (await input.current?.getMarkdown()) === session.text;
+      },
     }),
-    [session],
+    [session, ready],
   );
 
   const markdownStyle = useMemo(() => {
@@ -196,13 +211,6 @@ export default function NoteVisualEditor(props: {
           disabled={!canEdit}
           onPress={() => command((target) => target.toggleUnorderedList())}
         />
-        <ToolbarButton
-          label="1."
-          name="Numbered list"
-          selected={active("numbered")}
-          disabled={!canEdit}
-          onPress={() => command((target) => target.toggleOrderedList())}
-        />
         <ToolbarButton label="↶" name="Undo" disabled={!canEdit || !canUndo} onPress={undo} />
       </View>
       {ready ? null : <Text className="text-xs text-foreground-muted">Checking this note…</Text>}
@@ -213,7 +221,7 @@ export default function NoteVisualEditor(props: {
           defaultValue={session.text}
           editable={props.editable && ready}
           autoFocus={false}
-          markdownShortcuts
+          markdownShortcuts={{ heading: true, unorderedList: true }}
           // Typed URLs stay as typed; auto-linking would rewrite them into [text](url).
           linkRegex={null}
           formatMenuConfig={{ underline: { enabled: false }, spoiler: { enabled: false } }}
@@ -223,19 +231,9 @@ export default function NoteVisualEditor(props: {
           selectionColor={nativeTextStyle.linkColor}
           markdownStyle={markdownStyle}
           onChangeText={changed}
-          onChangeSelection={({ start, end }) => {
-            selection.current = `${start}:${end}`;
-          }}
           onChangeState={(state) => {
             const next = styleStateKey(state);
             if (next !== styleKey) setStyleKey(next);
-            // Context-menu and keyboard formatting change styles without a text change;
-            // a style change on the same selection is an edit.
-            const format = formatKey(state);
-            const previous = lastFormat.current;
-            lastFormat.current = { selection: selection.current, key: format };
-            if (ready && previous.selection === selection.current && previous.key !== format)
-              changed();
           }}
           style={{
             height: Math.min(Math.max(height * 0.5, 280), 720),
@@ -255,24 +253,9 @@ function styleStateKey(state: StyleState): string {
     state.italic.isActive && "italic",
     state.heading.isActive && `h${state.heading.level}`,
     state.unorderedList.isActive && "bullet",
-    state.orderedList.isActive && "numbered",
   ]
     .filter(Boolean)
     .join(" ");
-}
-
-function formatKey(state: StyleState): string {
-  return JSON.stringify([
-    state.bold.isActive,
-    state.italic.isActive,
-    state.underline.isActive,
-    state.strikethrough.isActive,
-    state.spoiler.isActive,
-    state.link.isActive && state.link.destination,
-    state.heading.isActive && state.heading.level,
-    state.unorderedList.isActive && state.unorderedList.depth,
-    state.orderedList.isActive && state.orderedList.depth,
-  ]);
 }
 
 function ToolbarButton(props: {

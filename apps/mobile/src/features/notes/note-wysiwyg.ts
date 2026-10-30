@@ -52,6 +52,8 @@ function blockBlocker(text: string, node: RootContent, inList: boolean): string 
   if (node.type === "heading")
     return inList ? "a heading in a list" : inlineBlocker(text, node.children);
   if (node.type !== "list") return label(node.type);
+  // Editing a numbered list renumbers the items after the edit, which the user did not touch.
+  if (node.ordered) return "a numbered list";
   if (node.spread) return "a list with blank lines between items";
   for (const item of node.children) {
     if (item.checked != null) return "a checklist";

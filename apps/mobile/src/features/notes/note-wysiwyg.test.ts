@@ -6,6 +6,7 @@ describe("visual note editor eligibility", () => {
   it.each([
     ["headings", null],
     ["indentThree", null],
+    ["numbered", "a numbered list"],
     // The AST allows these; the native round trip rewrites the indent, so they fall back on open.
     ["indentTwo", null],
     ["indentFour", null],
