@@ -2,8 +2,9 @@ import type { ScreenObservationDraft } from "./ScreenObservations.ts";
 
 type Element = ScreenObservationDraft["elements"][number];
 
-const nativeRef = (token: string) =>
-  token.replace(/^aria-ref=t3-.+-((?:f\d+)?e\d+)$/, "aria-ref=$1");
+const snapshotRefPattern = /^aria-ref=t3-.+-((?:f\d+)?e\d+)$/; // goat-rename: legacy: browser ref namespace.
+const snapshotRefPrefix = "aria-ref=t3-"; // goat-rename: legacy: browser ref namespace.
+const nativeRef = (token: string) => token.replace(snapshotRefPattern, "aria-ref=$1");
 
 export const hasFrameRefs = (draft: ScreenObservationDraft) =>
   draft.elements.some((element) => /^aria-ref=f\d+e\d+$/.test(nativeRef(element.driverToken)));
@@ -21,7 +22,7 @@ const rows = (draft: ScreenObservationDraft) => {
   if (
     draft.elements.some(
       (element) =>
-        element.driverToken.startsWith("aria-ref=t3-") &&
+        element.driverToken.startsWith(snapshotRefPrefix) &&
         nativeRef(element.driverToken) === element.driverToken,
     )
   )
