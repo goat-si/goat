@@ -573,7 +573,10 @@ it("explains why a pairing without hub access shows no hub devices, and opens th
   expect(container.textContent).toContain("These devices do not open on this phone");
   expect(container.textContent).toContain("Also open hub devices");
   await act(async () => button("Scan new QR").click());
-  expect(state.navigate).toHaveBeenCalledWith("SettingsEnvironmentNew", { routeFor: "hub-a" });
+  expect(state.navigate).toHaveBeenCalledWith("SettingsEnvironmentNew", {
+    routeFor: "hub-a",
+    preferRoute: true,
+  });
 
   state.sessionPermissions = ["orchestration:read", "hub:proxy"];
   act(() => root.unmount());

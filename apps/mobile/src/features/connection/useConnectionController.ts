@@ -69,10 +69,11 @@ export function useConnectionController() {
   );
 
   const connectPairingUrl = useCallback(
-    (pairingUrl: string, expectedEnvironmentId?: EnvironmentId) =>
+    (pairingUrl: string, expectedEnvironmentId?: EnvironmentId, preferRoute = false) =>
       connectPairingUrlMutation({
         pairingUrl,
         ...(expectedEnvironmentId === undefined ? {} : { expectedEnvironmentId }),
+        ...(preferRoute ? { preferRoute } : {}),
       }),
     [connectPairingUrlMutation],
   );

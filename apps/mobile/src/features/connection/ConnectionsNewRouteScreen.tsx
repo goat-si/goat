@@ -52,6 +52,8 @@ type ConnectionsNewRouteParams = {
   readonly pairingUrl?: string;
   readonly autoConnect?: string;
   readonly routeFor?: EnvironmentId;
+  /** Use the new route first: a pairing again for more access must replace the old session. */
+  readonly preferRoute?: boolean;
   readonly intent?: "hub" | "change-hub" | "add-server";
   readonly replaceEnvironmentId?: EnvironmentId;
 };
@@ -264,7 +266,7 @@ export function ConnectionsNewRouteScreen({
     setCompletionError(null);
     onChangeConnectionPairingUrl(pairingUrl);
     try {
-      const result = await onConnectPress(pairingUrl, params.routeFor);
+      const result = await onConnectPress(pairingUrl, params.routeFor, params.preferRoute === true);
       if (!isCurrentAttempt()) return;
       if (AsyncResult.isFailure(result)) {
         const error = Cause.squash(result.cause);

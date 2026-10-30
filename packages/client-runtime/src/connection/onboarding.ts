@@ -37,13 +37,18 @@ import {
 import * as Persistence from "../platform/persistence.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import { orchestrationProtocolCompatibilityError } from "./compatibility.ts";
-import { connectionRoutes, routeEntry, sshTargetKey } from "./routes.ts";
+import { connectionRouteId, connectionRoutes, routeEntry, sshTargetKey } from "./routes.ts";
 
 export interface PairingConnectionInput {
   readonly pairingUrl?: string;
   readonly host?: string;
   readonly pairingCode?: string;
   readonly expectedEnvironmentId?: EnvironmentId;
+  /**
+   * Put this route first. Pairing again to gain access (hub devices) changes what this device may
+   * do, and an older route to another address would otherwise keep the old session in use.
+   */
+  readonly preferRoute?: boolean;
 }
 
 export interface SshConnectionInput {
@@ -168,6 +173,20 @@ const registerPairingConnection = Effect.fn(
   const knownAddressOnly = input.expectedEnvironmentId === undefined;
   if (!(yield* registry.register(registration, { knownAddressOnly }))) {
     return registration.target.environmentId;
+  }
+  if (input.preferRoute === true) {
+    const environmentId = registration.target.environmentId;
+    const preferred = connectionRouteId(registration.target);
+    const entry = (yield* SubscriptionRef.get(registry.entries)).get(environmentId);
+    const others = (entry === undefined ? [] : connectionRoutes(entry))
+      .map((route) => connectionRouteId(route.target))
+      .filter((id) => id !== preferred);
+    yield* registry.reorderRoutes(environmentId, [preferred, ...others]).pipe(
+      Effect.catchTags({
+        EnvironmentNotRegisteredError: () => Effect.void,
+        PlatformEnvironmentRemovalError: () => Effect.void,
+      }),
+    );
   }
   yield* registry.setCompatibility(registration.target.environmentId, null);
   yield* registry

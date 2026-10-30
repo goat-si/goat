@@ -181,6 +181,7 @@ function layerPairingOnboarding(
     Layer.mock(Persistence.ConnectionRegistrationStore)({
       register: () => Effect.void,
       setEnabled: () => Effect.void,
+      setRoutes: () => Effect.void,
     }),
     Layer.mock(Persistence.EnvironmentCacheStore)({}),
     Layer.mock(ConnectionProfileStore.ConnectionProfileStore)({}),
@@ -323,6 +324,44 @@ describe("connection onboarding", () => {
           label: PAIRED_PROFILE.label,
         }),
       );
+    }).pipe(Effect.provide(layerPairingOnboarding())),
+  );
+
+  it.effect("puts a preferred re-pairing first, ahead of the old route to another address", () =>
+    Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const onboarding = yield* Onboarding.ConnectionOnboarding;
+      const oldConnectionId = "bearer:environment-paired:https://old.example.test";
+      yield* registry.register(
+        new BearerConnectionRegistration({
+          target: new BearerConnectionTarget({
+            environmentId: PAIRED_ENVIRONMENT_ID,
+            connectionId: oldConnectionId,
+            label: "Paired environment",
+          }),
+          profile: new BearerConnectionProfile({
+            ...PAIRED_PROFILE,
+            connectionId: oldConnectionId,
+            httpBaseUrl: "https://old.example.test/",
+            wsBaseUrl: "wss://old.example.test/",
+          }),
+          credential: new BearerConnectionCredential({ token: "old-token" }),
+        }),
+      );
+
+      yield* onboarding.registerPairing({
+        ...PAIRING_INPUT,
+        expectedEnvironmentId: PAIRED_ENVIRONMENT_ID,
+        preferRoute: true,
+      });
+
+      const entry = (yield* SubscriptionRef.get(registry.entries)).get(PAIRED_ENVIRONMENT_ID);
+      // The old route's session lacks what the new pairing grants, so it must not stay preferred.
+      expect(
+        connectionRoutes(entry!).map((route) =>
+          route.target._tag === "BearerConnectionTarget" ? route.target.connectionId : null,
+        ),
+      ).toEqual([PAIRED_PROFILE.connectionId, oldConnectionId]);
     }).pipe(Effect.provide(layerPairingOnboarding())),
   );
 

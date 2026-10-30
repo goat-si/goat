@@ -118,8 +118,12 @@ export function useRemoteConnections() {
   }, []);
 
   const onConnectPress = useCallback(
-    (pairingUrl?: string, expectedEnvironmentId?: EnvironmentId) =>
-      controller.connectPairingUrl(pairingUrl ?? connectionPairingUrl, expectedEnvironmentId),
+    (pairingUrl?: string, expectedEnvironmentId?: EnvironmentId, preferRoute = false) =>
+      controller.connectPairingUrl(
+        pairingUrl ?? connectionPairingUrl,
+        expectedEnvironmentId,
+        preferRoute,
+      ),
     [connectionPairingUrl, controller],
   );
 

@@ -55,8 +55,14 @@ export function HubAccessNotice({
       {notice.repairs ? (
         <Button
           label="Scan new QR"
-          // Pairs this same environment again, so a QR for another address of it is accepted.
-          onPress={() => navigation.navigate("SettingsEnvironmentNew", { routeFor: environmentId })}
+          // Pairs this same environment again (a QR for another address of it is accepted) and
+          // uses that pairing first, since older routes keep their session without hub access.
+          onPress={() =>
+            navigation.navigate("SettingsEnvironmentNew", {
+              routeFor: environmentId,
+              preferRoute: true,
+            })
+          }
         />
       ) : null}
     </View>
