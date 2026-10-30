@@ -54,6 +54,23 @@ const UNVERIFIED_INPUT_NOTE =
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+export const driverScreenLocked = (message: unknown): boolean => {
+  if (!isRecord(message)) return false;
+  const error = isRecord(message.error) ? message.error : undefined;
+  const result = isRecord(message.result) ? message.result : undefined;
+  const raw = error ? error.data : result?.structuredContent;
+  if (!isRecord(raw)) return false;
+  const code = isRecord(raw.refusal) ? raw.refusal.code : raw.code;
+  return (
+    code === "screen_locked" &&
+    (raw.effect === undefined || raw.effect === "refused") &&
+    (error !== undefined ||
+      result?.isError === true ||
+      raw.effect === "refused" ||
+      raw.status === "refused")
+  );
+};
+
 /**
  * The driver's own word that nothing went out, on refusals that carry no effect: bring_to_front's
  * pre-checks (activated and request_accepted false) and a paste kept out of browser chrome.
