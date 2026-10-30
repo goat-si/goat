@@ -2702,16 +2702,6 @@ export const layerWsRpc = (
                 operation: "normalize",
               });
             if (patch.enableCua === true) {
-              yield* handoffs.stopComputerUseSessions().pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ServerSettingsError({
-                      settingsPath: config.settingsPath,
-                      operation: "normalize",
-                      cause,
-                    }),
-                ),
-              );
               yield* ComputerUseSettings.admitEnable();
             }
             const deviceHosts = patch.deviceHosts
@@ -2720,7 +2710,7 @@ export const layerWsRpc = (
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            const settings = yield* updateSettings({
+            const update = updateSettings({
               patch: nextPatch,
               ...(providerInstanceMutation === undefined ? {} : { providerInstanceMutation }),
               ...(agentTerminalBinding === undefined ? {} : { agentTerminalBinding }),
@@ -2742,6 +2732,19 @@ export const layerWsRpc = (
                   ),
               }),
             );
+            const settings = yield* patch.enableCua === undefined
+              ? update
+              : handoffs.withComputerUseToggle(patch.enableCua, update).pipe(
+                  Effect.catchTag("HandoffError", (cause) =>
+                    Effect.fail(
+                      new ServerSettingsError({
+                        settingsPath: config.settingsPath,
+                        operation: "normalize",
+                        cause,
+                      }),
+                    ),
+                  ),
+                );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,

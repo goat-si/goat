@@ -126,6 +126,10 @@ export class Handoffs extends Context.Service<
       threadId?: ThreadId,
     ) => Effect.Effect<ReadonlyArray<ThreadId>, HandoffError>;
     readonly revalidateComputerUse: (threadId?: ThreadId) => Effect.Effect<void, HandoffError>;
+    readonly withComputerUseToggle: <A, E, R>(
+      enabled: boolean,
+      update: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | HandoffError, R>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
     /** A computer use request's answer for its waiting call; see computerUseContinuations. */
     readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
@@ -919,6 +923,7 @@ const make = Effect.gen(function* () {
     clearComputerUseSessions: standing.clear,
     stopComputerUseSessions: standing.stop,
     revalidateComputerUse: standing.revalidate,
+    withComputerUseToggle: standing.toggle,
     read,
     open,
     respond,

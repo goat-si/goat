@@ -36,26 +36,25 @@ export const setEnabled = Effect.fn("ComputerUseSettings.setEnabled")(function* 
   authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
 ) {
   const settings = yield* ServerSettings.ServerSettingsService;
-  if (enabled) {
-    const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
-    if (Option.isNone(handoffs))
-      return yield* new ServerSettingsError({
-        settingsPath: "computer-use",
-        operation: "normalize",
-        reason: "Cannot clear previous computer use sessions.",
-      });
-    yield* handoffs.value.stopComputerUseSessions().pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerSettingsError({
-            settingsPath: "computer-use",
-            operation: "normalize",
-            cause,
-          }),
+  if (enabled) yield* admitEnable();
+  const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
+  if (Option.isNone(handoffs))
+    return yield* new ServerSettingsError({
+      settingsPath: "computer-use",
+      operation: "normalize",
+      reason: "Cannot clear previous computer use sessions.",
+    });
+  const stored = yield* handoffs.value
+    .withComputerUseToggle(
+      enabled,
+      settings.updateSettings({ enableCua: enabled }, authorizeAtCommit),
+    )
+    .pipe(
+      Effect.catchTag("HandoffError", (cause) =>
+        Effect.fail(
+          new ServerSettingsError({ settingsPath: "computer-use", operation: "normalize", cause }),
+        ),
       ),
     );
-  }
-  if (enabled) yield* admitEnable();
-  const stored = yield* settings.updateSettings({ enableCua: enabled }, authorizeAtCommit);
   return { enabled: stored.enableCua };
 });

@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId, ProjectId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
@@ -136,6 +138,39 @@ it.effect("Stop all clears session choices without active leases", () =>
   ),
 );
 
+it.effect(
+  "turning computer use off clears sessions while enabling an already enabled host does not",
+  () =>
+    withHarness(({ orchestrator }) =>
+      withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const settings = yield* ServerSettings.ServerSettingsService;
+          yield* settings.updateSettings({ enableCua: true });
+          const first = yield* request({ apps: ["com.example.Editor"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            {
+              threadId,
+              handoffId: first.handoff.handoffId,
+              action: "completed",
+              computerUseScope: "session",
+            },
+            sessionId,
+          );
+          yield* handoffs.withComputerUseToggle(true, settings.updateSettings({ enableCua: true }));
+          yield* TestClock.adjust("31 minutes");
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+          yield* handoffs.withComputerUseToggle(
+            false,
+            settings.updateSettings({ enableCua: false }),
+          );
+          yield* handoffs.withComputerUseToggle(true, settings.updateSettings({ enableCua: true }));
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        }),
+      ),
+    ),
+);
+
 it.effect("a session choice does not approve the same app in another thread", () =>
   withHarness(({ orchestrator, worker }) =>
     Effect.gen(function* () {
@@ -256,6 +291,48 @@ it.effect("Stop does not remove an always choice", () =>
         );
         yield* stopComputerUse(Option.some(leases), handoffs, sessionId, threadId);
         assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+      }),
+    ),
+  ),
+);
+
+it.effect("a concurrent re-enable cannot revive a session ended by turning computer use off", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ enableCua: true });
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const off = yield* handoffs
+          .withComputerUseToggle(
+            false,
+            Effect.gen(function* () {
+              yield* settings.updateSettings({ enableCua: false });
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const on = yield* handoffs
+          .withComputerUseToggle(true, settings.updateSettings({ enableCua: true }))
+          .pipe(Effect.forkChild);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(off);
+        yield* Fiber.join(on);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
       }),
     ),
   ),
