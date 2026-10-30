@@ -2745,6 +2745,17 @@ export const layerWsRpc = (
                     ),
                   ),
                 );
+            if (patch.cuaAllowedApps !== undefined)
+              yield* handoffs.revalidateComputerUse().pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath: config.settingsPath,
+                      operation: "normalize",
+                      cause,
+                    }),
+                ),
+              );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) => sourceControlDiscovery.discover,
