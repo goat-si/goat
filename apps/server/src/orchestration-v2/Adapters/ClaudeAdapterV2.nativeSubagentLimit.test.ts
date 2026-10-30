@@ -73,7 +73,8 @@ it.effect(
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "goat-claude-subagent-limit-",
         });
-        const sdkMessages = yield* Queue.unbounded<SDKMessage>();
+        // Each process reads its own messages, so a closed one cannot take the next one's.
+        let sdkMessages = yield* Queue.unbounded<SDKMessage>();
         const offers: SDKUserMessage[] = [];
         const opened: Array<ReturnType<typeof subagentPolicy>> = [];
         const flagSettings: unknown[] = [];
@@ -89,10 +90,12 @@ it.effect(
           queryRunner: {
             allocateSessionId: Effect.succeed(nativeSessionId),
             open: (input) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 opened.push(subagentPolicy(input.options));
+                const messages = yield* Queue.unbounded<SDKMessage>();
+                sdkMessages = messages;
                 return {
-                  messages: Stream.fromQueue(sdkMessages),
+                  messages: Stream.fromQueue(messages),
                   offer: (message) => Effect.sync(() => void offers.push(message)),
                   setMcpServers: () => Effect.void,
                   setModel: () => Effect.void,
@@ -101,7 +104,7 @@ it.effect(
                   backgroundTasks: () => Effect.succeed(false),
                   stopTask: () => Effect.void,
                   interrupt: Effect.void,
-                  close: Effect.void,
+                  close: Queue.shutdown(messages).pipe(Effect.asVoid),
                 } satisfies ClaudeAdapterV2.ClaudeAgentSdkQuerySession;
               }),
             forkSession: () => Effect.die("unused"),
@@ -179,15 +182,18 @@ it.effect(
             yield* sessions.set(
               nativeSubagentLimit === undefined ? config : { ...config, nativeSubagentLimit },
             );
+            const opens = opened.length;
             yield* runtime.startTurn(turn(ordinal));
-            yield* Queue.offer(sdkMessages, {
-              type: "system",
-              subtype: "init",
-              claude_code_version: claudeCodeVersion,
-              permissionMode: "bypassPermissions",
-              session_id: nativeSessionId,
-              uuid: `00000000-0000-4000-8000-00000000011${ordinal}`,
-            } as unknown as SDKMessage);
+            // A Claude process reports its version once, when it starts.
+            if (opened.length > opens)
+              yield* Queue.offer(sdkMessages, {
+                type: "system",
+                subtype: "init",
+                claude_code_version: claudeCodeVersion,
+                permissionMode: "bypassPermissions",
+                session_id: nativeSessionId,
+                uuid: `00000000-0000-4000-8000-00000000011${ordinal}`,
+              } as unknown as SDKMessage);
             const offer = offers.at(-1);
             expect(offer).toBeDefined();
             yield* Queue.offer(sdkMessages, { ...offer!, session_id: nativeSessionId });
