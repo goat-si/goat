@@ -148,7 +148,14 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     } satisfies ComputerUseRequestResult;
   if (wanted !== undefined) {
     // Credential stores stay out whether or not the host can list its apps (#1598).
-    const excluded = wanted.filter(isExcludedCuaApplication);
+    const catalog = yield* cua.value.appCatalog;
+    const excluded = wanted.filter(
+      (app) =>
+        isExcludedCuaApplication(app) ||
+        catalog.some(
+          (entry) => cuaAppKey(entry.name) === cuaAppKey(app) && isExcludedCuaApplication(entry.id),
+        ),
+    );
     if (excluded.length > 0)
       return {
         kind: "refused",

@@ -78,6 +78,30 @@ it.effect("an organization-denied bundle is refused when requested by display na
   ),
 );
 
+it.effect("a protected bundle is refused by its catalog display name", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          assert.deepInclude(yield* request({ apps: ["Mac Configuration"] }), {
+            kind: "refused",
+            code: "app_not_allowed",
+          });
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "person",
+      undefined,
+      [{ id: "com.apple.systempreferences", name: "Mac Configuration" }],
+    ),
+  ),
+);
+
 it.effect(
   "refuses a window title absent from the host app listing without creating an approval (#1536)",
   () =>
