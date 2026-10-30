@@ -20,9 +20,9 @@ or **Composer: Send and Start New Thread**. These bindings take priority over th
 send shortcut. Click the send button to use the configured follow-up behavior.
 
 When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
-steer. While the composer uses `mod+Shift+Enter` for the opposite action, move focus
-out of the composer first. Change it under **Queue: Send First Queued Message** in
-Keybindings.
+steer. While the composer uses `mod+Shift+Enter` for the opposite action, first click
+elsewhere in the thread, outside the composer and any terminal. Change it under
+**Queue: Send First Queued Message** in Keybindings.
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
 To step a new thread to the next machine instead of opening the menu, bind
