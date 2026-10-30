@@ -19,6 +19,7 @@ import {
   ThreadSettingsSessionProvider,
   type ThreadSettingsSessionProps,
 } from "./thread-settings-session";
+import { popoverSheetHeight } from "./thread-settings-sheet-state";
 
 const THREAD_SETTINGS_HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(
   Platform.OS,
@@ -67,19 +68,43 @@ export function useExistingThreadSettingsRoutePresentation() {
 
 type RootNavigation = NativeStackNavigationProp<Record<string, object | undefined>>;
 
-/** The composer's reasoning popover; its sheet sizes to this content. */
+// The last measured popover height, so a reopened sheet starts at its size instead of resizing.
+let lastPopoverHeight = 320;
+
+/**
+ * The composer's reasoning popover; its "fitToContents" sheet sizes to this content.
+ * On iOS the flex:1 layers between the sheet's content-sized wrapper and this content (Screens'
+ * SafeAreaView on iOS 26+, the card stack and column views) collapse to zero, so the sheet would
+ * measure nothing. The popover measures its content and sets the wrapper's height via `contentStyle`.
+ */
 function ThreadSettingsPopover(
   props: ThreadSettingsSessionProps & { readonly onOpenModelPicker: () => void },
 ) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
+  const [contentHeight, setContentHeight] = useState(lastPopoverHeight);
+  const sheetHeight = popoverSheetHeight({
+    contentHeight,
+    windowHeight: height,
+    isPad: Platform.OS === "ios" && Platform.isPad,
+  });
   return (
     <ThreadSettingsSessionProvider {...props}>
+      {Platform.OS === "ios" ? (
+        <NativeStackScreenOptions
+          options={{ contentStyle: { height: sheetHeight } }}
+          optionsVersion={sheetHeight}
+        />
+      ) : null}
       <ScreenContent fitToContents>
         <ScrollView
           className="bg-sheet ios:flex-1"
           style={Platform.OS === "android" ? { flexGrow: 0, maxHeight: height * 0.85 } : undefined}
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 12) }}
+          onContentSizeChange={(_width, nextHeight) => {
+            lastPopoverHeight = nextHeight;
+            setContentHeight(nextHeight);
+          }}
           showsVerticalScrollIndicator={false}
         >
           <ThreadSettingsTraits onOpenModelPicker={props.onOpenModelPicker} />
