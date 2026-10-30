@@ -17,7 +17,11 @@ import {
   threadListInboxReturns,
 } from "./threadListV2";
 import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
-import { publishHeldPriorityKeys } from "./threadListV2PriorityHolds";
+import {
+  heldPriorityKeys,
+  publishHeldPriorityKeys,
+  subscribeHeldPriorityKeys,
+} from "./threadListV2PriorityHolds";
 import { computeThreadMoveAvailability } from "./threadOrder";
 import {
   useRevealLaunchGroups,
@@ -70,6 +74,7 @@ function usePriorityHolds() {
     );
   };
   return {
+    listId,
     holds,
     releases,
     observe,
@@ -116,6 +121,8 @@ export function useThreadListV2(input: {
   const launchOwners = useAtomValue(launchSubagentRowsAtom);
   const launchGroups = useThreadListV2LaunchGroups(input.selectedThreadKey);
   const priority = usePriorityHolds();
+  // Other lists' held rows; this list's own Priority rows come from its layout below.
+  useSyncExternalStore(subscribeHeldPriorityKeys, () => heldPriorityKeys(priority.listId));
   // Folded and lifted rows sit outside the ordered sections on every reorder path.
   const reorderExcludedKeys = threadListV2ReorderExcludedKeys({
     threads,
@@ -125,6 +132,7 @@ export function useThreadListV2(input: {
     settlementEnvironmentIds: input.settlementEnvironmentIds,
     snoozeEnvironmentIds: input.snoozeEnvironmentIds,
     queuedThreadKeys: input.queuedThreadKeys,
+    listId: priority.listId,
   });
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(

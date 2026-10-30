@@ -2,7 +2,7 @@ import { SheetHeader } from "../../components/ui/SheetHeader";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Animated, FlatList, Modal, Pressable, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Reanimated, { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
@@ -24,6 +24,7 @@ import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
 import { useThreadListActions } from "../home/useThreadListActions";
 import { hiddenGoatBotThreadKeysAtom } from "./goatBotThreadVisibility";
 import { threadArrangementSections } from "./threadArrangementSections";
+import { heldPriorityKeys, subscribeHeldPriorityKeys } from "./threadListV2PriorityHolds";
 import {
   createThreadMovePlanner,
   threadDragAction,
@@ -192,6 +193,8 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
     );
     return () => clearTimeout(timer);
   }, [threads, now]);
+  // Rows a thread list holds in Priority stay out of arranging; they change as lists clear them.
+  const heldPriority = useSyncExternalStore(subscribeHeldPriorityKeys, heldPriorityKeys);
   const sections = useMemo(
     () =>
       threadArrangementSections({
@@ -222,6 +225,8 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
       workingShelfEnabled,
       hiddenBotThreadKeys,
       launchOwners,
+      // oxlint-disable-next-line react/memo-dependencies -- the sections read held rows from their store; this snapshot changes with it
+      heldPriority,
     ],
   );
   const listedSettled = sections.settled.filter(olderSettledShelf.isListed);

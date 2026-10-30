@@ -122,6 +122,8 @@ export function resolveThreadListV2SwipeActions(input: {
   readonly snoozeSupported: boolean;
   readonly snoozable: boolean;
   readonly snoozed?: boolean;
+  /** Settled, though a Priority row shows it as a card. */
+  readonly settled?: boolean;
 }): {
   readonly primary: Exclude<ThreadListV2SwipeAction, "snooze">;
   readonly secondary: "snooze" | null;
@@ -130,7 +132,7 @@ export function resolveThreadListV2SwipeActions(input: {
     return { primary: "unsnooze", secondary: null };
   }
   const primary = input.settlementSupported
-    ? input.variant === "slim"
+    ? input.variant === "slim" || input.settled === true
       ? "unsettle"
       : "settle"
     : "archive";

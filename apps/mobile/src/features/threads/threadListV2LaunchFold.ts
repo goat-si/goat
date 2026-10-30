@@ -174,8 +174,11 @@ export function threadListV2ReorderExcludedKeys(
     /** Subagent rows when `threads` leaves them out. */
     readonly owners?: readonly LaunchSubagentRow[] | undefined;
     readonly hiddenBotThreadKeys?: ReadonlySet<string> | undefined;
+    /** The list asking, which leaves its own Priority rows out itself. */
+    readonly listId?: string | undefined;
   },
 ): ReadonlySet<string> {
+  const held = heldPriorityKeys(input.listId);
   const args = [
     input.threads,
     input.owners,
@@ -184,7 +187,7 @@ export function threadListV2ReorderExcludedKeys(
     input.settlementEnvironmentIds,
     input.snoozeEnvironmentIds,
     input.queuedThreadKeys,
-    heldPriorityKeys(),
+    held,
   ];
   if (
     args.length === lastExcludedInput.length &&
@@ -204,7 +207,7 @@ export function threadListV2ReorderExcludedKeys(
       foldThreadListV2({ listed, owners: input.owners ?? input.threads, lifecycle: input }),
       input,
     ),
-    ...heldPriorityKeys(),
+    ...held,
   ]);
   return lastExcludedKeys;
 }

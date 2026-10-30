@@ -16,6 +16,7 @@ import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
+  resolveThreadListV2SwipeActions,
   type ThreadListV2Item,
   type ThreadListV2ListItem,
 } from "./threadListV2";
@@ -224,5 +225,33 @@ describe("threadListV2 Priority", () => {
       now: NOW,
     });
     expect(layout.items[0]?.pinned).toBe(true);
+  });
+
+  it("lets a settled thread in Priority un-settle, though it shows as a card", () => {
+    const actions = (settled: boolean) =>
+      resolveThreadListV2SwipeActions({
+        variant: "card",
+        settlementSupported: true,
+        snoozeSupported: false,
+        snoozable: false,
+        settled,
+      }).primary;
+    expect(actions(true)).toBe("unsettle");
+    expect(actions(false)).toBe("settle");
+  });
+
+  it("leaves another list's held rows out of a list's reorder plan, but not its own published ones", () => {
+    const threads = [makeThread("held")];
+    const excluded = (listId?: string) =>
+      threadListV2ReorderExcludedKeys({ threads, now: NOW, listId }).has(`${environmentId}:held`);
+    publishHeldPriorityKeys("home", new Set([`${environmentId}:held`]));
+    try {
+      expect(excluded("home")).toBe(false);
+      expect(excluded("sidebar")).toBe(true);
+      expect(excluded()).toBe(true);
+    } finally {
+      publishHeldPriorityKeys("home", null);
+    }
+    expect(excluded("sidebar")).toBe(false);
   });
 });

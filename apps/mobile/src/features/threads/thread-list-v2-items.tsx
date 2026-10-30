@@ -671,7 +671,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
 
-  const canUnsettle = variant === "slim";
+  // A settled thread lifted into Priority shows as a card but still un-settles.
+  const canUnsettle =
+    variant === "slim" || (props.settlementSupported && thread.settledOverride === "settled");
   // The gate's only time-dependent edge is the queued-turn grace window, so its
   // expiry is known without a clock: evaluate at the message's own timestamp.
   // A gate held by runtime status has no expiry, and no clock tick opens it.
@@ -683,6 +685,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const snoozeGateNow = new Date(snoozeGateNowMs).toISOString();
   const swipeActions = resolveThreadListV2SwipeActions({
     variant,
+    settled: thread.settledOverride === "settled",
     settlementSupported: props.settlementSupported,
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: snoozeGateNow }),
