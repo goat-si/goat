@@ -200,6 +200,7 @@ const inertDependencies = Layer.mergeAll(
   }),
   Layer.mock(Handoffs.Handoffs)({
     withComputerUseToggle: (_enabled, update) => update,
+    withComputerUseSettings: (_patch, update) => update,
   }),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
