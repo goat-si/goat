@@ -378,9 +378,12 @@ export const watchClick = async (
   };
   page.on("popup", onPopup);
   // A page that cannot run script, or that a dialog holds, still reports a dialog the press opened.
-  const installing = Promise.resolve()
-    .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
-    .catch(() => undefined);
+  let installing: Promise<JSHandle<Watch> | undefined>;
+  try {
+    installing = (frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>).catch(() => undefined);
+  } catch {
+    installing = Promise.resolve(undefined);
+  }
   const watch = await bounded(installing, INSTALL_MS);
   if (watch === undefined) void installing.then((late) => late && stopWatch(late));
   const release = () => {

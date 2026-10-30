@@ -17,7 +17,7 @@ import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { SessionControl } from "./SessionControl.ts";
+import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
 // `chromium.executablePath()` is the full Chrome build, so it stays missing
@@ -261,7 +261,7 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     expect(await page.evaluate("f.files.length")).toBe(0);
   });
 
-  it("uploads through a label in one call after the gate", async () => {
+  it("refuses a blocked upload without changing the input and uploads through a label when allowed", async () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
     using _removeDirectory = {
       [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
@@ -271,11 +271,13 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await page.setContent(
       '<label id="l">Attach <input id="f" type="file"></label><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
     );
-    let gates = 0;
-    await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
-      gates++;
-    });
-    expect(gates).toBe(1);
+    await expect(
+      PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
+        throw new BrowserControlInterrupted("Blocked host", "blocked_url");
+      }),
+    ).rejects.toMatchObject({ reason: "blocked_url" });
+    expect(await page.evaluate("[f.files.length, window.changes]")).toEqual([0, 0]);
+    await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {});
     expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
   });
 

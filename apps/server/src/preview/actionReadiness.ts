@@ -15,6 +15,7 @@ export interface ReadinessGate {
   (): void | Promise<void>;
   readonly signal?: AbortSignal | undefined;
 }
+// Cancellation stops continuation; a browser operation already issued cannot be recalled.
 export const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {
   if (!signal) return work();
   if (signal.aborted) throw signal.reason;
