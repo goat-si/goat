@@ -63,7 +63,7 @@ it.live.each([
     "focus restoration abandoned: user_input (prior app pid 123)",
   ],
   [{ status: "restored", prior_pid: 123 }, "focus restored to the prior app (pid 123)"],
-])("text-only focus restoration reaches input and observation warnings: %s", (focus, warning) =>
+])("text-only focus restoration reaches input and observation warnings: %s", ([focus, warning]) =>
   Effect.gen(function* () {
     const blocks = ["Action completed.", `focus_restoration: ${JSON.stringify(focus)}`];
     const { host } = fixture({
