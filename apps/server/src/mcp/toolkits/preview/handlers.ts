@@ -46,7 +46,14 @@ import * as SiteNotes from "../../../preview/SiteNotes.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 const requireSiteNotes = Effect.serviceOption(SiteNotes.SiteNotes).pipe(
-  Effect.flatMap((notes) => Option.isSome(notes) ? Effect.succeed(notes.value) : Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "Site notes are unavailable." }))),
+  Effect.flatMap(Effect.fromOption),
+  Effect.mapError(
+    () =>
+      new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: "Site notes are unavailable.",
+      }),
+  ),
 );
 
 /** Whether a preview the agent

@@ -47,6 +47,7 @@ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
+import * as SiteNotes from "./preview/SiteNotes.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -147,6 +148,12 @@ const layerLifecycleEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment
 const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(MemoryService.MemoryService)({
     importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],
+  }),
+  Layer.mock(SiteNotes.SiteNotes)({
+    noteFor: () => Effect.runSync(Effect.die("site notes are unused in this test")),
+    list: () => Effect.runSync(Effect.die("site notes are unused in this test")),
+    deliverOnce: () => Effect.runSync(Effect.die("site notes are unused in this test")),
+    hasTouched: () => Effect.runSync(Effect.die("site notes are unused in this test")),
   }),
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
