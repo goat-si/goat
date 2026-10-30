@@ -76,6 +76,8 @@ function NoteContent(props: NoteParams) {
   const localBody = useRef(body);
   const localStatus = useRef(status);
   const pendingSaves = useRef(0);
+  // Bumped when a delete starts or adopts the hub's version, so older reads cannot overwrite it.
+  const readEpoch = useRef(0);
   const latest = Option.getOrNull(AsyncResult.value(feed))?.notes.find(
     (entry) => entry.path === props.path,
   );
@@ -119,9 +121,10 @@ function NoteContent(props: NoteParams) {
     if (!restored || !connected || row || editing || saving || dirty || (props.create && !latest))
       return;
     let active = true;
+    const epoch = readEpoch.current;
     void read({ environmentId: readRequest.environmentId, input: readRequest.input }).then(
       (result) => {
-        if (!active) return;
+        if (!active || epoch !== readEpoch.current) return;
         if (AsyncResult.isSuccess(result)) {
           setHasSnapshot(true);
           setNote(result.value);
@@ -180,6 +183,7 @@ function NoteContent(props: NoteParams) {
     if (pendingSaves.current === 0) setSaving(false);
   };
   const adopt = (document: NoteDocument) => {
+    readEpoch.current++;
     setNote(document);
     setBody(document.body);
     localBody.current = document.body;
@@ -198,6 +202,7 @@ function NoteContent(props: NoteParams) {
       return;
     }
     deletingRef.current = true;
+    readEpoch.current++;
     setDeleting(true);
     const result = await remove({
       environmentId,

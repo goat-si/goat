@@ -128,7 +128,8 @@ it.effect(
       assert.isTrue("code" in refused);
       if ("code" in refused) {
         assert.strictEqual(refused.code, "invalid_request");
-        assert.include(refused.message, "goat_note_read");
+        assert.include(refused.message, "was kept");
+        assert.include(refused.message, "decide whether it should still be deleted");
       }
       assert.strictEqual((yield* notes.read({ path: original.path })).body, "second");
       const deleted = yield* toolkit

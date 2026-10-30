@@ -227,6 +227,25 @@ describe("note delete", () => {
     });
   });
 
+  it("keeps the conflict version when an older read finishes after it", async () => {
+    await synced();
+    const older = Promise.withResolvers<unknown>();
+    mocks.read.mockReturnValueOnce(older.promise);
+    await act(async () => button("Refresh / sync").click());
+    const current = noteDocument("theirs", "c".repeat(64));
+    mocks.remove.mockResolvedValueOnce(
+      AsyncResult.failure(
+        Cause.fail(new NoteConflictError({ path: current.path, current, message: "changed" })),
+      ),
+    );
+    act(() => button("Delete note").click());
+    await act(async () => confirmLastAlert()());
+    await act(async () => older.resolve(AsyncResult.success(noteDocument("older"))));
+    expect(container.textContent).toContain("theirs");
+    expect(container.textContent).not.toContain("older");
+    expect(container.textContent).toContain("This note changed on the hub");
+  });
+
   it("is unavailable offline or while this phone holds a draft", async () => {
     await synced();
     expect(button("Delete note").disabled).toBe(false);
