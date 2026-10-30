@@ -359,6 +359,7 @@ export interface ThreadFeedProps {
   readonly keyboardOffset: number;
   readonly contentTopInset?: number;
   readonly contentBottomInset?: number;
+  readonly placeholderKeyboardLift?: SharedValue<number>;
   readonly historyControls?: ThreadFeedHistoryControls;
   readonly contentMaxWidth?: number;
   readonly contentSideInsets?: { readonly left: number; readonly right: number };
@@ -3160,6 +3161,7 @@ export const ThreadFeed = memo(function ThreadFeed({
         detail={props.contentPresentation.detail}
         topInset={topContentInset}
         bottomInset={bottomContentInset}
+        keyboardLift={props.placeholderKeyboardLift}
         horizontalPadding={horizontalPadding}
       />
     );
@@ -3310,6 +3312,7 @@ export const ThreadFeed = memo(function ThreadFeed({
               detail="Ask the agent to inspect the repo, run a command, or continue the active thread."
               topInset={topContentInset}
               bottomInset={bottomContentInset}
+              keyboardLift={props.placeholderKeyboardLift}
               horizontalPadding={horizontalPadding}
             />
           </View>

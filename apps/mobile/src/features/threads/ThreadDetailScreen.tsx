@@ -191,7 +191,7 @@ import {
   THREAD_COMPOSER_BOTTOM_GUTTER,
   ThreadComposer,
 } from "./ThreadComposer";
-import { ComposerSlot } from "./ComposerSlot";
+import { ComposerSlot, useSettledComposerHeight } from "./ComposerSlot";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHandle, type ThreadFeedHistoryControls } from "./ThreadFeed";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
@@ -349,9 +349,6 @@ const threadVisitTracker = createThreadVisitTracker({
   visit: threadEnvironment.visit,
 });
 
-// Past the composer's 180 ms height animation.
-const COMPOSER_HEIGHT_SETTLE_MS = 220;
-
 // Anchors, the submitted message, follow state and pending scrolls belong to
 // one thread, so the body remounts when the thread changes.
 export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
@@ -479,19 +476,11 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   // Aborted when the screen hides or unmounts; a hidden Activity pane keeps its state but re-runs
   // effects when shown, so each show arms a fresh scope.
   const threadScope = useRef(new AbortController());
-  const [composerHeight, setComposerHeight] = useState<number | null>(null);
-  // The composer animates its height and reports a layout every frame. The feed follows those
-  // frames on the UI thread through onComposerLayout; this is only an estimate, so committing
-  // each frame would re-render the whole screen for the length of the animation.
-  const composerHeightSettle = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleComposerHeightChange = useCallback((height: number) => {
-    setComposerHeight((current) => current ?? height);
-    if (composerHeightSettle.current !== null) clearTimeout(composerHeightSettle.current);
-    composerHeightSettle.current = setTimeout(() => {
-      composerHeightSettle.current = null;
-      setComposerHeight(height);
-    }, COMPOSER_HEIGHT_SETTLE_MS);
-  }, []);
+  const {
+    height: composerHeight,
+    onHeight: handleComposerSlotHeight,
+    cancel: cancelComposerHeightSettle,
+  } = useSettledComposerHeight();
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
   const feedRef = useRef<ThreadFeedHandle>(null);
   const [endFollowEnabled, setEndFollowEnabled] = useState(true);
@@ -872,7 +861,14 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
   // The question card reads the keyboard frame on the UI thread, in the same frame the sticky
   // view translates, so it gets the full height while the keyboard is closed and never crosses
   // the header while the keyboard moves.
-  const { height: keyboardTranslation } = useReanimatedKeyboardAnimation();
+  const { height: keyboardTranslation, progress: keyboardProgress } =
+    useReanimatedKeyboardAnimation();
+  // The composer's lift: KeyboardStickyView moves it by the keyboard less its opened offset.
+  const placeholderKeyboardLift = useDerivedValue(() =>
+    keyboardStickyEnabled
+      ? Math.max(0, -keyboardTranslation.value - composerKeyboardOffset * keyboardProgress.value)
+      : 0,
+  );
   const pendingUserInputMaxHeight = useDerivedValue(() =>
     derivePendingUserInputMaxHeight({
       windowHeight: screenAreaHeight,
@@ -1020,10 +1016,10 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
     return () => {
       scope.abort();
       if (overlayRepinTimerRef.current !== null) clearTimeout(overlayRepinTimerRef.current);
-      if (composerHeightSettle.current !== null) clearTimeout(composerHeightSettle.current);
+      cancelComposerHeightSettle();
       finishThreadMessageJump(selectedThreadKey);
     };
-  }, [selectedThreadKey]);
+  }, [cancelComposerHeightSettle, selectedThreadKey]);
   const handleToggleUserInputCollapsed = () => {
     if (activeUserInputRequestId === null) {
       return;
@@ -1333,6 +1329,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                 estimatedOverlayHeight +
                 (showFloatingStatus ? FLOATING_WORKING_CONTROL_COVERAGE : 0)
               }
+              placeholderKeyboardLift={placeholderKeyboardLift}
               contentMaxWidth={contentMaxWidth}
               historyControls={props.historyControls}
               contentSideInsets={nativeMetrics?.safeArea}
@@ -1545,7 +1542,7 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                   ) : null}
                 </View>
 
-                <ComposerSlot hidden={composerSlotHidden} onHeight={handleComposerHeightChange}>
+                <ComposerSlot hidden={composerSlotHidden} onHeight={handleComposerSlotHeight}>
                   {isProviderSubagent ? (
                     <View
                       className="self-center px-3 pt-1.5"
