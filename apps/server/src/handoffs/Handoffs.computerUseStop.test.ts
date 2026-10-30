@@ -138,6 +138,17 @@ it.effect.each(["button", "person_esc"] as const)(
           const late = yield* leases.control(threadId, Option.none());
           const lateState = yield* leases.controlState(threadId, late.controlId);
           assert.deepEqual(lateState._tag === "active" ? lateState.apps : undefined, []);
+          if (source === "person_esc") {
+            const stale = yield* stopComputerUseFromHelper(
+              Option.some(leases),
+              service,
+              threadId,
+              live.controlId,
+            );
+            assert.isFalse(stale.stopped);
+            assert.equal((yield* leases.controlState(threadId, late.controlId))._tag, "active");
+          }
+
           const afterLate = (yield* leases.sessions).filter(
             ({ control }) => control.threadId === threadId,
           );
