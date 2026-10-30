@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
+import { prepareDesktopInput } from "./DesktopInputPlan.ts";
+import type { BoundWindow } from "./DesktopTargetHost.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -120,3 +122,41 @@ it.live(
     });
   },
 );
+
+it("held keys forward duration only at or above the minimum driver version", () => {
+  const bound: BoundWindow = {
+    ref: {
+      id: "target",
+      kind: "app",
+      environmentId: "env",
+      runId: "r",
+      turnId: "t",
+      generation: 0,
+    },
+    pid: 42,
+    windowId: 7,
+    appId: "org.example.Editor",
+    controlId: "control",
+    epoch: 0,
+    connectionGeneration: "driver:1",
+  };
+  const plan = (version: string) =>
+    prepareDesktopInput("press_key", { key: "a", holdMs: 123 }, bound, () => undefined, undefined, {
+      version,
+      minimumVersion: "0.38.0-goat.16",
+    });
+  expect(plan("0.38.0-goat.15")).toMatchObject({
+    error: { code: "unsupported", effectStarted: false },
+  });
+  expect(plan("0.38.0-goat.9")).toMatchObject({
+    error: { code: "unsupported", effectStarted: false },
+  });
+  for (const version of ["0.38.0-goat.16", "0.38.0-goat.17", "0.38.0-goat.20", "0.38.0-goat.100"]) {
+    const result = plan(version);
+    expect(result.forwarded).toMatchObject({ key: "a", duration_ms: 123 });
+    expect(result.forwarded).not.toHaveProperty("holdMs");
+  }
+  expect(plan("not-a-version")).toMatchObject({
+    error: { code: "unsupported", effectStarted: false },
+  });
+});

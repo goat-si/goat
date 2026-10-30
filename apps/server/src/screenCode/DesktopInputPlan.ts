@@ -16,6 +16,7 @@ import type {
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
 import { actionName, spansLines } from "./DesktopTreeText.ts";
 import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
+import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import type { Rect } from "./DesktopFrames.ts";
 import {
   checkWindowReplyState,
@@ -28,7 +29,7 @@ import {
 import type { DesktopRow } from "./DesktopObserveRead.ts";
 import { applyDesktopPointerArgs, pointerStateFor } from "./DesktopTargetPoints.ts";
 
-const KEY_HOLD_DRIVER_VERSION: string | null = null;
+const KEY_HOLD_DRIVER_VERSION: string | undefined = undefined;
 
 const ACTION_TO_AX: Readonly<Record<string, string>> = {
   press: "AXPress",
@@ -269,6 +270,10 @@ export const prepareDesktopInput = (
   bound: BoundWindow,
   resolveToken: (el: Record<string, unknown>, bound: BoundWindow) => string | undefined,
   tracker?: CellWindowTracker,
+  driver: { readonly version: string; readonly minimumVersion: string | undefined } = {
+    version: CUA_DRIVER_VERSION,
+    minimumVersion: KEY_HOLD_DRIVER_VERSION,
+  },
 ): {
   readonly forwarded?: Record<string, unknown>;
   readonly elementToken?: string | undefined;
@@ -294,11 +299,16 @@ export const prepareDesktopInput = (
       args.holdMs > 30000
     )
       return { error: fail("invalid_argument", "holdMs must be an integer from 0 to 30000.") };
-    if (KEY_HOLD_DRIVER_VERSION === null || CUA_DRIVER_VERSION !== KEY_HOLD_DRIVER_VERSION)
+    if (
+      driver.minimumVersion === undefined ||
+      parseSemver(driver.version) === null ||
+      parseSemver(driver.minimumVersion) === null ||
+      compareSemverVersions(driver.version, driver.minimumVersion) < 0
+    )
       return {
         error: fail(
           "unsupported",
-          `Held keys require a driver with duration_ms support; the pinned driver is ${CUA_DRIVER_VERSION}.`,
+          `Held keys require a driver with duration_ms support; the pinned driver is ${driver.version}.`,
         ),
       };
   }
