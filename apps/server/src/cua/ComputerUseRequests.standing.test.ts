@@ -4,6 +4,15 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Layer from "effect/Layer";
+import * as Context from "effect/Context";
+import { ProviderSessionId, ProviderThreadId, ProviderTurnId } from "@goat/contracts";
+import * as ProviderTurnControl from "../orchestration-v2/ProviderTurnControlService.ts";
+import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
+import * as EventSink from "../orchestration-v2/EventSink.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -52,6 +61,133 @@ it.effect.each(["session", "named"] as const)("organization denial precedes %s a
       );
     }),
   ),
+);
+
+const interruptThread = (
+  handoffs: Handoffs.Handoffs["Service"],
+  leases: ComputerUseLeases.ComputerUseLeases["Service"],
+) =>
+  Effect.gen(function* () {
+    const context = yield* Layer.build(
+      Layer.fresh(ProviderTurnControl.layer).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getProviderControlContext: () =>
+                Effect.succeed({
+                  providerThread: undefined,
+                  providerTurn: undefined,
+                  attempt: undefined,
+                  message: undefined,
+                  run: undefined,
+                }),
+            }),
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({}),
+            Layer.mock(EventSink.EventSinkV2)({}),
+            Layer.succeed(Handoffs.Handoffs, handoffs),
+            Layer.succeed(ComputerUseLeases.ComputerUseLeases, leases),
+          ),
+        ),
+      ),
+    );
+    const control = Context.get(context, ProviderTurnControl.ProviderTurnControlServiceV2);
+    yield* control
+      .interrupt({
+        threadId,
+        providerSessionId: ProviderSessionId.make("session:test"),
+        providerThreadId: ProviderThreadId.make("thread:test"),
+        providerTurnId: ProviderTurnId.make("turn:test"),
+      })
+      .pipe(Effect.result);
+  });
+
+it.effect("thread interrupt revokes a session approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        yield* interruptThread(handoffs, leases);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
+  ),
+);
+
+it.effect.each(["end", "stop all", "thread stop", "disable"] as const)(
+  "old mention cannot restore an approval after %s",
+  (termination) =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("old-mention"),
+          threadId,
+          messageId: MessageId.make("message:old-mention"),
+          text: "Use com.example.Editor",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+          Effect.gen(function* () {
+            const first = yield* request({ apps: ["com.example.Editor"] });
+            if (first.kind !== "needs_human") return assert.fail("expected approval");
+            yield* handoffs.respond(
+              {
+                threadId,
+                handoffId: first.handoff.handoffId,
+                action: "completed",
+                computerUseScope: "session",
+              },
+              sessionId,
+            );
+            if (termination === "end")
+              yield* handoffs.respond(
+                { threadId, handoffId: first.handoff.handoffId, action: "cancelled" },
+                sessionId,
+              );
+            if (termination === "stop all")
+              yield* stopAllComputerUse(Option.some(leases), handoffs, sessionId);
+            if (termination === "thread stop") yield* interruptThread(handoffs, leases);
+            if (termination === "disable") {
+              const settings = yield* ServerSettings.ServerSettingsService;
+              yield* handoffs.withComputerUseToggle(
+                false,
+                settings.updateSettings({ enableCua: false }),
+              );
+              yield* handoffs.withComputerUseToggle(
+                true,
+                settings.updateSettings({ enableCua: true }),
+              );
+            }
+            assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("new-mention"),
+              threadId,
+              messageId: MessageId.make("message:new-mention"),
+              text: "Use com.example.Editor",
+              attachments: [],
+              dispatchMode: { type: "queue_after_active" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+          }),
+        );
+      }),
+    ),
 );
 
 it.effect("a person's named app receives a session admission after a prior approval", () =>
