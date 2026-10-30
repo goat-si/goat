@@ -649,7 +649,7 @@ it.effect("a value edit at the same number keeps the full observation baseline",
             element_token: `${snapshot}:1`,
             role: "AXTextField",
             label: "Name",
-            value: reads === 1 ? "a" : "ab",
+            value: reads <= 2 ? "a" : "ab",
           },
         ];
         return {
@@ -660,7 +660,9 @@ it.effect("a value edit at the same number keeps the full observation baseline",
           elements,
           ...(args.since === undefined
             ? { tree_markdown: '- [0] AXWindow "Document"\n- [1] AXTextField "Name" = "a"' }
-            : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
+            : reads === 2
+              ? { since_status: "no_change", tree_diff: "no change since s1" }
+              : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
         };
       },
     });
@@ -670,8 +672,16 @@ it.effect("a value edit at the same number keeps the full observation baseline",
     )).value as ScreenTargetRef;
     const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
       .value as Observed;
-    const second = (yield* host.observe(
+    const unchanged = (yield* host.observe(
       call("get_accessibility_tree", { mode: "diff", baseObservationId: first.observationId }, ref),
+      context,
+    )).value as Observed;
+    const second = (yield* host.observe(
+      call(
+        "get_accessibility_tree",
+        { mode: "diff", baseObservationId: unchanged.observationId },
+        ref,
+      ),
       context,
     )).value as Observed;
     expect(second.indexedText).toBe(

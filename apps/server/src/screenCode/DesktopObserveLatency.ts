@@ -398,6 +398,40 @@ const structuralDiff = (
   return false;
 };
 
+const retainPairingTitles = (
+  previous: ReadonlyArray<DesktopRow>,
+  current: ReadonlyArray<DesktopRow>,
+  diff: string,
+) => {
+  const changed = new Set([...diff.matchAll(/^~ \[(\d+)\]/gm)].map((match) => Number(match[1])));
+  const byIndex = (rows: ReadonlyArray<DesktopRow>) => {
+    const result = new Map<number, DesktopRow | undefined>();
+    for (const row of rows) {
+      if (row.index !== undefined) result.set(row.index, result.has(row.index) ? undefined : row);
+    }
+    return result;
+  };
+  const old = byIndex(previous);
+  const next = byIndex(current);
+  return current.map((row) => {
+    if (
+      row.pairingTitle ||
+      row.index === undefined ||
+      changed.has(row.index) ||
+      next.get(row.index) !== row
+    )
+      return row;
+    const before = old.get(row.index);
+    return before?.pairingTitle &&
+      before.role === row.role &&
+      before.name === row.name &&
+      before.text === row.text &&
+      before.id === row.id
+      ? { ...row, pairingTitle: before.pairingTitle }
+      : row;
+  });
+};
+
 export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(function* (
   deps: DesktopObserveDeps,
   bound: BoundWindow,
@@ -634,7 +668,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
-    bound.rows = tree.shown;
+    bound.rows =
+      isDiff && !numbersChanged && bound.rows
+        ? retainPairingTitles(bound.rows, tree.shown, rows)
+        : tree.shown;
     bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows, tree.markdown);
     const basis = treeWindowBasis(bound.frames, nextBounds);
     if (basis === undefined) delete bound.framesBasis;
