@@ -475,3 +475,22 @@ it.live("a name's window list that may be incomplete launches and binds nothing"
     expect(tools(sent)).not.toContain("bind_app");
   });
 });
+
+it.effect(
+  "a process's list that may have left the window out stays unchecked past the full list",
+  () =>
+    Effect.gen(function* () {
+      const editor = { pid: 42, window_id: 9, app_name: "Editor", layer: 0 };
+      const { host } = fixture({
+        list_apps: { apps: [{ pid: 42, name: "Editor", bundle_id: "org.example.Editor" }] },
+        // The pid's list says it may be incomplete; the full list, layer 0 only, lacks the panel.
+        list_windows: (args: { pid?: number }) =>
+          args.pid === 42
+            ? { windows: [editor], enumeration_complete: false }
+            : { windows: [editor], enumeration_complete: true },
+      });
+      const result = yield* bindResult(host, { bundle_id: "org.example.Editor", window_id: 77 });
+      expect(result._tag === "Failure" && result.failure.code).toBe("downstream_failure");
+      expect(result._tag === "Failure" && result.failure.detail).toBeUndefined();
+    }),
+);

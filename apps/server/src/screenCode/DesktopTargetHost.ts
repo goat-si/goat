@@ -394,17 +394,18 @@ export const createDesktopTargetHost = (deps: {
             : undefined;
       let { reply: windowsReply, windows: listedWindows } = yield* listWindows(filter ?? {});
       let listedPid = onlyPid;
-      let unfiltered = filter === undefined;
       let bundleFiltered = isMac && filter !== undefined && "app" in filter;
+      // A filtered list that may have left the window out keeps that doubt past the re-list.
+      let absenceUnproven = false;
       // Not among the filtered windows: whose window it is, if anyone's, decides the answer.
       if (
         filter !== undefined &&
         Array.isArray(listedWindows) &&
         !listedWindows.some((window) => object(window)?.window_id === requestedWindow)
       ) {
+        absenceUnproven = !listingProvesAbsent(driverValue(windowsReply), requestedWindow);
         ({ reply: windowsReply, windows: listedWindows } = yield* listWindows({}));
         listedPid = undefined;
-        unfiltered = true;
         bundleFiltered = false;
       }
       // A list cut at the reply cap cannot show the window, its owner, or a duplicate of its id.
@@ -433,11 +434,11 @@ export const createDesktopTargetHost = (deps: {
       });
       if (
         matched.error?.detail === "window_gone" &&
-        !listingProvesAbsent(driverValue(windowsReply), requestedWindow)
+        (absenceUnproven || !listingProvesAbsent(driverValue(windowsReply), requestedWindow))
       )
         return yield* Effect.fail(unproven);
       // macOS lists windows above layer 0 (panels, popovers) only for their pid.
-      if (matched.error?.detail === "window_gone" && isMac && unfiltered)
+      if (matched.error?.detail === "window_gone" && isMac && filter === undefined)
         return yield* Effect.fail({
           ...matched.error,
           nextStep:
