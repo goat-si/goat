@@ -90,7 +90,13 @@ export const scopeBrowserCall = (
   )
     return { refused: true as const };
   const claim = claims.find((candidate) => candidate.tabId === args.tab_id);
-  if (claim === undefined || claim.origins.length === 0) return { refused: true as const };
+  if (
+    claim === undefined ||
+    claim.origins.length === 0 ||
+    (args.pid !== undefined && args.pid !== claim.pid) ||
+    (args.window_id !== undefined && args.window_id !== claim.windowId)
+  )
+    return { refused: true as const };
   return {
     args: { ...args, origin_scope: claim.origins },
     claimId: claim.claimId,

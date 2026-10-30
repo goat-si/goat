@@ -51,10 +51,39 @@ it("requires the applied manifest hash and no reload error", () => {
 });
 
 it("detects an out-of-scope claimed tab reply without treating redacted other tabs as evidence", () => {
-  const claim = { claimId: "claim-1", claimGeneration: 1, pid: 42, windowId: 7, tabId: "tab-1", origins: ["https://example.test"] };
-  expect(browserReplyOutsideClaim({ structuredContent: { refusal: { code: "browser_origin_outside_scope" } } }, claim)).toBe(true);
-  expect(browserReplyOutsideClaim({ structuredContent: { tab_id: "tab-1", url: "https://other.test/secret" } }, claim)).toBe(true);
-  expect(browserReplyOutsideClaim({ structuredContent: { tabs: [{ tab_id: "tab-1", url: "https://example.test/" }, { tab_id: "tab-2", active: false }] } }, claim)).toBe(false);
+  const claim = {
+    claimId: "claim-1",
+    claimGeneration: 1,
+    pid: 42,
+    windowId: 7,
+    tabId: "tab-1",
+    origins: ["https://example.test"],
+  };
+  expect(
+    browserReplyOutsideClaim(
+      { structuredContent: { refusal: { code: "browser_origin_outside_scope" } } },
+      claim,
+    ),
+  ).toBe(true);
+  expect(
+    browserReplyOutsideClaim(
+      { structuredContent: { tab_id: "tab-1", url: "https://other.test/secret" } },
+      claim,
+    ),
+  ).toBe(true);
+  expect(
+    browserReplyOutsideClaim(
+      {
+        structuredContent: {
+          tabs: [
+            { tab_id: "tab-1", url: "https://example.test/" },
+            { tab_id: "tab-2", active: false },
+          ],
+        },
+      },
+      claim,
+    ),
+  ).toBe(false);
 });
 
 it("limits browser calls to the claimed tab and replaces caller supplied origin scopes", () => {
@@ -90,6 +119,25 @@ it("limits browser calls to the claimed tab and replaces caller supplied origin 
       { steps: [{ tool: "browser_click", args: { tab_id: "tab-1" } }] },
       claims,
     ),
+  ).toEqual({ refused: true });
+});
+
+it("refuses browser calls that name a different pid or window for the claimed tab", () => {
+  const claims = [
+    {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+    },
+  ];
+  expect(
+    scopeBrowserCall("browser_click", { tab_id: "tab-1", pid: 43, window_id: 7 }, claims),
+  ).toEqual({ refused: true });
+  expect(
+    scopeBrowserCall("browser_click", { tab_id: "tab-1", pid: 42, window_id: 8 }, claims),
   ).toEqual({ refused: true });
 });
 
