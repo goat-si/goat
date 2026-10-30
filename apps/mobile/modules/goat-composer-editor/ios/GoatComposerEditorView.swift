@@ -931,17 +931,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     let result = NSMutableAttributedString()
     let source = value as NSString
     var cursor = 0
-    let validTokens = tokens.filter {
-      $0.start >= cursor &&
-        $0.end > $0.start &&
-        $0.end <= source.length &&
-        source.substring(with: NSRange(location: $0.start, length: $0.end - $0.start)) == $0.source
-    }
-
-    for token in validTokens {
-      if token.start < cursor {
-        continue
-      }
+    for token in renderedTokens() {
       if token.start > cursor {
         appendPlainText(
           source.substring(with: NSRange(location: cursor, length: token.start - cursor)),
@@ -958,6 +948,22 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       )
     }
     return result
+  }
+
+  /// The tokens drawn as chips: those matching the text, in order, skipping any that overlap an
+  /// earlier chip. Rendering, offset mapping and the rebuild check must all agree on this list.
+  private func renderedTokens() -> [ComposerTokenPayload] {
+    let source = value as NSString
+    var cursor = 0
+    var rendered: [ComposerTokenPayload] = []
+    for token in tokens where token.start >= cursor &&
+      token.end > token.start &&
+      token.end <= source.length &&
+      source.substring(with: NSRange(location: token.start, length: token.end - token.start)) == token.source {
+      rendered.append(token)
+      cursor = token.end
+    }
+    return rendered
   }
 
   private func appendPlainText(_ text: String, to result: NSMutableAttributedString) {
@@ -1180,11 +1186,12 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
 
   private func displayOffset(forSourceOffset sourceOffset: Int) -> Int {
     let boundedOffset = max(0, min((value as NSString).length, sourceOffset))
+    let rendered = renderedTokens()
     var collapsedLength = 0
-    for token in tokens where token.end <= boundedOffset {
+    for token in rendered where token.end <= boundedOffset {
       collapsedLength += max(0, token.end - token.start - 1)
     }
-    if let token = tokens.first(where: { $0.start < boundedOffset && boundedOffset < $0.end }) {
+    if let token = rendered.first(where: { $0.start < boundedOffset && boundedOffset < $0.end }) {
       return token.start - collapsedLength + 1
     }
     return boundedOffset - collapsedLength
@@ -1314,20 +1321,9 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   private func documentMatchesExpectedTokens() -> Bool {
-    let source = value as NSString
     // Offsets matter too: a token can move between identical strings while the rendered
     // attachment stays where it was.
-    let expectedChips = tokens.compactMap { token -> String? in
-      guard token.start >= 0,
-            token.end > token.start,
-            token.end <= source.length,
-            source.substring(
-              with: NSRange(location: token.start, length: token.end - token.start)
-            ) == token.source else {
-        return nil
-      }
-      return "\(token.start):\(token.source)"
-    }
+    let expectedChips = renderedTokens().map { "\($0.start):\($0.source)" }
     var renderedChips: [String] = []
     textView.attributedText.enumerateAttribute(
       .attachment,
