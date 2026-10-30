@@ -50,6 +50,19 @@ for (const scenario of [
   { title: "case insensitive bundle id", text: "use COM.EXAMPLE.EDITOR", expected: "available" },
   { title: "substring", text: "Use Fancy Editors", expected: "needs_human" },
   { title: "bundle id prefix", text: "Use com.example.Editor.extra", expected: "needs_human" },
+  { title: "bundle id punctuation", text: "Use comXexampleXEditor", expected: "needs_human" },
+  {
+    title: "unlisted display name",
+    text: "Use Fancy Editor",
+    expected: "needs_human",
+    unlisted: true,
+  },
+  {
+    title: "unlisted bundle id",
+    text: "Use com.example.Editor",
+    expected: "available",
+    unlisted: true,
+  },
   { title: "agent message", text: "Use Fancy Editor", expected: "needs_human", agent: true },
   { title: "agent send", text: "Use Fancy Editor", expected: "needs_human", sender: true },
   {
@@ -122,7 +135,7 @@ for (const scenario of [
           undefined,
           "remote" in scenario ? "remote" : "person",
           undefined,
-          [{ id: "com.example.Editor", name: "Fancy Editor" }],
+          "unlisted" in scenario ? [] : [{ id: "com.example.Editor", name: "Fancy Editor" }],
         );
       }),
     ),
