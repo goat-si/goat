@@ -260,6 +260,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
 
+  const pauseForScreenLock = Effect.fn("ComputerUseLeaseProxy.screenLocked")(function* () {
+    yield* overlay.screenLocked();
+    yield* lifecycleLock.withPermits(1)(pause("screen_locked"));
+    if (options.onScreenLocked !== undefined) yield* options.onScreenLocked();
+  });
+
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
@@ -269,6 +275,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const message = parse(line);
       let delivered = line;
       let tool: string | undefined;
+      let screenLocked = false;
       let sink = providerSink;
       if (message?.id !== undefined && message.id !== null && message.method === undefined) {
         const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
@@ -287,6 +294,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
+        screenLocked = driverScreenLocked(message);
+        if (screenLocked) screenLockPending = true;
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
@@ -306,6 +315,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         if (request.cancelled) {
           yield* drawOverlay({ type: "reply", id: key, failed: true });
           yield* release(request, true, driverRefused(request.tool, message, request.args));
+          if (screenLocked) yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
           if (gone() || paused !== undefined || idle) return;
           outstanding.delete(key);
           options.onCancelledRequestSettled?.(key);
@@ -368,18 +378,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           outstanding.delete(key);
         }
       }
-      const screenLocked = message !== undefined && driverScreenLocked(message);
-      if (screenLocked) {
-        screenLockPending = true;
-        yield* overlay.screenLocked();
-      }
       if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
       yield* sink.answer(admitDriverReplyScreenshots(delivered), "settled", { tool });
-      if (screenLocked) {
-        if (options.onScreenLocked !== undefined)
-          yield* options.onScreenLocked().pipe(Effect.forkIn(scope));
-        yield* lifecycleLock.withPermits(1)(pause("screen_locked")).pipe(Effect.forkIn(scope));
-      }
+      if (screenLocked) yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
     });
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
@@ -483,7 +484,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
-    if (screenLockPending && !screenLockConfirmed) return;
+    if (screenLockPending && !screenLockConfirmed) {
+      const sawLock =
+        update.interruptions?.last === "screen_locked" &&
+        update.interruptions.count > (interruptionsSeen ?? 0);
+      if (!sawLock) return;
+      screenLockConfirmed = true;
+    }
     if (paused === "screen_locked") {
       screenLockPending = false;
       screenLockConfirmed = false;

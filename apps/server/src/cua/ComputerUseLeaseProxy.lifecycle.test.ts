@@ -66,6 +66,9 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
           },
         },
       });
+      yield* h.push({ ...active(), interruptions: { count: 1, last: "screen_locked" } });
+      yield* h.applied;
+      assert.equal(yield* h.liveDrivers, 1);
     }),
   );
 
