@@ -471,6 +471,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         runtimeMode: input.runtimePolicy.runtimeMode,
         cuaGatePath: gates.cua?.path,
         screenSkillGatePath: gates.screenSkillPath,
+        subagentGatePath: gates.subagentsPath,
       });
       const scopedLaunch = yield* agentScope.wrap({
         command: options.settings.binaryPath || "pi",

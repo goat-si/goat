@@ -428,6 +428,41 @@ describe("Pi MCP tool schemas", () => {
 });
 
 describe("Pi tool discovery permissions", () => {
+  it.each(["full-access", "approval-required"])(
+    "blocks Pi's subagent tool in %s while the turn's gate is off, and asks as before when on",
+    async (runtimeMode) => {
+      const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-pi-subagents-"));
+      try {
+        const gate = NodePath.join(directory, "subagents");
+        const bridge = await loadMcpBridge({ modern: true, runtimeMode, subagentGate: gate });
+        const hook = bridge.handlers.get("tool_call") as unknown as (
+          event: { toolName: string; input: unknown },
+          ctx: { ui: { confirm: (title: string) => Promise<boolean> } },
+        ) => Promise<{ block: true; reason: string } | undefined>;
+        const confirmations: string[] = [];
+        const ctx = {
+          ui: {
+            confirm: async (title: string) => {
+              confirmations.push(title);
+              return true;
+            },
+          },
+        };
+        const call = { toolName: "subagent", input: { agent: "scout", task: "look" } };
+        await NodeFSP.writeFile(gate, "off");
+        assert.equal((await hook(call, ctx))?.block, true);
+        assert.deepEqual(confirmations, []);
+        await NodeFSP.writeFile(gate, "on");
+        assert.isUndefined(await hook(call, ctx));
+        assert.equal(confirmations.length, runtimeMode === "full-access" ? 0 : 1);
+        await NodeFSP.rm(gate);
+        assert.equal((await hook(call, ctx))?.block, true);
+      } finally {
+        await NodeFSP.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["approval-required", "auto-accept-edits", "auto"])(
     "allows annotated GOAT reads in %s while gating mutations and replacements",
     async (runtimeMode) => {

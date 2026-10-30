@@ -10,6 +10,16 @@ import type {
   ToolPart,
 } from "@opencode-ai/sdk/v2";
 import * as HostProcess from "@goat/shared/HostProcess";
+import {
+  OPENCODE_GOAT_SUBAGENT_DENY_KEY,
+  openCodeChildPermissionRules,
+  openCodeOwnsSubagentDeny,
+  openCodePermissionRules,
+  withOpenCodeSubagentDeny,
+} from "./permissionRules.ts";
+import { recordString, recordValue } from "./records.ts";
+
+export { openCodeChildPermissionRules, openCodePermissionRules } from "./permissionRules.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { causeErrorTag } from "@goat/shared/observability";
 import {
@@ -386,6 +396,10 @@ interface OpenCodeThreadState {
   parentSubagent: OpenCodeSubagentContext | null;
   nextChildTurnOrdinal: number;
   nextAdmissionGeneration: number;
+  /** The session's rules as last read or written, and whether their trailing deny is GOAT's. */
+  permission: PermissionRuleset;
+  metadata: { readonly [key: string]: unknown } | undefined;
+  subagentsDenied: boolean;
 }
 
 interface OpenCodeRequestOwner {
@@ -512,24 +526,6 @@ function dateTimeFromEpoch(value: number | undefined, fallback: DateTime.Utc): D
   return Option.getOrElse(DateTime.make(value), () => fallback);
 }
 
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function recordValue(input: unknown, key: string): unknown {
-  return typeof input === "object" && input !== null && key in input
-    ? (input as Record<string, unknown>)[key]
-    : undefined;
-}
-
-function recordString(input: unknown, ...keys: ReadonlyArray<string>): string | undefined {
-  for (const key of keys) {
-    const value = nonEmptyString(recordValue(input, key));
-    if (value !== undefined) return value;
-  }
-  return undefined;
-}
-
 function sdkResponseForRawLog(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
   if ("data" in value) return { data: (value as { readonly data?: unknown }).data ?? null };
@@ -574,145 +570,6 @@ export function openCodePermissionRequestKind(
     return "file-read";
   }
   return "command";
-}
-
-const OPENCODE_ALWAYS_ALLOWED_PERMISSIONS = [
-  "question",
-  "read",
-  "glob",
-  "grep",
-  "lsp",
-  "todowrite",
-  "task",
-  "skill",
-] as const;
-
-const OPENCODE_RESTRICTED_PERMISSIONS = [
-  "bash",
-  "edit",
-  "webfetch",
-  "websearch",
-  "codesearch",
-  "external_directory",
-  "doom_loop",
-] as const;
-
-/** OpenCode has no OS sandbox; permission rules must enforce non-interactive policies too. */
-export function openCodePermissionRules(
-  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-): PermissionRuleset {
-  const sandboxPolicy = recordValue(runtimePolicy, "sandboxPolicy");
-  const sandboxType = recordString(sandboxPolicy, "type");
-  const rawApprovalPolicy = runtimePolicy.approvalPolicy;
-  const approvalPolicy = nonEmptyString(rawApprovalPolicy);
-  const requiresApproval =
-    approvalPolicy === undefined
-      ? (typeof rawApprovalPolicy === "object" && rawApprovalPolicy !== null) ||
-        runtimePolicy.runtimeMode !== "full-access"
-      : approvalPolicy !== "never";
-  const externallySandboxed = sandboxType === "externalSandbox";
-  const dangerFullAccess = sandboxType === "dangerFullAccess";
-  const implicitFullAccess =
-    sandboxType === undefined && runtimePolicy.runtimeMode === "full-access";
-
-  if (!requiresApproval && (externallySandboxed || dangerFullAccess || implicitFullAccess)) {
-    return [{ permission: "*", pattern: "*", action: "allow" }];
-  }
-
-  // Children initially inherit only denies; seed them before overrides to protect the policy-install gap.
-  const rules: PermissionRuleset = [
-    { permission: "*", pattern: "*", action: "deny" },
-    ...OPENCODE_RESTRICTED_PERMISSIONS.map((permission) => ({
-      permission,
-      pattern: "*",
-      action: "deny" as const,
-    })),
-  ];
-
-  if (requiresApproval) {
-    rules.push({ permission: "*", pattern: "*", action: "ask" });
-    for (const permission of OPENCODE_RESTRICTED_PERMISSIONS) {
-      rules.push({ permission, pattern: "*", action: "ask" });
-    }
-  }
-
-  rules.push(
-    ...OPENCODE_ALWAYS_ALLOWED_PERMISSIONS.map((permission) => ({
-      permission,
-      pattern: "*",
-      action: "allow" as const,
-    })),
-  );
-
-  rules.push(
-    { permission: "read", pattern: "*.env", action: requiresApproval ? "ask" : "deny" },
-    { permission: "read", pattern: "*.env.*", action: requiresApproval ? "ask" : "deny" },
-    { permission: "read", pattern: "*.env.example", action: "allow" },
-  );
-
-  if (
-    runtimePolicy.runtimeMode === "auto-accept-edits" ||
-    (!requiresApproval && sandboxType === "workspaceWrite")
-  ) {
-    rules.push({ permission: "edit", pattern: "*", action: "allow" });
-  }
-
-  if (!requiresApproval && recordValue(sandboxPolicy, "networkAccess") === true) {
-    for (const permission of ["webfetch", "websearch", "codesearch"] as const) {
-      rules.push({ permission, pattern: "*", action: "allow" });
-    }
-  }
-
-  if (!requiresApproval && sandboxType === "readOnly") {
-    const access = recordValue(sandboxPolicy, "access");
-    if (recordString(access, "type") === "fullAccess") {
-      rules.push({ permission: "external_directory", pattern: "*", action: "allow" });
-    }
-  }
-
-  if (!requiresApproval && sandboxType === "workspaceWrite") {
-    const writableRoots = recordValue(sandboxPolicy, "writableRoots");
-    if (Array.isArray(writableRoots)) {
-      for (const root of writableRoots) {
-        if (typeof root === "string" && root.trim().length > 0) {
-          rules.push({
-            permission: "external_directory",
-            pattern: `${root.replace(/\/$/, "")}/*`,
-            action: "allow",
-          });
-        }
-      }
-    }
-  }
-
-  return rules;
-}
-
-function permissionRuleEquals(
-  left: PermissionRuleset[number],
-  right: PermissionRuleset[number],
-): boolean {
-  return (
-    left.permission === right.permission &&
-    left.pattern === right.pattern &&
-    left.action === right.action
-  );
-}
-
-/** Children inherit only deny/external-directory rules; restore parent policy while retaining agent restrictions. */
-export function openCodeChildPermissionRules(
-  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  nativeChildRules: PermissionRuleset,
-): PermissionRuleset {
-  const parentRules = openCodePermissionRules(runtimePolicy);
-  const inheritedRules = parentRules.filter(
-    (rule) => rule.permission === "external_directory" || rule.action === "deny",
-  );
-  const childSpecificRules = nativeChildRules.filter(
-    (childRule) =>
-      !inheritedRules.some((inheritedRule) => permissionRuleEquals(childRule, inheritedRule)),
-  );
-  return [...parentRules, ...childSpecificRules];
 }
 
 /** Boundaries are exclusive: use the next user message, or omit at head to retain the selected turn. */
@@ -1405,6 +1262,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             const childPermission = openCodeChildPermissionRules(
               turn.runtimePolicy,
               nativeChildSession.permission ?? [],
+              state.subagentsDenied,
             );
             yield* sdkCall(
               "session.update",
@@ -1427,6 +1285,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               parentSubagent: context,
               nextChildTurnOrdinal: 1,
               nextAdmissionGeneration: 1,
+              permission: childPermission,
+              metadata: undefined,
+              subagentsDenied: state.subagentsDenied,
             });
             yield* emitProviderEvent({
               type: "app_thread.created",
@@ -2823,6 +2684,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             parentSubagent: subagentsByChildSessionId.get(nativeSession.id) ?? null,
             nextChildTurnOrdinal: 1,
             nextAdmissionGeneration: 1,
+            permission: nativeSession.permission ?? [],
+            metadata: nativeSession.metadata,
+            subagentsDenied: openCodeOwnsSubagentDeny(nativeSession),
           };
           threads.set(nativeSession.id, state);
           return state;
@@ -2918,6 +2782,70 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           };
         });
 
+        const syncSubagentRules = Effect.fn("OpenCodeAdapter.syncSubagentRules")(function* (
+          state: OpenCodeThreadState,
+          subagentsOff: boolean,
+        ) {
+          if (state.subagentsDenied !== subagentsOff) {
+            const permission = withOpenCodeSubagentDeny(
+              state.permission,
+              state.subagentsDenied,
+              subagentsOff,
+            );
+            const metadata = { ...state.metadata, [OPENCODE_GOAT_SUBAGENT_DENY_KEY]: subagentsOff };
+            const sessionID = state.nativeSessionId;
+            yield* sdkCall("session.update", { sessionID, permission, metadata }, () =>
+              client.session.update({ sessionID, permission, metadata }),
+            );
+            Object.assign(state, { permission, metadata, subagentsDenied: subagentsOff });
+          }
+          // Children launch subagents too, so a new deny reaches each child session before the prompt.
+          for (const child of threads.values()) {
+            let owner = child.parentSubagent?.parentState;
+            while (owner !== undefined && owner !== state)
+              owner = owner.parentSubagent?.parentState;
+            if (owner === undefined || child.subagentsDenied === subagentsOff) continue;
+            const permission = withOpenCodeSubagentDeny(
+              child.permission,
+              child.subagentsDenied,
+              subagentsOff,
+            );
+            const sessionID = child.nativeSessionId;
+            const update = sdkCall("session.update", { sessionID, permission }, () =>
+              client.session.update({ sessionID, permission }),
+            ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  Object.assign(child, { permission, subagentsDenied: subagentsOff }),
+                ),
+              ),
+            );
+            // A failed relaxation keeps the child denied; the next turn tries again.
+            yield* subagentsOff ? update : update.pipe(Effect.ignore({ log: true }));
+          }
+        });
+
+        // OpenCode runs a command as a subtask without checking `task`: an explicit flag wins, or
+        // else a subagent-mode agent makes it one. Anything GOAT cannot read counts as a subtask.
+        const commandRunsAsSubtask = Effect.fn("OpenCodeAdapter.commandRunsAsSubtask")(
+          function* (name: string, promptAgent: string | undefined) {
+            const commands = yield* sdkCall("command.list", {}, (signal) =>
+              client.command.list(undefined, { signal }),
+            );
+            const command = commands.data?.find((entry) => entry.name === name);
+            if (command === undefined) return true;
+            if (command.subtask !== undefined) return command.subtask;
+            const agentName = command.agent ?? promptAgent;
+            if (agentName === undefined) return false;
+            const agents = yield* sdkCall("app.agents", {}, (signal) =>
+              client.app.agents(undefined, { signal }),
+            );
+            const agent = agents.data?.find((entry) => entry.name === agentName);
+            return agent === undefined || agent.mode === "subagent";
+          },
+          Effect.orElseSucceed(() => true),
+        );
+
         // Native commands await generation; user-message receipts admit their background requests.
         const submitPrompt = Effect.fn("OpenCode.submitPrompt")(function* (
           state: OpenCodeThreadState,
@@ -2943,6 +2871,16 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             : undefined;
           const currentMcp =
             memoryInput === undefined ? undefined : yield* mcpSessions.read(memoryInput.threadId);
+          const subagentsOff = (yield* mcpSessions.read(turn.threadId))?.nativeSubagentLimit === 0;
+          yield* syncSubagentRules(state, subagentsOff);
+          if (
+            command !== undefined &&
+            subagentsOff &&
+            (yield* commandRunsAsSubtask(command.name, payload.agent))
+          )
+            return yield* protocolError(
+              `/${command.name} runs as an OpenCode subtask, and this thread's GOAT permission profile allows no native subagents.`,
+            );
           if (
             memoryInput !== undefined &&
             !connection.external &&
@@ -3096,13 +3034,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 });
               }
               // OpenCode generates a title only when session.create leaves it unset.
-              const response = yield* sdkCall(
-                "session.create",
-                { permission: openCodePermissionRules(threadInput.runtimePolicy) },
-                () =>
-                  client.session.create({
-                    permission: openCodePermissionRules(threadInput.runtimePolicy),
-                  }),
+              const permission = openCodePermissionRules(threadInput.runtimePolicy);
+              const response = yield* sdkCall("session.create", { permission }, () =>
+                client.session.create({ permission }),
               );
               const nativeSession = unwrapData("session.create", response);
               const createdAt = yield* DateTime.now;
@@ -3126,7 +3060,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                       status: created.status,
                       updatedAt: created.updatedAt,
                     };
-              registerThread(nativeSession, providerThread, null);
+              registerThread(nativeSession, providerThread, null).permission =
+                nativeSession.permission ?? permission;
               return providerThread;
             },
             (effect, threadInput) =>
@@ -3690,7 +3625,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ...rollbackInput.providerThread,
                   nativeThreadRef: providerRef(fork.id),
                 };
-                registerThread(fork, retainedThread, state?.appThread ?? null);
+                // The fork's rules were just replaced without GOAT's deny; the next turn restores it.
+                Object.assign(registerThread(fork, retainedThread, state?.appThread ?? null), {
+                  permission: openCodePermissionRules(input.runtimePolicy),
+                  subagentsDenied: false,
+                });
               }
               const snapshot = yield* readSnapshot(retainedThread);
               return {

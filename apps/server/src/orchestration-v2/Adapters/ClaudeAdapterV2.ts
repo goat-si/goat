@@ -205,6 +205,11 @@ import {
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as ClaudeRuntimeSkills from "./ClaudeRuntimeSkills.ts";
+import {
+  claudeIgnoresSubagentCap,
+  claudeNativeSubagentPolicy,
+} from "./ClaudeNativeSubagentPolicy.ts";
+import { readClaudeCliVersion } from "../../provider/ClaudeProvider.ts";
 import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
@@ -1450,6 +1455,7 @@ export function makeClaudeQueryOptions(input: {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
+  readonly flagEnvironment?: Readonly<Record<string, string>>;
   readonly toolSearchOverride?: "true";
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
@@ -1495,13 +1501,19 @@ export function makeClaudeQueryOptions(input: {
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
           autoCompactWindow: Number(input.settings.autoCompactWindow),
         } as ClaudeSdkSettings);
+  const flagEnvironment = {
+    ...input.flagEnvironment,
+    ...(input.toolSearchOverride === undefined
+      ? {}
+      : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
+  };
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
-    input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"
+    Object.keys(flagEnvironment).length === 0 || typeof compactQuerySettings === "string"
       ? compactQuerySettings
       : ({
           ...compactQuerySettings,
-          env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },
+          env: { ...compactQuerySettings?.env, ...flagEnvironment },
         } as ClaudeSdkSettings);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -4128,6 +4140,8 @@ export interface ClaudeAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** The Claude CLI's version; read from the configured binary when absent. */
+  readonly claudeCliVersion?: Effect.Effect<string | undefined>;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -4149,6 +4163,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // Read as each capped process opens, since the binary can change; the SDK's bundled CLI (no
+  // binary path) is new enough to cap subagents.
+  const claudeSubagentCapSupported = (
+    adapterOptions.claudeCliVersion ??
+    (adapterOptions.settings.binaryPath.trim() === ""
+      ? Effect.succeed("bundled")
+      : readClaudeCliVersion(adapterOptions.settings, adapterOptions.environment).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provideService(Path.Path, adapterOptions.path),
+        ))
+  ).pipe(Effect.map((version) => version === "bundled" || !claudeIgnoresSubagentCap(version)));
   const memoryRegistry = Option.getOrUndefined(
     yield* Effect.serviceOption(McpSessionRegistry.McpSessionRegistry),
   );
@@ -9714,8 +9739,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
+          const subagentPolicy = claudeNativeSubagentPolicy(
+            mcpSession?.nativeSubagentLimit,
+            isGoatBotSessionThreadId(turnInput.threadId),
+          );
           const queryPolicyKey =
-            String(isGoatBotSessionThreadId(turnInput.threadId)) +
+            subagentPolicy.key +
+            ":" +
             claudeEffectiveQueryPolicyKey(queryPolicy, {
               ...mcpOverrides,
               allowedTools: mcpOverrides.allowedTools?.filter(
@@ -9848,6 +9878,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             turnInput.runtimePolicy.cwd,
             launchArgSettings,
           );
+          // A capped process on a Claude Code that ignores the cap opens without Agent instead.
+          const openedSubagentPolicy =
+            subagentPolicy.key.startsWith("cap:") && !(yield* claudeSubagentCapSupported)
+              ? claudeNativeSubagentPolicy(0, false)
+              : subagentPolicy;
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
@@ -9860,7 +9895,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(launchArgSettings === undefined ? {} : { sdkSettings: launchArgSettings }),
             environment: claudeQueryEnvironment(
               McpProviderSession.withThreadAgentEnvironment(
-                { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+                {
+                  ...adapterOptions.environment,
+                  ...mcpOverrides.mcpEnvironment,
+                  ...openedSubagentPolicy.environment,
+                },
                 mcpSession,
               ),
               turnInput.appThread,
@@ -9869,8 +9908,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : undefined,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
-            ...(isGoatBotSessionThreadId(turnInput.threadId)
-              ? { disallowedTools: ["Agent", "Task"] }
+            ...("disallowedTools" in openedSubagentPolicy
+              ? { disallowedTools: openedSubagentPolicy.disallowedTools }
               : {}),
             ...(mcpOverrides.allowedTools === undefined
               ? {}
@@ -9888,6 +9927,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             onUserDialog,
             supportedDialogKinds: ["resume_return"],
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
+            flagEnvironment: openedSubagentPolicy.environment,
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
           });
           const querySession = yield* queryRunner

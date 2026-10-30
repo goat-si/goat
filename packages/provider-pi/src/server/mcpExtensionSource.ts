@@ -35,6 +35,11 @@ export const GOAT_CUA_GATE_ENV = "GOAT_CUA_GATE";
 export const GOAT_BROWSER_TOOLS_ENV = "GOAT_BROWSER_TOOLS";
 export const GOAT_SCREEN_CODE_SKILL_ENV = "GOAT_SCREEN_CODE_SKILL";
 export const GOAT_SCREEN_CODE_SKILL_GATE_ENV = "GOAT_SCREEN_CODE_SKILL_GATE";
+/**
+ * A file the adapter rewrites before every turn: `off` while the thread's goatclaw limit allows no
+ * native subagents. Pi's `subagent` extension has no concurrency cap, so other limits leave it open.
+ */
+export const GOAT_SUBAGENT_GATE_ENV = "GOAT_SUBAGENT_GATE";
 
 // These tools trigger file-change approvals, bypassed by Auto-accept edits.
 export const PI_FILE_CHANGE_TOOLS = ["edit", "write"] as const;
@@ -74,6 +79,7 @@ const BROWSER_TOOLS_ENV = ${JSON.stringify(GOAT_BROWSER_TOOLS_ENV)};
 const BROWSER_INSTRUCTIONS = ${JSON.stringify(GOAT_BROWSER_TOOL_INSTRUCTIONS.trim())};
 const SCREEN_CODE_SKILL_ENV = ${JSON.stringify(GOAT_SCREEN_CODE_SKILL_ENV)};
 const SCREEN_CODE_SKILL_GATE_ENV = ${JSON.stringify(GOAT_SCREEN_CODE_SKILL_GATE_ENV)};
+const SUBAGENT_GATE_ENV = ${JSON.stringify(GOAT_SUBAGENT_GATE_ENV)};
 const ALWAYS_LOAD_META_KEY = ${JSON.stringify(ALWAYS_LOAD_META_KEY)};
 const GOAT_CALL_READ_TARGETS = new Set(${JSON.stringify(GOAT_CALL_READ_TARGETS)});
 const ORCHESTRATION_INSTRUCTIONS = ${JSON.stringify(GOAT_ORCHESTRATION_INSTRUCTIONS.trim())};
@@ -431,6 +437,18 @@ async function readCuaSkill(): Promise<boolean> {
   }
 }
 
+// Without the gate the launch keeps Pi's own behavior; an unreadable gate keeps subagents closed.
+async function subagentsOpen(): Promise<boolean> {
+  const path = env(SUBAGENT_GATE_ENV);
+  if (path === undefined) return true;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    return (await readFile(path, "utf8")).trim() === "on";
+  } catch {
+    return false;
+  }
+}
+
 async function readTurnSkill(key: "screenCode" | "browser", environmentName: string): Promise<boolean> {
   const path = env(SCREEN_CODE_SKILL_GATE_ENV);
   if (path === undefined) return env(environmentName) === "on";
@@ -545,6 +563,9 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
   };
 
   pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "subagent" && !(await subagentsOpen())) {
+      return { block: true, reason: "This thread's GOAT permission profile allows no native subagents." };
+    }
     const mode = runtimeMode();
     if (mode === "full-access") return;
     if ((event.toolName === "tool_search" ? hasBuiltinToolSearch() : READ_ONLY_TOOLS.has(event.toolName)) ||

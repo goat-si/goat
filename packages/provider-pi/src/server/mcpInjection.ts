@@ -16,6 +16,7 @@ import {
   GOAT_SCREEN_CODE_SKILL_ENV,
   GOAT_BROWSER_TOOLS_ENV,
   GOAT_SCREEN_CODE_SKILL_GATE_ENV,
+  GOAT_SUBAGENT_GATE_ENV,
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
@@ -260,6 +261,7 @@ export function buildPiRpcLaunch(input: {
   /** The per-turn computer use gate; only a process launched with the driver gets it. */
   readonly cuaGatePath?: string | undefined;
   readonly screenSkillGatePath?: string | undefined;
+  readonly subagentGatePath?: string | undefined;
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
@@ -308,6 +310,7 @@ export function buildPiRpcLaunch(input: {
   delete environment[GOAT_SCREEN_CODE_SKILL_ENV];
   delete environment[GOAT_BROWSER_TOOLS_ENV];
   delete environment[GOAT_SCREEN_CODE_SKILL_GATE_ENV];
+  delete environment[GOAT_SUBAGENT_GATE_ENV];
   // The driver reaches Pi only through GOAT's extension bridge, fixed at launch.
   const cuaDriver = hasGoatMcp ? input.mcpSession?.cuaDriver : undefined;
 
@@ -337,6 +340,9 @@ export function buildPiRpcLaunch(input: {
               ...(input.screenSkillGatePath === undefined
                 ? {}
                 : { [GOAT_SCREEN_CODE_SKILL_GATE_ENV]: input.screenSkillGatePath }),
+              ...(input.subagentGatePath === undefined
+                ? {}
+                : { [GOAT_SUBAGENT_GATE_ENV]: input.subagentGatePath }),
             }
           : {}),
       }),

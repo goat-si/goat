@@ -64,6 +64,8 @@ const FxProviderCapabilitiesV2 = {
     ...AcpProviderCapabilitiesV2.checkpointing,
     providerCanReadConversationSnapshot: true,
   },
+  // goatclaw's native subagent limit is not enforced: Fx's subagent tool needs no approval
+  // and GOAT cannot set the rules that would hide it.
   subagents: {
     ...AcpProviderCapabilitiesV2.subagents,
     supportsSubagents: true,

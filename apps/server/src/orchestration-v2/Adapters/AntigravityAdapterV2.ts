@@ -55,6 +55,8 @@ const AntigravityProviderCapabilitiesV2 = {
     ...AcpProviderCapabilitiesV2.tools,
     supportsMcpTools: true,
   },
+  // goatclaw's native subagent limit is not enforced: Antigravity has no verified switch,
+  // cap, or per-launch permission request for start_subagent.
   subagents: {
     ...AcpProviderCapabilitiesV2.subagents,
     supportsSubagents: true,
