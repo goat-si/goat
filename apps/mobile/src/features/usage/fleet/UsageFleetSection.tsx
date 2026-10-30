@@ -8,7 +8,7 @@ import {
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import { use } from "react";
-import { View } from "react-native";
+import { useWindowDimensions, View } from "react-native";
 
 import { AppText as Text } from "../../../components/ui/AppText";
 import { EmptyState } from "../../../components/ui/EmptyState";
@@ -95,11 +95,13 @@ function FleetContent() {
         className="gap-2"
       >
         <ListSection>
-          <View className="flex-row">
-            <FleetMetric label="Running" value={totals.running} />
-            <FleetMetric label="Need you" value={totals.attention} />
-            <FleetMetric label="Machines" value={totals.machines} />
-          </View>
+          <FleetMetrics
+            metrics={[
+              ["Running", totals.running],
+              ["Need you", totals.attention],
+              ["Machines", totals.machines],
+            ]}
+          />
         </ListSection>
         {details.length > 0 ? (
           <Text textRole="footnote" className="px-2 text-foreground-muted">
@@ -192,11 +194,32 @@ function FleetContent() {
   );
 }
 
-function FleetMetric(props: { readonly label: string; readonly value: number }) {
+/** Three columns, or one row per total at large text sizes, where a third of the width breaks words. */
+function FleetMetrics(props: { readonly metrics: ReadonlyArray<readonly [string, number]> }) {
+  const { fontScale } = useWindowDimensions();
+  if (fontScale >= 1.5) {
+    return props.metrics.map(([label, value], index) => (
+      <View
+        key={label}
+        className={
+          index > 0
+            ? "flex-row items-center justify-between gap-3 border-t border-border-subtle px-4 py-3"
+            : "flex-row items-center justify-between gap-3 px-4 py-3"
+        }
+      >
+        <Text className="shrink text-sm text-foreground-muted">{label}</Text>
+        <Text className="text-xl font-goat-medium tabular-nums text-foreground">{value}</Text>
+      </View>
+    ));
+  }
   return (
-    <View className="flex-1 gap-0.5 p-4">
-      <Text className="text-sm text-foreground-muted">{props.label}</Text>
-      <Text className="text-xl font-goat-medium tabular-nums text-foreground">{props.value}</Text>
+    <View className="flex-row">
+      {props.metrics.map(([label, value]) => (
+        <View key={label} className="flex-1 gap-0.5 p-4">
+          <Text className="text-sm text-foreground-muted">{label}</Text>
+          <Text className="text-xl font-goat-medium tabular-nums text-foreground">{value}</Text>
+        </View>
+      ))}
     </View>
   );
 }
