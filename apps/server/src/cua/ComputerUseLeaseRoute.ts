@@ -47,6 +47,7 @@ import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
+import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 
@@ -107,12 +108,7 @@ export const leaseUpdates = (input: {
       yield* leases.streamOpened(input.controlId);
       yield* Effect.addFinalizer(() => leases.releaseApps(input.threadId, input.controlId));
       const wake = yield* Queue.sliding<void>(1);
-      if (Option.isSome(grants))
-        yield* grants.value.changes.pipe(
-          Stream.drop(1),
-          Stream.runForEach(() => Queue.offer(wake, undefined)),
-          Effect.forkScoped,
-        );
+      if (Option.isSome(grants)) yield* watchClaimChanges(grants.value.changes, wake);
       const subscription = yield* leases.subscribe;
       yield* PubSub.take(subscription).pipe(
         Effect.andThen(Queue.offer(wake, undefined)),

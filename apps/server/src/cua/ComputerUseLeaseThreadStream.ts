@@ -18,6 +18,7 @@ import * as BrowserOriginGrants from "../preview/BrowserOriginGrantsLayer.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { PER_SIGNAL_READ } from "./ComputerUseLeaseQueries.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 
 export const threadLeaseUpdates = (input: {
   readonly threadId: ThreadId;
@@ -36,12 +37,7 @@ export const threadLeaseUpdates = (input: {
       const registry = yield* McpSessionRegistry.McpSessionRegistry;
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const wake = yield* Queue.sliding<void>(1);
-      if (Option.isSome(grants))
-        yield* grants.value.changes.pipe(
-          Stream.drop(1),
-          Stream.runForEach(() => Queue.offer(wake, undefined)),
-          Effect.forkScoped,
-        );
+      if (Option.isSome(grants)) yield* watchClaimChanges(grants.value.changes, wake);
       // Acquire every subscription before reading authority, including while no control exists.
       const controls = yield* leases.subscribe;
       const credentials = yield* registry.subscribeChanges;

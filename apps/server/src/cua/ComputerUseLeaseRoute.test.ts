@@ -303,6 +303,47 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect("does not advertise a claim revoked while its change subscription is starting", () =>
+    Effect.gen(function* () {
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const request = yield* grants.request({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return assert.fail("expected pending");
+      yield* grants.answer(request.claimId, true);
+      const starting = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const changes = Stream.unwrap(
+        Deferred.succeed(starting, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(grants.changes),
+        ),
+      );
+      const f = yield* fixture({ ...grants, changes, reportDriverCapability: () => Effect.void });
+      yield* Deferred.await(starting);
+      yield* grants.revoke(threadId, "https://example.test");
+      yield* Deferred.succeed(release, undefined);
+      const snapshot = yield* f.next;
+      if (snapshot?.state !== "active") return assert.fail("expected active");
+      assert.isUndefined(snapshot.browserClaims);
+      assert.isUndefined(snapshot.claimedBrowserPids);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest())),
+  );
   it.effect("revoking a service claim makes the next proxied call refuse", () =>
     Effect.gen(function* () {
       const grants = yield* makeBrowserOriginGrants({
@@ -402,8 +443,8 @@ describe("computer use lease route", () => {
           call(2, "get_browser_state", { tab_id: "tab", origin_scope: ["https://other.test"] }),
         );
         const sent = yield* Effect.raceFirst(
-          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "sent" as const, message }))),
-          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "refused" as const, message }))),
+          h.nextToDriver.pipe(Effect.map((message) => ({ kind: "sent", message }))),
+          h.nextToProvider.pipe(Effect.map((message) => ({ kind: "refused", message }))),
         );
         assert.equal(sent.kind, "sent", JSON.stringify(sent.message));
         if (sent.kind !== "sent") return;
