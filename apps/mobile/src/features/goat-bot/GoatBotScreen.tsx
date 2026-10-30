@@ -15,6 +15,7 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
@@ -350,12 +351,16 @@ export function GoatBotScreen(props: {
       ? { bottomSafeArea: props.floatingTabs.bottomSafeArea, floatingTabs: true }
       : { bottomSafeArea: insets.bottom, floatingTabs: false },
   );
-  // The header is transparent; the list reaches under it and UIKit insets it, so the header's
-  // scroll-edge effect covers the rows. Anything pinned above the list starts below the header.
+  // A glass header is transparent: the list reaches under it and UIKit insets it, so the header's
+  // scroll-edge effect covers the rows. Anything pinned above the list starts below that header.
+  // An opaque header already sits above the content.
   const headerHeight = useContext(HeaderHeightContext) ?? insets.top + IOS_NAV_BAR_HEIGHT;
-  const topInset = Platform.OS === "ios" ? headerHeight : 0;
   const hasBanner = session.availability !== "ready";
   const homeError = homeSettings.error;
+  const topInset = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED ? headerHeight : 0;
+  // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
+  // conversation by the header height and its last message starts below the composer's top.
+  const listTopInset = hasBanner || homeError ? 0 : topInset;
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(44);
   const renderItem = useCallback(
@@ -448,6 +453,7 @@ export function GoatBotScreen(props: {
         keyboardShouldPersistTaps="handled"
         // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
         contentInsetAdjustmentBehavior="automatic"
+        contentInsetStartAdjustment={listTopInset}
         contentContainerStyle={{ padding: 16 }}
         ListEmptyComponent={
           <Text className="py-6 text-center text-foreground-muted">
