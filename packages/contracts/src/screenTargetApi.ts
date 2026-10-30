@@ -33,7 +33,7 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // that input's safety, and its nextStep names the input; read again in a new cell and never resend it.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
-// Diff text uses + added, ~ changed and - removed rows; unchanged numbers remain valid.
+// Diff text uses + added, ~ changed and - removed rows; unchanged rows keep the numbers they had in the previous observation.
 interface Observation extends ReadTime { text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
@@ -69,9 +69,9 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }. "gone" is met, and bound "closed", only when the driver proves the window closed.
 // Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
-// one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
+// one GOAT-side group; each member is an individual driver call, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
-// after a failed or unknown one, later steps may already have run: read every result; a step went
+// after a failed step, later group members are not run: read every result; a step went
 // unsent only when its own result says nothingSent.
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })

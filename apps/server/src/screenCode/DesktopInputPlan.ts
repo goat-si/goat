@@ -14,6 +14,7 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
+import { selectTextArgs } from "./DesktopSelectionExtras.ts";
 import { actionName, spansLines } from "./DesktopTreeText.ts";
 import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
@@ -382,6 +383,16 @@ export const inspectBatchMember = (
   resolveToken: (el: Record<string, unknown>, b: BoundWindow) => string | undefined,
 ) => {
   if (!bound) return { ok: false as const, error: fail("stale_reference") };
+  if (method === "invoke_menu") {
+    const checked = validateMenuInput(args, bound);
+    if (checked.error) return { ok: false as const, error: checked.error };
+  } else if (method === "select_text") {
+    const checked = selectTextArgs(args, bound, resolveToken);
+    if ("error" in checked) return { ok: false as const, error: checked.error };
+  } else if (INPUT_METHODS.has(method)) {
+    const checked = prepareDesktopInput(method, args, bound, resolveToken);
+    if (checked.error) return { ok: false as const, error: checked.error };
+  }
   const element =
     typeof args.elementRef === "object" &&
     args.elementRef !== null &&

@@ -55,7 +55,8 @@ const __send = async (method, args) => __sendJson(method, JSON.stringify(args));
 // out as one batch group per run on a target (ScreenBatchGroups); any other call first sends what
 // waits, so the cell's calls keep their order. Each call still gets its own reply. The runtime
 // admits a group whole (__hostGroup) or refuses all of it before any goes out.
-const __batchable = new Set(['click', 'right_click', 'type_text', 'set_value']);
+const __batchable = new Set(['click', 'right_click', 'type_text', 'set_value', 'press_key', 'scroll', 'drag', 'invoke_menu', 'select_text']);
+const __batchWithoutTarget = new Set(['press_key', 'scroll', 'drag', 'invoke_menu', 'select_text']);
 let __queued = [];
 const __flush = () => {
   const queued = __queued;
@@ -168,7 +169,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const act = async (name, method, arg, verify = false) => {
     if (tab && method !== 'click' && method !== 'right_click') retire();
-    const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (arg.elementRef !== undefined || 'x' in arg));
+    const reply = await __checked(method, { ...arg, targetRef: ref }, !tab && __batchable.has(method) && (__batchWithoutTarget.has(method) || arg.elementRef !== undefined || 'x' in arg));
     const verdict = __verdict(reply);
     __remember({ call: name, verdict });
     return done(reply, arg, verify);

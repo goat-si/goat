@@ -45,6 +45,7 @@ import {
   shownTree,
   treeOf,
   type DesktopQuery,
+  type DesktopRow,
 } from "./DesktopObserveRead.ts";
 import { buildScreenshotCapture, treeWindowBasis } from "./DesktopTargetPoints.ts";
 import { cleanActionText, isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
@@ -315,7 +316,27 @@ const modelDiffRows = (diffText: string) => {
   if (/^Rows and indices are as before; use snapshot_id/.test(lines.at(-1) ?? "")) lines.pop();
   return lines.join("\n");
 };
-const structuralDiff = (rows: string) => /^(?:[+-] |reindexed:)/m.test(rows);
+const structuralDiff = (
+  diff: string,
+  previous: ReadonlyArray<DesktopRow> | undefined,
+  current: ReadonlyArray<DesktopRow>,
+) => {
+  if (/^(?:[+-] |reindexed:)/m.test(diff)) return true;
+  const identity = (row: DesktopRow) => {
+    const name = row.id ?? row.name;
+    return name ? JSON.stringify([row.role, name]) : undefined;
+  };
+  for (const match of diff.matchAll(/^~ \[(\d+)\]/gm)) {
+    const index = Number(match[1]);
+    const atIndex = current.filter((row) => row.index === index);
+    const key = atIndex.length === 1 && atIndex[0] ? identity(atIndex[0]) : undefined;
+    if (key === undefined || previous === undefined) return true;
+    const old = previous.filter((row) => identity(row) === key);
+    if (old.length !== 1 || old[0]?.index !== index) return true;
+    if (current.filter((row) => identity(row) === key).length !== 1) return true;
+  }
+  return false;
+};
 
 export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(function* (
   deps: DesktopObserveDeps,
@@ -438,6 +459,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     if (checked.evictTarget) deps.targets.delete(bound.ref.id);
     return Effect.fail(checked.error);
   };
+  const retiredBeforeSheet = retired;
   const sheet = yield* resolveObservedSheet({
     bound,
     capture,
@@ -520,22 +542,25 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
             ? "full read: rows named by their text"
             : followedSheet
               ? "full read: window changed"
-              : since === undefined
-                ? baseObservationId === bound.observationId
-                  ? bound.lastReadCut
-                    ? "full read: the last read was cut"
-                    : "full read: scope changed"
-                  : "full read: observation expired"
-                : currentStatus === "unknown_snapshot"
-                  ? "full read: snapshot expired"
-                  : `full read: ${(currentStatus ?? "diff unavailable").replaceAll("_", " ")}`;
+              : retired && !retiredBeforeSheet
+                ? "full read: sheet probe retired the previous observation"
+                : since === undefined
+                  ? baseObservationId === bound.observationId
+                    ? bound.lastReadCut
+                      ? "full read: the last read was cut"
+                      : "full read: scope changed"
+                    : "full read: observation expired"
+                  : currentStatus === "unknown_snapshot"
+                    ? "full read: snapshot expired"
+                    : `full read: ${(currentStatus ?? "diff unavailable").replaceAll("_", " ")}`;
     const rows = isDiff ? modelDiffRows(diffText) : "";
-    const numbersChanged = isDiff && (bound.structuralDiff === true || structuralDiff(rows));
     const focus =
       currentStatus === "no_change"
         ? (diffText?.match(/; focused element is \[\d+\]/)?.[0] ?? "")
         : "";
     const tree = parseDesktopTreeState({ state, filtered, query, interactive });
+    const numbersChanged =
+      isDiff && (bound.structuralDiff === true || structuralDiff(rows, bound.rows, tree.rows));
     bound.frames = elementFrames(tree.elements);
     // The agent reads frames in window points; internal geometry stays in the driver's screen points.
     const origin = windowOrigin(tree.elements);
