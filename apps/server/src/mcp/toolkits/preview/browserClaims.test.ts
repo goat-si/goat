@@ -50,6 +50,18 @@ it.effect("agent request only creates pending approval and never binds or grants
     assert.notInclude(JSON.stringify(pending), "example.test");
     assert.equal(binds, 0);
     assert.deepEqual((yield* grants.list(threadId)).grants, []);
+    if (pending.status !== "pending") return assert.fail("expected pending");
+    const answer = yield* grants.answer(pending.claimId, true);
+    assert.equal(answer.agentResult.status, "attached");
+    const own = yield* BrowserClaims.listClaims().pipe(
+      Effect.provideService(BrowserOriginGrants, {
+        ...grants,
+        setDriverCapability: () => Effect.void,
+      }),
+      Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+    );
+    assert.lengthOf(own.grants, 1);
+    assert.lengthOf(own.claims, 1);
     const other = {
       ...scope,
       thread: {
