@@ -98,8 +98,6 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
       return serialize(async () => {
         const key = noteOutboxKey(edit.environmentId, edit.path);
         const previous = acknowledged.get(key);
-        // Any new edit supersedes the remembered save, so release it either way.
-        acknowledged.delete(key);
         const rebased =
           continues &&
           previous &&
@@ -116,6 +114,8 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
             noteOutboxKey(edit.environmentId, edit.path),
         )!;
         await storage.save(next);
+        // The stored edit supersedes the remembered save; a failed write keeps it for the retry.
+        acknowledged.delete(key);
         rows = merged;
         if (flushing.has(edit.environmentId)) changedDuringFlush.add(edit.environmentId);
         emit();

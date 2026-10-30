@@ -102,6 +102,8 @@ function boot(init: NoteEditorInit) {
   // Replacing text or reconfiguring mid-composition can drop the syllable being composed.
   let deferredDoc: Extract<NoteEditorInbound, { type: "setDoc" }> | null = null;
   let deferredConfig: NoteEditorConfig | null = null;
+  // A snapshot taken mid-syllable would save a half-composed character; answer once it settles.
+  let deferredRequest: number | null = null;
   const { lineBreak } = init;
   const accessCompartment = new Compartment();
   const previewCompartment = new Compartment();
@@ -141,7 +143,7 @@ function boot(init: NoteEditorInit) {
             }
           }
           if (update.focusChanged) post({ type: "focus", focused: update.view.hasFocus });
-          if (!update.view.composing && (deferredDoc || deferredConfig))
+          if (!update.view.composing && (deferredDoc || deferredConfig || deferredRequest !== null))
             queueMicrotask(applyDeferred);
         }),
       ],
@@ -181,6 +183,11 @@ function boot(init: NoteEditorInit) {
       applyTheme(config);
       view.dispatch({ effects: accessCompartment.reconfigure(access(config)) });
     }
+    if (deferredRequest !== null) {
+      const id = deferredRequest;
+      deferredRequest = null;
+      post({ type: "doc", id, generation, seq, doc: noteText(view.state), checkboxSeqs });
+    }
   }
   view.contentDOM.addEventListener("compositionend", () => setTimeout(applyDeferred));
 
@@ -201,14 +208,8 @@ function boot(init: NoteEditorInit) {
         if (!view.composing) applyDeferred();
         return;
       case "requestDoc":
-        post({
-          type: "doc",
-          id: message.id,
-          generation,
-          seq,
-          doc: noteText(view.state),
-          checkboxSeqs,
-        });
+        deferredRequest = message.id;
+        if (!view.composing) applyDeferred();
         return;
       case "command":
         switch (message.command) {

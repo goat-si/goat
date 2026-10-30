@@ -100,4 +100,15 @@ describe("note editor bridge keeps React Native's copy equal to the page", () =>
     expect(bridge.retry()).toEqual({ type: "requestDoc", id: 2 });
     expect(bridge.receive(doc(5, "abcdef", [], 2)).value?.text).toBe("abcdef");
   });
+  it("a save's barrier brings in an edit whose message never arrived", () => {
+    const bridge = new NoteEditorBridge("ab");
+    expect(bridge.receive(change(1, [[2, 2, "c"]], 3)).value?.text).toBe("abc");
+    // seq 2 ("d") is lost and nothing follows it, so no gap is ever seen.
+    expect(bridge.barrier()).toEqual({ type: "requestDoc", id: 1 });
+    expect(bridge.pending).toBe(true);
+    expect(bridge.receive(change(3, [[4, 4, "e"]], 5))).toEqual({});
+    expect(bridge.receive(doc(2, "abcd", [], 1)).value?.text).toBe("abcde");
+    expect(bridge.pending).toBe(false);
+    expect(bridge.text).toBe("abcde");
+  });
 });

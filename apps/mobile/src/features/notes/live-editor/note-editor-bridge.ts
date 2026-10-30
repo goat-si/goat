@@ -45,6 +45,19 @@ export class NoteEditorBridge {
     return this.awaitingDoc ? this.requestDoc() : null;
   }
 
+  /**
+   * Asks the page for its whole text even though no gap was seen, so a save can prove React
+   * Native holds everything the page has. The reply resolves like any recovery.
+   */
+  barrier(): NoteEditorInbound {
+    return this.resync().send ?? this.requestDoc();
+  }
+
+  /** The text React Native holds; current once pending is false after a barrier. */
+  get text() {
+    return this.known;
+  }
+
   /** Reconciles a rendered value; anything not an echo of the page replaces its text. */
   sync(value: string): NoteEditorInbound | null {
     if (value === this.known) {

@@ -80,6 +80,8 @@ function NoteContent(props: NoteParams) {
   // The live editor is re-reading its own text; its latest edits may not be in body yet.
   const [editorPending, setEditorPending] = useState(false);
   const editorPendingRef = useRef(false);
+  // Bumped when the editor ended holding text this screen never received.
+  const recoveryEpoch = useRef(0);
   const [editorFocused, setEditorFocused] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const editorFocusedRef = useRef(false);
@@ -201,6 +203,7 @@ function NoteContent(props: NoteParams) {
 
   const save = async (nextBody: string, nextStatus: NoteStatus) => {
     if (!canWrite || deletingRef.current) return;
+    const epoch = recoveryEpoch.current;
     setSaving(true);
     pendingSaves.current++;
     setBody(nextBody);
@@ -228,7 +231,9 @@ function NoteContent(props: NoteParams) {
       setDirty(true);
       setError(notesError(error));
     }
-    if (stored) {
+    // A recovery loss during the write owns the warning and the unsaved state now.
+    if (stored && epoch !== recoveryEpoch.current) savedSnapshot.current = null;
+    else if (stored) {
       savedSnapshot.current = { body: nextBody, status: nextStatus };
       // Edits that arrived while the outbox was writing are not in this snapshot.
       if (localBody.current === nextBody && localStatus.current === nextStatus) {
@@ -304,6 +309,7 @@ function NoteContent(props: NoteParams) {
   };
   // The editor ended before sending its newest text: say so, and keep the rest as unsaved edits.
   const recoveryLost = () => {
+    recoveryEpoch.current++;
     editorPendingRef.current = false;
     setEditorPending(false);
     beginEdit("live");
@@ -311,6 +317,15 @@ function NoteContent(props: NoteParams) {
     setError(
       "The editor restarted before it sent your latest typing. Check the note; the last few edits may be missing.",
     );
+  };
+  /** Saves what the live editor holds now, after it confirms React Native has all of it. */
+  const saveCurrent = async (nextStatus: NoteStatus = localStatus.current) => {
+    const editor = liveEditor.current;
+    if (editor && liveUnavailable === null && !(await editor.sync())) {
+      setError("The editor did not answer, so nothing was saved. Try Save again.");
+      return;
+    }
+    await save(localBody.current, nextStatus);
   };
   const support = noteEditorSupport(body);
   const liveEditing = editing && surface === "live";
@@ -347,7 +362,7 @@ function NoteContent(props: NoteParams) {
       tone="primary"
       label={saving ? "Saving…" : "Save on phone"}
       disabled={!canWrite || saving || !restored || editorHolding}
-      onPress={() => void save(localBody.current, localStatus.current)}
+      onPress={() => void saveCurrent()}
     />
   );
   const header = (
@@ -425,7 +440,7 @@ function NoteContent(props: NoteParams) {
           tone="primary"
           label="Retry saving on phone"
           disabled={saving || !canWrite || editorHolding}
-          onPress={() => void save(localBody.current, localStatus.current)}
+          onPress={() => void saveCurrent()}
         />
       ) : null}
       {bodyAvailable ? (
@@ -442,7 +457,7 @@ function NoteContent(props: NoteParams) {
                   setStatus(value);
                   localStatus.current = value;
                   setDirty(true);
-                } else void save(localBody.current, value);
+                } else void saveCurrent(value);
               }}
             />
           ))}
@@ -496,13 +511,15 @@ function NoteContent(props: NoteParams) {
         />
         <KeyboardAvoidingView behavior="padding" className="flex-1">
           {editorFocused ? (
-            <View className="flex-row items-center gap-3 border-b border-border px-4 py-2">
-              <Text
-                accessibilityLiveRegion="polite"
-                className="flex-1 text-xs text-foreground-muted"
-              >
+            <View className="gap-1 border-b border-border px-4 py-2">
+              <Text accessibilityLiveRegion="polite" className="text-xs text-foreground-muted">
                 {syncText}
               </Text>
+              {error ? (
+                <Text accessibilityRole="alert" className="text-sm text-danger-foreground">
+                  {error}
+                </Text>
+              ) : null}
             </View>
           ) : (
             <NativeScrollView
@@ -542,7 +559,6 @@ function NoteContent(props: NoteParams) {
             onSourceChange={setShowSource}
             onLink={(href) => void tryOpenExternalUrl(href, "markdown-link")}
             onUnavailable={(reason) => {
-              if (editorPendingRef.current) recoveryLost();
               setLiveUnavailable(reason);
             }}
             onRecoveryLost={recoveryLost}
@@ -561,7 +577,7 @@ function NoteContent(props: NoteParams) {
                   ? {
                       label: saving ? "Saving…" : "Save on phone",
                       disabled: !canWrite || saving || !restored || editorHolding,
-                      onPress: () => void save(localBody.current, localStatus.current),
+                      onPress: () => void saveCurrent(),
                     }
                   : null
               }

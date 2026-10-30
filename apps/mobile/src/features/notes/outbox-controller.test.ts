@@ -121,14 +121,34 @@ describe("durable notes delivery", () => {
       }),
   );
 
+  it.effect("still re-bases a continuing edit after a failed phone write is retried", () =>
+    Effect.gen(function* () {
+      const memory = memoryStorage();
+      const controller = createNotesOutboxController(memory.storage);
+      yield* Effect.promise(() => controller.enqueue(edit));
+      yield* Effect.promise(() => controller.flush("hub", savedAs("c".repeat(64)), () => true));
+      const second = { ...edit, body: "second", localUpdatedAt: 5 };
+      const continues = { body: edit.body, status: edit.status };
+      memory.fail(true);
+      const failed = yield* Effect.promise(() =>
+        controller.enqueue(second, continues).then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(failed).toBeInstanceOf(Error);
+      memory.fail(false);
+      expect(yield* Effect.promise(() => controller.enqueue(second, continues))).toBe(
+        "c".repeat(64),
+      );
+    }),
+  );
+
   it.effect("keeps the base when the acknowledged save is not the one this edit continues", () =>
     Effect.gen(function* () {
       const controller = createNotesOutboxController(memoryStorage().storage);
       yield* Effect.promise(() => controller.enqueue(edit));
-      let sends = 0;
-      yield* Effect.promise(() =>
-        controller.flush("hub", savedAs("c".repeat(64)), () => sends++ < 1),
-      );
+      yield* Effect.promise(() => controller.flush("hub", savedAs("c".repeat(64)), () => true));
       yield* Effect.promise(() =>
         controller.enqueue(
           { ...edit, body: "second", localUpdatedAt: 5 },

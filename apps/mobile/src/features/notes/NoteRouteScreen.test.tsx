@@ -1,5 +1,5 @@
 import type { ComponentProps, ReactNode } from "react";
-import { act, useState, useSyncExternalStore } from "react";
+import { act, useImperativeHandle, useState, useSyncExternalStore, type Ref } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { AsyncResult } from "effect/reactivity";
@@ -29,6 +29,7 @@ const { mocks, Children } = vi.hoisted(() => ({
     liveNext: "",
     liveCheckbox: false,
     preventRemove: false,
+    sync: vi.fn(),
     feedNotes: [] as ReadonlyArray<{ path: string }>,
   },
 }));
@@ -59,6 +60,7 @@ vi.mock("./live-editor/NoteEditorToolbar", () => ({
 vi.mock("./live-editor/NoteLiveEditor", () => ({
   useNoteEditorTheme: () => ({}),
   NoteLiveEditor: (props: {
+    ref?: Ref<{ command: () => void; sync: () => Promise<boolean> }>;
     value: string;
     lineBreak: string;
     config: { editable: boolean; readOnly: boolean };
@@ -67,22 +69,43 @@ vi.mock("./live-editor/NoteLiveEditor", () => ({
     onPendingChange: (pending: boolean) => void;
     onRecoveryLost: () => void;
     onUnavailable: (reason: string) => void;
-  }) => (
-    <div
-      data-testid="live-editor"
-      data-readonly={String(props.config.readOnly)}
-      data-linebreak={props.lineBreak}
-    >
-      <output>{props.value}</output>
-      <button onClick={() => props.onFocusChange(true)}>Focus live editor</button>
-      <button onClick={() => props.onFocusChange(false)}>Blur live editor</button>
-      <button onClick={() => props.onChange(mocks.liveNext, mocks.liveCheckbox)}>Live edit</button>
-      <button onClick={() => props.onPendingChange(true)}>Editor resyncing</button>
-      <button onClick={() => props.onPendingChange(false)}>Editor resynced</button>
-      <button onClick={() => props.onRecoveryLost()}>Editor crashed mid-resync</button>
-      <button onClick={() => props.onUnavailable("Editor failed")}>Editor failed</button>
-    </div>
-  ),
+  }) => {
+    // The page answers a save's sync by reporting any text it still held, then confirming.
+    useImperativeHandle(props.ref, () => ({
+      command: () => {},
+      sync: async () => {
+        const answer = await mocks.sync();
+        if (answer.text !== undefined) props.onChange(answer.text, false);
+        return answer.synced;
+      },
+    }));
+    return (
+      <div
+        data-testid="live-editor"
+        data-readonly={String(props.config.readOnly)}
+        data-linebreak={props.lineBreak}
+      >
+        <output>{props.value}</output>
+        <button onClick={() => props.onFocusChange(true)}>Focus live editor</button>
+        <button onClick={() => props.onFocusChange(false)}>Blur live editor</button>
+        <button onClick={() => props.onChange(mocks.liveNext, mocks.liveCheckbox)}>
+          Live edit
+        </button>
+        <button onClick={() => props.onPendingChange(true)}>Editor resyncing</button>
+        <button onClick={() => props.onPendingChange(false)}>Editor resynced</button>
+        <button onClick={() => props.onRecoveryLost()}>Editor crashed mid-resync</button>
+        <button
+          onClick={() => {
+            // NoteLiveEditor warns before falling back when the page may hold unsent text.
+            props.onRecoveryLost();
+            props.onUnavailable("Editor failed");
+          }}
+        >
+          Editor failed
+        </button>
+      </div>
+    );
+  },
 }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({
   ScreenScrollView: ({ children }: { children?: ReactNode }) => (
@@ -224,6 +247,7 @@ beforeEach(() => {
   mocks.liveNext = "";
   mocks.liveCheckbox = false;
   mocks.feedNotes = [];
+  mocks.sync.mockReset().mockResolvedValue({ synced: true });
   mocks.read.mockReset().mockResolvedValue(AsyncResult.success(noteDocument()));
   mocks.remove.mockReset().mockResolvedValue(AsyncResult.success({ path: "note.md" }));
   mocks.alert.mockReset();
@@ -659,6 +683,44 @@ describe("live note editor", () => {
     expect(mocks.preventRemove).toBe(true);
   });
 
+  it("saves the text the editor confirms, including typing that had not arrived yet", async () => {
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    // The final keystroke's message never arrived; the save's sync brings it.
+    mocks.sync.mockResolvedValueOnce({ synced: true, text: "v1 last\n" });
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.lastCall?.[0]).toMatchObject({ body: "v1 last\n" });
+  });
+
+  it("saves nothing when the editor does not confirm its text", async () => {
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    mocks.sync.mockResolvedValueOnce({ synced: false });
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("nothing was saved");
+  });
+
+  it("keeps the recovery warning when a save started before it finishes later", async () => {
+    const pending = Promise.withResolvers<string>();
+    mocks.enqueue.mockReturnValueOnce(pending.promise);
+    await live("v0\n");
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "v1\n";
+    act(() => button("Live edit").click());
+    await act(async () => button("Save on phone").click());
+    act(() => button("Editor crashed mid-resync").click());
+    await act(async () => pending.resolve("a".repeat(64)));
+    expect(container.textContent).toContain("the last few edits may be missing");
+    expect(container.textContent).toContain("Unsaved edits");
+    expect(mocks.flush).not.toHaveBeenCalled();
+    expect(mocks.preventRemove).toBe(true);
+  });
+
   it("ends editing for a saved new note on blur, so the hub read resumes", async () => {
     mocks.live = true;
     mocks.rows = [];
@@ -718,7 +780,7 @@ describe("live note editor", () => {
     act(() => button("Focus live editor").click());
     mocks.liveNext = "v1\n";
     act(() => button("Live edit").click());
-    act(() => button("Save on phone").click());
+    await act(async () => button("Save on phone").click());
     mocks.liveNext = "v2\n";
     act(() => button("Live edit").click());
     await act(async () => pending.resolve());

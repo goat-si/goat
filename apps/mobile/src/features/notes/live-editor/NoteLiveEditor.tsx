@@ -19,6 +19,7 @@ import { NoteEditorBridge } from "./note-editor-bridge";
 const READY_TIMEOUT_MS = 10_000;
 // How often to ask again for the page's text while React Native's copy may be stale.
 const RESYNC_RETRY_MS = 1_000;
+const SYNC_TIMEOUT_MS = 5_000;
 let editorUri: Promise<string> | null = null;
 /** Copies the bundled editor page to a readable file the first time a note opens. */
 function loadEditorUri() {
@@ -58,6 +59,11 @@ export function useNoteEditorTheme(): NoteEditorTheme {
 
 export interface NoteLiveEditorHandle {
   readonly command: (command: NoteEditorCommand) => void;
+  /**
+   * Resolves true once React Native holds the page's whole current text (after any composing
+   * syllable settles), and false if the page does not answer; a save waits for this.
+   */
+  readonly sync: () => Promise<boolean>;
 }
 
 interface NoteLiveEditorProps {
@@ -83,10 +89,25 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
   const [attempt, setAttempt] = useState(0);
   const page = useRef<NoteLiveEditorHandle>(null);
   const pending = useRef(false);
-  useImperativeHandle(ref, () => ({ command: (command) => page.current?.command(command) }), []);
+  // True while the page may hold edits React Native never received: it had focus, or a re-sync
+  // is outstanding, and no snapshot has confirmed the copy since.
+  const uncertain = useRef(false);
+  useImperativeHandle(
+    ref,
+    () => ({
+      command: (command) => page.current?.command(command),
+      sync: () => page.current?.sync() ?? Promise.resolve(false),
+    }),
+    [],
+  );
   const unavailable = useEffectEvent(() =>
     props.onUnavailable("The live editor could not load, so this note opens as markdown source."),
   );
+  const ended = () => {
+    if (pending.current || uncertain.current) props.onRecoveryLost();
+    pending.current = false;
+    uncertain.current = false;
+  };
   // oxlint-disable-next-line goat/react-effect-budget -- loads the editor asset only when a note opens
   useEffect(() => {
     let active = true;
@@ -106,14 +127,18 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
           ref={page}
           uri={uri}
           {...props}
+          uncertain={uncertain}
+          onUnavailable={(reason) => {
+            ended();
+            props.onUnavailable(reason);
+          }}
           onPendingChange={(value) => {
             pending.current = value;
             props.onPendingChange(value);
           }}
           // The OS can end a WebView's process under memory pressure; start a fresh page.
           onTerminated={() => {
-            if (pending.current) props.onRecoveryLost();
-            pending.current = false;
+            ended();
             // The fresh page starts unfocused; the screen must not keep editing chrome for it.
             props.onFocusChange(false);
             props.onPendingChange(false);
@@ -134,14 +159,28 @@ function NoteEditorPage({
   uri,
   onTerminated,
   ...props
-}: NoteLiveEditorProps & { readonly uri: string; readonly onTerminated: () => void }) {
+}: NoteLiveEditorProps & {
+  readonly uri: string;
+  readonly onTerminated: () => void;
+  readonly uncertain: { current: boolean };
+}) {
   const webView = useRef<WebView<object>>(null);
   const [ready, setReady] = useState(false);
   const [resyncing, setResyncing] = useState(false);
+  const focused = useRef(false);
+  const waiters = useRef<Array<(synced: boolean) => void>>([]);
   const notePending = () => {
+    if (!bridge.pending) {
+      if (!focused.current) props.uncertain.current = false;
+      for (const resolve of waiters.current.splice(0)) resolve(true);
+    } else props.uncertain.current = true;
     if (bridge.pending === resyncing) return;
     setResyncing(bridge.pending);
     props.onPendingChange(bridge.pending);
+  };
+  const barrier = () => {
+    send(bridge.barrier());
+    notePending();
   };
   const [bridge] = useState(() => new NoteEditorBridge(props.value));
   const sentConfig = useRef(JSON.stringify(props.config));
@@ -165,7 +204,22 @@ function NoteEditorPage({
   };
   useImperativeHandle(
     ref,
-    () => ({ command: (command) => send({ type: "command", command }) }),
+    () => ({
+      command: (command) => send({ type: "command", command }),
+      sync: () =>
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => {
+            waiters.current = waiters.current.filter((waiter) => waiter !== done);
+            resolve(false);
+          }, SYNC_TIMEOUT_MS);
+          const done = (synced: boolean) => {
+            clearTimeout(timer);
+            resolve(synced);
+          };
+          waiters.current.push(done);
+          barrier();
+        }),
+    }),
     [],
   );
   const giveUp = useEffectEvent(() => fail("no ready signal"));
@@ -222,6 +276,10 @@ function NoteEditorPage({
         return;
       }
       case "focus":
+        focused.current = message.focused;
+        if (message.focused) props.uncertain.current = true;
+        // Leaving the editor confirms the copy, so a later crash need not warn.
+        else barrier();
         props.onFocusChange(message.focused);
         return;
       case "source":
@@ -258,8 +316,14 @@ function NoteEditorPage({
       setSupportMultipleWindows={false}
       javaScriptCanOpenWindowsAutomatically={false}
       webviewDebuggingEnabled={__DEV__}
-      onContentProcessDidTerminate={onTerminated}
-      onRenderProcessGone={onTerminated}
+      onContentProcessDidTerminate={() => {
+        for (const resolve of waiters.current.splice(0)) resolve(false);
+        onTerminated();
+      }}
+      onRenderProcessGone={() => {
+        for (const resolve of waiters.current.splice(0)) resolve(false);
+        onTerminated();
+      }}
       style={{ flex: 1, backgroundColor: "transparent", opacity: ready ? 1 : 0 }}
       containerStyle={Platform.OS === "android" ? { overflow: "hidden" } : undefined}
     />
