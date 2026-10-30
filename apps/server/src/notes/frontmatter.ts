@@ -15,10 +15,14 @@ export interface NoteContents {
   readonly threads: ReadonlyArray<NoteThreadLink>;
   readonly updatedBy: NoteAuthor | null;
   readonly metadata: Document | null;
+  /** The file began with a UTF-8 byte order mark, which saves keep and the body never shows. */
+  readonly bom?: boolean;
 }
 
 export function parseNote(contents: string): NoteContents {
-  const candidate = /^(?:\uFEFF)?---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/mu.exec(contents);
+  const bom = contents.startsWith("\uFEFF");
+  const text = bom ? contents.slice(1) : contents;
+  const candidate = /^---\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/mu.exec(text);
   const match = candidate?.index === 0 ? candidate : null;
   const metadata = match ? parseDocument(match[1]!, { uniqueKeys: true }) : null;
   if (
@@ -41,13 +45,14 @@ export function parseNote(contents: string): NoteContents {
     });
   };
   return {
-    body: match ? contents.slice(match[0].length) : contents,
+    body: match ? text.slice(match[0].length) : text,
     status: status === "doing" || status === "done" ? status : "idea",
     pinned: metadata?.get("pinned") === true,
     related: refs("related"),
     threads: refs("threads").map((ref) => ({ ...ref, lastResult: null })),
     updatedBy: updatedBy === "user" || updatedBy === "agent" ? updatedBy : null,
     metadata,
+    ...(bom ? { bom } : {}),
   };
 }
 
@@ -71,5 +76,6 @@ export function serializeNote(note: NoteContents): string {
   if (!note.pinned && isMap(metadata?.contents)) metadata.delete("pinned");
   if (note.related.length === 0 && isMap(metadata?.contents)) metadata.delete("related");
   if (metadata) for (const [key, value] of Object.entries(fields)) metadata.set(key, value);
-  return `---\n${metadata ? metadata.toString() : stringify(fields)}---\n${note.body}`;
+  const bom = note.bom ? "\uFEFF" : "";
+  return `${bom}---\n${metadata ? metadata.toString() : stringify(fields)}---\n${note.body}`;
 }

@@ -479,7 +479,7 @@ it.live(
     return Effect.gen(function* () {
       const cell1 = yield* runCell(
         "globalThis.savedApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
-          "await savedApp.observe(); const c = await savedApp.click('Apply', {verify: true}); return c.result.windows;",
+          "await savedApp.observe(); const c = await savedApp.click('Apply', {verify: true}); return c.result.debug.value.windows;",
       );
       expect(
         (cell1.value as { opened?: Array<{ window_id: number }> })?.opened?.map((w) => w.window_id),

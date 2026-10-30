@@ -456,14 +456,18 @@ const make = Effect.gen(function* () {
 
   const resolveDialog = async (tab: ServerTab, input: PreviewAutomationDialogInput) => {
     const dialog = tab.dialog;
-    if (!dialog) throw new Error("No dialog is pending.");
+    if (!dialog)
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "No dialog is pending.",
+        { beforeInput: true },
+      );
     if (input.accept) await dialog.accept(input.promptText);
     else await dialog.dismiss();
     if (tab.dialog === dialog) tab.dialog = null;
     ServerBrowserPage.invalidateRefs(tab.page);
     broadcastControl(tab);
   };
-
   const report = (tab: ServerTab, navStatus: PreviewNavStatus) => {
     void tab.cdp
       .send("Page.getNavigationHistory")
@@ -1013,20 +1017,7 @@ const make = Effect.gen(function* () {
     input: PreviewAutomationUploadInput,
     gate: ServerBrowserPage.DispatchGate,
   ) => {
-    const relative = input.paths.find((path) => !NodePath.isAbsolute(path));
-    if (relative !== undefined)
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `Upload paths must be absolute: ${relative}`,
-      );
-    // Checked before the gate, so a missing file fails before anything reaches the page.
-    for (const path of input.paths)
-      await NodeFSP.access(path).catch(() => {
-        throw new ServerBrowserPage.ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          `Upload file not found or not readable: ${path}`,
-        );
-      });
+    await PreviewUpload.validatePaths(input.paths);
     if (await PreviewUpload.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
     const open = tab.fileChooser;
     if (!open)
@@ -1794,6 +1785,7 @@ const make = Effect.gen(function* () {
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
+      ServerBrowserScreen.assertScreenExpectation(tab, request);
       await resolveDialog(tab, input as PreviewAutomationDialogInput);
       return statusWithTitle(tab, request.agentSessionId);
     }

@@ -1,6 +1,36 @@
 import { entry } from "../entry.ts";
 
 export const previewEntries = {
+  "browser_site_note.read": entry({
+    resource: "browser_site_note",
+    verb: "read",
+    name: "goat_browser_site_note_read",
+    toolkit: "preview",
+    summary: "Read a site's saved note",
+    description: "Read the saved browser note for an HTTP or HTTPS origin.",
+    effect: "read",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Read site note", idempotentHint: true, openWorldHint: false },
+  }),
+  "browser_site_note.write": entry({
+    resource: "browser_site_note",
+    verb: "write",
+    name: "goat_browser_site_note_write",
+    toolkit: "preview",
+    summary: "Save a site's note",
+    description: "Save a note for an origin this thread has visited, up to 1024 UTF-8 bytes.",
+    effect: "write",
+    capability: "threads.launch",
+    idempotencyReason: "Replacing a note with the same text has the same result.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Save site note", idempotentHint: true, openWorldHint: false },
+  }),
   "preview.read": entry({
     resource: "preview",
     verb: "read",
@@ -645,7 +675,7 @@ export const previewEntries = {
     description:
       "Read retained console messages, page errors and network metadata for a tab, newest first, without refreshing snapshot refs. droppedCount and omittedCount say what buffer evictions and limits left out, so an empty result is not proof nothing happened. URLs are redacted; other page text can contain secrets.",
     guide:
-      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Reads return newest entries first. Network entries hold each request's latest request, response, finished, or failed phase, with elapsed duration when its start was observed. Each stream defaults to 50 entries, at most 100, under a shared 24,000-byte entry budget. droppedCount counts buffer evictions before filtering; omittedCount counts retained matches excluded by limits. Filter console levels and console/error text, or network URL, method, status, and failed state. Console, error, and network streams default to included. URL credentials and query values are redacted and fragments removed. In free-form text, URL tokens start with scheme:// and end at whitespace, quotes, backslashes, angle brackets, or closing brackets and parentheses. Other console/error text is returned within its limits without secret scrubbing. Headers and bodies are never collected. Reading does not collect DOM or ARIA, take screenshots, clear buffers, or invalidate snapshot refs. Pending dialogs block all logs requests.",
+      "This operation is implemented by the environment's server browser, including server tabs rendered by the desktop. A native desktop-only automation host may not advertise it. Reads return newest entries first. The optional since filter includes entries at or after the ISO 8601 instant. Network entries hold each request's latest request, response, finished, or failed phase, with elapsed duration when its start was observed. Each stream defaults to 50 entries, at most 100, under a shared 24,000-byte entry budget. droppedCount counts buffer evictions before filtering; omittedCount counts retained matches excluded by limits. Filter console levels and console/error text, or network URL, method, status, and failed state. Console, error, and network streams default to included. URL credentials and query values are redacted and fragments removed. In free-form text, URL tokens start with scheme:// and end at whitespace, quotes, backslashes, angle brackets, or closing brackets and parentheses. Other console/error text is returned within its limits without secret scrubbing. Headers and bodies are never collected. Reading does not collect DOM or ARIA, take screenshots, clear buffers, or invalidate snapshot refs. Pending dialogs block all logs requests.",
     effect: "read",
     hostRoutable: false,
     requires: "thread",

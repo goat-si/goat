@@ -27,6 +27,8 @@ const makeTab = (
     readonly fillThrew?: boolean;
     readonly fillRefused?: boolean;
     readonly stillFilled?: boolean;
+    readonly notPassword?: boolean;
+    readonly origin?: string;
   } = {},
   /** Tabs of one profile share their browser context, and so their sign-ins. */
   context: object = {},
@@ -49,9 +51,14 @@ const makeTab = (
     if (method === "DOM.describeNode") return { node: { nodeName: "INPUT" } };
     const fn = String(params?.functionDeclaration);
     const args = (params?.arguments ?? []) as Array<{ readonly value: unknown }>;
+    if (fn.startsWith("function () {\n  let element = document.activeElement;"))
+      return { result: { subtype: "node", objectId: "field" } };
     if (fn.includes("querySelectorAll(selector)"))
       return { result: { subtype: "node", objectId: "field" } };
-    if (fn.includes("self.origin : null")) return { result: { value: "https://login.test" } };
+    if (fn.includes("self.origin : null"))
+      return {
+        result: { value: faults.notPassword ? null : (faults.origin ?? "https://login.test") },
+      };
     if (fn.includes("HTMLInputElement.prototype")) {
       if (faults.fillRefused) return { result: { value: false } };
       field.value = String(args[0]?.value);
@@ -130,7 +137,12 @@ const withFill = <A>(
           Effect.flatMap(() =>
             input.origin === "https://login.test" && state.consumed < passwords.length
               ? Effect.sync(() => passwords[state.consumed++]!)
-              : Effect.fail(new SecretRequestError({ reason: "ref_unavailable" })),
+              : Effect.fail(
+                  new SecretRequestError({
+                    reason:
+                      input.origin === "https://login.test" ? "ref_unavailable" : "origin_mismatch",
+                  }),
+                ),
           ),
         ),
     }),
@@ -378,6 +390,11 @@ it.live("masks filled values in every answer, keys included only for page-made J
       ok: true,
       result: { network: { entries: [{ method: "[secret]", url: "https://x/" }] } },
     });
+    const denied = fill.mask(request("evaluate", {}))({
+      ok: false,
+      error: { _tag: "X", message: `failed ${PASSWORD}`, detail: { text: PASSWORD } },
+    });
+    expect(JSON.stringify(denied)).not.toContain(PASSWORD);
     const data = `iVBOR${PASSWORD}`;
     expect(
       outcome("snapshot", { title: PASSWORD, screenshot: { mimeType: "image/png", data } }),
@@ -748,3 +765,35 @@ it.effect("a blocked cut while resolving a secret target stops further CDP comma
     });
   }),
 );
+
+it.live("a focused non-password field refuses before consuming or typing the secret", () => {
+  const { tab, field } = makeTab({ notPassword: true });
+  return withFill(async (fill, state) => {
+    const error = await fill
+      .fill(tab, request("fillSecret", { secretRef: ref }), later(), record, checkBlocked)
+      .catch((cause) => cause);
+    expect(error.detail).toEqual({ beforeInput: true });
+    expect(field.value).toBe("");
+    expect(state.consumed).toBe(0);
+  });
+});
+
+it.live("a focused password at a different origin refuses without typing", () => {
+  const { tab, field } = makeTab({ origin: "https://other.test" });
+  return withFill(async (fill, state) => {
+    const error = await fill
+      .fill(tab, request("fillSecret", { secretRef: ref }), later(), record, checkBlocked)
+      .catch((cause) => cause);
+    expect(error.detail).toEqual({ beforeInput: true, secretFailure: "not_permitted" });
+    expect(field.value).toBe("");
+    expect(state.consumed).toBe(0);
+  });
+});
+
+it.live("fills the focused password using its origin-bound reference", () => {
+  const { tab, field } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, request("fillSecret", { secretRef: ref }), later(), record, checkBlocked);
+    expect(field.value).toBe(PASSWORD);
+  });
+});

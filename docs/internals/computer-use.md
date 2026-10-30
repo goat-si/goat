@@ -59,13 +59,18 @@ provider (Codex, Claude, ...)
   per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
   member, or one that opens a Go to Folder sheet, reads the process's window list around the
   input, and the acted element only when a unique label with text or selection names it (a 60 ms
-  settle follows that read); those reads run in parallel. Element changes are `observed:`
-  evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
+  settle follows that read); those reads run in parallel. Diagnostics are exposed under
+  `result.debug` only with `verify: true` or `screen.debug = true`; the verdict and driver
+  warnings remain at the top level, including `suspected_noop`; element changes are evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
   `unverifiable` even when the driver says done, and the cell's end read lists the new windows
   (flagged unverified when no baseline window is still listed). A cell's window
   baseline comes from its bind, or from one read for the first input on a process, and its end
   read compares against it. The next screenshot or tree read after an input waits only for what
   is left of the 60 ms settle time.
+- The first app diff of the same window after inputs in a cell is attached to those inputs as
+  `change_seen` or `no_change_seen` evidence (`ScreenObservedEffect.ts`). It never changes the
+  driver's verdict and never stops later inputs the way a driver `suspected_noop` does: one
+  window's diff cannot rule out an effect on another window, a sheet or the clipboard.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
@@ -159,9 +164,14 @@ designated requirement, never a pid or path alone. The driver would remain the h
 - A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
   desktop, and its display. Any change of epoch invalidates every element ref issued under it.
 - App observations start with a full tree. Later reads request a driver diff against the latest
-  snapshot and retain the new snapshot's element tokens and frames internally. A driver fallback
+  snapshot and retain the new snapshot's element tokens and frames internally. Numbers from the latest full observation remain valid until a diff adds, removes or renumbers
+  rows. After that, apply each diff and use the latest observation's numbers, or read the full list
+  with `observe({diff:false})`. A driver fallback
   returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
-  computed by GOAT's observation tracker. Model-facing observations omit the element array.
+  computed by GOAT's observation tracker using role, accessible name and native main-frame ref
+  within a known document lineage. A frame ref or ambiguous row resets the diff to a full read.
+  Added, changed and removed rows use `+`, `~` and `-`; unchanged numbers stay valid in the new
+  observation. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
@@ -247,20 +257,7 @@ journal slot for its receipt, so once a cell's journal is full its next call is 
 `call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
 request receives `live_children_limit` until a slot is released.
 
-Element clicks, typing and `set_value` that a cell starts on one app window without awaiting
-each leave the guest as one batch group and reach the driver as one `run_steps`, kept by
-`app_scope` to that window's app in the background (`ScreenBatchGroups.ts`,
-`DesktopTargetHost.dispatchBatch`). The runtime admits a group whole or refuses all of it before
-any goes out, and the group takes one pending place; a refused group sent nothing, so like any
-refusal it leaves the cell free. Each call keeps its own admission, receipt and
-reply. The group's first call holds the window's gate until every member has passed its own checks,
-so a member refused on admission sends none of the group. Each step's receipt reads the driver's
-effect and code for that step, which stay on a failed call's error and receipt as evidence. Steps
-after a failed one get `not_run` only when the reply accounts for every step it ran and ends at the
-failure; any other reply leaves them all possibly committed. The driver does go on past a step that
-answered no-op, so those later steps may have run where single calls would have stopped; their
-receipts say what they did. A driver that refuses the batch before running it, such as one without
-`app_scope`, gets the calls one at a time.
+Concurrent decided app inputs on one window form a GOAT-side group: all members pass preflight before any are sent, then the driver receives individual calls in order; after a failure, later members are `not_run`.
 
 A person's Stop must not wait on a page. `PreviewSessions` fences the affected cells first, then
 stops the browser agents or computer-use control, and only then closes the turn's temporary tabs
@@ -791,3 +788,9 @@ thread at a time drives a machine's real GUI, assigned by the epic's lead.
 | P5    | WS10 #1138 Linux helper                          | WS2, WS5, WS6   | conformance suite green on X11 and Wayland; unsupported cells typed                                                |
 | P4    | WS12 #1230 built-in computer use skill           | WS1, WS6, WS7   | skill in the builtin registry replaces the runtime paragraph for every adapter; real-task evidence on a ready host |
 | P6    | WS11 #1139 qualification and visual verification | runs throughout | hard gates met on a signed packaged build per platform; latency within budget                                      |
+
+- `tab.logs({ since? })` reads diagnostics from an inclusive ISO 8601 instant.
+- `tab.evaluate(expression)` uses the browser evaluation guard.
+- `tab.dialog(action, promptText?)` answers a pending browser dialog.
+- `tab.upload(target, files)` supplies absolute file paths to a file input.
+- `tab.fillSecret(target, secretRef)` focuses an observed element or uses a CSS selector with origin-bound secret fill.

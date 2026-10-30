@@ -941,3 +941,43 @@ it.effect("a window read too large even at 256 elements fails as tree_limit, not
     expect(unknown._tag === "Failure" && unknown.failure.code).toBe("downstream_failure");
   }),
 );
+
+it.effect("model fit is requested only for supported macOS driver captures", () =>
+  Effect.gen(function* () {
+    for (const [platform, version, supported] of [
+      ["darwin", "0.38.0-goat.15", false],
+      ["darwin", "0.38.0-goat.9", false],
+      ["darwin", "0.37.9-goat.99", false],
+      ["darwin", "0.38.0-goat.16", true],
+      ["darwin", "0.38.0-goat.100", true],
+      ["darwin", "0.39.0-goat.1", true],
+      ["linux", "0.38.0-goat.16", false],
+      ["win32", "0.38.0-goat.16", false],
+    ] as const) {
+      const { host, sent } = fixture(
+        { get_window_state: goat2WindowState },
+        undefined,
+        undefined,
+        undefined,
+        platform,
+        version,
+      );
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      yield* host.observe(call("get_window_state", {}, ref), context);
+      const read = sent.filter((entry) => entry.tool === "get_window_state").at(-1)?.args;
+      expect(read).toMatchObject({ include_screenshot: false });
+      expect(read).not.toHaveProperty("screenshot_fit");
+      yield* host.observe(call("screenshot", {}, ref), context);
+      const capture = sent.filter((entry) => entry.tool === "get_window_state").at(-1)?.args;
+      expect(capture).toMatchObject({ include_screenshot: true });
+      if (supported) {
+        expect(capture).toHaveProperty("screenshot_fit", "model");
+        expect(capture).not.toHaveProperty("screenshot_format");
+      } else expect(capture).not.toHaveProperty("screenshot_fit");
+    }
+  }),
+);

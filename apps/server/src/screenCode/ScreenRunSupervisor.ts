@@ -26,6 +26,7 @@ export interface ScreenRunIdentity {
   readonly runId: string;
   readonly turnId: string;
   readonly context: ScreenHostContext;
+  readonly onCellStart?: (deadlineMillis: number) => void;
 }
 
 const SupervisorCode = Schema.Literals([
@@ -44,6 +45,7 @@ export class ScreenSupervisorFailure extends Schema.TaggedError<ScreenSupervisor
   "ScreenSupervisorFailure",
   {
     code: SupervisorCode,
+    startupFailed: Schema.optionalKey(Schema.Boolean),
     effectStarted: Schema.optionalKey(Schema.Boolean),
     receipts: Schema.optionalKey(Schema.Array(ScreenEffectReceipt)),
     /** What ended the cell before an effect that may have started made it unknown_outcome. */
@@ -56,6 +58,7 @@ const isScreenSupervisorFailure = Schema.is(ScreenSupervisorFailure);
 const failure = (
   code: typeof SupervisorCode.Type,
   options: {
+    startupFailed?: boolean;
     effectStarted?: boolean;
     receipts?: readonly ScreenEffectReceipt[];
     endedBy?: typeof SupervisorCode.Type;
@@ -64,6 +67,7 @@ const failure = (
 ) =>
   new ScreenSupervisorFailure({
     code,
+    ...(options.startupFailed ? { startupFailed: true } : {}),
     ...(options.effectStarted === undefined ? {} : { effectStarted: options.effectStarted }),
     ...(options.receipts === undefined ? {} : { receipts: [...options.receipts] }),
     ...(options.endedBy === undefined ? {} : { endedBy: options.endedBy }),
@@ -88,6 +92,8 @@ interface Session {
   active: ActiveCell | undefined;
   abortActive: ((code: typeof SupervisorCode.Type) => void) | undefined;
   closed: boolean;
+  ready: boolean;
+  onReady: (() => void) | undefined;
   lastUsed: number;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
 }
@@ -97,6 +103,7 @@ const MAX_FRAME_BYTES = 256 * 1024;
 const IDLE_CHILD_MS = 10 * 60 * 1000;
 // The child ends a cell at the same deadline; this only catches a child that stopped answering.
 const BACKSTOP_GRACE_MS = 2_000;
+const STARTUP_LIMIT_MS = 30_000;
 const ChildResultFrame = Schema.Struct({
   t: Schema.Literal("result"),
   cellId: Schema.String,
@@ -124,6 +131,7 @@ export function createScreenRunSupervisor(deps: {
   readonly invocation: SelfInvocation;
   readonly runCallback: <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => Promise<A>;
   readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
+  readonly scheduleStartup?: (run: () => void, ms: number) => () => void;
 }) {
   const sessions = new Map<string, Session>();
   let spare: Session | undefined;
@@ -159,11 +167,19 @@ export function createScreenRunSupervisor(deps: {
       turnWasmBytes,
       thread: undefined,
       closed: false,
+      ready: false,
+      onReady: undefined,
       active: undefined,
       abortActive: undefined,
       lastUsed: Date.now(),
       idleTimer: undefined,
     };
+    session.lines.on("line", (line: string) => {
+      if (!session.ready && line === '{"t":"ready"}') {
+        session.ready = true;
+        session.onReady?.();
+      }
+    });
     session.lines.on("limit", () => {
       session.abortActive?.("output_limit");
       close(session);
@@ -274,6 +290,8 @@ export function createScreenRunSupervisor(deps: {
         try: (signal) =>
           new Promise<ScreenRunResult>((resolve, reject) => {
             let settled = false;
+            let cancelDeadline = () => {};
+            let cancelStartup = () => {};
             // Set once the child's result arrives: a later Stop or exit finishes the cell with that
             // result, because the bridge's journal is already taken.
             let finishAfterResult: (() => void) | undefined;
@@ -281,6 +299,8 @@ export function createScreenRunSupervisor(deps: {
             const callAbort = new AbortController();
             const cleanup = () => {
               cancelDeadline();
+              cancelStartup();
+              session.onReady = undefined;
               signal.removeEventListener("abort", onAbort);
               session.lines.off("line", onLine);
               session.active = undefined;
@@ -321,6 +341,7 @@ export function createScreenRunSupervisor(deps: {
               reject(
                 failure(effectStarted ? "unknown_outcome" : code, {
                   effectStarted,
+                  startupFailed: code === "runtime_unavailable" && !session.ready,
                   receipts,
                   endedBy: code,
                   journal: normalized,
@@ -339,6 +360,7 @@ export function createScreenRunSupervisor(deps: {
               }
               if (typeof frame !== "object" || frame === null || !("t" in frame))
                 return failRun("runtime_unavailable");
+              if (frame.t === "ready" && session.ready) return;
               if (frame.t === "call") {
                 let call;
                 try {
@@ -444,26 +466,44 @@ export function createScreenRunSupervisor(deps: {
                   () => finish(collected, UNREAD_AVAILABILITY),
                 );
             };
-            const deadlineMillis = Date.now() + identity.context.limits.cellWallMs;
-            const cancelDeadline = deps.scheduleDeadline
-              ? deps.scheduleDeadline(
-                  () => failRun("wall_limit"),
-                  identity.context.limits.cellWallMs + BACKSTOP_GRACE_MS,
-                )
-              : (() => {
-                  const timer = setTimeout(
+            const startCell = () => {
+              cancelStartup();
+              session.onReady = undefined;
+              const deadlineMillis = Date.now() + identity.context.limits.cellWallMs;
+              identity.onCellStart?.(deadlineMillis);
+              cancelDeadline = deps.scheduleDeadline
+                ? deps.scheduleDeadline(
                     () => failRun("wall_limit"),
                     identity.context.limits.cellWallMs + BACKSTOP_GRACE_MS,
-                  );
-                  return () => clearTimeout(timer);
-                })();
+                  )
+                : (() => {
+                    const timer = setTimeout(
+                      () => failRun("wall_limit"),
+                      identity.context.limits.cellWallMs + BACKSTOP_GRACE_MS,
+                    );
+                    return () => clearTimeout(timer);
+                  })();
+              session.child.stdin.write(
+                `${JSON.stringify({ t: "cell", runId: identity.runId, turnId: identity.turnId, cellId, source, resetValues, limits: identity.context.limits, deadlineMillis })}\n`,
+              );
+            };
             session.abortActive = failRun;
             signal.addEventListener("abort", onAbort, { once: true });
             session.lines.on("line", onLine);
             if (signal.aborted) return onAbort();
-            session.child.stdin.write(
-              `${JSON.stringify({ t: "cell", runId: identity.runId, turnId: identity.turnId, cellId, source, resetValues, limits: identity.context.limits, deadlineMillis })}\n`,
-            );
+            if (session.ready) startCell();
+            else {
+              session.onReady = startCell;
+              cancelStartup = deps.scheduleStartup
+                ? deps.scheduleStartup(() => failRun("runtime_unavailable"), STARTUP_LIMIT_MS)
+                : (() => {
+                    const timer = setTimeout(
+                      () => failRun("runtime_unavailable"),
+                      STARTUP_LIMIT_MS,
+                    );
+                    return () => clearTimeout(timer);
+                  })();
+            }
           }),
         catch: (cause) =>
           isScreenSupervisorFailure(cause) ? cause : failure("runtime_unavailable"),

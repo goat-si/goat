@@ -7,10 +7,11 @@ import {
 } from "@goat/client-runtime/state/fleet-machine-description";
 import type { ScopedThreadRef } from "@goat/contracts";
 import { useIsFocused, useNavigation } from "@react-navigation/native";
-import { use } from "react";
+import { use, useState } from "react";
 import { useWindowDimensions, View } from "react-native";
 
 import { AppText as Text } from "../../../components/ui/AppText";
+import { Button } from "../../../components/ui/Button";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { ListSection } from "../../../components/ui/ListSection";
 import { useAppActive } from "../../../lib/appState";
@@ -21,6 +22,9 @@ import { useAdaptiveWorkspaceLayout } from "../../layout/adaptive-workspace-cont
 import { HubAccessNotice } from "../../settings/HubAccessNotice";
 import { openSettings } from "../../settings/settings-navigation";
 import { useSelectWorkspaceDetail } from "../../workspace/useSelectWorkspaceDetail";
+import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
+import { showsFleetGraph } from "./fleetGraphText";
+import { UsageFleetGraph } from "./UsageFleetGraph";
 import {
   FleetCloudRunRow,
   FleetMachineDot,
@@ -47,6 +51,9 @@ function FleetContent() {
   const { snapshot, connections, loading } = useAtomValue(mobileFleet.fleetPageAtom);
   const cloudAgents = useAtomValue(mobileFleet.fleetCloudAgentsAtom);
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  const { fontScale } = useWindowDimensions();
+  const { baseFontSize } = useAppearancePreferences().appearance;
+  const graphShown = showsFleetGraph({ baseFontSize, fontScale });
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const { startNewTask } = useAdaptiveWorkspaceLayout();
@@ -56,6 +63,11 @@ function FleetContent() {
       params: { environmentId: String(ref.environmentId), threadId: String(ref.threadId) },
     });
   const openConnections = () => openSettings(navigation, "SettingsEnvironments");
+  const [selection, setSelection] = useState<string | null>(null);
+  // A machine that left the Fleet is no longer a filter.
+  const selected = snapshot.machines.find((machine) => machine.id === selection) ?? null;
+  const toggleMachine = (machineId: string) =>
+    setSelection(selected?.id === machineId ? null : machineId);
 
   const threadsByMachine = new Map<string, FleetThread[]>();
   for (const thread of snapshot.threads) {
@@ -63,8 +75,9 @@ function FleetContent() {
     list.push(thread);
     threadsByMachine.set(thread.machineId, list);
   }
-  const busy = snapshot.machines.filter(isFleetMachineBusy);
-  const quiet = snapshot.machines.filter((machine) => !isFleetMachineBusy(machine));
+  const listed = selected === null ? snapshot.machines : [selected];
+  const busy = listed.filter(isFleetMachineBusy);
+  const quiet = listed.filter((machine) => !isFleetMachineBusy(machine));
   const { totals } = snapshot;
   const notConnected = snapshot.machines.filter((machine) => !machine.answering).length;
   const hubs = [...presentations].filter(
@@ -110,6 +123,25 @@ function FleetContent() {
         ) : null}
       </View>
 
+      {snapshot.machines.length > 0 && graphShown ? (
+        <UsageFleetGraph
+          snapshot={snapshot}
+          connections={connections}
+          selectedMachineId={selected?.id ?? null}
+          onSelectMachine={toggleMachine}
+          onOpenThread={openThread}
+        />
+      ) : null}
+
+      {selected !== null ? (
+        <View className="flex-row items-center justify-between gap-3 px-2">
+          <Text className="min-w-0 shrink text-sm text-foreground" numberOfLines={1}>
+            {"Showing " + selected.label}
+          </Text>
+          <Button label="Show all" tone="secondary" onPress={() => setSelection(null)} />
+        </View>
+      ) : null}
+
       {hubs.map(([environmentId, presentation]) => (
         <HubAccessNotice
           key={environmentId}
@@ -125,7 +157,7 @@ function FleetContent() {
           actionLabel="Open Connections"
           onAction={openConnections}
         />
-      ) : busy.length === 0 ? (
+      ) : selected === null && busy.length === 0 ? (
         <EmptyState
           title="Nothing running"
           detail={"No thread is running on your " + plural(totals.machines, "machine") + "."}
@@ -161,7 +193,7 @@ function FleetContent() {
         );
       })}
 
-      {cloudAgents.map((group) => (
+      {(selected === null ? cloudAgents : []).map((group) => (
         <ListSection
           key={group.provider}
           title={group.label}
@@ -178,7 +210,15 @@ function FleetContent() {
       ))}
 
       {quiet.length > 0 ? (
-        <ListSection title={busy.length === 0 ? "Machines" : "Other machines"}>
+        <ListSection
+          title={
+            selected !== null
+              ? "Nothing running"
+              : busy.length === 0
+                ? "Machines"
+                : "Other machines"
+          }
+        >
           {quiet.map((machine, index) => (
             <FleetQuietMachineRow
               key={machine.id}

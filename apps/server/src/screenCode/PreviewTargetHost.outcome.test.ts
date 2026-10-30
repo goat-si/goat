@@ -6,6 +6,12 @@ import {
   type ScreenObservation,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeURL from "node:url";
+import { ScreenRunService } from "./ScreenRunService.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { actionErrorContext, browserFixture, call, context } from "./PreviewTargetHost.testkit.ts";
 
 it.effect("preserves blocked_url when the browser refuses input before dispatch", () =>
@@ -188,4 +194,36 @@ it.effect(
         _timing: timing,
       });
     }),
+);
+
+it.live("tab observations do not attach app observation evidence", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture(true);
+    const result = yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      return yield* service.runCell({
+        runId: "run",
+        turnId: "turn",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source: `const tab = await screen.tab({tabId:'tab'}); await tab.observe(); await tab.click(1); return await tab.observe();`,
+      });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ tab: fixture.host }),
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+    expect(result.value).not.toHaveProperty("effect");
+    expect(
+      result.journal.find((entry) => entry.receipt.method === "click")?.receipt.observedEffect,
+    ).toBeUndefined();
+  }),
 );

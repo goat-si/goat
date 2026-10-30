@@ -131,6 +131,7 @@ export * from "./secretRequest.ts";
 export * from "./clientRpcPermissions.ts";
 
 export * from "./memory.ts";
+export * from "./siteNotes.ts";
 export * from "./memoryGeneration.ts";
 
 export * from "./handoff.ts";

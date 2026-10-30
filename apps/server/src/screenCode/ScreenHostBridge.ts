@@ -27,6 +27,7 @@ import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
+import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
@@ -49,7 +50,10 @@ export interface ScreenHostDispatchResult {
   readonly image?: ScreenImage;
   readonly imageMetadata?: ScreenImageMetadata;
   readonly category: ScreenEffectReceipt["category"];
+  readonly observedWindow?: string;
+  readonly observedBaseline?: string;
   readonly evidence?: readonly string[];
+  readonly warnings?: readonly string[];
   readonly outcome?: ScreenActionOutcome;
 }
 
@@ -82,6 +86,7 @@ interface CellState {
   pending: number;
   lastCallId: number;
   journal: ScreenJournalEntry[];
+  pendingObserved: Map<string, Array<{ index: number; window: string; baseline: string }>>;
   images: ScreenImage[];
   metadata: ScreenImageMetadata[];
   truncated: string[];
@@ -208,6 +213,7 @@ export class ScreenHostBridge {
         pending: 0,
         lastCallId: 0,
         journal: [],
+        pendingObserved: new Map(),
         images: [],
         metadata: [],
         truncated: [],
@@ -543,7 +549,11 @@ export class ScreenHostBridge {
             category !== "refused",
           ));
       // An unverifiable write is a success that may have committed; the receipt says so.
-      if (FAILED_CATEGORIES.has(category) && safety.writeStatus !== "not_applicable")
+      if (
+        FAILED_CATEGORIES.has(category) &&
+        category !== "suspected_noop" &&
+        safety.writeStatus !== "not_applicable"
+      )
         return yield* Effect.fail({
           ...failure(safety.possibleCommit ? "unknown_outcome" : "downstream_failure", call.callId),
           effectStarted: safety.possibleCommit,
@@ -567,6 +577,7 @@ export class ScreenHostBridge {
             limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
           });
       }
+      if (category === "suspected_noop" && safety.writeStatus !== "not_applicable") halt(safety);
       return { ...outcome, category, safety };
     });
     const guardedDispatch = dispatch.pipe(
@@ -692,8 +703,14 @@ export class ScreenHostBridge {
         failCell(error);
         return refused(call, { ...error, safety: screenFailureSafety(call, error) });
       }
+      const existing = state.images.find(
+        (item) => item.bytes === image.bytes && item.mimeType === image.mimeType,
+      );
+      const returnedMetadata = existing ? { ...metadata, imageRef: existing.imageRef } : metadata;
       const size = imageSize(image);
-      if (size > context.limits.imageBytes) {
+      if (existing) {
+        state.metadata.push(returnedMetadata);
+      } else if (size > context.limits.imageBytes) {
         state.metadata.push({ ...metadata, omitted: true });
         state.truncated.push(`image:${metadata.imageRef}`);
       } else {
@@ -701,9 +718,9 @@ export class ScreenHostBridge {
           const old = state.images.shift();
           if (!old) break;
           state.retainedBytes -= imageSize(old);
-          const index = state.metadata.findIndex((item) => item.imageRef === old.imageRef);
-          const previous = state.metadata[index];
-          if (previous) state.metadata[index] = { ...previous, omitted: true };
+          state.metadata = state.metadata.map((item) =>
+            item.imageRef === old.imageRef ? { ...item, omitted: true } : item,
+          );
           state.truncated.push(`image:${old.imageRef}`);
         }
         state.images.push(image);
@@ -716,15 +733,20 @@ export class ScreenHostBridge {
           const record = item as Record<string, unknown>;
           if (record.bytes === image.bytes) {
             const { bytes: _bytes, ...rest } = record;
-            return { ...rest, ...metadata };
+            return { ...rest, ...returnedMetadata };
           }
           return Object.fromEntries(
-            Object.entries(record).map(([name, part]) => [name, stripImage(part)]),
+            Object.entries(record).map(([name, part]) => [
+              name,
+              name === "imageRef" && part === metadata.imageRef
+                ? returnedMetadata.imageRef
+                : stripImage(part),
+            ]),
           );
         }
         return item;
       };
-      value = value === undefined ? metadata : stripImage(value);
+      value = value === undefined ? returnedMetadata : stripImage(value);
     }
     const json = image ? JSON.stringify(value) : undefined;
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {
@@ -740,6 +762,9 @@ export class ScreenHostBridge {
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
     const evidence = result.success.evidence ?? [];
+    const withEffect = applyObservedEffect(state, call, result.success, admittedIndex, value);
+    if (Buffer.byteLength(JSON.stringify(withEffect) ?? "") <= context.limits.returnBytes)
+      value = withEffect;
     settle(
       result.success.category,
       "settled",
@@ -755,6 +780,10 @@ export class ScreenHostBridge {
       callId: call.callId,
       outcome: "ok" as const,
       category: result.success.category,
+      ...(result.success.warnings?.length ? { warnings: result.success.warnings } : {}),
+      ...(evidence.length
+        ? { evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)) }
+        : {}),
       ...(value === undefined ? {} : { value: value as NonNullable<ScreenHostReply["value"]> }),
     } satisfies ScreenHostReply;
   });

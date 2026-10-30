@@ -850,6 +850,7 @@ describe("Memory hub assembled HTTP scenarios", () => {
         retainedLocalSpace: true,
         generationHold: true,
         hubDiagnostics: true,
+        siteNotes: true,
       });
       yield* s.configure("disabled");
       const disabled = yield* descriptor;

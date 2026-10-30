@@ -47,6 +47,7 @@ import {
   withoutEnvironmentThemes,
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
+import { withProviderStatusChangesOrFullLists } from "./providerStatusChangesFallback.ts";
 import { isLocalServerConnection, loopbackBudgetMs } from "../connection/loopbackHost.ts";
 import { logSshConnectionTiming } from "../connection/sshTiming.ts";
 
@@ -278,7 +279,9 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       reason: "remote-unavailable",
       detail: `${connection.label} config subscription ended.`,
     });
-    const serverConfigSource = protocolClient[WS_METHODS.subscribeServerConfig](
+    const openServerConfig = protocolClient[WS_METHODS.subscribeServerConfig];
+    const serverConfigSource = withProviderStatusChangesOrFullLists(
+      openServerConfig,
       onDemandSnapshots(serverConfigInput),
     ).pipe(
       Stream.runForEach((event) =>
@@ -420,7 +423,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
           Effect.as(
             Equal.equals(input, serverConfigInput)
               ? serverConfigEvents
-              : protocolClient[WS_METHODS.subscribeServerConfig](onDemandSnapshots(input)),
+              : withProviderStatusChangesOrFullLists(openServerConfig, onDemandSnapshots(input)),
           ),
         ),
       );

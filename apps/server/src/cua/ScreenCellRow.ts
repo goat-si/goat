@@ -165,6 +165,11 @@ const VERBS: Readonly<Record<ScreenMethod, Verb>> = {
   wait_for: "observe",
   invoke_menu: "menu",
   fetch_tab: "fetch",
+  tab_dialog: "dialog",
+  tab_upload: "upload",
+  tab_evaluate: "evaluate",
+  tab_fill_secret: "fill secret",
+  tab_logs: "observe",
 };
 
 const CATEGORIES: ReadonlyArray<readonly [ScreenEffectReceipt["category"], string]> = [
@@ -180,7 +185,9 @@ const seconds = (ms: number) => `${Number((ms / 1000).toFixed(1))} s`;
 const duration = (ms: number) => (ms < 1000 ? `${Math.max(0, Math.round(ms))} ms` : seconds(ms));
 
 export interface ScreenCellFacts {
-  readonly receipts: ReadonlyArray<Pick<ScreenEffectReceipt, "callId" | "method" | "category">>;
+  readonly receipts: ReadonlyArray<
+    Pick<ScreenEffectReceipt, "callId" | "method" | "category" | "observedEffect">
+  >;
   /** Shortcut labels of the cell's key presses, by call id. */
   readonly keys: ReadonlyMap<number, string>;
   /** Safe subjects in first-use order, and how many distinct ones the cell touched. */
@@ -248,5 +255,12 @@ export function screenCellSummary(facts: ScreenCellFacts): string {
     const n = facts.receipts.filter((receipt) => receipt.category === category).length;
     return n > 0 ? [`${n} ${label}`] : [];
   });
+  for (const [state, label] of [
+    ["change_seen", "window change seen"],
+    ["no_change_seen", "no window change seen"],
+  ] as const) {
+    const n = facts.receipts.filter((receipt) => receipt.observedEffect?.state === state).length;
+    if (n > 0) parts.push(`${n} ${label}`);
+  }
   return [...parts, duration(facts.durationMs)].join(" · ");
 }

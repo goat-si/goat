@@ -23,6 +23,8 @@ export type NoteDelivery =
   | { readonly type: "conflict"; readonly current: NoteDocument }
   | { readonly type: "retry"; readonly message: string };
 
+const ACKNOWLEDGED_LIMIT = 8;
+
 /** Serialize disk mutations, but let edits persist while a network request is in flight. */
 export function createNotesOutboxController(storage: NotesOutboxStorage) {
   let rows: ReadonlyArray<NoteOutboxRow> = [];
@@ -33,6 +35,11 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
   const errors = new Map<string, string>();
   const changedDuringFlush = new Set<string>();
   const requestedDuringFlush = new Map<string, number>();
+  // The last acknowledged save of each note that left the outbox, and the base it was sent on.
+  const acknowledged = new Map<
+    string,
+    { readonly base: string | null; readonly note: NoteDocument }
+  >();
   const emit = () => {
     for (const listener of listeners) listener();
   };
@@ -77,19 +84,42 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
       };
     },
     error: (environmentId: string) => errors.get(environmentId),
-    async enqueue(edit: NoteEdit) {
+    /**
+     * `continues` names this phone's previous save in the same edit session. When that save was
+     * acknowledged on this edit's base and left the outbox, the hub's revision of it becomes the
+     * base, decided in the same serialized step that observes the row's removal.
+     */
+    async enqueue(
+      edit: NoteEdit,
+      continues?: { readonly body: string; readonly status: NoteEdit["status"] },
+    ) {
       await restore();
-      await serialize(async () => {
-        const merged = enqueueNote(rows, edit);
+      /** Returns the base the outbox will send this edit on. */
+      return serialize(async () => {
+        const key = noteOutboxKey(edit.environmentId, edit.path);
+        const previous = acknowledged.get(key);
+        const rebased =
+          continues &&
+          previous &&
+          !rows.some((row) => noteOutboxKey(row.environmentId, row.path) === key) &&
+          previous.base === edit.baseRevision &&
+          previous.note.body === continues.body &&
+          previous.note.status === continues.status
+            ? { ...edit, baseRevision: previous.note.revision }
+            : edit;
+        const merged = enqueueNote(rows, rebased);
         const next = merged.find(
           (row) =>
             noteOutboxKey(row.environmentId, row.path) ===
             noteOutboxKey(edit.environmentId, edit.path),
         )!;
         await storage.save(next);
+        // The stored edit supersedes the remembered save; a failed write keeps it for the retry.
+        acknowledged.delete(key);
         rows = merged;
         if (flushing.has(edit.environmentId)) changedDuringFlush.add(edit.environmentId);
         emit();
+        return next.baseRevision;
       });
     },
     async discard(environmentId: string, path: string, version: number) {
@@ -172,12 +202,23 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
           await serialize(async () => {
             const row = find(environmentId, sent.path);
             if (!row) return;
-            if (delivery.type === "saved")
-              await replace(
-                row,
-                acknowledgeNote(row, sent.inFlight!.localUpdatedAt, delivery.note.revision),
-              );
-            else if (delivery.type === "conflict")
+            const sentEdit = sent.inFlight;
+            if (delivery.type === "saved") {
+              const next = sentEdit
+                ? acknowledgeNote(row, sentEdit.localUpdatedAt, delivery.note.revision)
+                : row;
+              if (!next && sentEdit) {
+                const key = noteOutboxKey(row.environmentId, row.path);
+                acknowledged.delete(key);
+                acknowledged.set(key, { base: sentEdit.baseRevision, note: delivery.note });
+                // Only notes still open need this; keep the few most recent.
+                for (const oldest of acknowledged.keys()) {
+                  if (acknowledged.size <= ACKNOWLEDGED_LIMIT) break;
+                  acknowledged.delete(oldest);
+                }
+              }
+              await replace(row, next);
+            } else if (delivery.type === "conflict")
               await replace(row, conflictNote(row, delivery.current));
             else {
               errors.set(environmentId, delivery.message);

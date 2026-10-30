@@ -58,6 +58,7 @@ export const call = (
 
 export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(function* (
   ownedByCaller = false,
+  documentKnown = false,
 ) {
   const tab = {
     environmentId: "env",
@@ -96,6 +97,7 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
           url: state.url,
           title: tab.title,
           loading: false,
+          ...(documentKnown ? { documentGeneration: 1 } : {}),
           control: { owner: tab.owner, ownedByCaller, generation: state.generation },
         } as A);
       if (request.operation === "snapshot") {
@@ -179,7 +181,7 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
     if (!reply || reply.outcome !== "ok") throw new Error("Expected the tab to bind again");
     return (reply.value as { targetRef: ScreenTargetRef }).targetRef;
   });
-  return { state, requests, dispatch, observe, bridge, ref, rebind, tab };
+  return { state, requests, dispatch, observe, bridge, ref, rebind, tab, host };
 });
 
 export const actionErrorContext = {
