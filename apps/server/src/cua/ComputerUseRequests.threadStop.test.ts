@@ -14,6 +14,8 @@ import * as DateTime from "effect/DateTime";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
+import { makeComputerUseStop } from "../orchestration-v2/goat/ComputerUseStop.ts";
 import {
   instanceId,
   threadId as runningThreadId,
@@ -25,6 +27,64 @@ import {
   supported,
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
+
+it.effect("replaying a completed Stop does not revoke a newer session", () =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<Handoffs.Handoffs["Service"]>();
+    yield* withHarness(
+      ({ orchestrator, worker }) =>
+        withRequests(orchestrator, supported, ({ request, handoffs }) =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(ready, handoffs);
+            const commandId = CommandId.make("replay-stop");
+            yield* orchestrator.dispatch({
+              type: "thread.stop",
+              commandId,
+              threadId: runningThreadId,
+            });
+            yield* worker.drain();
+            const effects = yield* (yield* EffectOutbox.EffectOutboxV2).listByCommandId(commandId);
+            const stop = effects.find((effect) => effect.request.type === "computer-use.stop");
+            if (stop === undefined) return assert.fail("expected stop effect");
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              commandId: CommandId.make("after-stop"),
+              threadId: runningThreadId,
+              messageId: MessageId.make("message:after-stop"),
+              text: "Continue",
+              attachments: [],
+              dispatchMode: { type: "start_immediately" },
+              createdBy: "user",
+              creationSource: "web",
+            });
+            yield* worker.drain();
+            const first = yield* request({ apps: ["com.example.Editor"] });
+            if (first.kind !== "needs_human") return assert.fail("expected approval");
+            yield* handoffs.respond(
+              {
+                threadId: runningThreadId,
+                handoffId: first.handoff.handoffId,
+                action: "completed",
+                computerUseScope: "session",
+              },
+              sessionId,
+            );
+            const replay = yield* makeComputerUseStop.pipe(
+              Effect.provideService(Handoffs.Handoffs, handoffs),
+            );
+            yield* replay(stop);
+            assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+          }),
+        ),
+      Layer.mock(Handoffs.Handoffs)({
+        stopComputerUseSessions: (id, cutoff) =>
+          Deferred.await(ready).pipe(
+            Effect.flatMap((handoffs) => handoffs.stopComputerUseSessions(id, cutoff)),
+          ),
+      }),
+    );
+  }),
+);
 
 it.effect("thread Stop with no active turn clears the session choice", () =>
   Effect.gen(function* () {
@@ -79,9 +139,9 @@ it.effect("thread Stop with no active turn clears the session choice", () =>
           );
         }),
       Layer.mock(Handoffs.Handoffs)({
-        stopComputerUseSessions: (id) =>
+        stopComputerUseSessions: (id, cutoff) =>
           Deferred.await(ready).pipe(
-            Effect.flatMap((handoffs) => handoffs.stopComputerUseSessions(id)),
+            Effect.flatMap((handoffs) => handoffs.stopComputerUseSessions(id, cutoff)),
           ),
       }),
     );
@@ -239,9 +299,9 @@ it.effect.each(["running", "waiting", "idle"] as const)(
             );
           }),
         Layer.mock(Handoffs.Handoffs)({
-          stopComputerUseSessions: (id) =>
+          stopComputerUseSessions: (id, cutoff) =>
             Deferred.await(ready).pipe(
-              Effect.flatMap((handoffs) => handoffs.stopComputerUseSessions(id)),
+              Effect.flatMap((handoffs) => handoffs.stopComputerUseSessions(id, cutoff)),
             ),
         }),
       );

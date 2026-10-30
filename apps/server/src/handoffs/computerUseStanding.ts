@@ -44,6 +44,7 @@ export type CreateInput = {
 };
 
 const unavailable = (cause: unknown) => new HandoffError({ reason: "unavailable", cause });
+const isHandoffError = Schema.is(HandoffError);
 const encodeIds = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export const makeComputerUseStanding = (deps: {
@@ -59,6 +60,30 @@ export const makeComputerUseStanding = (deps: {
   revoke: (handoff: Handoff) => Effect.Effect<void, HandoffError>;
 }) => {
   const { sql, lock, leases, settings } = deps;
+  const syncAllowed = Effect.fn("Handoffs.syncComputerUseAllowedApps")(function* (
+    list: ReadonlyArray<string>,
+  ) {
+    const keys = [...new Set(list.map(cuaAppKey))];
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const previous = yield* sql<{
+            app_key: string;
+          }>`SELECT app_key FROM computer_use_allowed_apps_snapshot`;
+          const next = new Set(keys);
+          if (previous.length === keys.length && previous.every((row) => next.has(row.app_key)))
+            return;
+          if (previous.some((row) => !next.has(row.app_key)))
+            yield* sql`INSERT INTO computer_use_revocation_watermarks (scope, sequence)
+          VALUES ('', (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events))
+          ON CONFLICT(scope) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)`;
+          yield* sql`DELETE FROM computer_use_allowed_apps_snapshot`;
+          for (const key of keys)
+            yield* sql`INSERT INTO computer_use_allowed_apps_snapshot (app_key) VALUES (${key})`;
+        }),
+      )
+      .pipe(Effect.mapError(unavailable));
+  });
   const allowed = Effect.fn("Handoffs.computerUseStandingAllowed")(function* (
     threadId: ThreadId,
     apps: ReadonlyArray<string>,
@@ -102,51 +127,55 @@ export const makeComputerUseStanding = (deps: {
       return Effect.fail(new HandoffError({ reason: "unavailable" }));
     return Effect.void;
   });
-  const clear = Effect.fn("Handoffs.clearComputerUseSessions")((threadId?: ThreadId) =>
-    sql
-      .withTransaction(
-        Effect.gen(function* () {
-          yield* sql`INSERT INTO computer_use_revocation_watermarks (scope, sequence)
-        VALUES (${threadId ?? ""}, (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events))
-        ON CONFLICT(scope) DO UPDATE SET sequence = excluded.sequence`;
-          yield* threadId === undefined
-            ? sql`DELETE FROM computer_use_session_approvals`
-            : sql`DELETE FROM computer_use_session_approvals WHERE thread_id = ${threadId}`;
-        }),
-      )
-      .pipe(Effect.mapError(unavailable)),
+  const clear = Effect.fn("Handoffs.clearComputerUseSessions")(
+    (threadId?: ThreadId, cutoff?: number) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const sequence =
+              cutoff ??
+              (yield* sql<{
+                sequence: number;
+              }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM orchestration_events`)[0]
+                ?.sequence ??
+              0;
+            yield* sql`INSERT INTO computer_use_revocation_watermarks (scope, sequence)
+        VALUES (${threadId ?? ""}, ${sequence})
+        ON CONFLICT(scope) DO UPDATE SET sequence = MAX(sequence, excluded.sequence)`;
+            yield* threadId === undefined
+              ? sql`DELETE FROM computer_use_session_approvals WHERE created_sequence <= ${sequence}`
+              : sql`DELETE FROM computer_use_session_approvals WHERE thread_id = ${threadId} AND created_sequence <= ${sequence}`;
+          }),
+        )
+        .pipe(Effect.mapError(unavailable)),
   );
-  const record = Effect.fn("Handoffs.recordComputerUseScope")(function* (
-    input: HandoffRespondInput,
-    result: Handoff,
-  ) {
-    if (
-      result.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-      result.state === "completed" &&
-      result.actor.type === "client"
-    )
-      yield* sql`INSERT OR IGNORE INTO computer_use_person_approval (id) VALUES (1)`.pipe(
-        Effect.mapError(unavailable),
-      );
-    if (result.state === "completed" && input.computerUseScope && result.apps) {
-      if (input.computerUseScope === "session") {
-        for (const app of result.apps)
-          yield* sql`INSERT OR IGNORE INTO computer_use_session_approvals (thread_id, app_key) VALUES (${input.threadId}, ${cuaAppKey(app)})`.pipe(
-            Effect.mapError(unavailable),
-          );
-      } else if (Option.isSome(settings)) {
-        yield* settings.value
-          .updateSettingsWith((current) =>
+  const record = Effect.fn("Handoffs.recordComputerUseScope")(
+    function* (input: HandoffRespondInput, result: Handoff) {
+      if (
+        result.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+        result.state === "completed" &&
+        result.actor.type === "client"
+      )
+        yield* sql`INSERT OR IGNORE INTO computer_use_person_approval (id) VALUES (1)`;
+      if (result.state === "completed" && input.computerUseScope && result.apps) {
+        if (input.computerUseScope === "session") {
+          for (const app of result.apps)
+            yield* sql`INSERT INTO computer_use_session_approvals (thread_id, app_key, created_sequence) VALUES (${input.threadId}, ${cuaAppKey(app)}, (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events WHERE command_id = ${`handoff:${result.handoffId}:completed`})) ON CONFLICT(thread_id, app_key) DO UPDATE SET created_sequence = excluded.created_sequence`;
+        } else if (Option.isSome(settings)) {
+          const updated = yield* settings.value.updateSettingsWith((current) =>
             Effect.succeed({ cuaAllowedApps: [...current.cuaAllowedApps, ...(result.apps ?? [])] }),
-          )
-          .pipe(Effect.mapError(unavailable));
+          );
+          yield* syncAllowed(updated.cuaAllowedApps);
+        }
       }
-    }
-  });
+    },
+    Effect.mapError((cause) => (isHandoffError(cause) ? cause : unavailable(cause))),
+  );
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
     const attempt = withAllowedSettings((list, enabled) =>
       Effect.gen(function* () {
         if (!enabled) return yield* new HandoffError({ reason: "unavailable" });
+        yield* syncAllowed(list);
         const apps = input.apps;
         if (
           input.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
@@ -241,7 +270,7 @@ export const makeComputerUseStanding = (deps: {
           true,
         );
         for (const entry of named) {
-          yield* sql`INSERT OR IGNORE INTO computer_use_session_approvals (thread_id, app_key) VALUES (${input.requestedBy.threadId}, ${cuaAppKey(entry.app)})`.pipe(
+          yield* sql`INSERT INTO computer_use_session_approvals (thread_id, app_key, created_sequence) VALUES (${input.requestedBy.threadId}, ${cuaAppKey(entry.app)}, (SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events WHERE command_id = ${`handoff:${granted.handoffId}:create`})) ON CONFLICT(thread_id, app_key) DO UPDATE SET created_sequence = excluded.created_sequence`.pipe(
             Effect.mapError(unavailable),
           );
           yield* sql`INSERT OR IGNORE INTO computer_use_named_messages (thread_id, app_key, message_id) VALUES (${input.requestedBy.threadId}, ${cuaAppKey(entry.app)}, ${entry.messageId})`.pipe(
@@ -256,21 +285,46 @@ export const makeComputerUseStanding = (deps: {
   });
   const stopUnlocked = Effect.fn("Handoffs.stopComputerUseSessionsUnlocked")(function* (
     threadId: ThreadId | undefined,
+    cutoff?: number,
   ) {
-    const stopped = new Set(
-      Option.isNone(leases)
+    const prior =
+      threadId === undefined || cutoff === undefined
         ? []
-        : threadId === undefined
-          ? yield* leases.value.stopAll
-          : (yield* leases.value.stop(threadId))
-            ? [threadId]
-            : [],
-    );
-    yield* clear(threadId);
+        : yield* sql<{
+            sequence: number;
+          }>`SELECT sequence FROM computer_use_revocation_watermarks WHERE scope = ${threadId}`.pipe(
+            Effect.mapError(unavailable),
+          );
+    const previouslyApplied =
+      cutoff !== undefined && prior[0] !== undefined && prior[0].sequence >= cutoff;
+    const grants = Option.isNone(leases)
+      ? []
+      : yield* leases.value.grants.pipe(Effect.mapError(unavailable));
+    const older: Array<(typeof grants)[number]> = [];
+    let hasNewer = false;
+    for (const grant of grants) {
+      if (threadId !== undefined && grant.threadId !== threadId) continue;
+      if (cutoff !== undefined) {
+        const events = yield* sql<{
+          sequence: number;
+        }>`SELECT sequence FROM orchestration_events WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND stream_id = ${grant.threadId} AND event_type = 'turn-item.updated' AND json_extract(payload_json, '$.handoff.handoffId') = ${grant.handoffId} AND json_extract(payload_json, '$.handoff.state') = 'completed' ORDER BY sequence DESC LIMIT 1`.pipe(
+          Effect.mapError(unavailable),
+        );
+        if (events[0] !== undefined && events[0].sequence > cutoff) {
+          hasNewer = true;
+          continue;
+        }
+      }
+      older.push(grant);
+    }
+    const stopped = new Set<ThreadId>();
+    if (Option.isSome(leases) && !hasNewer && (!previouslyApplied || older.length > 0)) {
+      if (threadId === undefined) for (const id of yield* leases.value.stopAll) stopped.add(id);
+      else if (yield* leases.value.stop(threadId)) stopped.add(threadId);
+    }
+    yield* clear(threadId, cutoff);
     if (Option.isSome(leases)) {
-      const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
-      for (const grant of grants) {
-        if (threadId !== undefined && grant.threadId !== threadId) continue;
+      for (const grant of older) {
         const handoff = yield* deps.read(grant.threadId, grant.handoffId);
         if (handoff.computerUseScope === undefined) continue;
         yield* leases.value.release([grant.handoffId]);
@@ -280,8 +334,11 @@ export const makeComputerUseStanding = (deps: {
     }
     return [...stopped];
   }, lock.withPermits(1));
-  const stop = Effect.fn("Handoffs.stopComputerUseSessions")((threadId?: ThreadId) => {
-    const effect = stopUnlocked(threadId);
+  const stop = Effect.fn("Handoffs.stopComputerUseSessions")((
+    threadId?: ThreadId,
+    cutoff?: number,
+  ) => {
+    const effect = stopUnlocked(threadId, cutoff);
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
   const toggle = Effect.fn("Handoffs.withComputerUseToggle")(<A, E, R>(
@@ -299,6 +356,7 @@ export const makeComputerUseStanding = (deps: {
   const revalidateUnlocked = (threadId?: ThreadId, endingHandoffId?: Handoff["handoffId"]) =>
     withAllowedSettings((list) =>
       Effect.gen(function* () {
+        yield* syncAllowed(list);
         if (Option.isNone(leases)) return;
         const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
         for (const grant of grants) {
@@ -344,6 +402,7 @@ export const makeComputerUseStanding = (deps: {
     handoffId: Handoff["handoffId"],
   ) {
     yield* clear(threadId);
+    if (Option.isSome(leases)) yield* leases.value.release([handoffId]);
     yield* revalidateUnlocked(threadId, handoffId);
   });
   return { validate, record, clear, auto, stop, revalidate, toggle, end, withSettings };

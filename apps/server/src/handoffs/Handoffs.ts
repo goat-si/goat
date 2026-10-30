@@ -124,6 +124,7 @@ export class Handoffs extends Context.Service<
     readonly clearComputerUseSessions: (threadId?: ThreadId) => Effect.Effect<void, HandoffError>;
     readonly stopComputerUseSessions: (
       threadId?: ThreadId,
+      cutoff?: number,
     ) => Effect.Effect<ReadonlyArray<ThreadId>, HandoffError>;
     readonly revalidateComputerUse: (threadId?: ThreadId) => Effect.Effect<void, HandoffError>;
     readonly withComputerUseToggle: <A, E, R>(

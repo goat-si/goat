@@ -108,6 +108,43 @@ it.effect.each(["live", "expired"] as const)(
     ),
 );
 
+it.effect("a direct settings writer cannot revive a removed app from an old mention", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("direct-named"),
+        threadId,
+        messageId: MessageId.make("message:direct-named"),
+        text: "Use com.example.Editor",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Editor"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            {
+              threadId,
+              handoffId: first.handoff.handoffId,
+              action: "completed",
+              computerUseScope: "always",
+            },
+            sessionId,
+          );
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaAllowedApps: [],
+          });
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        }),
+      );
+    }),
+  ),
+);
+
 it.effect("a failed end transition cannot leave the session reusable", () =>
   withHarness(({ orchestrator }) => {
     const failing = {
