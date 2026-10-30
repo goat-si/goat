@@ -421,6 +421,69 @@ export function cuaDriverCapabilityManifest(input: {
   ].join("\n");
 }
 
+export interface CuaBrowserResources {
+  readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+  readonly origins: ReadonlyArray<string>;
+}
+
+/** Changes only the generated browser resource and its allow-list entries. */
+export function updateCuaDriverBrowserManifest(text: string, browser: CuaBrowserResources): string {
+  const generated = cuaDriverCapabilityManifest({
+    applications: [],
+    tools: [],
+    browserClaimsSupported: true,
+    browser,
+  });
+  const browserMatch = /^  browser:\n(?: {4,}[^\n]*\n)*/m;
+  const block = generated.match(browserMatch)?.[0] ?? "";
+  const withoutBrowser = text.replace(browserMatch, "");
+  const appMarker = /^  apps:(?: \[\])?\n/m;
+  if (!appMarker.test(withoutBrowser)) throw new Error("Manifest has no canonical apps section.");
+  let updated = withoutBrowser.replace(appMarker, (marker) => block + marker);
+  const toolSection = /^  tools:\n(?:    - [^\n]*\n)*/m;
+  const section = updated.match(toolSection)?.[0];
+  if (section === undefined) throw new Error("Manifest has no canonical tool list.");
+  const claimLines = new Set(CUA_DRIVER_CLAIM_TOOLS.map((tool) => `    - ${JSON.stringify(tool)}`));
+  const kept = section.split("\n").filter((line) => !claimLines.has(line));
+  if (kept.at(-1) === "") kept.pop();
+  if (block !== "") kept.push(...claimLines);
+  updated = updated.replace(toolSection, kept.join("\n") + "\n");
+  return updated;
+}
+
+interface BrowserManifestFiles {
+  readonly readFile: (path: string) => Promise<string>;
+  readonly writeFile: (path: string, text: string) => Promise<void>;
+  readonly rename: (from: string, to: string) => Promise<void>;
+  readonly remove: (path: string) => Promise<void>;
+}
+
+/** The temporary file shares the manifest directory, so rename replaces it atomically. */
+export async function publishCuaDriverBrowserManifest(
+  path: string,
+  browser: CuaBrowserResources,
+  files?: BrowserManifestFiles,
+): Promise<string> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const { dirname, join } = await import("node:path");
+  const fs = await import("node:fs/promises");
+  const io: BrowserManifestFiles = files ?? {
+    readFile: (name) => fs.readFile(name, "utf8"),
+    writeFile: (name, text) => fs.writeFile(name, text, { flag: "wx", mode: 0o600 }),
+    rename: fs.rename,
+    remove: (name) => fs.rm(name, { force: true }),
+  };
+  const text = updateCuaDriverBrowserManifest(await io.readFile(path), browser);
+  const temporary = join(dirname(path), `.manifest-${randomUUID()}.yaml`);
+  await io.writeFile(temporary, text);
+  try {
+    await io.rename(temporary, path);
+  } finally {
+    await io.remove(temporary);
+  }
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
 const LIST_APPS_TIMEOUT_MS = 15_000;
 
 /**
