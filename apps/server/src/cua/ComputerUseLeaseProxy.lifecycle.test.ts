@@ -58,6 +58,7 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
         structuredContent: {
           refused: "screenLocked",
           detail: "screen_locked",
+          code: "screen_locked",
           safety: {
             possibleCommit: false,
             retryClass: "never",

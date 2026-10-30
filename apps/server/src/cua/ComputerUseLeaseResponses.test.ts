@@ -55,3 +55,11 @@ it("person stop is terminal and preserves uncertainty for an interrupted write",
   assert.equal(stoppedAll.structuredContent.code, "stopped_by_person");
   assert.equal(stoppedAll.structuredContent.safety.retryClass, "never");
 });
+
+it("screen lock never retries interrupted reads or writes", () => {
+  for (const tool of ["list_windows", "click"]) {
+    const answer = parsed(cutOff(5, tool, { _tag: "pause", reason: "screen_locked" })).result;
+    assert.equal(answer.structuredContent.code, "screen_locked");
+    assert.equal(answer.structuredContent.safety.retryClass, "never");
+  }
+});
