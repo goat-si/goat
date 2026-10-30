@@ -446,7 +446,11 @@ export function discoverRuns(
   for (const run of sorted) {
     if (!watch.heldRuns.includes(run.runId) && (run.ordinal <= from || known(run))) continue;
     if (run.trigger === undefined && !run.terminal) held.push(run.runId);
-    else if (ownRun(watch, run.trigger) && !(run.terminal && wentOn(watch, run, sorted)))
+    // A held run is looked at again after its first end, so how that end went no longer counts.
+    else if (
+      ownRun(watch, run.trigger) &&
+      !(run.terminal && !watch.heldRuns.includes(run.runId) && wentOn(watch, run, sorted))
+    )
       pending.push(run.runId);
     else skipped = keepRecent(skipped, run.runId);
   }
@@ -480,7 +484,13 @@ export function discoverRuns(
 /** Whether a found run's end goes unreported because the thread went straight on to its own next run. */
 export const wentOnFrom = (watch: LaunchWatch, runId: RunId, runs: ReadonlyArray<WatchedRun>) => {
   const run = runs.find((candidate) => candidate.runId === runId);
-  return watch.discoveredRuns.includes(runId) && run !== undefined && wentOn(watch, run, runs);
+  // A retry owed after this end is followed to its own end, so this one is reported as usual.
+  return (
+    watch.discoveredRuns.includes(runId) &&
+    !watch.followAgain.includes(runId) &&
+    run !== undefined &&
+    wentOn(watch, run, runs)
+  );
 };
 
 /** Settles a found run without a report, remembering no end, so a send re-arming it still reports. */
@@ -515,10 +525,19 @@ export function settleRun(watch: LaunchWatch, runId: RunId, now: number): Launch
  */
 export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): LaunchWatch {
   if (watch.pendingRuns.includes(runId)) {
-    return watch.followAgain.includes(runId)
-      ? watch
-      : { ...watch, followAgain: [...watch.followAgain, runId], updatedAt: now };
+    const followAgain = watch.followAgain.includes(runId)
+      ? watch.followAgain
+      : [...watch.followAgain, runId];
+    return { ...watch, followAgain, armedAt: now, updatedAt: now };
   }
+  // A run a look left unreported is looked at again: followed if it is the thread's own.
+  if (watch.skippedRuns.includes(runId))
+    return {
+      ...watch,
+      skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
+      heldRuns: [...watch.heldRuns, runId],
+      updatedAt: now,
+    };
   if (!watch.reportedRuns.includes(runId)) return watch;
   return {
     ...watch,
