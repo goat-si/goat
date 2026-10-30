@@ -426,6 +426,8 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var tokensJson = "[]"
   private var tokens: [ComposerTokenPayload] = []
   private var requestedSelection: ComposerSelectionPayload?
+  /// The source text a caret request was made against, kept while IME composition defers it.
+  private var requestedSelectionValue: String?
   private var theme = ComposerThemePayload(
     text: "#262626",
     placeholder: "#8e8e93"
@@ -661,6 +663,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     let previousSelection = sourceSelection()
     value = document.value
     requestedSelection = document.selection
+    requestedSelectionValue = document.selection == nil ? nil : document.value
     applyControlledDocument(force: tokensNeedRebuild)
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
@@ -777,11 +780,13 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   func setSelection(start: Int, end: Int) {
     let previousSelection = sourceSelection()
     requestedSelection = ComposerSelectionPayload(start: start, end: end)
+    requestedSelectionValue = textView.serializedText()
     applyRequestedSelection()
     cancelFocusingTapRestoreIfSelectionMoved(from: previousSelection)
   }
 
   public func textViewDidChange(_ textView: UITextView) {
+    applyRequestedSelectionAfterComposition()
     emitTextChange()
   }
 
@@ -790,6 +795,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       return
     }
     restoreBaseTypingAttributes()
+    applyRequestedSelectionAfterComposition()
     // UIKit moves the selection before textViewDidChange runs. Emitting here
     // would pair the post-edit text with a pre-edit revision counter, so let
     // the change event that follows carry both; only pure caret moves emit.
@@ -883,6 +889,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     textView.attributedText = makeAttributedDocument()
     let targetSelection = requestedSelection ?? previousSelection
     requestedSelection = nil
+    requestedSelectionValue = nil
     textView.selectedRange = displayRange(for: targetSelection)
     restoreBaseTypingAttributes()
     isApplyingControlledValue = false
@@ -1087,7 +1094,13 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     guard textView.markedTextRange == nil else {
       return
     }
-    textView.typingAttributes = baseAttributes()
+    let attributes = baseAttributes()
+    // Assigning typing attributes resets the keyboard's input context, which splits a Korean
+    // syllable the keyboard is still composing; skip the write when nothing would change.
+    guard !NSDictionary(dictionary: textView.typingAttributes).isEqual(to: attributes) else {
+      return
+    }
+    textView.typingAttributes = attributes
   }
 
   private func applyTheme() {
@@ -1156,12 +1169,18 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     guard let requestedSelection else {
       return
     }
+    // Moving the caret commits marked text, so an IME composition would end mid-syllable.
+    // The request waits for the composition to finish; see applyRequestedSelectionAfterComposition.
+    guard textView.markedTextRange == nil else {
+      return
+    }
     let nextRange = displayRange(for: requestedSelection)
     guard nextRange.location <= textView.attributedText.length,
           NSMaxRange(nextRange) <= textView.attributedText.length else {
       return
     }
     self.requestedSelection = nil
+    requestedSelectionValue = nil
     // Programmatically assigning selectedRange resets the keyboard's
     // autocorrect and predictive-text context even when the range is
     // unchanged, so a no-op assignment must be skipped.
@@ -1172,6 +1191,19 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     textView.selectedRange = nextRange
     isApplyingControlledValue = false
     revealSelectionAfterLayout()
+  }
+
+  private func applyRequestedSelectionAfterComposition() {
+    guard requestedSelection != nil, textView.markedTextRange == nil else {
+      return
+    }
+    // Offsets refer to the text the request was made against; typing since then owns the caret.
+    guard requestedSelectionValue == textView.serializedText() else {
+      requestedSelection = nil
+      requestedSelectionValue = nil
+      return
+    }
+    applyRequestedSelection()
   }
 
   private func restoreSelectionBeforeFocusingTap() {
