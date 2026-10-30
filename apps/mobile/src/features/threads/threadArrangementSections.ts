@@ -6,6 +6,7 @@ import type { EnvironmentId } from "@goat/contracts";
 
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { getThreadListV2OrderedSection, threadListInboxReturns } from "./threadListV2";
+import { threadListV2ReorderExcludedKeys, type LaunchSubagentRow } from "./threadListV2LaunchFold";
 import type { PendingThreadOrder } from "./threadOrder";
 
 const keyOf = (thread: EnvironmentThreadShell) => scopedThreadKey(thread.environmentId, thread.id);
@@ -19,15 +20,23 @@ export function threadArrangementSections(input: {
   readonly snoozeEnvironmentIds: ReadonlySet<EnvironmentId>;
   readonly hiddenBotThreadKeys: ReadonlySet<string>;
   readonly workingShelfEnabled: boolean;
+  /** Subagent rows, since `threads` leaves them out. */
+  readonly launchOwners: readonly LaunchSubagentRow[];
 }) {
   const { threads, now, hiddenBotThreadKeys } = input;
-  const pinned = getThreadListV2OrderedSection({ ...input, section: "pinned" });
-  const active = getThreadListV2OrderedSection({ ...input, section: "active" });
+  // Folded and lifted rows are placed by their launcher and urgency; arranging leaves them out.
+  const excludedThreadKeys = threadListV2ReorderExcludedKeys({
+    ...input,
+    owners: input.launchOwners,
+  });
+  const pinned = getThreadListV2OrderedSection({ ...input, section: "pinned", excludedThreadKeys });
+  const active = getThreadListV2OrderedSection({ ...input, section: "active", excludedThreadKeys });
   const visible = new Set([...pinned, ...active].map(keyOf));
   const parked = threads.filter(
     (thread) =>
       thread.archivedAt === null &&
       !visible.has(keyOf(thread)) &&
+      !excludedThreadKeys.has(keyOf(thread)) &&
       !hiddenBotThreadKeys.has(keyOf(thread)),
   );
   return {

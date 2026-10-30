@@ -6,7 +6,6 @@ import {
   QUEUED_TURN_START_GRACE_MS,
   resolveSnoozePresets,
   snoozeWakeLabel,
-  threadWokeAt,
 } from "@goat/client-runtime/state/thread-settled";
 import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -43,8 +42,24 @@ import {
   reconcilePendingThreadOrder,
   type PendingThreadOrder,
 } from "./threadOrder";
+import {
+  appendWithLaunchChildren,
+  foldThreadListV2,
+  liftedThreadListV2Status,
+  resolveThreadListV2WokeAt,
+  sortLiftedThreads,
+  threadHasUnseenCompletion,
+  threadListV2Settled,
+  threadListV2Snoozed,
+  type LaunchLift,
+  type LaunchSubagentRow,
+  type ThreadListV2LaunchGroupEntry,
+  type ThreadListV2LaunchGroupState,
+  type ThreadListV2LaunchMarker,
+} from "./threadListV2LaunchFold";
+import { launchAncestorKeys, launchRootKey } from "@goat/client-runtime/state/launch-fold";
 
-export { snoozeWakeLabel };
+export { resolveThreadListV2WokeAt, snoozeWakeLabel, threadHasUnseenCompletion };
 
 export const threadListInboxReturns = createInboxReturnTracker();
 
@@ -165,24 +180,6 @@ export function nextSnoozeWakeAfter(
 export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
-export function threadHasUnseenCompletion(
-  thread: Pick<
-    EnvironmentThreadShell,
-    "latestRun" | "lastVisitedAt" | "notificationCompletedAt" | "markedUnreadCompletionAt"
-  >,
-): boolean {
-  const automatic =
-    thread.notificationCompletedAt === undefined
-      ? thread.latestRun?.completedAt
-      : thread.notificationCompletedAt;
-  const times = [automatic, thread.markedUnreadCompletionAt]
-    .map((at) => Date.parse(at ?? ""))
-    .filter(Number.isFinite);
-  if (times.length === 0 || !thread.lastVisitedAt) return false;
-  const visited = Date.parse(thread.lastVisitedAt);
-  return Number.isNaN(visited) || Math.max(...times) > visited;
-}
-
 /** The server marks unread only after a completed run, and only a recorded visit makes a thread read. */
 export function canMarkThreadUnread(
   thread: Pick<
@@ -195,20 +192,6 @@ export function canMarkThreadUnread(
     thread.latestRun?.completedAt != null &&
     !threadHasUnseenCompletion(thread)
   );
-}
-
-export function resolveThreadListV2WokeAt(
-  thread: EnvironmentThreadShell,
-  options: { readonly now: string },
-): string | null {
-  // Older servers cannot persist an acknowledgement.
-  if (thread.lastVisitedAt === undefined || thread.settledOverride === "settled") return null;
-  const wokeAt = threadWokeAt(thread, options);
-  const wokeAtMs = Date.parse(wokeAt ?? "");
-  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt ?? "");
-  return !Number.isNaN(wokeAtMs) && (Number.isNaN(lastVisitedAtMs) || lastVisitedAtMs < wokeAtMs)
-    ? wokeAt
-    : null;
 }
 
 export function resolveThreadListV2Status(
@@ -277,6 +260,8 @@ export function getThreadListV2OrderedSection(input: {
   readonly queuedThreadKeys?: ReadonlySet<string>;
   /** GOAT Bot's observation threads, by `environmentId:threadId`; they get no row. */
   readonly hiddenBotThreadKeys?: ReadonlySet<string>;
+  /** Folded and lifted rows (threadListV2ReorderExcludedKeys); they are not ordered here. */
+  readonly excludedThreadKeys?: ReadonlySet<string>;
 }): EnvironmentThreadShell[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
   const threads = input.threads.filter((thread) => {
@@ -284,7 +269,8 @@ export function getThreadListV2OrderedSection(input: {
       thread.archivedAt !== null ||
       thread.lineage.relationshipToParent === "subagent" ||
       isSideChatThread(thread) ||
-      input.hiddenBotThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true
+      input.hiddenBotThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true ||
+      input.excludedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true
     )
       return false;
     if (
@@ -320,10 +306,16 @@ export interface ThreadListV2Item {
   readonly pinned: boolean;
   readonly wokeAt: string | null;
   readonly isLast: boolean;
+  /** Launch nesting: 0 for a top-level row. */
+  readonly depth?: number;
+  /** The most urgent state folded under this row, which its card carries. */
+  readonly lift?: LaunchLift | null;
 }
 
 export interface ThreadListV2Layout {
   readonly items: ThreadListV2Item[];
+  /** Launch group lines and "+N more", each after the row it follows, in order. */
+  readonly launchMarkers?: readonly ThreadListV2LaunchMarker[];
   readonly hiddenSettledCount: number;
   /** The settled rows the shelf may list, before its visible limit. */
   readonly listedSettledThreads: ReadonlyArray<EnvironmentThreadShell>;
@@ -337,6 +329,10 @@ export interface ThreadListV2Layout {
   readonly nextSnoozeWakeAt: string | null;
   /** Threads listed only because their messages match the search. */
   readonly contentOnlyThreadKeys: ReadonlySet<string>;
+  /** Groups above the selected thread to expand and remember, as opening a folded thread does. */
+  readonly launchRevealKeys: readonly string[];
+  /** Groups above the selected thread, whose collapse lasts while it stays selected. */
+  readonly launchRouteAncestorKeys: readonly string[];
 }
 
 export interface ThreadListV2ThreadListItem {
@@ -386,12 +382,33 @@ export interface ThreadListV2SettledShelfListItem {
   readonly disabled: boolean;
 }
 
+export interface ThreadListV2LaunchGroupListItem {
+  readonly type: "v2-launch-group";
+  readonly key: string;
+  readonly parentKey: string;
+  readonly depth: number;
+  readonly label: string;
+  readonly states: ThreadListV2LaunchGroupEntry["states"];
+  readonly expanded: boolean;
+  readonly disabled: boolean;
+}
+
+export interface ThreadListV2LaunchMoreListItem {
+  readonly type: "v2-launch-more";
+  readonly key: string;
+  readonly parentKey: string;
+  readonly depth: number;
+  readonly hidden: number;
+}
+
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2WorkingShelfListItem
   | ThreadListV2SnoozedShelfListItem
-  | ThreadListV2SettledShelfListItem;
+  | ThreadListV2SettledShelfListItem
+  | ThreadListV2LaunchGroupListItem
+  | ThreadListV2LaunchMoreListItem;
 
 export function isThreadListV2ListItem(value: {
   readonly type: string;
@@ -401,7 +418,9 @@ export function isThreadListV2ListItem(value: {
     value.type === "v2-pending" ||
     value.type === "v2-working-shelf" ||
     value.type === "v2-snoozed-shelf" ||
-    value.type === "v2-settled-shelf"
+    value.type === "v2-settled-shelf" ||
+    value.type === "v2-launch-group" ||
+    value.type === "v2-launch-more"
   );
 }
 
@@ -420,6 +439,8 @@ export function threadListV2ListItemsAreEqual(
         previous.item.snoozed === item.item.snoozed &&
         previous.item.pinned === item.item.pinned &&
         previous.item.wokeAt === item.item.wokeAt &&
+        (previous.item.depth ?? 0) === (item.item.depth ?? 0) &&
+        (previous.item.lift ?? null) === (item.item.lift ?? null) &&
         previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
         previous.timeLabel === item.timeLabel &&
         previous.snoozePresetMinute === item.snoozePresetMinute &&
@@ -457,6 +478,24 @@ export function threadListV2ListItemsAreEqual(
         previous.expanded === item.expanded &&
         previous.disabled === item.disabled
       );
+    case "v2-launch-group":
+      return (
+        previous.type === "v2-launch-group" &&
+        previous.key === item.key &&
+        previous.depth === item.depth &&
+        previous.label === item.label &&
+        previous.expanded === item.expanded &&
+        previous.disabled === item.disabled &&
+        previous.states.length === item.states.length &&
+        previous.states.every((state, index) => state === item.states[index])
+      );
+    case "v2-launch-more":
+      return (
+        previous.type === "v2-launch-more" &&
+        previous.key === item.key &&
+        previous.depth === item.depth &&
+        previous.hidden === item.hidden
+      );
   }
 }
 
@@ -468,7 +507,8 @@ function resolveThreadListV2ItemTimeLabel(
   if (showSnoozeWakeLabel) return "";
   if (
     variant === "card" &&
-    (resolveThreadListV2Status(thread) !== "ready" ||
+    (liftedThreadListV2Status(resolveThreadListV2Status(thread), item.lift) !== "ready" ||
+      item.lift === "unseen" ||
       item.wokeAt !== null ||
       threadHasUnseenCompletion(thread))
   )
@@ -482,6 +522,7 @@ function resolveThreadListV2ItemTimeLabel(
 
 export function buildThreadListV2ListItems(input: {
   readonly items: ReadonlyArray<ThreadListV2Item>;
+  readonly launchMarkers?: readonly ThreadListV2LaunchMarker[];
   readonly pendingTasks: ReadonlyArray<PendingNewTask>;
   readonly workingCount?: number;
   readonly workingShelfExpanded?: boolean;
@@ -497,9 +538,36 @@ export function buildThreadListV2ListItems(input: {
   readonly queuedThreadKeys?: ReadonlySet<string>;
   readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
   readonly shelfPreferencesLoading?: boolean;
+  /** Launch groups toggle once this device's preferences load. */
+  readonly launchGroupsLoading?: boolean;
 }): ThreadListV2ListItem[] {
   const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const threadItems = input.items.map((item): ThreadListV2ListItem => {
+  const launchLine = ({ entry }: ThreadListV2LaunchMarker): ThreadListV2ListItem =>
+    entry.kind === "launch-group"
+      ? {
+          type: "v2-launch-group",
+          key: `v2-launch-group:${entry.parentKey}`,
+          parentKey: entry.parentKey,
+          depth: entry.depth,
+          label: entry.label,
+          states: entry.states,
+          expanded: entry.expanded,
+          disabled: input.launchGroupsLoading === true,
+        }
+      : {
+          type: "v2-launch-more",
+          key: `v2-launch-more:${entry.parentKey}`,
+          parentKey: entry.parentKey,
+          depth: entry.depth,
+          hidden: entry.hidden,
+        };
+  const markersAfter = new Map<number, ThreadListV2ListItem[]>();
+  for (const marker of input.launchMarkers ?? []) {
+    const lines = markersAfter.get(marker.afterIndex);
+    if (lines === undefined) markersAfter.set(marker.afterIndex, [launchLine(marker)]);
+    else lines.push(launchLine(marker));
+  }
+  const threadRows = input.items.map((item): ThreadListV2ListItem => {
     const snoozeWakeLabelText =
       item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
         ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
@@ -530,6 +598,8 @@ export function buildThreadListV2ListItems(input: {
       canMoveDown: move?.canMoveDown === true,
     };
   });
+  // Each row carries the launch lines after it, so shelf slices keep a group with its launcher.
+  const threadItems = threadRows.map((row, index) => [row, ...(markersAfter.get(index) ?? [])]);
   const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
     type: "v2-pending",
     key: `v2-${pendingTask.key}`,
@@ -546,7 +616,10 @@ export function buildThreadListV2ListItems(input: {
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
   const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  const result: ThreadListV2ListItem[] = [...pendingItems, ...threadItems.slice(0, activeEnd)];
+  const result: ThreadListV2ListItem[] = [
+    ...pendingItems,
+    ...threadItems.slice(0, activeEnd).flat(),
+  ];
   const shelfDisabled = input.shelfPreferencesLoading === true;
   if (workingShelfHeaderIndex !== null && workingCount > 0) {
     result.push({
@@ -556,7 +629,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.workingShelfExpanded === true,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(workingShelfHeaderIndex, workingEnd));
+    result.push(...threadItems.slice(workingShelfHeaderIndex, workingEnd).flat());
   }
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
@@ -566,7 +639,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.snoozedShelfExpanded === true,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd));
+    result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd).flat());
   }
   if (settledShelfHeaderIndex !== null && settledCount > 0) {
     result.push({
@@ -576,7 +649,7 @@ export function buildThreadListV2ListItems(input: {
       expanded: input.settledShelfExpanded !== false,
       disabled: shelfDisabled,
     });
-    result.push(...threadItems.slice(settledShelfHeaderIndex));
+    result.push(...threadItems.slice(settledShelfHeaderIndex).flat());
   }
   return result.map((entry, index) => {
     if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
@@ -639,8 +712,20 @@ export function buildThreadListV2Items(input: {
   readonly unloadedSettledCount?: number;
   /** GOAT Bot's observation threads, by `environmentId:threadId`; search still finds them. */
   readonly hiddenBotThreadKeys?: ReadonlySet<string>;
+  /** Subagent rows, so work a subagent launched folds under the row that owns it. */
+  readonly launchOwners?: ReadonlyArray<LaunchSubagentRow>;
+  /** Expansion of launch groups; groups stay collapsed without it. */
+  readonly launchGroups?: ThreadListV2LaunchGroupState;
+  /** Rows every reorder path leaves out (threadListV2ReorderExcludedKeys). */
+  readonly reorderExcludedKeys?: ReadonlySet<string>;
 }): ThreadListV2Layout {
   const now = input.now;
+  const lifecycle = {
+    now,
+    settlementEnvironmentIds: input.settlementEnvironmentIds,
+    snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+    queuedThreadKeys: input.queuedThreadKeys,
+  };
   const pending =
     input.pendingOrder == null
       ? null
@@ -650,6 +735,7 @@ export function buildThreadListV2Items(input: {
             ...input,
             section: input.pendingOrder.section,
             pendingOrder: null,
+            excludedThreadKeys: input.reorderExcludedKeys,
           }),
         );
   const query = foldSearchQuery(input.searchQuery);
@@ -694,7 +780,22 @@ export function buildThreadListV2Items(input: {
   // Threads listed only because their messages match; only their rows show
   // the message and open at it.
   const contentOnlyThreadKeys = new Set<string>();
+  // Searching lists matches flat; otherwise launched threads fold under their launcher's row.
+  const fold =
+    rankedMatches === null
+      ? foldThreadListV2({ listed: listedThreads, owners: input.launchOwners ?? [], lifecycle })
+      : null;
+  const lifted: EnvironmentThreadShell[] = [];
   for (const thread of listedThreads) {
+    if (thread.snoozedUntil == null || !threadListV2Snoozed(thread, lifecycle)) continue;
+    if (
+      nextSnoozeWakeAt === null ||
+      parseTimestampMs(thread.snoozedUntil) < parseTimestampMs(nextSnoozeWakeAt)
+    ) {
+      nextSnoozeWakeAt = thread.snoozedUntil;
+    }
+  }
+  for (const thread of fold?.roots ?? listedThreads) {
     if (matchingThreads !== null && !matchingThreads.has(thread)) {
       const key = threadSearchMatchKey({
         environmentId: thread.environmentId,
@@ -703,22 +804,14 @@ export function buildThreadListV2Items(input: {
       if (input.matchedThreadKeys?.has(key) !== true) continue;
       contentOnlyThreadKeys.add(key);
     }
-    const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
-    const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
-    const hasQueuedMessages =
-      queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
-    if (supportsSnooze && effectiveSnoozed(thread, { now })) {
+    if (threadListV2Snoozed(thread, lifecycle)) {
       snoozed.push(thread);
-      if (
-        thread.snoozedUntil != null &&
-        (nextSnoozeWakeAt === null ||
-          parseTimestampMs(thread.snoozedUntil) < parseTimestampMs(nextSnoozeWakeAt))
-      ) {
-        nextSnoozeWakeAt = thread.snoozedUntil;
-      }
       continue;
     }
-    if (supportsSettlement && thread.settledOverride === "settled" && !hasQueuedMessages) {
+    // Work folded under a row carries it where the web's Priority would: never in a shelf.
+    if (fold?.liftByKey.has(`${thread.environmentId}:${thread.id}`) === true) {
+      (thread.pinnedAt != null ? pinned : lifted).push(thread);
+    } else if (threadListV2Settled(thread, lifecycle)) {
       settled.push(thread);
     } else if (thread.pinnedAt != null) {
       pinned.push(thread);
@@ -766,6 +859,8 @@ export function buildThreadListV2Items(input: {
       settledShelfHeaderIndex: null,
       nextSnoozeWakeAt,
       contentOnlyThreadKeys,
+      launchRevealKeys: [],
+      launchRouteAncestorKeys: [],
     };
   }
 
@@ -778,100 +873,106 @@ export function buildThreadListV2Items(input: {
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
   );
   const selectedThreadKey = input.selectedThreadKey ?? null;
+  // A selected folded thread shows through the top-level row that holds it.
+  const selectedRowKey = fold === null ? selectedThreadKey : launchRootKey(fold, selectedThreadKey);
+  const isSelectedRow = (thread: EnvironmentThreadShell) =>
+    `${thread.environmentId}:${thread.id}` === selectedRowKey;
   const visibleWorking =
-    input.workingShelfExpanded === true
-      ? orderedWorking
-      : orderedWorking.filter(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
-        );
+    input.workingShelfExpanded === true ? orderedWorking : orderedWorking.filter(isSelectedRow);
   const visibleSnoozed =
-    input.snoozedShelfExpanded === true
-      ? orderedSnoozed
-      : orderedSnoozed.filter(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
-        );
+    input.snoozedShelfExpanded === true ? orderedSnoozed : orderedSnoozed.filter(isSelectedRow);
   const orderedSettled = sortSettledThreadsReusingLast(settled);
+  const isListedSettled = input.isListedSettled;
+  // A settled launcher is listed once it or anything folded under it has loaded.
+  const listedWithFolded = (thread: EnvironmentThreadShell): boolean =>
+    isListedSettled === undefined ||
+    isListedSettled(thread) ||
+    (fold?.childrenByParentKey.get(`${thread.environmentId}:${thread.id}`) ?? []).some(
+      listedWithFolded,
+    );
   const listedSettled =
-    input.isListedSettled === undefined
-      ? orderedSettled
-      : orderedSettled.filter(input.isListedSettled);
+    isListedSettled === undefined ? orderedSettled : orderedSettled.filter(listedWithFolded);
   const settledTotal = orderedSettled.length + (input.unloadedSettledCount ?? 0);
   const settledLimit = input.settledLimit ?? Number.POSITIVE_INFINITY;
   const limitedSettled =
     listedSettled.length > settledLimit ? listedSettled.slice(0, settledLimit) : listedSettled;
   const selectedSettled =
-    selectedThreadKey === null ||
-    limitedSettled.some((thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey)
+    selectedRowKey === null || limitedSettled.some(isSelectedRow)
       ? undefined
-      : orderedSettled.find(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
-        );
+      : orderedSettled.find(isSelectedRow);
   const pagedSettled =
     selectedSettled === undefined ? limitedSettled : [...limitedSettled, selectedSettled];
   const visibleSettled =
-    input.settledShelfExpanded !== false
-      ? pagedSettled
-      : pagedSettled.filter(
-          (thread) => `${thread.environmentId}:${thread.id}` === selectedThreadKey,
-        );
+    input.settledShelfExpanded !== false ? pagedSettled : pagedSettled.filter(isSelectedRow);
 
+  const groups = input.launchGroups;
+  const routeAncestorKeys =
+    fold === null || selectedThreadKey === null ? [] : launchAncestorKeys(fold, selectedThreadKey);
+  const isExpanded = (parentKey: string) =>
+    routeAncestorKeys.includes(parentKey)
+      ? groups?.routeCollapsed.has(parentKey) !== true
+      : groups?.expanded[parentKey] === true;
+  const childItem = (thread: EnvironmentThreadShell, depth: number): ThreadListV2Item => {
+    const childSnoozed = threadListV2Snoozed(thread, lifecycle);
+    const slim = childSnoozed || threadListV2Settled(thread, lifecycle);
+    return {
+      thread,
+      variant: slim ? "slim" : "card",
+      snoozed: childSnoozed,
+      pinned: false,
+      wokeAt: slim ? null : resolveThreadListV2WokeAt(thread, { now }),
+      isLast: false,
+      depth,
+      lift: fold?.liftByKey.get(`${thread.environmentId}:${thread.id}`) ?? null,
+    };
+  };
   const items: ThreadListV2Item[] = [];
+  const launchMarkers: ThreadListV2LaunchMarker[] = [];
+  const push = (item: Omit<ThreadListV2Item, "isLast" | "depth" | "lift">) => {
+    const lift = fold?.liftByKey.get(`${item.thread.environmentId}:${item.thread.id}`) ?? null;
+    const entry: ThreadListV2Item = { ...item, isLast: false, depth: 0, lift };
+    if (fold === null) items.push(entry);
+    else
+      appendWithLaunchChildren(items, launchMarkers, entry, {
+        fold,
+        isExpanded,
+        showAll: (parentKey) => groups?.showAll.has(parentKey) === true,
+        routeKeys: new Set(
+          selectedThreadKey === null ? [] : [selectedThreadKey, ...routeAncestorKeys],
+        ),
+        childItem,
+      });
+  };
+  const card = (thread: EnvironmentThreadShell, pinnedRow: boolean) =>
+    push({
+      thread,
+      variant: "card",
+      snoozed: false,
+      pinned: pinnedRow,
+      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
+    });
   for (const thread of applyPendingThreadOrder(
     sortPinnedThreadsByOrderKey(pinned),
     "pinned",
     pending,
   )) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: true,
-      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
-      isLast: false,
-    });
+    card(thread, true);
   }
-  for (const thread of orderedActive) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
-      isLast: false,
-    });
+  for (const thread of fold === null
+    ? []
+    : sortLiftedThreads(sortThreadsForListV2(lifted), fold.liftByKey)) {
+    card(thread, false);
   }
+  for (const thread of orderedActive) card(thread, false);
   const workingShelfHeaderIndex = orderedWorking.length > 0 ? items.length : null;
-  for (const thread of visibleWorking) {
-    items.push({
-      thread,
-      variant: "card",
-      snoozed: false,
-      pinned: false,
-      wokeAt: resolveThreadListV2WokeAt(thread, { now }),
-      isLast: false,
-    });
-  }
+  for (const thread of visibleWorking) card(thread, false);
   const snoozedShelfHeaderIndex = orderedSnoozed.length > 0 ? items.length : null;
   for (const thread of visibleSnoozed) {
-    items.push({
-      thread,
-      variant: "slim",
-      snoozed: true,
-      pinned: false,
-      wokeAt: null,
-      isLast: false,
-    });
+    push({ thread, variant: "slim", snoozed: true, pinned: false, wokeAt: null });
   }
   const settledShelfHeaderIndex = settledTotal > 0 ? items.length : null;
   for (const thread of visibleSettled) {
-    items.push({
-      thread,
-      variant: "slim",
-      snoozed: false,
-      pinned: false,
-      wokeAt: null,
-      isLast: false,
-    });
+    push({ thread, variant: "slim", snoozed: false, pinned: false, wokeAt: null });
   }
   const last = items.at(-1);
   if (last) {
@@ -879,6 +980,7 @@ export function buildThreadListV2Items(input: {
   }
   return {
     items,
+    launchMarkers,
     hiddenSettledCount: Math.max(0, settledTotal - pagedSettled.length),
     listedSettledThreads: listedSettled,
     workingCount: orderedWorking.length,
@@ -889,5 +991,9 @@ export function buildThreadListV2Items(input: {
     settledShelfHeaderIndex,
     nextSnoozeWakeAt,
     contentOnlyThreadKeys,
+    launchRevealKeys: routeAncestorKeys.filter(
+      (key) => groups?.expanded[key] !== true && groups?.routeCollapsed.has(key) !== true,
+    ),
+    launchRouteAncestorKeys: routeAncestorKeys,
   };
 }

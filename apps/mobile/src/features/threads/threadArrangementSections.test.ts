@@ -25,6 +25,7 @@ const threads = [
 function sections(hiddenBotThreadKeys: ReadonlySet<string>) {
   const environments = new Set([environmentId]);
   const result = threadArrangementSections({
+    launchOwners: [],
     threads,
     now: "2026-06-02T00:00:00.000Z",
     queuedThreadKeys: new Set(),

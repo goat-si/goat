@@ -68,13 +68,21 @@ describe("threadListV2 with GOAT Bot threads", () => {
     expect(listed("observer", hiddenBotThreadKeys)).toEqual(["observer"]);
   });
 
-  it("lists every thread as before when no bot visibility is passed", () => {
+  it("lists every thread when no bot visibility is passed, the bot's work folded under its session", () => {
     expect(listed("")).toEqual([
       "channel-worker:work",
-      "coding",
       "goat-bot-session:conversation",
       "mine",
       "observer",
+    ]);
+    const layout = buildThreadListV2Items({
+      threads,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    expect(layout.launchMarkers?.map((marker) => marker.entry.parentKey)).toEqual([
+      `${environmentId}:${SESSION}`,
     ]);
   });
 

@@ -30,6 +30,7 @@ import {
   threadDropLifecycle,
 } from "../threads/threadOrder";
 import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { threadListV2ReorderExcludedKeys } from "../threads/threadListV2LaunchFold";
 import { hiddenGoatBotThreadKeysAtom } from "../threads/goatBotThreadVisibility";
 import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
@@ -669,9 +670,8 @@ export function useThreadListActions(): {
       );
       return false;
     }
-    const ordered = getThreadListV2OrderedSection({
+    const placement = {
       threads: shells,
-      section,
       now: new Date().toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
       hiddenBotThreadKeys,
@@ -685,6 +685,11 @@ export function useThreadListActions(): {
           config.environment.capabilities.threadSnooze === true ? [id] : [],
         ),
       ),
+    };
+    const ordered = getThreadListV2OrderedSection({
+      ...placement,
+      section,
+      excludedThreadKeys: threadListV2ReorderExcludedKeys(placement),
     });
     const assignments = createThreadMovePlanner({
       allThreads: shells,

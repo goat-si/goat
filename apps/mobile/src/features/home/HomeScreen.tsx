@@ -60,10 +60,15 @@ import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
-  ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
 } from "../threads/thread-list-v2-items";
+import {
+  ThreadListV2LaunchGroupRow,
+  ThreadListV2LaunchMoreRow,
+  ThreadListV2Nested,
+  ThreadListV2ShowMoreRow,
+} from "../threads/thread-list-v2-group-rows";
 import { useThreadRowProviderInstanceResolver } from "../threads/thread-provider-instance";
 import { useOpenThreadPullRequests } from "../threads/use-open-thread-pull-requests";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
@@ -454,6 +459,7 @@ export function HomeScreen(props: HomeScreenProps) {
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    launchGroups,
   } = useThreadListV2({
     threads: props.threads,
     pendingTasks: props.pendingTasks,
@@ -576,76 +582,109 @@ export function HomeScreen(props: HomeScreenProps) {
         />
       );
     }
+    if (item.type === "v2-launch-group") {
+      return (
+        <ThreadListV2LaunchGroupRow
+          pane={primaryColumn ? "sidebar" : "screen"}
+          parentKey={item.parentKey}
+          depth={item.depth}
+          label={item.label}
+          states={item.states}
+          expanded={item.expanded}
+          disabled={item.disabled}
+          onToggle={launchGroups.toggle}
+        />
+      );
+    }
+    if (item.type === "v2-launch-more") {
+      return (
+        <ThreadListV2LaunchMoreRow
+          pane={primaryColumn ? "sidebar" : "screen"}
+          parentKey={item.parentKey}
+          depth={item.depth}
+          hidden={item.hidden}
+          onShowAll={launchGroups.showAll}
+        />
+      );
+    }
     const thread = item.item.thread;
     return (
-      <ThreadListV2Row
-        pane={primaryColumn ? "sidebar" : "screen"}
-        selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
-        fullSwipeWidth={fullSwipeWidth}
-        onNewThreadOnBranch={props.onNewThreadOnBranch}
-        thread={thread}
-        variant={item.item.variant}
-        hasQueuedMessages={item.hasQueuedMessages}
-        snoozed={item.item.snoozed}
-        pinned={item.item.pinned}
-        wokeAt={item.item.wokeAt}
-        snoozePresetMinute={item.snoozePresetMinute ?? ""}
-        snoozeWakeLabelText={item.snoozeWakeLabelText}
-        timeLabel={item.timeLabel}
-        showTrailingDivider={item.showTrailingDivider}
-        project={projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null}
-        providerInstance={resolveProviderInstance(thread)}
-        providers={providersByEnvironmentId.get(thread.environmentId)}
-        environmentLabel={
-          Object.keys(props.savedConnectionsById).length > 1
-            ? (props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
-            : null
-        }
-        environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
-        searchMatch={
-          // Only rows listed for their messages show one and open at it.
-          contentOnlyThreadKeys.has(
-            threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-          )
-            ? threadSearchMatchByKey.get(
-                threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-              )
-            : undefined
-        }
-        searchQuery={threadSearch.query}
-        onSelectThread={selectThread}
-        onOpenThreadPullRequests={handleOpenThreadPullRequests}
-        onDeleteThread={handleDeleteThread}
-        onArchiveThread={props.onArchiveThread}
-        onRenameThread={handleRenameThread}
-        onRegenerateThreadTitle={handleRegenerateThreadTitle}
-        onMarkThreadUnread={props.onMarkThreadUnread}
-        titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
-        settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
-        onSettleThread={handleSettleThread}
-        snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
-        snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
-        pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
-        autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
-        reorderSupported={
-          item.item.pinned
-            ? pinReorderEnvironmentIds.has(thread.environmentId)
-            : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
-        }
-        canMoveUp={item.canMoveUp}
-        canMoveDown={item.canMoveDown}
-        onSnoozeThread={handleSnoozeThread}
-        onUnsnoozeThread={handleUnsnoozeThread}
-        onUnsettleThread={handleUnsettleThread}
-        onPinThread={handlePinThread}
-        onUnpinThread={handleUnpinThread}
-        onSetThreadAutoSettle={handleSetThreadAutoSettle}
-        onMoveThread={handleMoveThread}
-        onSwipeableClose={handleSwipeableClose}
-        onSwipeableWillOpen={handleSwipeableWillOpen}
-        simultaneousSwipeGesture={homeScrollGesture}
-        activationKey={item.key}
-      />
+      <ThreadListV2Nested depth={item.item.depth ?? 0}>
+        <ThreadListV2Row
+          pane={primaryColumn ? "sidebar" : "screen"}
+          selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
+          fullSwipeWidth={fullSwipeWidth}
+          onNewThreadOnBranch={props.onNewThreadOnBranch}
+          thread={thread}
+          variant={item.item.variant}
+          hasQueuedMessages={item.hasQueuedMessages}
+          snoozed={item.item.snoozed}
+          pinned={item.item.pinned}
+          wokeAt={item.item.wokeAt}
+          lift={item.item.lift}
+          snoozePresetMinute={item.snoozePresetMinute ?? ""}
+          snoozeWakeLabelText={item.snoozeWakeLabelText}
+          timeLabel={item.timeLabel}
+          showTrailingDivider={item.showTrailingDivider}
+          project={
+            projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
+          }
+          providerInstance={resolveProviderInstance(thread)}
+          providers={providersByEnvironmentId.get(thread.environmentId)}
+          environmentLabel={
+            Object.keys(props.savedConnectionsById).length > 1
+              ? (props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
+              : null
+          }
+          environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
+          searchMatch={
+            // Only rows listed for their messages show one and open at it.
+            contentOnlyThreadKeys.has(
+              threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
+            )
+              ? threadSearchMatchByKey.get(
+                  threadSearchMatchKey({
+                    environmentId: thread.environmentId,
+                    threadId: thread.id,
+                  }),
+                )
+              : undefined
+          }
+          searchQuery={threadSearch.query}
+          onSelectThread={selectThread}
+          onOpenThreadPullRequests={handleOpenThreadPullRequests}
+          onDeleteThread={handleDeleteThread}
+          onArchiveThread={props.onArchiveThread}
+          onRenameThread={handleRenameThread}
+          onRegenerateThreadTitle={handleRegenerateThreadTitle}
+          onMarkThreadUnread={props.onMarkThreadUnread}
+          titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+          settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+          onSettleThread={handleSettleThread}
+          snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+          snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
+          pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
+          autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+          reorderSupported={
+            item.item.pinned
+              ? pinReorderEnvironmentIds.has(thread.environmentId)
+              : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+          }
+          canMoveUp={item.canMoveUp}
+          canMoveDown={item.canMoveDown}
+          onSnoozeThread={handleSnoozeThread}
+          onUnsnoozeThread={handleUnsnoozeThread}
+          onUnsettleThread={handleUnsettleThread}
+          onPinThread={handlePinThread}
+          onUnpinThread={handleUnpinThread}
+          onSetThreadAutoSettle={handleSetThreadAutoSettle}
+          onMoveThread={handleMoveThread}
+          onSwipeableClose={handleSwipeableClose}
+          onSwipeableWillOpen={handleSwipeableWillOpen}
+          simultaneousSwipeGesture={homeScrollGesture}
+          activationKey={item.key}
+        />
+      </ThreadListV2Nested>
     );
   };
   const v2KeyExtractor = (item: ThreadListV2ListItem) => item.key;
