@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -24,6 +25,7 @@ export interface Request {
 
 interface Pending extends Request {
   readonly claimId: string;
+  readonly createdAt: number;
   granted: boolean;
 }
 
@@ -159,11 +161,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   };
   const request = Effect.fn("BrowserOriginGrants.request")((input: Request) =>
     lock.withPermits(1)(
-      Effect.sync(() => {
+      Effect.gen(function* () {
         if (!deps.supported()) return unavailable;
         if (!isOrigin(input.origin)) return invalidOrigin;
+        const createdAt = yield* Clock.currentTimeMillis;
         const claimId = `browser-claim:${++sequence}`;
-        pending.set(claimId, { ...input, claimId, granted: false });
+        pending.set(claimId, { ...input, claimId, createdAt, granted: false });
+        yield* advance;
         return { status: "pending" as const, claimId };
       }),
     ),
@@ -173,11 +177,12 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       Effect.gen(function* () {
         const entry = pending.get(claimId);
         if (entry === undefined || !approved || !deps.supported()) {
-          pending.delete(claimId);
+          if (pending.delete(claimId)) yield* advance;
           return { agentResult: decline };
         }
         if (deps.bindAvailable?.() === false) {
           pending.delete(claimId);
+          yield* advance;
           return { agentResult: unavailable };
         }
         const epoch = driverEpoch;
@@ -251,6 +256,41 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           grant.threadId === threadId && !uncommittedGrants.has(key(grant.threadId, grant.origin)),
       ),
     })),
+  );
+  const claim = Effect.fn("BrowserOriginGrants.claim")(function* (input: Request) {
+    const result = yield* request(input);
+    if (result.status !== "pending") return { agentResult: result };
+    return yield* answer(result.claimId, true);
+  });
+  const listAll = Effect.fn("BrowserOriginGrants.listAll")(() =>
+    Effect.sync(() => ({
+      claims: [...claims.values()],
+      grants: [...grants.values()].filter(
+        (grant) => !uncommittedGrants.has(key(grant.threadId, grant.origin)),
+      ),
+      pending: [...pending.values()].map(
+        ({ claimId, threadId, pid, windowId, origin, windowTitle, createdAt }) => ({
+          claimId,
+          threadId,
+          pid,
+          windowId,
+          origin,
+          windowTitle,
+          createdAt,
+        }),
+      ),
+    })),
+  );
+  const endPerson = Effect.fn("BrowserOriginGrants.endPerson")((claimId: string) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        const claim = claims.get(claimId);
+        if (!claim) return false;
+        claims.delete(claimId);
+        yield* shrink(union());
+        return true;
+      }),
+    ),
   );
   const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
     lock.withPermits(1)(
@@ -360,7 +400,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   return {
     request,
     answer,
+    claim,
     list,
+    listAll,
+    endPerson,
     revoke,
     stop,
     end,
