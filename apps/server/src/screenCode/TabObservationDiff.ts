@@ -15,6 +15,9 @@ const comparableLine = (line: string) => line.trim().replace(/\[ref=[^\]]+\]/, "
 const rows = (draft: ScreenObservationDraft) => {
   const elements = new Map(draft.elements.map((element) => [element.driverToken, element]));
   if (elements.size !== draft.elements.length) return undefined;
+  const nativeRefs = new Set(draft.elements.map((element) => nativeRef(element.driverToken)));
+  if (nativeRefs.size !== draft.elements.length) return undefined;
+  if (draft.elements.some((element) => element.driverToken.startsWith("aria-ref=t3-") && nativeRef(element.driverToken) === element.driverToken)) return undefined;
   const found = new Set<string>();
   const byIdentity = new Map<string, { line: string; element: Element; index: number }>();
   const plain: string[] = [];
