@@ -2,6 +2,7 @@ import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { aimClick, watchClick } from "./clickEffect.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { testActionGate } from "./actionChannel.testkit.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 const fixture = async (run: (page: Page) => Promise<void>) => {
@@ -277,8 +278,14 @@ it("credits a menu opened by a right click or a double click", () =>
     await expect(
       ServerBrowserPage.click(page, { selector: "#right", button: "right" }),
     ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["dom"]) });
+    const cdp = await page.context().newCDPSession(page);
     await expect(
-      ServerBrowserPage.click(page, { selector: "#double", clickCount: 2 }),
+      ServerBrowserPage.click(
+        page,
+        { selector: "#double", clickCount: 2 },
+        undefined,
+        testActionGate(page, cdp),
+      ),
     ).resolves.toMatchObject({ effect: "confirmed", evidence: expect.arrayContaining(["dom"]) });
   }));
 

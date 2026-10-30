@@ -4,6 +4,7 @@ import type { PreviewAutomationUploadInput } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ElementHandle, Frame, Page } from "playwright-core";
+import type { ActionChannel } from "./actionChannel.ts";
 
 import {
   DEFAULT_TIMEOUT_MS,
@@ -18,13 +19,12 @@ import {
  * nearest ancestor's that is, else the page's. A same-site child of a cross-site frame shares that
  * frame's process, so the page's session cannot see it.
  */
-const sessionFor = async (frame: Frame): Promise<CDPSession> => {
-  const context = frame.page().context();
+const sessionFor = async (frame: Frame, channel: ActionChannel): Promise<CDPSession> => {
   for (let current: Frame | null = frame; current !== null; current = current.parentFrame()) {
-    const session = await context.newCDPSession(current).catch(() => null);
+    const session = await channel.newCDPSession(current).catch(() => null);
     if (session !== null) return session;
   }
-  return context.newCDPSession(frame.page());
+  return channel.newCDPSession(frame.page());
 };
 
 /**
@@ -32,10 +32,10 @@ const sessionFor = async (frame: Frame): Promise<CDPSession> => {
  * runs that frame. Its frames are listed by turning Runtime on in that session alone, so no
  * session the tab keeps changes state.
  */
-const framedInput = async (handle: ElementHandle, key: string) => {
-  const frame = await handle.ownerFrame();
+const framedInput = async (handle: ElementHandle, key: string, channel: ActionChannel) => {
+  const frame = await channel.ownerFrame(handle);
   if (frame === null) return undefined;
-  const session = await sessionFor(frame);
+  const session = await sessionFor(frame, channel);
   try {
     const worlds: Array<number> = [];
     const onContext = (event: {
@@ -45,24 +45,24 @@ const framedInput = async (handle: ElementHandle, key: string) => {
       if (aux?.isDefault === true) worlds.push(event.context.id);
     };
     session.on("Runtime.executionContextCreated", onContext);
-    await session.send("Runtime.enable");
+    await channel.sendFor(session)("Runtime.enable");
     session.off("Runtime.executionContextCreated", onContext);
     for (const contextId of worlds) {
-      const found = await session
-        .send("Runtime.evaluate", { expression: `globalThis.${key}`, contextId })
+      const found = await channel
+        .sendFor(session)("Runtime.evaluate", { expression: `globalThis.${key}`, contextId })
         .catch(() => undefined);
       if (found?.result.subtype === "node" && found.result.objectId !== undefined) {
-        const { node } = await session.send("DOM.describeNode", {
+        const { node } = await channel.sendFor(session)("DOM.describeNode", {
           objectId: found.result.objectId,
         });
         return { session, backendNodeId: node.backendNodeId };
       }
     }
   } catch (cause) {
-    void session.detach().catch(constVoid);
+    void channel.detach(session).catch(constVoid);
     throw cause;
   }
-  void session.detach().catch(constVoid);
+  void channel.detach(session).catch(constVoid);
   return undefined;
 };
 
@@ -77,20 +77,34 @@ export const uploadInto = async (
   paths: ReadonlyArray<string>,
   gate: DispatchGate,
 ) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for upload.");
+  const send = channel.sendFor(cdp);
   const key = `__goatUploadTarget_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
   let stashed = false;
   try {
     await gate();
     gate.signal?.throwIfAborted();
-    const multiple = await handle.evaluate((element, name) => {
-      type FileInput = { tagName?: string; type?: string; multiple?: boolean; disabled?: boolean };
-      const target = (
-        element.tagName === "LABEL" ? (element as unknown as { control: unknown }).control : element
-      ) as FileInput | null;
-      if (target?.tagName !== "INPUT" || target.type !== "file" || target.disabled) return null;
-      (globalThis as unknown as Record<string, unknown>)[name] = target;
-      return target.multiple === true;
-    }, key);
+    const multiple = (await channel.evaluate(
+      handle,
+      (element: { tagName: string }, name: string) => {
+        type FileInput = {
+          tagName?: string;
+          type?: string;
+          multiple?: boolean;
+          disabled?: boolean;
+        };
+        const target = (
+          element.tagName === "LABEL"
+            ? (element as unknown as { control: unknown }).control
+            : element
+        ) as FileInput | null;
+        if (target?.tagName !== "INPUT" || target.type !== "file" || target.disabled) return null;
+        (globalThis as unknown as Record<string, unknown>)[name] = target;
+        return target.multiple === true;
+      },
+      key,
+    )) as boolean | null;
     stashed = multiple !== null;
     if (multiple === null)
       throw new ServerBrowserOperationError(
@@ -103,41 +117,41 @@ export const uploadInto = async (
         "This file input accepts one file.",
       );
     // A main-frame input resolves on the tab's session; a framed one's global is not there.
-    const found = await cdp.send("Runtime.evaluate", { expression: `globalThis.${key}` });
+    const found = await send("Runtime.evaluate", { expression: `globalThis.${key}` });
     const objectId = found.result.subtype === "node" ? found.result.objectId : undefined;
     if (objectId !== undefined) {
-      const { node } = await cdp.send("DOM.describeNode", { objectId });
-      await gate();
-      gate.signal?.throwIfAborted();
-      await cdp.send("DOM.setFileInputFiles", {
+      const { node } = await send("DOM.describeNode", { objectId });
+      await send("DOM.setFileInputFiles", {
         files: [...paths],
         backendNodeId: node.backendNodeId,
       });
       return;
     }
-    const framed = await framedInput(handle, key);
+    const framed = await framedInput(handle, key, channel);
     if (framed === undefined)
       throw new ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         "GOAT could not reach this file input's frame, so nothing was uploaded.",
       );
     try {
-      await gate();
-      gate.signal?.throwIfAborted();
-      await framed.session.send("DOM.setFileInputFiles", {
+      await channel.sendFor(framed.session)("DOM.setFileInputFiles", {
         files: [...paths],
         backendNodeId: framed.backendNodeId,
       });
     } finally {
-      void framed.session.detach().catch(constVoid);
+      void channel.detach(framed.session).catch(constVoid);
     }
   } finally {
     // The global lives in whichever frame owns the input; deleting it there is the frame's own call.
     if (stashed)
-      await handle
-        .evaluate((_element, name) => {
-          delete (globalThis as unknown as Record<string, unknown>)[name];
-        }, key)
+      await channel
+        .evaluate(
+          handle,
+          (_element: unknown, name: string) => {
+            delete (globalThis as unknown as Record<string, unknown>)[name];
+          },
+          key,
+        )
         .catch(constVoid);
   }
 };
@@ -150,11 +164,13 @@ export const setInputFiles = async (
 ) => {
   const locator = targetLocator(page, input);
   if (locator === null) return false;
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for upload.");
   const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.signal);
   try {
     await uploadInto(cdp, handle, input.paths, gate);
   } finally {
-    void handle.dispose().catch(constVoid);
+    if (!gate.signal?.aborted) void channel.dispose(handle).catch(constVoid);
   }
   return true;
 };

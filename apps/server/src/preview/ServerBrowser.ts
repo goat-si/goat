@@ -109,6 +109,7 @@ import { READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch } from "./inPageFetch.ts";
 import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
+import { secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import {
   assertReusable,
@@ -1769,8 +1770,12 @@ const make = Effect.gen(function* () {
         "agentMismatch",
       );
     if (request.operation === "fillSecret")
-      return secretFill.fill(tab, request, deadlineMs, recordAction, (destination) =>
-        blockedTabs.assertTab(tab, request.runId, destination),
+      return secretFill.fill(
+        tab,
+        request,
+        deadlineMs,
+        recordAction,
+        secretBlockedGate(tab, request.runId, blockedTabs),
       );
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
@@ -1845,11 +1850,7 @@ const make = Effect.gen(function* () {
     const input = request.input;
     await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
-    const actionGate = () =>
-      Object.assign(
-        blockedTabs.gate(tab, request.runId, ServerBrowserScreen.screenActionGate(tab, request)),
-        { deadline: deadlineMs, signal },
-      );
+    const actionGate = () => tabActionGate(tab, request, blockedTabs, deadlineMs, signal);
     switch (request.operation) {
       case "back":
       case "forward":

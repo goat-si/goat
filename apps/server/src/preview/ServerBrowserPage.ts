@@ -20,6 +20,8 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { pointerInterception } from "./pointerInterception.ts";
+import { subsequentClick } from "./actionClick.ts";
+import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
   abortable,
@@ -195,7 +197,6 @@ export type PointerReporter = (
   phase: "move" | "click",
 ) => Promise<void>;
 const noPointer: PointerReporter = async () => {};
-
 /** A gate rechecks authority after target waits; linger covers input still draining after return. */
 export interface DispatchGate {
   (): void | Promise<void>;
@@ -205,6 +206,7 @@ export interface DispatchGate {
   /** When the caller stops waiting, on the performance.now() clock; no input goes out after it. */
   readonly deadline?: number;
   readonly signal?: AbortSignal | undefined;
+  readonly channel?: import("./actionChannel.ts").ActionChannel | undefined;
 }
 const open: DispatchGate = () => {};
 
@@ -727,9 +729,7 @@ export const click = async (
       return locator === null
         ? page.mouse.click(point.x, point.y, { button })
         : locator.click({ button, ...dispatched(deadline) });
-    return page.mouse
-      .down({ button, clickCount: count })
-      .then(() => page.mouse.up({ button, clickCount: count }));
+    return subsequentClick(gate, point, button, count);
   };
   let presses = 0;
   try {
@@ -1055,23 +1055,15 @@ export const evaluate = async (
 ) => {
   const before = frameUrls(page);
   await gate?.();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      // Stops a busy script; an awaited promise is abandoned and settles unread.
-      void cdp.send("Runtime.terminateExecution").catch(constVoid);
-      reject(
-        new ServerBrowserOperationError(
-          "PreviewAutomationTimeoutError",
-          `Evaluation did not finish within ${timeoutMs}ms and was stopped.`,
-        ),
-      );
-    }, timeoutMs);
-  });
-  const evaluation = cdp.send("Runtime.evaluate", {
+  const channel = requireEvaluationChannel(gate);
+  const evaluation = channel.send("Runtime.evaluate", {
     expression: input.expression,
     awaitPromise: input.awaitPromise ?? true,
     returnByValue: input.returnByValue ?? true,
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => evaluationExpired(channel, reject, timeoutMs), timeoutMs);
   });
   void evaluation.catch(constVoid);
   const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));

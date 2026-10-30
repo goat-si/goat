@@ -103,7 +103,10 @@ const request = (operation: PreviewAutomationRequest["operation"], input: unknow
 
 const fillRequest = request("fillSecret", { secretRef: ref, selector: "#pw" });
 const record = <T, A>(_tab: T, _action: string, run: () => Promise<A>) => run();
-const checkBlocked = async () => {};
+const checkBlocked = Object.assign(async () => {}, {
+  isFenced: () => false,
+  blockedFrame: () => false,
+});
 
 /** A one-use ref whose consumption can run a hook first, as a person's Stop would land. */
 const withFill = <A>(
@@ -679,10 +682,19 @@ it.effect("refuses a blocked password destination before consuming or filling", 
   const { tab, field } = makeTab();
   return withFill(async (fill, state) => {
     const result = await fill
-      .fill(tab, fillRequest, later(), record, async (destination?: string) => {
-        if (destination === "https://login.test")
-          throw new BrowserControlInterrupted("blocked", "blocked_url");
-      })
+      .fill(
+        tab,
+        fillRequest,
+        later(),
+        record,
+        Object.assign(
+          async (destination?: string) => {
+            if (destination === "https://login.test")
+              throw new BrowserControlInterrupted("blocked", "blocked_url");
+          },
+          { isFenced: () => false, blockedFrame: () => false },
+        ),
+      )
       .then(
         () => ({ ok: true as const }),
         (error: unknown) => ({ ok: false as const, error }),

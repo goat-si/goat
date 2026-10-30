@@ -1,6 +1,7 @@
 import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { testActionGate } from "./actionChannel.testkit.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 // These drive headless Chromium, as the CU Lab fixture (160_cu_benchmark cu_lab.html) found the bugs.
@@ -261,7 +262,13 @@ it("a click with clickCount 2 lands two clicks and one double click, as the cell
         'cv.addEventListener("click", () => seen.push("click"));' +
         'cv.addEventListener("dblclick", () => seen.push("dblclick"));</script>',
     );
-    await ServerBrowserPage.click(page, { selector: "#cv", clickCount: 2 });
+    const cdp = await page.context().newCDPSession(page);
+    await ServerBrowserPage.click(
+      page,
+      { selector: "#cv", clickCount: 2 },
+      undefined,
+      testActionGate(page, cdp),
+    );
     expect(await page.evaluate("seen")).toEqual(["click", "click", "dblclick"]);
   }));
 

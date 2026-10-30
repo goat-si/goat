@@ -29,12 +29,30 @@ export const makeActionChannel = ({
     if (isFenced() || blockedFrame())
       throw new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
   };
-  const send = ((...args: Parameters<CDPSession["send"]>) => {
-    check();
-    return Reflect.apply(cdp.send, cdp, args);
-  }) as CDPSession["send"];
+  const sendFor = (session: CDPSession): CDPSession["send"] =>
+    ((...args: Parameters<CDPSession["send"]>) => {
+      check();
+      return Reflect.apply(session.send, session, args);
+    }) as CDPSession["send"];
   return {
-    send,
+    send: sendFor(cdp),
+    sendFor,
+    detach: (session: CDPSession) => {
+      check();
+      return session.detach();
+    },
+    ownerFrame: (handle: ElementHandle) => {
+      check();
+      return handle.ownerFrame();
+    },
+    dispose: (handle: ElementHandle) => {
+      check();
+      return handle.dispose();
+    },
+    newCDPSession: (target: Page | Frame) => {
+      check();
+      return page.context().newCDPSession(target);
+    },
     mouse: {
       down: (...args: Parameters<Page["mouse"]["down"]>) => {
         check();
@@ -80,3 +98,5 @@ export const makeActionChannel = ({
       }),
   };
 };
+
+export type ActionChannel = ReturnType<typeof makeActionChannel>;

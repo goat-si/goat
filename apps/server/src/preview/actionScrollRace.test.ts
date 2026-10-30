@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 import { collectWhileScrolling } from "./scrollCollector.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 it.effect("a blocked cut during the collector gate sends no mouse input", () =>
@@ -15,6 +16,7 @@ it.effect("a blocked cut during the collector gate sends no mouse input", () =>
       );
       const page = yield* Effect.promise(() => browser.newPage());
       vi.spyOn(page, "waitForTimeout").mockResolvedValue();
+      const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
       const move = vi.spyOn(page.mouse, "move");
       const wheel = vi.spyOn(page.mouse, "wheel");
       const entered = yield* Deferred.make<void>();
@@ -33,7 +35,7 @@ it.effect("a blocked cut during the collector gate sends no mouse input", () =>
               Deferred.doneUnsafe(entered, Effect.void);
               await latch.promise;
             },
-            { signal },
+            { signal, channel: testActionChannel(page, cdp, signal) },
           ),
           { maxScrolls: 1 },
         ),

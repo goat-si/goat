@@ -11,12 +11,27 @@ import {
 } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import {
-  collectWhileScrolling,
+  collectWhileScrolling as collect,
   matchesResponse,
   type CollectorPage,
   type CollectorResponse,
+  type ScrollCollectOptions,
 } from "./scrollCollector.ts";
 import { SessionControl } from "./SessionControl.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
+import type { CDPSession } from "playwright-core";
+import type { DispatchGate } from "./ServerBrowserPage.ts";
+
+const collectWhileScrolling = (
+  page: CollectorPage,
+  control: SessionControl,
+  gate: DispatchGate,
+  options?: ScrollCollectOptions,
+) => {
+  const cdp = {} as CDPSession;
+  const channel = testActionChannel(page as Page, cdp, gate.signal);
+  return collect(page, control, Object.assign(gate, { channel }), options);
+};
 
 const response = (
   json: unknown,

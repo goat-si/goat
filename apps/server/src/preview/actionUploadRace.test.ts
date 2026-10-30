@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 import * as PreviewUpload from "./PreviewUpload.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 it.effect("a blocked cut after upload preparation starts no further browser commands", () =>
@@ -46,7 +47,7 @@ it.effect("a blocked cut after upload preparation starts no further browser comm
           cdp,
           delayed,
           [],
-          Object.assign(() => {}, { signal }),
+          Object.assign(() => {}, { signal, channel: testActionChannel(page, cdp, signal) }),
         ),
       );
       void action.catch(() => undefined);

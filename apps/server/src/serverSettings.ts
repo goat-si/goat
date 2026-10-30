@@ -2087,10 +2087,9 @@ const make = Effect.gen(function* () {
       Effect.map(resolveTextGenerationProvider),
     ),
     blockedBrowserHostsSnapshot: Ref.get(blockedBrowserHostsRef).pipe(
-      Effect.flatMap((hosts) =>
-        hosts === null
-          ? Effect.fail(new ServerSettingsError({ settingsPath, operation: "read-file" }))
-          : Effect.succeed(hosts),
+      Effect.filterOrFail(
+        (hosts): hosts is ReadonlyArray<string> => hosts !== null,
+        () => new ServerSettingsError({ settingsPath, operation: "read-file" }),
       ),
     ),
     committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),

@@ -11,6 +11,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import { makeBlockedTabFence } from "./blockedTabFence.ts";
 import { inputFence } from "./PreviewInputFence.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 import { SessionControl } from "./SessionControl.ts";
 
@@ -120,12 +121,20 @@ it.effect(
         let exposed = -1;
         const { uploadInto } = yield* Effect.promise(() => import("./PreviewUpload.ts"));
         const error = yield* Effect.promise(() =>
-          uploadInto(cdp, handle, [], async () => {
-            exposed = await page.evaluate(
-              "Object.keys(globalThis).filter(k => k.startsWith('__goatUploadTarget_')).length",
-            );
-            throw new Error("fenced");
-          }).then(
+          uploadInto(
+            cdp,
+            handle,
+            [],
+            Object.assign(
+              async () => {
+                exposed = await page.evaluate(
+                  "Object.keys(globalThis).filter(k => k.startsWith('__goatUploadTarget_')).length",
+                );
+                throw new Error("fenced");
+              },
+              { channel: testActionChannel(page, cdp) },
+            ),
+          ).then(
             () => undefined,
             (cause: unknown) => cause,
           ),

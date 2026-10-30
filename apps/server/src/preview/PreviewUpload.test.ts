@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 
 const FRAMED =
   '<input id="g" type="file"><input id="h" type="file"><script>window.changes = 0; g.addEventListener("change", () => changes++); h.addEventListener("change", () => changes++)</script>';
@@ -78,9 +79,17 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
         ),
       ).toBe(ownSession);
       let gates = 0;
-      await PreviewUpload.setInputFiles(page, cdp, { locator: `${path}#g`, paths: [file] }, () => {
-        gates++;
-      });
+      await PreviewUpload.setInputFiles(
+        page,
+        cdp,
+        { locator: `${path}#g`, paths: [file] },
+        Object.assign(
+          () => {
+            gates++;
+          },
+          { channel: testActionChannel(page, cdp) },
+        ),
+      );
       expect(gates).toBe(1);
       const state = (id: string) =>
         inside
@@ -91,9 +100,17 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
           ]);
       expect(await state("#g")).toEqual(["note.txt", 1]);
       await expect(
-        PreviewUpload.setInputFiles(page, cdp, { locator: `${path}#h`, paths: [file] }, () => {
-          throw new Error("stopped");
-        }),
+        PreviewUpload.setInputFiles(
+          page,
+          cdp,
+          { locator: `${path}#h`, paths: [file] },
+          Object.assign(
+            () => {
+              throw new Error("stopped");
+            },
+            { channel: testActionChannel(page, cdp) },
+          ),
+        ),
       ).rejects.toThrow("stopped");
       expect(await state("#h")).toEqual([null, 1]);
     }

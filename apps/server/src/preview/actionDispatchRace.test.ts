@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 it.effect("a blocked cut while the evaluation gate waits sends no expression", () =>
@@ -33,7 +34,7 @@ it.effect("a blocked cut while the evaluation gate waits sends no expression", (
               Deferred.doneUnsafe(entered, Effect.void);
               await latch.promise;
             },
-            { signal },
+            { signal, channel: testActionChannel(page, cdp, signal) },
           ),
         ),
       );

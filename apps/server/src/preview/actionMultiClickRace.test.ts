@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 it.effect("a cut during the second press prevents an ungated mouse-up", () =>
@@ -17,6 +18,8 @@ it.effect("a cut during the second press prevents an ungated mouse-up", () =>
       yield* Effect.promise(() =>
         page.setContent('<button style="width:200px;height:200px">click</button>'),
       );
+      const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+      const sent = vi.spyOn(cdp, "send");
       const entered = yield* Deferred.make<void>();
       const resume = yield* Deferred.make<void>();
       const latch = Promise.withResolvers<void>();
@@ -36,7 +39,10 @@ it.effect("a cut during the second press prevents an ungated mouse-up", () =>
           page,
           { x: 20, y: 20, clickCount: 2 },
           undefined,
-          Object.assign(control.dispatchGate(), { signal }),
+          Object.assign(control.dispatchGate(), {
+            signal,
+            channel: testActionChannel(page, cdp, signal),
+          }),
         ),
       );
       void action.catch(() => undefined);
@@ -52,6 +58,12 @@ it.effect("a cut during the second press prevents an ungated mouse-up", () =>
       yield* Effect.promise(() => control.system(async () => {}));
       expect(result).toMatchObject({ reason: "blocked_url" });
       expect(up).not.toHaveBeenCalled();
+      expect(sent.mock.calls.filter(([method]) => method === "Input.dispatchMouseEvent")).toEqual([
+        [
+          "Input.dispatchMouseEvent",
+          { type: "mouseReleased", x: 20, y: 20, button: "left", buttons: 0, clickCount: 1 },
+        ],
+      ]);
     }),
   ),
 );

@@ -8,6 +8,7 @@
  *
  * @module scrollCollector
  */
+import type { DispatchGate } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, type SessionControl } from "./SessionControl.ts";
 
 /** The part of a Playwright response the collector reads. */
@@ -131,16 +132,18 @@ const noteFor = (items: number, responses: number, stoppedBecause: ScrollCollect
 export const collectWhileScrolling = (
   page: CollectorPage,
   control: Pick<SessionControl, "observe" | "isPrivate">,
-  gate: () => void | Promise<void>,
+  gate: DispatchGate,
   options: ScrollCollectOptions = {},
 ) => control.observe(() => collect(page, control, gate, options));
 
 const collect = async (
   page: CollectorPage,
   control: Pick<SessionControl, "isPrivate">,
-  gate: () => void | Promise<void>,
+  gate: DispatchGate,
   options: ScrollCollectOptions,
 ): Promise<ScrollCollectResult> => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for scrolling.");
   const minItems =
     options.minItems === undefined
       ? Number.POSITIVE_INFINITY
@@ -247,9 +250,9 @@ const collect = async (
       const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
       const next = arm();
       await dispatch();
-      await page.mouse.move(Math.floor(viewport.width / 2), Math.floor(viewport.height / 2));
+      await channel.mouse.move(Math.floor(viewport.width / 2), Math.floor(viewport.height / 2));
       await dispatch();
-      await page.mouse.wheel(0, Math.floor(viewport.height * 0.9));
+      await channel.mouse.wheel(0, Math.floor(viewport.height * 0.9));
       rounds += 1;
       await settle(next);
     }
