@@ -1,14 +1,16 @@
-import type {
-  NodeId,
-  OrchestrationV2AppThread,
-  OrchestrationV2ConversationMessage,
-  OrchestrationV2ProviderThread,
-  OrchestrationV2ProviderTurn,
-  OrchestrationV2Run,
-  OrchestrationV2RunAttempt,
-  OrchestrationV2Subagent,
-  OrchestrationV2TurnItem,
-  OrchestratorMcpReviewRound,
+import {
+  isCompactionCommandMessage,
+  type NodeId,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2ContextTransfer,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Run,
+  type OrchestrationV2RunAttempt,
+  type OrchestrationV2Subagent,
+  type OrchestrationV2TurnItem,
+  type OrchestratorMcpReviewRound,
 } from "@goat/contracts";
 
 /**
@@ -22,6 +24,9 @@ export interface ReviewChildRecords {
   readonly runs: ReadonlyArray<OrchestrationV2Run>;
   readonly attempts: ReadonlyArray<OrchestrationV2RunAttempt>;
   readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
+  readonly contextTransfers: ReadonlyArray<
+    Pick<OrchestrationV2ContextTransfer, "type" | "targetThreadId" | "targetRunId">
+  >;
 }
 
 type ReviewTask = Pick<OrchestrationV2Subagent, "id" | "prompt" | "continuedFrom">;
@@ -39,20 +44,36 @@ const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
 
 export const isSlashPrompt = (text: string) => text.trimStart().startsWith("/");
 
-/** The task's runs. The original task owns the child's runs that no later task claimed. */
+/**
+ * The task's runs. The original task owns its spawn run and that run's restart continuations;
+ * a later task owns the runs bound to it.
+ */
 function reviewTaskRuns(
-  child: Pick<ReviewChildRecords, "runs">,
+  child: Pick<ReviewChildRecords, "thread" | "runs" | "contextTransfers">,
   task: Pick<OrchestrationV2Subagent, "id">,
   isOriginal: boolean,
 ): ReadonlyArray<OrchestrationV2Run> {
-  return child.runs.filter((run) =>
-    isOriginal ? run.delegatedTaskId === undefined : run.delegatedTaskId === task.id,
-  );
+  if (!isOriginal) return child.runs.filter((run) => run.delegatedTaskId === task.id);
+  const sorted = child.runs.toSorted((left, right) => left.ordinal - right.ordinal);
+  const spawnRunId =
+    child.contextTransfers.find(
+      (transfer) =>
+        transfer.type === "subagent_spawn" && transfer.targetThreadId === child.thread.id,
+    )?.targetRunId ?? sorted[0]?.id;
+  const owned = new Set(spawnRunId === undefined || spawnRunId === null ? [] : [spawnRunId]);
+  for (const run of sorted)
+    if (
+      run.delegatedTaskId === undefined &&
+      run.restartContinuationOfRunId !== undefined &&
+      owned.has(run.restartContinuationOfRunId)
+    )
+      owned.add(run.id);
+  return sorted.filter((run) => owned.has(run.id));
 }
 
 /** The run that carried the task's brief: its first run that is not a restart continuation. */
 function briefRun(
-  child: Pick<ReviewChildRecords, "runs">,
+  child: Pick<ReviewChildRecords, "thread" | "runs" | "contextTransfers">,
   task: Pick<OrchestrationV2Subagent, "id">,
   isOriginal: boolean,
 ): OrchestrationV2Run | undefined {
@@ -116,7 +137,12 @@ function reviewBaseline(
  */
 export function reviewContinuationRefusal(input: {
   readonly child: ReviewChildRecords & {
-    readonly messages: ReadonlyArray<Pick<OrchestrationV2ConversationMessage, "id" | "text">>;
+    readonly messages: ReadonlyArray<
+      Pick<
+        OrchestrationV2ConversationMessage,
+        "id" | "role" | "text" | "attachments" | "idleCompaction"
+      >
+    >;
     readonly providerThreads: ReadonlyArray<
       Pick<OrchestrationV2ProviderThread, "id" | "nativeThreadRef">
     >;
@@ -133,9 +159,12 @@ export function reviewContinuationRefusal(input: {
   const earlierRuns = reviewTaskRuns(child, earlier, isOriginal);
   if (earlierRuns.some((run) => run.status === "rolled_back"))
     return "This reviewer's conversation was rolled back; start a fresh review.";
-  const messageText = new Map(child.messages.map((message) => [message.id, message.text]));
+  const messages = new Map(child.messages.map((message) => [message.id, message]));
   const latest = child.runs
-    .filter((run) => !isSlashPrompt(messageText.get(run.userMessageId) ?? ""))
+    .filter((run) => {
+      const message = messages.get(run.userMessageId);
+      return message === undefined || !isCompactionCommandMessage(message);
+    })
     .toSorted((left, right) => right.ordinal - left.ordinal)[0];
   if (latest === undefined || !earlierRuns.some((run) => run.id === latest.id))
     return "continueFrom must name the latest review round in that reviewer's thread.";
@@ -170,15 +199,16 @@ export function reviewRound(input: {
   readonly task: ReviewTask & Pick<OrchestrationV2Subagent, "status">;
   readonly earlier: ReviewTask | undefined;
   readonly earlierIsOriginal: boolean;
+  readonly taskIsOriginal: boolean;
   readonly compactions: ReadonlyArray<Pick<OrchestrationV2TurnItem, "runId">>;
 }): OrchestratorMcpReviewRound {
   const { child, task } = input;
   const continuedFrom: NodeId | null = task.continuedFrom ?? null;
-  const runs = continuedFrom === null ? [] : reviewTaskRuns(child, task, false);
+  const runs = reviewTaskRuns(child, task, input.taskIsOriginal);
   const lastRunOrdinal = Math.max(0, ...runs.map((run) => run.ordinal));
   const compacted = input.compactions.some((item) => {
     const run = child.runs.find((candidate) => candidate.id === item.runId);
-    return run !== undefined && (continuedFrom === null || run.ordinal <= lastRunOrdinal);
+    return run !== undefined && run.ordinal <= lastRunOrdinal;
   });
   if (continuedFrom === null) return { continuedFrom, conversation: "new", compacted };
   const conversation = ((): OrchestratorMcpReviewRound["conversation"] => {

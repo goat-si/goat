@@ -189,6 +189,7 @@ export const makeReviewContinuation = (deps: ReviewContinuationDeps) => {
       "providerTurns",
       "providerThreads",
       "messages",
+      "contextTransfers",
     ]);
     if (
       child.thread.lineage.parentThreadId !== command.threadId ||

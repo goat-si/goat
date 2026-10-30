@@ -96,7 +96,7 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
     threadManagement
       .getThreadRecords(
         threadId,
-        ["runs", "attempts", "providerTurns", "providerThreads", "messages"],
+        ["runs", "attempts", "providerTurns", "providerThreads", "messages", "contextTransfers"],
         { messageRoles: ["user"] },
       )
       .pipe(Effect.mapError(deps.threadManagementFailure));
@@ -140,6 +140,9 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
           "invalid_request",
           "This clientRequestId already started a different review round; use a new one.",
         );
+      // A retry after a lost response settles the lane the first call claimed.
+      if (existing.childThreadId !== null)
+        yield* permissions.complete(commandId, existing.childThreadId);
       return yield* deps.finishTaskWait(scope, taskId, key, input);
     }
     const earlier = parent.subagents.find(
@@ -284,7 +287,7 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
                     Effect.flatMap((receipt) =>
                       Option.isSome(receipt) && receipt.value.status === "accepted"
                         ? Effect.void
-                        : permissions.release(commandId, true),
+                        : permissions.release(commandId),
                     ),
                     Effect.ignore,
                   ),
@@ -331,6 +334,8 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
         earlier !== undefined &&
         child.thread.forkedFrom?.type === "node" &&
         child.thread.forkedFrom.nodeId === earlier.id,
+      taskIsOriginal:
+        child.thread.forkedFrom?.type === "node" && child.thread.forkedFrom.nodeId === task.id,
       compactions: compactions.turnItems,
     });
   });

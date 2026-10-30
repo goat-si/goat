@@ -1,6 +1,7 @@
 import { layerNoFleetSync } from "../goatclaw/FleetSync.testkit.ts";
 import { assert, it } from "@effect/vitest";
 import {
+  BUILTIN_PERMISSION_PROFILES,
   CommandId,
   EnvironmentId,
   EventId,
@@ -19,6 +20,8 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import { TestClock } from "effect/testing";
@@ -100,6 +103,8 @@ const layerTest = ProviderReplayHarness.layerWithRegistry(
   ProviderAdapterRegistry.layerFromAdapters([adapter]),
   { databaseLayer: SqlitePersistence.layerMemory, runEffectWorker: false },
 );
+// The same database layer reference, so goatclaw lanes share the projection tables.
+const layerTestWithSql = Layer.merge(layerTest, SqlitePersistence.layerMemory);
 
 let eventCounter = 0;
 const nextEventId = () => EventId.make("continue-review-event-" + ++eventCounter);
@@ -308,15 +313,43 @@ const makeFixture = Effect.gen(function* () {
 
 type Fixture = Effect.Success<typeof makeFixture>;
 
-const serviceLayer = ({ orchestrator, store }: Fixture) =>
+interface ServiceOptions {
+  /** Turns goatclaw on with one lane, backed by the harness database. */
+  readonly goatclaw?: boolean;
+  /** Runs inside the next review-continue dispatch, after MCP preflight and before commit. */
+  readonly race?: { current: Effect.Effect<void> | undefined };
+}
+
+const serviceLayer = ({ orchestrator, store }: Fixture, options: ServiceOptions = {}) =>
   Effect.gen(function* () {
+    const receipts = yield* Effect.serviceOption(CommandReceiptStore.CommandReceiptStoreV2);
+    const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
-      ServerSettings.layerTest(),
+      ServerSettings.layerTest({
+        goatclaw: {
+          enabled: options.goatclaw === true,
+          defaultProfile: "owner",
+          profiles: { owner: { ...BUILTIN_PERMISSION_PROFILES.owner!, maxLanes: 1 } },
+        },
+      }),
+      ...(options.goatclaw === true && Option.isSome(sql)
+        ? [Layer.succeed(SqlClient.SqlClient, sql.value)]
+        : []),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
-        dispatch: orchestrator.dispatch,
-        // Retries reach the existing task before the receipt check, so none is consulted here.
-        hasReceipt: () => Effect.succeed(false),
+        dispatch: (command) => {
+          const race = options.race?.current;
+          if (command.type !== "delegated_task.review-continue" || race === undefined)
+            return orchestrator.dispatch(command);
+          options.race!.current = undefined;
+          return Effect.andThen(race, orchestrator.dispatch(command));
+        },
+        hasReceipt: (commandId) =>
+          Option.match(receipts, {
+            onNone: () => Effect.succeed(false),
+            onSome: (stored) =>
+              stored.getByCommandId(commandId).pipe(Effect.map(Option.isSome), Effect.orDie),
+          }),
         getThreadRecords: (id, fields, filter) =>
           store.getThreadRecords(id, fields, filter).pipe(Effect.orDie),
         getReviewLedgerEntries: (input) => store.getReviewLedgerEntries(input).pipe(Effect.orDie),
@@ -354,9 +387,10 @@ const withService = <A, E, R>(
   body: (
     service: OrchestratorMcpService.OrchestratorMcpService["Service"],
   ) => Effect.Effect<A, E, R>,
+  options: ServiceOptions = {},
 ) =>
   Effect.gen(function* () {
-    const layer = yield* serviceLayer(fixture);
+    const layer = yield* serviceLayer(fixture, options);
     return yield* OrchestratorMcpService.OrchestratorMcpService.pipe(
       Effect.flatMap(body),
       Effect.provide(layer),
@@ -578,6 +612,11 @@ it.effect("reviewRound reports a compaction GOAT recorded in the reviewer conver
       service.taskStatus(scope, created.taskId),
     );
     assert.deepInclude(status.reviewRound, { conversation: "continued", compacted: true });
+    // The compaction came after round 1, so round 1 does not report it.
+    const first = yield* withService(fixture, (service) =>
+      service.taskStatus(scope, fixture.first.id),
+    );
+    assert.deepInclude(first.reviewRound, { conversation: "new", compacted: false });
   }).pipe(Effect.provide(layerTest)),
 );
 
@@ -804,4 +843,105 @@ it.effect("goat_thread_send stays refused after a continued review round finishe
     assert.equal(refused._tag, "ThreadManagementReviewTaskFinishedError");
     assert.include(refused.message, "continueFrom");
   }).pipe(Effect.provide(layerTest)),
+);
+
+/** A finished run in the reviewer thread that no task owns, as a server-sent message makes. */
+const sendUnbound = (fixture: Fixture, id: string, text: string) =>
+  Effect.gen(function* () {
+    yield* fixture.orchestrator.dispatch({
+      type: "message.dispatch",
+      commandId: CommandId.make("send-" + id),
+      threadId: fixture.childThreadId,
+      messageId: MessageId.make("message-" + id),
+      text,
+      attachments: [],
+      dispatchMode: { type: "start_immediately" },
+      createdBy: "agent",
+      creationSource: "server",
+    });
+    const run = (yield* childRuns(fixture.childThreadId)).at(-1)!;
+    assert.isUndefined(run.delegatedTaskId);
+    yield* fixture.store.apply({
+      id: nextEventId(),
+      type: "run.updated",
+      threadId: fixture.childThreadId,
+      runId: run.id,
+      occurredAt: at,
+      payload: { ...run, status: "completed", completedAt: at },
+    });
+  });
+
+it.effect("a /compact run after the round does not block continuing it", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* sendUnbound(fixture, "compact", "/compact");
+    const created = yield* continued(fixture);
+    assert.equal(created.reviewRound?.continuedFrom, fixture.first.id);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("an unrelated run after the round blocks continuing it", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    yield* sendUnbound(fixture, "unbound", "Something unrelated");
+    const refused = yield* continued(fixture).pipe(Effect.flip);
+    assert.include(refused.message, "latest review round");
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect(
+  "a lane claimed for a continuation that fails to commit is released, and a retry replays the refusal",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      const [firstRun] = yield* childRuns(fixture.childThreadId);
+      const setFirstRun = (status: OrchestrationV2Run["status"]) =>
+        fixture.store
+          .apply({
+            id: nextEventId(),
+            type: "run.updated",
+            threadId: fixture.childThreadId,
+            runId: firstRun!.id,
+            occurredAt: at,
+            payload: { ...firstRun!, status, completedAt: at },
+          })
+          .pipe(Effect.orDie);
+      // A user message reaches the reviewer between MCP preflight and commit.
+      const race: ServiceOptions["race"] = { current: setFirstRun("running") };
+      const sql = yield* SqlClient.SqlClient;
+      const lanes = () => sql<{ pending: number }>`SELECT pending FROM goatclaw_lane_reservations`;
+      yield* withService(
+        fixture,
+        (service) =>
+          Effect.gen(function* () {
+            const first = yield* service
+              .delegateTask(scope, continueInput(fixture))
+              .pipe(Effect.flip);
+            assert.equal(first.code, "invalid_request");
+            assert.include(first.message, "running or queued");
+            assert.lengthOf(yield* lanes(), 0);
+            yield* setFirstRun("completed");
+            const replayed = yield* service
+              .delegateTask(scope, continueInput(fixture))
+              .pipe(Effect.flip);
+            assert.equal(replayed.code, "invalid_request");
+            assert.lengthOf(yield* lanes(), 0);
+            // With the lane free, a new request continues the reviewer within maxLanes 1.
+            const created = yield* service.delegateTask(
+              scope,
+              continueInput(fixture, { clientRequestId: "round-2b" }),
+            );
+            assert.equal(created.childThreadId, fixture.childThreadId);
+            assert.deepEqual(
+              (yield* lanes()).map((lane) => lane.pending),
+              [0],
+            );
+          }),
+        { goatclaw: true, race },
+      );
+      assert.lengthOf(
+        (yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents,
+        2,
+      );
+    }).pipe(Effect.provide(layerTestWithSql)),
 );
