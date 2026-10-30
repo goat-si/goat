@@ -128,7 +128,10 @@ it.effect("the host retains bounded images and guest replies contain metadata on
           scale: 1,
           mimeType: "image/png",
         };
-        const image: ScreenImage = { ...metadata, bytes: Buffer.from("1234").toString("base64") };
+        const image: ScreenImage = {
+          ...metadata,
+          bytes: Buffer.from(`123${request.callId}`).toString("base64"),
+        };
         return Effect.succeed({
           value: { observationId: "o", tree: "button Save", image },
           image,

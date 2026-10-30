@@ -383,9 +383,9 @@ export const applyDesktopPointerArgs = (
 
   const regionId = string(args.regionId);
   const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
-  if (regionId !== undefined) {
-    if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
-      return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+  if (regionId !== undefined && (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0))
+    return { ok: false, error: fail("stale_reference", MOVED_WINDOW) };
+  if (shot && shot.pixelWidth > 0 && shot.pixelHeight > 0) {
     if (hasXY) {
       const px = args.x as number;
       const py = args.y as number;
@@ -446,51 +446,6 @@ export const applyDesktopPointerArgs = (
       forwarded.coordinate_space = "window_points";
       forwarded.window_basis = shot.basis;
       return { ok: true, windowPoint: { x: tx, y: ty }, needs: "points" };
-    }
-  }
-  if (shot && shot.pixelWidth > 0 && shot.pixelHeight > 0) {
-    if (hasXY) {
-      const px = args.x as number;
-      const py = args.y as number;
-      const wx = (px * shot.basis.w) / shot.pixelWidth;
-      const wy = (py * shot.basis.h) / shot.pixelHeight;
-      if (
-        px < 0 ||
-        py < 0 ||
-        px >= shot.pixelWidth ||
-        py >= shot.pixelHeight ||
-        wx < 0 ||
-        wy < 0 ||
-        wx > shot.basis.w ||
-        wy > shot.basis.h
-      )
-        return {
-          ok: false,
-          error: fail("invalid_argument", formatPixelOutOfBounds(px, py, wx, wy, shot)),
-        };
-    }
-    if (hasDragXY) {
-      for (const [px, py] of [
-        [args.from_x as number, args.from_y as number],
-        [args.to_x as number, args.to_y as number],
-      ] as const) {
-        const wx = (px * shot.basis.w) / shot.pixelWidth;
-        const wy = (py * shot.basis.h) / shot.pixelHeight;
-        if (
-          px < 0 ||
-          py < 0 ||
-          px >= shot.pixelWidth ||
-          py >= shot.pixelHeight ||
-          wx < 0 ||
-          wy < 0 ||
-          wx > shot.basis.w ||
-          wy > shot.basis.h
-        )
-          return {
-            ok: false,
-            error: fail("invalid_argument", formatPixelOutOfBounds(px, py, wx, wy, shot)),
-          };
-      }
     }
   }
 

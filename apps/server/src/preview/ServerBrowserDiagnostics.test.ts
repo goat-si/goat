@@ -393,3 +393,26 @@ describe("ServerBrowserDiagnostics", () => {
     },
   );
 });
+
+it("filters each stream inclusively by time before applying its limit", () => {
+  const { diagnostics } = fixture();
+  diagnostics.consoleEntries.push(
+    { level: "log", text: "old", timestamp: "2026-01-01T00:00:00.000Z" },
+    { level: "log", text: "same", timestamp: "2026-01-01T00:00:01.000Z" },
+    { level: "log", text: "new", timestamp: "2026-01-01T00:00:02.000Z" },
+  );
+  const result = diagnostics.read({ since: "2026-01-01T00:00:01.000Z", limit: 2 });
+  expect(result.console.entries.map((entry) => entry.text)).toEqual(["new", "same"]);
+  expect(result.console.omittedCount).toBe(0);
+});
+
+it("filters network entries by request start even after a later response", () => {
+  const { page, diagnostics } = fixture();
+  const request = { url: () => "https://example.test/", method: () => "GET" };
+  using now = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-01-01T00:00:00Z"));
+  page.emit("request", request);
+  now.mockReturnValue(Date.parse("2026-01-01T00:00:02Z"));
+  page.emit("response", { request: () => request, url: request.url, status: () => 200 });
+  expect(diagnostics.read({ since: "2026-01-01T00:00:01Z" }).network.entries).toEqual([]);
+  expect(diagnostics.read({ since: "2026-01-01T00:00:00Z" }).network.entries).toHaveLength(1);
+});

@@ -144,6 +144,7 @@ export const fixture = (
   labelTarget?: Parameters<typeof createDesktopTargetHost>[0]["labelTarget"],
   // Launch arguments depend on the platform; tests pin macOS so they read the same on every runner.
   platform: NodeJS.Platform = "darwin",
+  driverVersion?: string,
 ) => {
   const sent: Array<{
     tool: string;
@@ -231,6 +232,7 @@ export const fixture = (
       ...(observations ? { observations } : {}),
       ...(labelTarget ? { labelTarget } : {}),
       platform,
+      ...(driverVersion === undefined ? {} : { driverVersion }),
     }),
     sent,
     channel,
