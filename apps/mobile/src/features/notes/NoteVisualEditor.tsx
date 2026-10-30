@@ -58,6 +58,10 @@ export default function NoteVisualEditor(props: {
   const pauseMs = useRef(MIN_PAUSE_MS);
   const version = useRef(0);
   const undoRun = useRef<Promise<void> | null>(null);
+  const focused = useRef(false);
+  const blurred = useRef<Array<() => void>>([]);
+  const selection = useRef({ start: 0, end: 0 });
+  const refocus = useRef<{ start: number; end: number } | null>(null);
   const onFallback = useEffectEvent((reason: string) => props.onFallback(reason));
   const canEdit = ready && props.editable && !undoing;
 
@@ -125,6 +129,7 @@ export default function NoteVisualEditor(props: {
   };
   const undo = () => {
     if (!canEdit || undoRun.current) return;
+    refocus.current = focused.current ? { ...selection.current } : null;
     setUndoing(true);
     const release = () => {
       undoRun.current = null;
@@ -133,7 +138,6 @@ export default function NoteVisualEditor(props: {
     undoRun.current = restorePrevious().catch(fail).then(release);
   };
   const restorePrevious = async () => {
-    const refocus = focused.current;
     await settle();
     const started = version.current;
     await snapshot();
@@ -145,24 +149,45 @@ export default function NoteVisualEditor(props: {
     // iOS echoes setValue as a change and Android does not; a duplicate snapshot is skipped either way.
     input.current.setValue(previous);
     props.onChange();
-    if (refocus) input.current.focus();
   };
-  const focused = useRef(false);
-  const blurred = useRef<Array<() => void>>([]);
   const settle = () =>
-    new Promise<void>((resolve) => {
+    new Promise<void>((resolve, reject) => {
       const target = input.current;
-      if (!target || !focused.current) return resolve();
-      blurred.current.push(resolve);
+      if (!target) return resolve();
+      // Blur even when unfocused, in case a focus event is still on its way.
+      if (!focused.current) {
+        target.blur();
+        return resolve();
+      }
+      const done = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      // Without a confirmed blur the read has no boundary, so it fails instead of guessing.
+      const timer = setTimeout(() => {
+        blurred.current = blurred.current.filter((waiter) => waiter !== done);
+        reject(new Error("The editor did not finish input. Try again."));
+      }, BLUR_TIMEOUT_MS);
+      blurred.current.push(done);
       target.blur();
-      // A blur that never reports back must not hold the save lock.
-      setTimeout(resolve, BLUR_TIMEOUT_MS);
     });
+  // oxlint-disable-next-line goat/react-effect-budget -- focus waits for the input to be enabled again after undo
+  useEffect(() => {
+    const target = refocus.current;
+    if (undoing || !target || !input.current) return;
+    refocus.current = null;
+    input.current.focus();
+    input.current.setSelection(target.start, target.end);
+  }, [undoing]);
 
   useImperativeHandle(
     props.handleRef,
     () => ({
-      settle,
+      settle: async () => {
+        // An undo restores, then a save reads: never the other way round.
+        await undoRun.current;
+        await settle();
+      },
       body: async () => {
         // Before the open check passes nothing could be edited, and the serializer may rewrite.
         if (!ready) return session.source;
@@ -249,6 +274,9 @@ export default function NoteVisualEditor(props: {
           selectionColor={nativeTextStyle.linkColor}
           markdownStyle={markdownStyle}
           onChangeText={changed}
+          onChangeSelection={(next) => {
+            selection.current = next;
+          }}
           onFocus={() => {
             focused.current = true;
           }}

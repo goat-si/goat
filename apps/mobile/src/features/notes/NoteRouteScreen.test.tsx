@@ -34,6 +34,7 @@ const { mocks, Children } = vi.hoisted(() => ({
     serialize: (markdown: string): string | Promise<string> => markdown,
     dispatch: vi.fn(),
     composing: "",
+    blurHangs: false,
     preventRemove: null as null | {
       enabled: boolean;
       callback: (event: { data: { action: unknown } }) => void;
@@ -145,6 +146,7 @@ vi.mock("react-native-enriched-markdown", () => ({
     useImperativeHandle(props.ref, () => ({
       getMarkdown: async () => mocks.serialize(element.current?.value ?? ""),
       focus: () => props.onFocus(),
+      setSelection: () => undefined,
       // Like UIKit, ending input commits a composition still marked in the field.
       blur: () => {
         if (mocks.composing && element.current) {
@@ -152,7 +154,7 @@ vi.mock("react-native-enriched-markdown", () => ({
           mocks.composing = "";
           props.onChangeText(element.current.value);
         }
-        props.onBlur();
+        if (!mocks.blurHangs) props.onBlur();
       },
       setValue: (markdown: string) => {
         if (element.current) element.current.value = markdown;
@@ -264,6 +266,7 @@ beforeEach(() => {
   mocks.serialize = (markdown: string): string | Promise<string> => markdown;
   mocks.dispatch.mockReset();
   mocks.composing = "";
+  mocks.blurHangs = false;
   mocks.preventRemove = null;
 });
 afterEach(() => act(() => root.unmount()));
@@ -773,6 +776,23 @@ describe("visual note editor", () => {
     mocks.composing = "한";
     await act(async () => button("Save on phone").click());
     expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "mine한" }));
+  });
+
+  it("a blur that never confirms fails the save instead of reading without a boundary", async () => {
+    await act(async () => render());
+    await edit();
+    act(() => type("edited"));
+    mocks.blurHangs = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await act(async () => button("Save on phone").click());
+      await act(async () => vi.advanceTimersByTime(1000));
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("The editor did not finish input. Try again.");
+    expect(button("Save on phone").disabled).toBe(false);
   });
 
   it("undo reverts an edit that sent no text event, such as a list key", async () => {
