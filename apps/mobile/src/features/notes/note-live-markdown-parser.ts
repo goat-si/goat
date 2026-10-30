@@ -1,9 +1,7 @@
 "worklet";
-// Runs on react-native-live-markdown's worklet runtime for every keystroke, over the whole note,
-// and on Android on the UI thread. Everything is a top-level function with regex literals inside,
-// so the worklet captures nothing it cannot copy. Ranges are emitted in order, containers before
-// their contents, so no sort is needed; inline scanning stops at the line end and very long lines
-// skip it, so a note costs one linear pass.
+// Reparses the whole note on every keystroke, on Android on the UI thread: keep it one linear
+// pass. Top-level functions with inline regex literals keep the worklet free of captured objects.
+// Ranges come out in order, containers before contents, because natives apply them in order.
 
 export type NoteMarkdownRangeType =
   | "bold"
@@ -183,13 +181,15 @@ function parseInline(
   const closers: number[] = [];
   let index = start;
   while (index < lineEnd || closers.length > 0) {
-    if (closers.length > 0 && index >= closers[closers.length - 2]!) {
-      push(ranges, "syntax", closers[closers.length - 2]!, closers[closers.length - 1]!);
-      index = closers[closers.length - 1]!;
+    const closeStart = closers[closers.length - 2] ?? -1;
+    const closeEnd = closers[closers.length - 1] ?? -1;
+    if (closeStart >= 0 && index >= closeStart) {
+      push(ranges, "syntax", closeStart, closeEnd);
+      index = closeEnd;
       closers.length -= 2;
       continue;
     }
-    const end = closers.length > 0 ? closers[closers.length - 2]! : lineEnd;
+    const end = closeStart >= 0 ? closeStart : lineEnd;
     let code = text.charCodeAt(index);
     if (!isInlineTrigger(code)) {
       // Jump over plain text with the native regex search; a JS loop per character is slow on Hermes.
@@ -354,7 +354,8 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
     if (fenceCode !== 0) {
       if (text.charCodeAt(first) === fenceCode) {
         const close = /^(`{3,}|~{3,})[ \t]*$/.exec(text.slice(first, end));
-        if (close && close[1]!.charCodeAt(0) === fenceCode && close[1]!.length >= fenceLength) {
+        const marker = close?.[1] ?? "";
+        if (marker.charCodeAt(0) === fenceCode && marker.length >= fenceLength) {
           push(ranges, "pre", fenceBody, position > fenceBody ? position - 1 : position);
           push(ranges, "syntax", position, end);
           fenceCode = 0;
@@ -401,10 +402,10 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
 
     if (lead === 96 || lead === 126) {
       const fence = /^(`{3,}|~{3,})(.*)$/.exec(text.slice(first, end));
-      if (fence && !(lead === 96 && fence[2]!.includes("`"))) {
+      if (fence && !(lead === 96 && (fence[2] ?? "").includes("`"))) {
         push(ranges, "syntax", restStart, end);
         fenceCode = lead;
-        fenceLength = fence[1]!.length;
+        fenceLength = (fence[1] ?? "").length;
         fenceBody = next;
         inTable = false;
         position = next;
@@ -483,7 +484,7 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
     if (lead === 45 || lead === 43 || lead === 42 || (lead >= 48 && lead <= 57)) {
       const list = /^([-+*]|\d{1,9}[.)])(?:[ \t]+|$)/.exec(text.slice(first, end));
       if (list) {
-        push(ranges, "syntax", first, first + list[1]!.length);
+        push(ranges, "syntax", first, first + (list[1] ?? "").length);
         let contentStart = first + list[0].length;
         if (
           text.charCodeAt(contentStart) === 91 &&
