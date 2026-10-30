@@ -168,7 +168,9 @@ export const focusRestorationWarning = (value: unknown): string | undefined => {
   return focus?.status === "abandoned"
     ? reason === "panic"
       ? `focus restoration failed (panic): the prior app${pid ? ` (pid ${pid})` : ""} may not have been restored`
-      : `focus restoration abandoned${reason ? `: ${reason}` : ""}${pid ? ` (prior app pid ${pid})` : ""}`
+      : reason === "unconfirmed"
+        ? `focus restoration unconfirmed: the prior app${pid ? ` (pid ${pid})` : ""} may not be in front`
+        : `focus restoration abandoned${reason ? `: ${reason}` : ""}${pid ? ` (prior app pid ${pid})` : ""}`
     : focus?.status === "restored"
       ? `focus restored to the prior app${pid ? ` (pid ${pid})` : ""}`
       : undefined;

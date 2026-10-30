@@ -169,34 +169,43 @@ it.live.each([
   }),
 );
 
-it.live("a focus restoration panic warns on the next app observation without debug", () =>
-  Effect.gen(function* () {
-    const { host } = fixture({
-      get_window_state: new DriverSuccess(
-        { ...state, focus_restoration: { status: "abandoned", reason: "panic", prior_pid: 123 } },
-        'focus_restoration: {"status":"abandoned","reason":"panic","prior_pid":123}',
-      ),
-      click: new DriverSuccess(
-        {
-          effect: "confirmed",
-          focus_restoration: { status: "abandoned", reason: "panic", prior_pid: 123 },
-        },
-        'focus_restoration: {"status":"abandoned","reason":"panic","prior_pid":123}',
-      ),
-    });
-    const result = yield* runCell(
-      host,
-      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
-        "const observation = await app.observe(); const done = await app.click(1); " +
-        "return { observation: observation.warnings, done };",
-    );
-    const warning =
-      "focus restoration failed (panic): the prior app (pid 123) may not have been restored";
-    expect(result.value).toEqual({
-      observation: [warning],
-      done: { ok: true, verdict: "confirmed", warnings: [warning] },
-    });
-  }),
+it.live.each([
+  {
+    reason: "panic",
+    warning: "focus restoration failed (panic): the prior app (pid 123) may not have been restored",
+  },
+  {
+    reason: "unconfirmed",
+    warning: "focus restoration unconfirmed: the prior app (pid 123) may not be in front",
+  },
+])(
+  "a focus restoration $reason warns on the next app observation without debug",
+  ({ reason, warning }) =>
+    Effect.gen(function* () {
+      const { host } = fixture({
+        get_window_state: new DriverSuccess(
+          { ...state, focus_restoration: { status: "abandoned", reason, prior_pid: 123 } },
+          `focus_restoration: {"status":"abandoned","reason":"${reason}","prior_pid":123}`,
+        ),
+        click: new DriverSuccess(
+          {
+            effect: "confirmed",
+            focus_restoration: { status: "abandoned", reason, prior_pid: 123 },
+          },
+          `focus_restoration: {"status":"abandoned","reason":"${reason}","prior_pid":123}`,
+        ),
+      });
+      const result = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+          "const observation = await app.observe(); const done = await app.click(1); " +
+          "return { observation: observation.warnings, done };",
+      );
+      expect(result.value).toEqual({
+        observation: [warning],
+        done: { ok: true, verdict: "confirmed", warnings: [warning] },
+      });
+    }),
 );
 
 it.live("a routine app observation has no warnings", () =>
