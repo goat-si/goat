@@ -18,6 +18,11 @@ import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { openVisualNote, visualEditorBlocker, visualNoteBody } from "./note-wysiwyg";
 
 export interface NoteVisualEditorHandle {
+  /**
+   * Ends input before a read: list keys and IME composition change the note without a text
+   * event, and once the input is blurred neither can reach it.
+   */
+  readonly settle: () => Promise<void>;
   /** The note body to save: the original bytes when nothing changed or the check has not passed. */
   readonly body: () => Promise<string>;
 }
@@ -29,6 +34,7 @@ const MIN_PAUSE_MS = 600;
 const PAUSE_PER_SNAPSHOT_MS = 20;
 const NO_STATE = "";
 const READ_TIMEOUT_MS = 5000;
+const BLUR_TIMEOUT_MS = 1000;
 
 /** Loaded lazily from the note screen, so the rich input costs nothing until a note is edited. */
 export default function NoteVisualEditor(props: {
@@ -46,7 +52,6 @@ export default function NoteVisualEditor(props: {
   const [session] = useState(() => openVisualNote(props.body));
   const [ready, setReady] = useState(false);
   const [styleKey, setStyleKey] = useState(NO_STATE);
-  const [canUndo, setCanUndo] = useState(false);
   const [undoing, setUndoing] = useState(false);
   const history = useRef([session.text]);
   const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,14 +103,12 @@ export default function NoteVisualEditor(props: {
       stack.push(markdown);
       if (stack.length > HISTORY_LIMIT) stack.shift();
     }
-    setCanUndo(stack.length > 1);
   };
   // Typing only flags the change; serializing waits for a pause. Undo is offered at once and
   // snapshots first, so it works before a long note's pause has passed.
   const changed = () => {
     version.current++;
     props.onChange();
-    setCanUndo(true);
     scheduleSnapshot();
   };
   const fail = (error: unknown) =>
@@ -130,6 +133,8 @@ export default function NoteVisualEditor(props: {
     undoRun.current = restorePrevious().catch(fail).then(release);
   };
   const restorePrevious = async () => {
+    const refocus = focused.current;
+    await settle();
     const started = version.current;
     await snapshot();
     const stack = history.current;
@@ -139,13 +144,25 @@ export default function NoteVisualEditor(props: {
     stack.pop();
     // iOS echoes setValue as a change and Android does not; a duplicate snapshot is skipped either way.
     input.current.setValue(previous);
-    setCanUndo(stack.length > 1);
     props.onChange();
+    if (refocus) input.current.focus();
   };
+  const focused = useRef(false);
+  const blurred = useRef<Array<() => void>>([]);
+  const settle = () =>
+    new Promise<void>((resolve) => {
+      const target = input.current;
+      if (!target || !focused.current) return resolve();
+      blurred.current.push(resolve);
+      target.blur();
+      // A blur that never reports back must not hold the save lock.
+      setTimeout(resolve, BLUR_TIMEOUT_MS);
+    });
 
   useImperativeHandle(
     props.handleRef,
     () => ({
+      settle,
       body: async () => {
         // Before the open check passes nothing could be edited, and the serializer may rewrite.
         if (!ready) return session.source;
@@ -210,7 +227,7 @@ export default function NoteVisualEditor(props: {
           disabled={!canEdit}
           onPress={() => command((target) => target.toggleUnorderedList())}
         />
-        <ToolbarButton label="↶" name="Undo" disabled={!canEdit || !canUndo} onPress={undo} />
+        <ToolbarButton label="↶" name="Undo" disabled={!canEdit} onPress={undo} />
       </View>
       {ready ? null : <Text className="text-xs text-foreground-muted">Checking this note…</Text>}
       <View className="rounded-xl border border-input-border bg-input px-4 py-3">
@@ -232,6 +249,13 @@ export default function NoteVisualEditor(props: {
           selectionColor={nativeTextStyle.linkColor}
           markdownStyle={markdownStyle}
           onChangeText={changed}
+          onFocus={() => {
+            focused.current = true;
+          }}
+          onBlur={() => {
+            focused.current = false;
+            for (const resolve of blurred.current.splice(0)) resolve();
+          }}
           onChangeState={(state) => {
             const next = styleStateKey(state);
             if (next !== styleKey) setStyleKey(next);

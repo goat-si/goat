@@ -228,6 +228,7 @@ function NoteContent(props: NoteParams) {
   const editorBody = async () =>
     visual && visualEditor.current ? visualEditor.current.body() : localBody.current;
   const stableEditorBody = async () => {
+    if (visual) await visualEditor.current?.settle();
     // A keystroke that lands while the native read is in flight forces another read.
     for (let attempt = 0; attempt < 5; attempt++) {
       const version = editVersion.current;

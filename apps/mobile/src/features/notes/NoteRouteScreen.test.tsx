@@ -33,6 +33,7 @@ const { mocks, Children } = vi.hoisted(() => ({
     flush: vi.fn(),
     serialize: (markdown: string): string | Promise<string> => markdown,
     dispatch: vi.fn(),
+    composing: "",
     preventRemove: null as null | {
       enabled: boolean;
       callback: (event: { data: { action: unknown } }) => void;
@@ -129,6 +130,8 @@ vi.mock("react-native-enriched-markdown", () => ({
     defaultValue: string;
     editable: boolean;
     onChangeText: (text: string) => void;
+    onFocus: () => void;
+    onBlur: () => void;
     onChangeSelection: (selection: { start: number; end: number }) => void;
     onChangeState: (state: unknown) => void;
   }) => {
@@ -141,7 +144,16 @@ vi.mock("react-native-enriched-markdown", () => ({
     }, [initial]);
     useImperativeHandle(props.ref, () => ({
       getMarkdown: async () => mocks.serialize(element.current?.value ?? ""),
-      focus: () => element.current?.focus(),
+      focus: () => props.onFocus(),
+      // Like UIKit, ending input commits a composition still marked in the field.
+      blur: () => {
+        if (mocks.composing && element.current) {
+          element.current.value += mocks.composing;
+          mocks.composing = "";
+          props.onChangeText(element.current.value);
+        }
+        props.onBlur();
+      },
       setValue: (markdown: string) => {
         if (element.current) element.current.value = markdown;
       },
@@ -251,6 +263,7 @@ beforeEach(() => {
   mocks.flush.mockReset().mockResolvedValue(undefined);
   mocks.serialize = (markdown: string): string | Promise<string> => markdown;
   mocks.dispatch.mockReset();
+  mocks.composing = "";
   mocks.preventRemove = null;
 });
 afterEach(() => act(() => root.unmount()));
@@ -754,10 +767,27 @@ describe("visual note editor", () => {
     ).toBe(false);
   });
 
-  it("offers undo right after typing and restores the opened text", async () => {
+  it("Save commits a character still being composed before reading the note", async () => {
     await act(async () => render());
     await edit();
-    expect(button("↶").disabled).toBe(true);
+    mocks.composing = "한";
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "mine한" }));
+  });
+
+  it("undo reverts an edit that sent no text event, such as a list key", async () => {
+    await act(async () => render());
+    await edit();
+    const field = container.querySelector<HTMLTextAreaElement>('[aria-label="Visual note"]');
+    if (field) field.value = "- mine";
+    await act(async () => button("↶").click());
+    await act(async () => button("↶").click());
+    expect(field?.value).toBe("mine");
+  });
+
+  it("undo right after typing restores the opened text", async () => {
+    await act(async () => render());
+    await edit();
     act(() => type("typed"));
     expect(button("↶").disabled).toBe(false);
     await act(async () => button("↶").click());
