@@ -308,6 +308,15 @@ const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
   };
 });
 
+/** The driver's diff rows as the model reads them: its header and hints name tokens it never sees. */
+const modelDiffRows = (diffText: string) => {
+  const lines = diffText.split("\n");
+  if (/^since \S+: \d+ added/.test(lines[0] ?? "")) lines.shift();
+  if (/^Rows and indices are as before; use snapshot_id/.test(lines.at(-1) ?? "")) lines.pop();
+  return lines.join("\n");
+};
+const structuralDiff = (rows: string) => /^(?:[+-] |reindexed:)/m.test(rows);
+
 export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(function* (
   deps: DesktopObserveDeps,
   bound: BoundWindow,
@@ -337,18 +346,18 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     args.interactiveOnly !== true &&
     args.mode === "diff" &&
     bound.diffBaseline === true &&
+    bound.fullObservationId !== undefined &&
     baseObservationId === bound.observationId
       ? bound.snapshotId
       : undefined;
+  let retired = false;
   let readWindow = bound.windowId;
-  let readCount = 0;
   const read = Effect.fn("DesktopObserveLatency.read")(function* (
     limit: number,
     filter?: string,
     windowId = readWindow,
     allowDiff = true,
   ) {
-    readCount++;
     const sentAt = yield* Clock.currentTimeMillis;
     const reply = yield* deps.boundRequest(
       bound,
@@ -363,6 +372,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         filter,
         since:
           allowDiff &&
+          !retired &&
           windowId === bound.windowId &&
           limit === READ_BOUNDS[0] &&
           filter === undefined
@@ -378,10 +388,14 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   // A read that ran retired the driver's earlier tokens, so their refs go even when its
   // answer is unusable; only a driver naming another window makes the binding stale.
   const retire = () => {
+    retired = true;
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
     delete bound.diffBaseline;
+    delete bound.fullObservationId;
+    delete bound.structuralDiff;
+    delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;
     delete bound.rows;
@@ -449,12 +463,18 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         string(entry.label) === undefined
       );
     });
-  if (needsFullForNames) {
+  const tooManyMoved = (string(state.tree_diff) ?? "").includes(
+    "reindexed: more shifted ranges not listed",
+  );
+  const missingDiffBase =
+    (status === "diff" || status === "no_change") &&
+    (retired || bound.fullObservationId === undefined || baseObservationId === undefined);
+  if (needsFullForNames || tooManyMoved || missingDiffBase) {
     retire();
-    if (readCount !== 1)
-      return yield* Effect.fail(fail("downstream_failure", "Cannot safely name rows in the diff."));
     reply = yield* read(limit, undefined, expectedWindowId, false);
     state = normalizeSheetState(yield* verifyReply(object(driverValue(reply)), expectedWindowId));
+    if (state.since_status === "diff" || state.since_status === "no_change")
+      return yield* Effect.fail(fail("downstream_failure", "The full read returned a diff."));
   }
   const fromSheetId = bound.windowId;
   const interactive = !capture && args.interactiveOnly === true;
@@ -474,6 +494,11 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     const diffText = string(state.tree_diff);
     const isDiff =
       !needsFullForNames &&
+      !tooManyMoved &&
+      !missingDiffBase &&
+      !retired &&
+      bound.fullObservationId !== undefined &&
+      baseObservationId !== undefined &&
       since !== undefined &&
       !followedSheet &&
       (currentStatus === "diff" || currentStatus === "no_change") &&
@@ -481,18 +506,30 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     const fallbackReason =
       args.mode !== "diff" || isDiff
         ? undefined
-        : needsFullForNames ||
-            (since === undefined && baseObservationId === bound.observationId && textNamedBaseline)
-          ? "full read: rows named by their text"
-          : followedSheet
-            ? "full read: window changed"
-            : since === undefined
-              ? baseObservationId === bound.observationId
-                ? "full read: scope changed"
-                : "full read: observation expired"
-              : currentStatus === "unknown_snapshot"
-                ? "full read: snapshot expired"
-                : `full read: ${(currentStatus ?? "diff unavailable").replaceAll("_", " ")}`;
+        : tooManyMoved
+          ? "full read: too many rows moved"
+          : needsFullForNames ||
+              (since === undefined &&
+                baseObservationId === bound.observationId &&
+                textNamedBaseline)
+            ? "full read: rows named by their text"
+            : followedSheet
+              ? "full read: window changed"
+              : since === undefined
+                ? baseObservationId === bound.observationId
+                  ? bound.lastReadCut
+                    ? "full read: the last read was cut"
+                    : "full read: scope changed"
+                  : "full read: observation expired"
+                : currentStatus === "unknown_snapshot"
+                  ? "full read: snapshot expired"
+                  : `full read: ${(currentStatus ?? "diff unavailable").replaceAll("_", " ")}`;
+    const rows = isDiff ? modelDiffRows(diffText) : "";
+    const numbersChanged = isDiff && (bound.structuralDiff === true || structuralDiff(rows));
+    const focus =
+      currentStatus === "no_change"
+        ? (diffText?.match(/; focused element is \[\d+\]/)?.[0] ?? "")
+        : "";
     const tree = parseDesktopTreeState({ state, filtered, query, interactive });
     bound.frames = elementFrames(tree.elements);
     // The agent reads frames in window points; internal geometry stays in the driver's screen points.
@@ -542,7 +579,15 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               filtered,
               limit,
               shown: placed.rows,
-              shownText: isDiff ? diffText : tree.shownText,
+              shownText: isDiff
+                ? currentStatus === "no_change"
+                  ? numbersChanged
+                    ? `no change since ${baseObservationId}; numbers as in that observation${focus}`
+                    : `no change; numbers unchanged; latest full observation is ${bound.fullObservationId}${focus}`
+                  : numbersChanged
+                    ? `${rows}\nother numbers unchanged since ${baseObservationId}; observe({diff:false}) lists every current number`
+                    : `${rows}\nother numbers unchanged; latest full observation is ${bound.fullObservationId}`
+                : tree.shownText,
               omitted,
               screen,
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
@@ -567,11 +612,19 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       if (followedSheet) deps.setEpoch(nextEpoch);
       commitObservedSheet(bound, sheet, nextRef, nextBounds);
       if (snapshotId !== undefined) bound.snapshotId = snapshotId;
+      bound.lastReadCut = query === undefined && !interactive && observation.truncated;
       bound.diffBaseline =
         query === undefined &&
         !interactive &&
         !observation.truncated &&
         !tree.shown.some((row) => row.lifted === true);
+      if (!bound.diffBaseline) {
+        delete bound.fullObservationId;
+        delete bound.structuralDiff;
+      } else if (!isDiff) {
+        bound.fullObservationId = observationId;
+        delete bound.structuralDiff;
+      } else if (numbersChanged) bound.structuralDiff = true;
       // A read its budget cut keeps the rest for observe({after}) until the next read.
       if (observation.elements.length < tree.shown.length)
         bound.pages = {
@@ -602,6 +655,11 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         category: "unverifiable",
       };
     }
+  }
+  if (kept === undefined) {
+    delete bound.diffBaseline;
+    delete bound.fullObservationId;
+    delete bound.structuralDiff;
   }
   if (observationId === undefined) return yield* Effect.fail(fail("downstream_failure"));
   const width = integer(state.screenshot_width);

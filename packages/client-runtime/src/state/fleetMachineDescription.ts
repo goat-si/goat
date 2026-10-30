@@ -1,5 +1,5 @@
-import { BOAT_MACHINE_STATUS_LABEL } from "@goat/client-runtime/cloud-machines";
-import type { FleetMachine } from "@goat/client-runtime/state/fleet";
+import { BOAT_MACHINE_STATUS_LABEL } from "../cloudMachines.ts";
+import type { FleetMachine } from "./fleet.ts";
 import type { EnvironmentMachineKind, ExecutionEnvironmentPlatformOs } from "@goat/contracts";
 
 const MAC_MODELS: Partial<Record<EnvironmentMachineKind, string>> = {
@@ -57,3 +57,19 @@ export function fleetMachineSubtitle(
   );
   return parts.length === 0 ? null : parts.join(" · ");
 }
+
+/** "2 running · 1 need you", or "Idle" when nothing runs there. */
+export function fleetMachineWork(
+  machine: Pick<FleetMachine, "running" | "attention" | "reported">,
+): string {
+  const parts = [
+    machine.running > 0 ? machine.running + " running" : null,
+    machine.attention > 0 ? machine.attention + " need you" : null,
+    machine.reported > 0 ? machine.reported + " reported" : null,
+  ].filter((part) => part !== null);
+  return parts.length === 0 ? "Idle" : parts.join(" · ");
+}
+
+export const isFleetMachineBusy = (
+  machine: Pick<FleetMachine, "running" | "attention" | "reported">,
+) => machine.running + machine.attention + machine.reported > 0;

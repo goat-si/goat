@@ -157,7 +157,7 @@ it("returns a diff only for consecutive complete same-lineage trees, carrying ev
     limits: { treeBytes: 4096 },
   });
   const diff = observations.renderObservation({
-    draft: tabDraft("heading\nbutton Save [ref=a]\nbutton Cancel [ref=b]", 2),
+    draft: tabDraft("heading\nbutton Save [ref=a]\nbutton Cancel [ref=b]"),
     mode: "diff",
     baseObservationId: base.observationId,
     limits: { treeBytes: 4096 },
@@ -424,4 +424,44 @@ it("a clipped text never splits a character and counts the characters it omits",
       [...text].length,
     );
   }
+});
+
+it("budget cuts remove current diff numbers but preserve removed old numbers", () => {
+  const observations = new ScreenObservations();
+  const draft = {
+    targetRef: {
+      id: "app-diff",
+      kind: "app" as const,
+      environmentId: "env",
+      runId: "run",
+      turnId: "turn",
+      generation: 1,
+    },
+    targetGeneration: 1,
+    surfaceGeneration: 1,
+    complete: true,
+    truncated: false,
+    loading: false,
+    indexedText: '+ [39] AXButton "Added"\n~ [38] AXButton "Changed"\n- [39] AXButton "Removed"',
+    elements: Array.from({ length: 40 }, (_, index) => ({
+      index,
+      role: "AXButton",
+      name: `Button ${index} ${"x".repeat(40)}`,
+      driverToken: `s2:${index}`,
+    })),
+  };
+  const result = observations.renderObservation({
+    draft,
+    mode: "diff",
+    prediffed: true,
+    baseObservationId: "old",
+    limits: { treeBytes: 2500 },
+  });
+  expect(result.truncated).toBe(true);
+  expect(result.elements.some((element) => element.index === 39 || element.index === 38)).toBe(
+    false,
+  );
+  expect(result.indexedText).toContain('+ AXButton "Added"');
+  expect(result.indexedText).toContain('~ AXButton "Changed"');
+  expect(result.indexedText).toContain('- [39] AXButton "Removed"');
 });

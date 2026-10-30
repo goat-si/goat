@@ -1,6 +1,6 @@
 import type { FleetMachine } from "@goat/client-runtime/state/fleet";
 
-import { fleetMachineSubtitle } from "./describeMachine";
+import { fleetMachineSubtitle } from "@goat/client-runtime/state/fleet-machine-description";
 import type { FleetConnection } from "./fleetConnection";
 import type { FleetHostRow } from "./fleetTelemetry";
 
