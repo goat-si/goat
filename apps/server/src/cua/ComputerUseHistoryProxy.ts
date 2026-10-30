@@ -44,10 +44,10 @@ export function callOutcome(
         ? fields.code
         : safety.code;
   const args = isRecord(call.args) ? call.args : {};
+  const text =
+    call.tool === "type_text" ? args.text : call.tool === "set_value" ? args.value : undefined;
   const typed =
-    call.tool === "type_text" && typeof args.text === "string"
-      ? { length: args.text.length, fieldKind: "unknown" as const }
-      : undefined;
+    typeof text === "string" ? { length: text.length, fieldKind: "unknown" as const } : undefined;
   return {
     type: "callOutcome",
     controlId,

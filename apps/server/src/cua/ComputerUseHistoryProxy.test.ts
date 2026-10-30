@@ -23,6 +23,14 @@ it("classifies the action outcome and drops text when the field is unknown", () 
     verdict: "sent",
   });
   assert.deepEqual(result?.typed, { length: 6, fieldKind: "unknown" });
+  assert.deepEqual(
+    callOutcome(
+      "control:a",
+      { tool: "set_value", args: { value: "secret" } },
+      JSON.stringify({ result: { structuredContent: { effect: "confirmed" } } }),
+    )?.typed,
+    { length: 6, fieldKind: "unknown" },
+  );
   const refused = callOutcome(
     "control:a",
     action,
