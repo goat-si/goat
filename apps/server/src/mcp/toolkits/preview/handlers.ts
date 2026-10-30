@@ -280,8 +280,13 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
 const handlers = {
   browser_site_note_read: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
-      yield* McpInvocationContext.requireThreadMcpCapability("preview");
+      const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
       const notes = yield* requireSiteNotes;
+      if (!notes.hasTouched(scope.thread.threadId, input.origin))
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Site notes are readable only for sites this thread has opened.",
+        });
       return { note: notes.noteFor(input.origin) ?? null };
     }),
   ),
