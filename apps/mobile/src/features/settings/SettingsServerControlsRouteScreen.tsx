@@ -34,6 +34,7 @@ import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
+import { ComputerUseHistoryRetentionRow } from "./computerUse/ComputerUseHistoryRetentionRow";
 import {
   ComputerUseAdvancedRow,
   useComputerUseAdvanced,
@@ -635,6 +636,11 @@ function ServerSettingsDetail(props: {
                       value={uniform("enableCua")}
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
+                    />
+                    <ComputerUseHistoryRetentionRow
+                      value={uniform("computerUseKeepTypedText")}
+                      disabled={disabledFor("computerUseKeepTypedText")}
+                      onChange={(value) => write({ computerUseKeepTypedText: value })}
                     />
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
                     {computerUseAdvanced.expanded ? (
