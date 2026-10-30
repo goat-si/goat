@@ -156,6 +156,34 @@ const formTab = {
   controlGeneration: 0,
 };
 
+it.live("a tab click returns a compact Done", () => {
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab]),
+    invoke: <A>() =>
+      Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "unclaimed", generation: 0 },
+        effect: "unverifiable",
+        evidence: [],
+      } as A),
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); return await tab.click('button');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: { ok: true, verdict: "unverifiable" } },
+      });
+      if (result?._tag === "Success") {
+        expect(result.success.value).toEqual({ ok: true, verdict: "unverifiable" });
+        expect(Buffer.byteLength(JSON.stringify(result.success.value))).toBeLessThanOrEqual(200);
+      }
+    }),
+  );
+});
+
 it.live("a tab target can be bound again in a later cell by its identity or tabId", () => {
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
     listBoundTabs: () => Effect.succeed([formTab]),

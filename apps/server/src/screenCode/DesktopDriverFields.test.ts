@@ -49,6 +49,34 @@ const state = {
   ],
 };
 
+it.live("app clicks return a compact Done and expose details only on request", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      list_windows: { windows: [{ pid: 42, window_id: 7, title: "Document" }] },
+      get_window_state: state,
+      click: {
+        effect: "confirmed",
+        evidence: ["driver:acted"],
+        point: { x: 2, y: 3, coordinate_space: "window_points" },
+      },
+    });
+    const res = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
+        "const plain = await app.click(1); const verified = await app.click(1, {verify: true}); " +
+        "screen.debug = true; const debug = await app.click(1); return {plain, verified, debug};",
+    );
+    expect(res.value).toMatchObject({
+      plain: { ok: true, verdict: "confirmed" },
+      verified: { result: { debug: expect.any(Object) } },
+      debug: { result: { debug: expect.any(Object) } },
+    });
+    const value = res.value as { plain: unknown };
+    expect(value.plain).toEqual({ ok: true, verdict: "confirmed" });
+    expect(Buffer.byteLength(JSON.stringify(value.plain))).toBeLessThanOrEqual(200);
+  }),
+);
+
 // A cell runs in a child process, so this test runs on the wall clock.
 it.live(
   "a goat.12 click reply and a list_windows reply with closure ids reach the guest, which sees point and hit in GOAT's terms",
