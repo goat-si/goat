@@ -409,3 +409,66 @@ effectIt.effect(
       ]);
     }),
 );
+
+effectIt.effect("a claim admits only its own tab under app-restricted control", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    const claim = {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+    };
+    yield* h.push({
+      ...active(undefined, ["other.app"]),
+      browserClaims: [claim],
+      claimedBrowserPids: [42],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(1, "browser_click", { tab_id: "tab-1" }));
+    const result = yield* Effect.raceFirst(
+      h.nextToProvider.pipe(Effect.map(() => "refused")),
+      h.nextToDriver.pipe(Effect.map(() => "sent")),
+    );
+    assert.equal(result, "sent");
+    yield* h.send(call(2, "browser_click", { tab_id: "tab-2", pid: 42, window_id: 7 }));
+    assert.equal((yield* h.nextToProvider).id, 2);
+    yield* h.send(call(3, "click", { pid: 42, window_id: 7, x: 1, y: 1 }));
+    assert.equal((yield* h.nextToProvider).id, 3);
+    yield* h.push({ ...active(undefined, ["other.app"]), browserClaims: [] });
+    yield* h.applied;
+    yield* h.send(call(4, "browser_click", { tab_id: "tab-1", pid: 42, window_id: 7 }));
+    assert.equal((yield* h.nextToProvider).id, 4);
+  }),
+);
+
+effectIt.effect("an app-restricted claim generation change fences a held page call", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness({ onTarget: () => true, targetGate: gate });
+    const claim = {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+    };
+    yield* h.push({ ...active(undefined, ["other.app"]), browserClaims: [claim] });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(1, "browser_click", { tab_id: "tab-1", pid: 42, window_id: 7 }));
+    yield* h.reported;
+    yield* h.push({
+      ...active(undefined, ["other.app"]),
+      browserClaims: [{ ...claim, claimGeneration: 2 }],
+    });
+    yield* h.applied;
+    yield* Deferred.succeed(gate, undefined);
+    assert.equal((yield* h.nextToProvider).id, 1);
+    assert.equal(yield* h.driverQueued, 0);
+  }),
+);

@@ -7,11 +7,11 @@ import * as Bind from "../preview/BrowserClaimBind.ts";
 import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
 import { active, call, harness, CONTROL } from "./ComputerUseLeaseProxy.testkit.ts";
 
-it.effect("admits a host bind only for an approved pending window", () =>
+it.effect("admits a host bind only for an approved pending window under app restrictions", () =>
   Effect.gen(function* () {
     const h = yield* harness();
     yield* h.push({
-      ...active(),
+      ...active(undefined, ["other.app"]),
       browserClaimBindings: [
         { claimId: "claim:1", pid: 42, windowId: 7, origin: "https://example.test" },
       ],
@@ -45,10 +45,10 @@ it.effect("admits a host bind only for an approved pending window", () =>
       args: { pid: 42, window_id: 7, mode: "bind", origin_scope: ["https://example.test"] },
     });
     const outcome = yield* Effect.raceFirst(
-      h.nextToDriver.pipe(Effect.as("sent")),
+      h.nextToDriver.pipe(Effect.map((message) => JSON.stringify(message))),
       h.primitiveReply.pipe(Effect.as("refused")),
     );
-    assert.equal(outcome, "sent");
+    assert.include(outcome, "get_browser_state");
   }),
 );
 

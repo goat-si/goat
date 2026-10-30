@@ -15,6 +15,8 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { makeTestBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
+import { active, call, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 import { makeComputerUseRpcHandlers, stopComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
 import * as Handoffs from "./Handoffs.ts";
 import { computerUseGrantClients, instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
@@ -92,6 +94,59 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         );
         yield* PubSub.take(wake);
         const live = yield* leases.control(threadId, yield* leases.active(threadId));
+        const handoffBefore = yield* service.read({ threadId, handoffId: held.handoffId });
+        const approvalBefore = yield* leases.active(threadId);
+        const controlBefore = yield* leases.controlState(threadId, live.controlId);
+        const claims = yield* makeTestBrowserOriginGrants({
+          environmentId,
+          supported: () => true,
+          publish: () => Effect.void,
+          bind: (input) =>
+            Effect.succeed({
+              tabId: "tab-1",
+              title: "Site",
+              url: input.origin,
+              driverGeneration: 1,
+            }),
+        });
+        const attached = yield* claims.claim({
+          threadId,
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        });
+        assert.equal(attached.agentResult.status, "attached");
+        const proxy = yield* harness();
+        yield* proxy.push({
+          ...active(undefined, [app]),
+          browserClaims: yield* claims.claimsFor(threadId),
+        });
+        yield* proxy.applied;
+        yield* proxy.send(
+          JSON.stringify({ jsonrpc: "2.0", id: 99, method: "tools/list", params: {} }),
+        );
+        yield* proxy.nextToDriver;
+        yield* proxy.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 99,
+            result: {
+              tools: [
+                { name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } },
+              ],
+            },
+          }),
+        );
+        yield* proxy.nextToProvider;
+        yield* proxy.send(call(100, "browser_click", { tab_id: "tab-1" }));
+        assert.equal((yield* proxy.nextToDriver).id, 100);
+        assert.deepEqual(
+          yield* service.read({ threadId, handoffId: held.handoffId }),
+          handoffBefore,
+        );
+        assert.deepEqual(yield* leases.active(threadId), approvalBefore);
+        assert.deepEqual(yield* leases.controlState(threadId, live.controlId), controlBefore);
         // Its agent reads the window, so the thread has a card to stop (#1555).
         yield* leases.callReservation(threadId, {
           action: "reserve",

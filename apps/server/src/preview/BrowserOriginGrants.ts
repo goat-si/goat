@@ -26,6 +26,7 @@ export interface Request {
 interface Pending extends Request {
   readonly claimId: string;
   readonly createdAt: number;
+  readonly stopped: Deferred.Deferred<void>;
   granted: boolean;
 }
 
@@ -120,7 +121,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const uncommittedGrants = new Set<string>();
   const ended = new Map<
     string,
-    { readonly threadId: ThreadId; readonly reason: "origin_changed" | "driver_restarted" }
+    {
+      readonly threadId: ThreadId;
+      readonly reason: "origin_changed" | "driver_restarted" | "stopped";
+    }
   >();
   let sequence = 0;
   let driverEpoch = 0;
@@ -128,11 +132,14 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const untilRestart = Effect.fn("BrowserOriginGrants.untilRestart")(function* <A, E>(
     effect: Effect.Effect<A, E>,
     signal: Deferred.Deferred<void>,
+    stopped: Deferred.Deferred<void>,
   ) {
     const task = yield* effect.pipe(Effect.forkDetach({ startImmediately: true }));
     return yield* Effect.raceFirst(
       Fiber.join(task).pipe(Effect.asSome),
-      Deferred.await(signal).pipe(Effect.as(Option.none<A>())),
+      Effect.raceFirst(Deferred.await(signal), Deferred.await(stopped)).pipe(
+        Effect.as(Option.none<A>()),
+      ),
     );
   });
   const key = (threadId: ThreadId, origin: string) => JSON.stringify([threadId, origin]);
@@ -169,7 +176,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         if (!isOrigin(input.origin)) return invalidOrigin;
         const createdAt = yield* Clock.currentTimeMillis;
         const claimId = `browser-claim:${++sequence}`;
-        pending.set(claimId, { ...input, claimId, createdAt, granted: false });
+        const stopped = yield* Deferred.make<void>();
+        pending.set(claimId, { ...input, claimId, createdAt, stopped, granted: false });
         yield* advance;
         return { status: "pending" as const, claimId };
       }),
@@ -218,12 +226,16 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           yield* shrink(union());
         });
         const result = yield* Effect.gen(function* () {
-          const applied = yield* untilRestart(publish(union()), signal);
+          const applied = yield* untilRestart(publish(union()), signal, entry.stopped);
           if (Option.isNone(applied)) return { agentResult: decline };
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
           const bindingVersion = yield* SubscriptionRef.get(version);
-          const bound = yield* untilRestart(deps.bind({ ...entry, bindingVersion }), signal);
+          const bound = yield* untilRestart(
+            deps.bind({ ...entry, bindingVersion }),
+            signal,
+            entry.stopped,
+          );
           if (Option.isNone(bound)) return { agentResult: decline };
           const tab = bound.value;
           if (epoch !== driverEpoch) return { agentResult: decline };
@@ -324,15 +336,33 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }),
     ),
   );
-  const stop = Effect.fn("BrowserOriginGrants.stop")((threadId: ThreadId) =>
-    lock.withPermits(1)(
-      Effect.gen(function* () {
-        for (const [id, entry] of pending) if (entry.threadId === threadId) pending.delete(id);
-        for (const [id, claim] of claims) if (claim.threadId === threadId) claims.delete(id);
-        yield* shrink(union());
-      }),
-    ),
-  );
+  const stop = Effect.fn("BrowserOriginGrants.stop")(function* (threadId?: ThreadId) {
+    const stopped = yield* Effect.sync(() => {
+      const signals: Array<Deferred.Deferred<void>> = [];
+      for (const [id, entry] of pending)
+        if (threadId === undefined || entry.threadId === threadId) {
+          pending.delete(id);
+          ended.set(id, { threadId: entry.threadId, reason: "stopped" });
+          if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+            grants.delete(key(entry.threadId, entry.origin));
+          signals.push(entry.stopped);
+          sequence++;
+        }
+      for (const [id, claim] of claims)
+        if (threadId === undefined || claim.threadId === threadId) {
+          claims.delete(id);
+          ended.set(id, { threadId: claim.threadId, reason: "stopped" });
+          sequence++;
+        }
+      return signals;
+    });
+    for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
+    yield* shrink(union()).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not publish stopped browser claims", { cause }),
+      ),
+    );
+  });
   const end = Effect.fn("BrowserOriginGrants.end")(
     (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
       lock.withPermits(1)(

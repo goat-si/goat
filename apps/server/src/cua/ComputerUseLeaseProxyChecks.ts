@@ -22,6 +22,7 @@ export const makeProxyChecks = (input: {
     id: JsonRpcId,
     message: Envelope,
     listApps: Effect.Effect<void>,
+    claimApproved: boolean,
   ) => Parameters<typeof refuseProxyCall>[0];
   readonly expire: Effect.Effect<void>;
   readonly deadline: () => number;
@@ -68,13 +69,14 @@ export const makeProxyChecks = (input: {
     id: JsonRpcId,
     message: Envelope,
     canSend: Effect.Effect<boolean>,
+    claimApproved: boolean,
   ) {
     if (
       input.proof.finished() === undefined &&
       (yield* Clock.currentTimeMillis) >= input.deadline()
     )
       yield* input.expire;
-    return yield* refuseProxyCall(input.refusal(id, message, listApps(canSend)));
+    return yield* refuseProxyCall(input.refusal(id, message, listApps(canSend), claimApproved));
   });
   return { listApps, proveDisplay, refuseCall };
 };

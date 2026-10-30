@@ -14,6 +14,9 @@ import * as PubSub from "effect/PubSub";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { makeTestBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
+import { active, call, harness } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 import { stopAllComputerUse } from "../cua/ComputerUseRpcHandlers.ts";
 import { fullTableScans } from "../persistence/fullTableScans.testkit.ts";
 import * as Handoffs from "./Handoffs.ts";
@@ -110,6 +113,18 @@ it.effect(
         yield* worker.drain();
         const { owner, operator, environmentId, dependencies } =
           yield* computerUseGrantClients(orchestrator);
+        const claims = yield* makeTestBrowserOriginGrants({
+          environmentId,
+          supported: () => true,
+          publish: () => Effect.void,
+          bind: (input) =>
+            Effect.succeed({
+              tabId: "tab-1",
+              title: "Site",
+              url: input.origin,
+              driverGeneration: 1,
+            }),
+        });
         yield* Effect.gen(function* () {
           const service = yield* Handoffs.Handoffs;
           const leases = yield* ComputerUseLeases.ComputerUseLeases;
@@ -160,12 +175,33 @@ it.effect(
             .respond({ ...secondAddress, action: "completed" }, owner.sessionId)
             .pipe(Effect.result);
           assert.equal(refused._tag, "Failure");
+          const attached = yield* claims.claim({
+            threadId,
+            pid: 42,
+            windowId: 7,
+            origin: "https://example.test",
+            windowTitle: "Browser",
+          });
+          if (attached.agentResult.status !== "attached")
+            return assert.fail("expected attached claim");
+          const proxy = yield* harness();
+          yield* proxy.push({ ...active(), browserClaims: yield* claims.claimsFor(threadId) });
+          yield* proxy.applied;
           // Ending early is a durable transition every client sees, and it wakes proxies.
           const ended = yield* service.respond(
             { ...firstAddress, action: "cancelled" },
             owner.sessionId,
           );
           assert.equal(ended.state, "cancelled");
+          assert.equal(
+            yield* claims.endReason(threadId, attached.agentResult.claim.claimId),
+            "stopped",
+          );
+          yield* proxy.push({ ...active(), browserClaims: yield* claims.claimsFor(threadId) });
+          yield* proxy.applied;
+          yield* proxy.send(call(1, "browser_click", { tab_id: "tab-1" }));
+          assert.equal((yield* proxy.nextToProvider).id, 1);
+          assert.equal(yield* proxy.driverQueued, 0);
           yield* PubSub.take(wake);
           assert.isTrue(Option.isNone(yield* leases.active(threadId)));
           assert.deepEqual(yield* leases.state(threadId, first.handoffId), {
@@ -244,7 +280,15 @@ it.effect(
           Effect.provide(
             Handoffs.layer.pipe(
               Layer.provideMerge(ComputerUseLeases.layer),
-              Layer.provide(dependencies),
+              Layer.provide(
+                Layer.merge(
+                  dependencies,
+                  Layer.succeed(BrowserOriginGrants, {
+                    ...claims,
+                    setDriverCapability: () => Effect.void,
+                  }),
+                ),
+              ),
             ),
           ),
         );

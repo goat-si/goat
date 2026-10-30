@@ -46,6 +46,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
 import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
@@ -281,6 +282,7 @@ const make = Effect.gen(function* () {
   const environment = yield* Effect.serviceOption(Environment.ServerEnvironment);
   const secrets = yield* SecretRequests.SecretRequests;
   const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const tabClaims = yield* Effect.serviceOption(BrowserOriginGrants);
   const key = yield* store
     .getOrCreateRandom("handoff-encryption-key", 32)
     .pipe(Effect.mapError(unavailable));
@@ -533,6 +535,7 @@ const make = Effect.gen(function* () {
         Option.isSome(computerUseLeases)
       )
         yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
+      if (endsApproved && Option.isSome(tabClaims)) yield* tabClaims.value.stop(input.threadId);
       if (isComputerUseGrant && Option.isSome(computerUseLeases))
         yield* computerUseLeases.value.changed;
       if (isComputerUseGrant) yield* continuations.answered(input.handoffId);
