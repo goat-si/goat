@@ -139,17 +139,6 @@ const watchedFor = (
       ]
     : [];
 
-/** A key with no element and no modifiers, such as Escape or Enter on the focused control. */
-const isSimpleKey = (
-  tool: string,
-  forwarded: Record<string, unknown>,
-  acted: DesktopRow | undefined,
-): boolean =>
-  tool === "press_key" &&
-  acted === undefined &&
-  forwarded.element_token === undefined &&
-  !(Array.isArray(forwarded.modifiers) && forwarded.modifiers.length > 0);
-
 const toVerifyExpectations = (watched: ReadonlyArray<WatchedElement>) =>
   watched.map((w) => ({
     element: {
@@ -293,8 +282,8 @@ const readsAroundInput = (deps: {
 
 /**
  * One driver call: no read follows it to turn its verdict into confirmed. The cell's window
- * baseline comes from its bind or one read for the process's first input; a close stays
- * unverifiable without a window list.
+ * baseline comes from its bind or one read for the process's first input; an input that opens
+ * or closes a window stays unverifiable without a window list.
  */
 const runInputAlone = Effect.fn("DesktopEvidence.runInputAlone")(function* (
   deps: InputEvidenceDeps,
@@ -336,8 +325,10 @@ const runInputAlone = Effect.fn("DesktopEvidence.runInputAlone")(function* (
       ...hopsPhase(call),
     },
   };
+  // An input that opens or closes a window was confirmed from a window list; without one the
+  // driver's word is all there is, and a window effect stays unverifiable.
   const unproven =
-    base.category === "confirmed" && (intent === "close" || hitCloseButton(tool, base.value));
+    base.category === "confirmed" && (intent !== undefined || hitCloseButton(tool, base.value));
   return {
     ...base,
     ...(unproven ? { category: "unverifiable" as const, safety: INDETERMINATE_WRITE } : {}),
@@ -356,10 +347,6 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     quietRead(deps.send, call, context, deps.connectionGeneration, method, args, reserveAfterMs);
   const inputCapMs = driverCallCapMs(tool, forwarded);
   const startedAt = yield* Clock.currentTimeMillis;
-  // A simple key rarely opens or closes a window; the cell's end read still compares windows
-  // against the cell's first baseline.
-  if (!opening && intent === undefined && isSimpleKey(tool, forwarded, acted))
-    return yield* runInputAlone(deps);
   const watched = watchedFor(acted, deps.rows);
   const verifyArgs = {
     pid,

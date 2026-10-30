@@ -509,3 +509,62 @@ it.live(
     });
   },
 );
+
+// The default path reads nothing around an input; these keep its labels and its cell report honest.
+const bareInput = (
+  host: Host,
+  ref: ScreenTargetRef,
+  method: "press_key" | "click",
+  args: Parameters<typeof call>[1],
+) =>
+  host.invoke({ ...call(method, args, ref), deadlineMillis: 10_000 }, context).pipe(Effect.result);
+
+it.effect("a driver's confirmed on a key that opens or closes a window stays unverifiable", () =>
+  Effect.gen(function* () {
+    const open = desktop(listing([7]), [listing([7, 8])], { effect: "confirmed" });
+    const opened = ok(yield* bareInput(open.host, yield* bind(open.host), "press_key", press("t")));
+    expect(opened.category).toBe("unverifiable");
+    const close = desktop(listing([7, 9]), [listing([9])], { effect: "confirmed" });
+    const closed = ok(
+      yield* bareInput(close.host, yield* bind(close.host), "press_key", press("w")),
+    );
+    expect(closed.category).toBe("unverifiable");
+    // Neither read a window list around itself.
+    expect(open.sent.filter((each) => each.tool === "list_windows")).toHaveLength(1);
+    expect(close.sent.filter((each) => each.tool === "list_windows")).toHaveLength(1);
+  }),
+);
+
+it.live(
+  "a window an input opens is in the cell's report even when it replaced every baseline window",
+  () => {
+    const { host } = desktop(listing([7]), [listing([8])]);
+    return Effect.gen(function* () {
+      const result = yield* runCellOn(
+        host,
+        "const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await a.press('cmd+t'); return 1;",
+      );
+      expect(result.windowsOpened?.map((each) => each.window_id)).toEqual([8]);
+      expect(result.windowsOpenedUnverified).toBe(true);
+    });
+  },
+);
+
+it.live("a window an input opens is in the cell's report from its end read alone", () => {
+  const { host, sent } = desktop(listing([7]), [listing([7, 8])]);
+  return Effect.gen(function* () {
+    const result = yield* runCellOn(
+      host,
+      "const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); const done = await a.press('cmd+t'); return done.verdict;",
+    );
+    expect(result.value).toBe("unverifiable");
+    expect(result.windowsOpened?.map((each) => each.window_id)).toEqual([8]);
+    expect(result.windowsOpenedUnverified).toBeUndefined();
+    // The bind's list, the key, and the cell's end read: nothing around the input itself.
+    expect(sent.map((each) => each.tool).filter((tool) => tool !== "list_apps")).toEqual([
+      "list_windows",
+      "press_key",
+      "list_windows",
+    ]);
+  });
+});

@@ -443,6 +443,10 @@ export class CellWindowTracker {
         }
       } else {
         unverified = true;
+        // No window of the start list is in the end list, so nothing proves these are new; they
+        // are still listed, flagged unverified, rather than dropped.
+        if (start !== undefined && end !== undefined && startIds !== undefined)
+          for (const w of end) if (!startIds.has(w.window_id)) opened.push(toSummary(w));
         const fallback = this.seenOpened.get(pid);
         if (fallback) opened.push(...fallback.values());
       }

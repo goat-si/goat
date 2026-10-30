@@ -21,7 +21,7 @@ type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; ren
 type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted?: boolean; [k: string]: unknown };
 // The picture comes back as an image beside the cell's JSON, under its imageRef; [x, y] count its pixels from the top-left. omitted: it did not fit the cell's image limit.
 // An option, query or tab condition key a method below does not take is refused unsent (invalid_argument), naming the keys it takes.
-// App observed lists only the acted element's own state change; read other elements with observe(). A key with no target and no modifiers carries no windows report.
+// App observed lists only the acted element's own state change; read other elements with observe(). An input carries observed evidence and a windows report only when it passes verify: true.
 // confirmed: the effect is proven. unverifiable: the input was sent and its effect was not checked; it may already have taken effect,
 // so never resend it. Nothing waits on it: go on with the next step and observe when you need the result. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };

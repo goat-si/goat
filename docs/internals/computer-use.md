@@ -56,9 +56,12 @@ provider (Codex, Claude, ...)
   `unverifiable` is a success for flow control: the input was sent and its effect was not
   checked, so nothing waits on it, retries it or reads around it. The one rule it carries is
   never to resend. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
-  per app input. Only a call that passes `verify: true`, or one that opens a Go to Folder
-  sheet, reads the process's windows and the acted element around the input; those reads run in
-  parallel, and a verdict is upgraded to `confirmed` only by what they show. A cell's window
+  per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
+  member, or one that opens a Go to Folder sheet, reads the process's windows and the acted
+  element around the input; those reads run in parallel, and a verdict is upgraded to
+  `confirmed` only by what they show. Without them an input that opens or closes a window keeps
+  `unverifiable` even when the driver says done, and the cell's end read lists the new windows
+  (flagged unverified when no baseline window is still listed). A cell's window
   baseline comes from its bind, or from one read for the first input on a process, and its end
   read compares against it. The next screenshot or tree read after an input waits only for what
   is left of the 60 ms settle time.

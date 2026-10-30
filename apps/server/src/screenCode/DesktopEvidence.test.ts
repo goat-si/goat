@@ -124,6 +124,27 @@ it.effect(
     }),
 );
 
+it.effect("a key without modifiers that asks to verify reads the windows around it", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_windows: { windows: [win] },
+      get_window_state: calculator,
+      press_key: { effect: "unverifiable" },
+    });
+    const { ref } = yield* bound(host);
+    const first = sent.length;
+    const done = yield* answersWithoutSettle(
+      host.invoke(at(10_000, call("press_key", { key: "Enter", verify: true }, ref)), context),
+    );
+    expect(sent.slice(first).map((each) => each.tool)).toEqual([
+      "list_windows",
+      "press_key",
+      "list_windows",
+    ]);
+    expect((done.value as { windows?: { bound?: string } }).windows?.bound).toBe("present");
+  }),
+);
+
 it.effect("a click that asks to verify reads the windows around the input", () =>
   Effect.gen(function* () {
     const { host, sent } = fixture({

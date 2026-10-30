@@ -471,8 +471,9 @@ export const createDesktopTargetHost = (deps: {
         bound.needsSettleBeforeCapture = true;
         delete bound.inputDrivenAt;
         const driven = (at: number) => void (bound.inputDrivenAt = at);
-        // A batch member skips window reads, except one that opens or closes a window.
-        if (inBatch && windowIntentOf(tool, forwarded, acted) === undefined)
+        // A batch member reads nothing around itself unless it asks to verify; one that opens or
+        // closes a window goes through the single-call path, which keeps it unverifiable.
+        if (inBatch && !verify && windowIntentOf(tool, forwarded, acted) === undefined)
           return runInput.pipe(
             Effect.tap(() => Effect.map(Clock.currentTimeMillis, driven)),
             Effect.map((result) => withoutUnprovenClose(tool, result)),
