@@ -12,6 +12,7 @@ import { usePullRequestsSupported } from "../../state/environments";
 import { GoatWordmark } from "../GoatWordmark";
 import { useBrandChannel } from "./brandChannel";
 import { BrandChannelPill } from "./BrandChannelPill";
+import { DevSshBadge } from "./DevSshBadge";
 import {
   SidebarFooter,
   SidebarMenu,

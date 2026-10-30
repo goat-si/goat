@@ -748,67 +748,57 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
-  it.effect(
-    "resolveWsl carries the kill switch, resource attributes and dev SSH opt-in into the distro",
-    () =>
-      Effect.gen(function* () {
-        const fileSystem = yield* FileSystem.FileSystem;
-        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: "goat-desktop-backend-config-test-",
-        });
+  it.effect("resolveWsl carries the kill switch and resource attributes into the distro", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-desktop-backend-config-test-",
+      });
 
-        const previousWslEnv = process.env.WSLENV;
-        const previousDisabled = process.env.OTEL_SDK_DISABLED;
-        const previousTelemetry = process.env.GOAT_TELEMETRY_ENABLED;
-        const previousDevSsh = process.env.GOAT_DEV_SSH;
-        const previousResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES;
-        try {
-          delete process.env.WSLENV;
-          process.env.OTEL_SDK_DISABLED = "true";
-          process.env.GOAT_TELEMETRY_ENABLED = "false";
-          process.env.GOAT_DEV_SSH = "on";
-          process.env.OTEL_RESOURCE_ATTRIBUTES = "deployment.environment.name=staging";
+      const previousWslEnv = process.env.WSLENV;
+      const previousDisabled = process.env.OTEL_SDK_DISABLED;
+      const previousTelemetry = process.env.GOAT_TELEMETRY_ENABLED;
+      const previousResourceAttributes = process.env.OTEL_RESOURCE_ATTRIBUTES;
+      try {
+        delete process.env.WSLENV;
+        process.env.OTEL_SDK_DISABLED = "true";
+        process.env.GOAT_TELEMETRY_ENABLED = "false";
+        process.env.OTEL_RESOURCE_ATTRIBUTES = "deployment.environment.name=staging";
 
-          yield* Effect.gen(function* () {
-            const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
-            const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
+        yield* Effect.gen(function* () {
+          const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+          const config = yield* configuration.resolveWsl({ port: 5050, distro: null });
 
-            assert.equal(config.env.OTEL_SDK_DISABLED, "true");
-            assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_SDK_DISABLED");
-            assert.equal(config.env.GOAT_TELEMETRY_ENABLED, "false");
-            assert.include((config.env.WSLENV ?? "").split(":"), "GOAT_TELEMETRY_ENABLED");
-            assert.equal(config.env.GOAT_DEV_SSH, "on");
-            assert.include((config.env.WSLENV ?? "").split(":"), "GOAT_DEV_SSH");
-            assert.equal(
-              config.env.OTEL_RESOURCE_ATTRIBUTES,
-              "deployment.environment.name=staging",
-            );
-            assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_RESOURCE_ATTRIBUTES");
-          }).pipe(
-            Effect.provide(
-              layerBackendConfiguration().pipe(
-                Layer.provideMerge(layerServerExposure),
-                Layer.provideMerge(DesktopAppSettings.layerTest()),
-                Layer.provideMerge(DesktopWslServerTree.layerTest()),
-                Layer.provideMerge(
-                  DesktopWslEnvironment.layerTest({
-                    isAvailable: true,
-                    windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
-                    getDistroIp: () => Option.some("172.27.0.99"),
-                  }),
-                ),
-                Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
+          assert.equal(config.env.OTEL_SDK_DISABLED, "true");
+          assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_SDK_DISABLED");
+          assert.equal(config.env.GOAT_TELEMETRY_ENABLED, "false");
+          assert.include((config.env.WSLENV ?? "").split(":"), "GOAT_TELEMETRY_ENABLED");
+          assert.equal(config.env.OTEL_RESOURCE_ATTRIBUTES, "deployment.environment.name=staging");
+          assert.include((config.env.WSLENV ?? "").split(":"), "OTEL_RESOURCE_ATTRIBUTES");
+        }).pipe(
+          Effect.provide(
+            layerBackendConfiguration().pipe(
+              Layer.provideMerge(layerServerExposure),
+              Layer.provideMerge(DesktopAppSettings.layerTest()),
+              Layer.provideMerge(DesktopWslServerTree.layerTest()),
+              Layer.provideMerge(
+                DesktopWslEnvironment.layerTest({
+                  isAvailable: true,
+                  windowsToWslPath: () => Option.some("/mnt/c/repo/apps/server/src/index.ts"),
+                  getDistroIp: () => Option.some("172.27.0.99"),
+                }),
               ),
+              Layer.provideMerge(layerEnvironment(baseDir, { platform: "win32" })),
             ),
-          );
-        } finally {
-          restoreEnv("WSLENV", previousWslEnv);
-          restoreEnv("OTEL_SDK_DISABLED", previousDisabled);
-          restoreEnv("GOAT_TELEMETRY_ENABLED", previousTelemetry);
-          restoreEnv("GOAT_DEV_SSH", previousDevSsh);
-          restoreEnv("OTEL_RESOURCE_ATTRIBUTES", previousResourceAttributes);
-        }
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+          ),
+        );
+      } finally {
+        restoreEnv("WSLENV", previousWslEnv);
+        restoreEnv("OTEL_SDK_DISABLED", previousDisabled);
+        restoreEnv("GOAT_TELEMETRY_ENABLED", previousTelemetry);
+        restoreEnv("OTEL_RESOURCE_ATTRIBUTES", previousResourceAttributes);
+      }
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect.each(["/p", "/l", "/u", "/w", "/pluw", ""] as const)(
