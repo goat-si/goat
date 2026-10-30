@@ -43,9 +43,22 @@ it.effect(
           POINT_BASIS_UNSUPPORTED,
         );
       }
-      // A step of a batch is held to the same rule.
-      yield* h.send(call("steps", "run_steps", { steps: [{ tool: "click", args: at }] }));
-      assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "outside_manifest" });
+      // A batch step is held to the same rule, in either step form, at any depth.
+      for (const steps of [
+        [{ tool: "click", args: at }],
+        [{ click: at }],
+        [{ double_click: at }],
+        [{ right_click: { ...at } }],
+        [{ tool: "wait", args: {} }, { if: { then: [{ click: at }] } }],
+      ]) {
+        yield* h.send(call("steps", "run_steps", { steps }));
+        const refused = yield* h.nextToProvider;
+        assert.deepInclude(
+          refusalOf(refused),
+          { detail: "outside_manifest" },
+          JSON.stringify(steps),
+        );
+      }
       assert.equal(yield* h.driverQueued, 0);
       // A click without a basis is not this check's business.
       yield* h.send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));

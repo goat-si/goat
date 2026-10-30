@@ -3,7 +3,7 @@
  * A point click names the screenshot its pixels count in by snapshot_id, which the driver checks
  * against the window's frame before sending input. A driver whose click lacks that input could
  * ignore it and click the pixels unchecked, so such a call goes only to a child whose own tool
- * list takes it, alone or as a run_steps step.
+ * list takes it. A run_steps call holding snapshot_id anywhere, in any step form, needs all three.
  */
 import * as Effect from "effect/Effect";
 
@@ -22,18 +22,23 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
     ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 
+/** Whether a snapshot_id appears anywhere in the value; too deep to read counts as one. */
+const namesBasis = (value: unknown, depth = 0): boolean => {
+  if (depth > 16) return true;
+  if (Array.isArray(value)) return value.some((item) => namesBasis(item, depth + 1));
+  const fields = record(value);
+  if (fields === undefined) return false;
+  return (
+    fields.snapshot_id !== undefined ||
+    Object.values(fields).some((item) => namesBasis(item, depth + 1))
+  );
+};
+
 /** The click tools the call asks to place by a window basis, its run_steps steps included. */
 const basisTools = (name: unknown, args: unknown): ReadonlyArray<string> => {
   if (typeof name === "string" && BASIS_TOOLS.has(name))
     return record(args)?.snapshot_id === undefined ? [] : [name];
-  if (name !== "run_steps") return [];
-  const steps = record(args)?.steps;
-  return (Array.isArray(steps) ? steps : []).flatMap((step) => {
-    const tool = record(step)?.tool;
-    return typeof tool === "string" && BASIS_TOOLS.has(tool)
-      ? basisTools(tool, record(step)?.args)
-      : [];
-  });
+  return name === "run_steps" && namesBasis(record(args)?.steps) ? [...BASIS_TOOLS] : [];
 };
 
 const makeProxyPointBasis = (
