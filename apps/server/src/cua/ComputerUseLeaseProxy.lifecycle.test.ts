@@ -126,6 +126,31 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
     }),
   );
 
+  it.effect("a person Stop all cuts the call off with a terminal typed result", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(81, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.nextToDriver;
+      yield* h.push({ state: "ended", reason: "stopped_all" });
+      yield* h.killed;
+      assert.deepInclude((yield* h.nextToProvider).result, {
+        isError: true,
+        structuredContent: {
+          code: "stopped_by_person",
+          detail: "stopped_all",
+          effect: "unverifiable",
+          safety: {
+            possibleCommit: true,
+            retryClass: "never",
+            writeStatus: "may_have_applied",
+            code: "write_indeterminate",
+          },
+        },
+      });
+    }),
+  );
+
   it.effect("reports helper Escape from the active control", () =>
     Effect.gen(function* () {
       const h = yield* harness({ personStop: true });
