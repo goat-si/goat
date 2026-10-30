@@ -12,6 +12,7 @@ interface Tab {
   readonly tabId: string;
   readonly closing: boolean;
   readonly page: { readonly url: () => string };
+  readonly control?: { readonly cutBlockedUrl: () => void };
 }
 interface Identity {
   readonly threadId: string;
@@ -63,8 +64,10 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
         version === tokens.get(runKey(tab.threadId, runId)) &&
         active(tab.threadId, runId) &&
         isBlockedBrowserUrl(url, current.blockedBrowserHosts)
-      )
+      ) {
         entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
+        tab.control?.cutBlockedUrl();
+      }
     });
     void check.catch(() => undefined);
     pending.set(key, { runId, check });

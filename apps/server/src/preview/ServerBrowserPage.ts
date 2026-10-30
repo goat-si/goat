@@ -940,14 +940,15 @@ export const drag = async (
   }
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
-  await pointer(await targetPoint(page, source, {}, deadline), "move");
+  const start = await targetPoint(page, source, {}, deadline);
+  await pointer(start, "move");
   await settled(source, deadline, false);
   await settled(target, deadline, false);
   const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
-  if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
-  remaining(deadline);
-  await gate();
-  await source.dragTo(target, dispatched(deadline));
+  if (!end) throw targetChanged();
+  const finish = { x: end.x + end.width / 2, y: end.y + end.height / 2 };
+  await pointer(finish, "move");
+  await dragBetween(page, { from: start, to: finish }, gate, deadline);
 };
 
 export const press = async (

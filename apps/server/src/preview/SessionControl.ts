@@ -207,6 +207,10 @@ export class SessionControl {
     this.changed();
   }
 
+  cutBlockedUrl() {
+    this.cut(new BrowserControlInterrupted("This browser host is blocked.", "blocked_url", false));
+  }
+
   private cut(reason: BrowserControlInterrupted) {
     // Input already past its gate cannot be recalled, so the page must ignore it until it ends.
     const held = [...this.lingering];
