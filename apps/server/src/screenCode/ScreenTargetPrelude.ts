@@ -162,7 +162,10 @@ const __target = (binding, note, owner, extraProps = {}) => {
       !('coordinate_space' in arg)
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
-    return __call(method, { ...withRegion, targetRef: ref });
+    return __call(method, { ...withRegion, targetRef: ref }).then((value) => {
+      if (tab && value && Object.prototype.hasOwnProperty.call(value, 'siteNote')) currentNote = value.siteNote ?? undefined;
+      return value;
+    });
   };
   const act = async (name, method, arg) => {
     if (tab && method !== 'click' && method !== 'right_click') retire();
@@ -313,6 +316,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     let observation;
     try {
       const value = (await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v;
+      if (tab && value && Object.prototype.hasOwnProperty.call(value, 'siteNote')) currentNote = value.siteNote ?? undefined;
       observation = page ? value : remember(value);
       // A page's elements join the read it continues, so numbers and names from every page resolve.
       if (page && seen.observation && value && Array.isArray(value.elements))

@@ -263,14 +263,22 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       dispatch: (call, context) =>
         dispatcher.dispatch(call, context).pipe(
           Effect.map((result) => {
-            if (!siteNotes || (call.method !== "select_tab" && call.method !== "open_tab"))
+            if (!siteNotes) return result;
+            const binding = call.method === "select_tab" || call.method === "open_tab";
+            if (
+              !binding &&
+              call.method !== "read_page" &&
+              call.method !== "observe" &&
+              call.method !== "tab_status"
+            )
               return result;
             const value = record(result.value);
             const tab = record(value?.tab);
-            if (!value || typeof tab?.url !== "string") return result;
+            const url = binding ? tab?.url : value?.url;
+            if (!value || typeof url !== "string") return result;
             return {
               ...result,
-              value: { ...value, siteNote: siteNotes.deliverOnce(context.threadId, tab.url) ?? null },
+              value: { ...value, siteNote: siteNotes.deliverOnce(context.threadId, url) ?? null },
             };
           }),
           Effect.tap((result) =>
