@@ -38,7 +38,6 @@ it.live("records trusted normal typing only with consent outside secret protecti
         const browser = await chromium.launch({ headless: true });
         try {
           const page = await (await browser.newContext()).newPage();
-          const cdp = await page.context().newCDPSession(page);
           const tab = {
             threadId: "thread:retention",
             page,
@@ -50,7 +49,7 @@ it.live("records trusted normal typing only with consent outside secret protecti
           );
           const type = async (selector: string, consent: boolean, safe: boolean) => {
             const retention = makeBrowserInputRetention(
-              () => startBrowserInputEvidence(page, cdp),
+              () => startBrowserInputEvidence(page),
               async () => consent,
               () => safe,
             );

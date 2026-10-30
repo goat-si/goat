@@ -1950,7 +1950,7 @@ const make = Effect.gen(function* () {
       case "type": {
         const aimed = input as PreviewAutomationTypeInput;
         const retention = makeBrowserInputRetention(
-          () => startBrowserInputEvidence(tab.page, tab.cdp),
+          () => startBrowserInputEvidence(tab.page),
           keepTypedText,
           () => secretFill.historySafe(tab, request.threadId),
         );

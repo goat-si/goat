@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import type { CDPSession, Page } from "playwright-core";
+import type { Page } from "playwright-core";
 
 const isEvidence = Schema.is(
   Schema.Struct({
@@ -14,6 +14,9 @@ const isEvidence = Schema.is(
     ),
   }),
 );
+
+const isContextCreated = Schema.is(Schema.Struct({ context: Schema.Struct({ id: Schema.Int }) }));
+const isContextDestroyed = Schema.is(Schema.Struct({ executionContextId: Schema.Int }));
 
 const MONITOR = `(() => {
   let next = 1, overflow = false;
@@ -46,8 +49,39 @@ const MONITOR = `(() => {
 
 const hidden = () => ({ finish: async () => false });
 
-export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
+export async function startBrowserInputEvidence(page: Page) {
+  const cdp = await page
+    .context()
+    .newCDPSession(page)
+    .catch(() => undefined);
+  if (cdp === undefined) return hidden();
   let navigated = false;
+  let contextsChanged = false;
+  let stable = false;
+  const contexts = new Set<number>();
+  const onCreated = (event: unknown) => {
+    if (!isContextCreated(event)) {
+      contextsChanged = true;
+      return;
+    }
+    if (stable && !contexts.has(event.context.id)) contextsChanged = true;
+    contexts.add(event.context.id);
+  };
+  const onDestroyed = (event: unknown) => {
+    if (!isContextDestroyed(event)) {
+      contextsChanged = true;
+      return;
+    }
+    if (stable) contextsChanged = true;
+    contexts.delete(event.executionContextId);
+  };
+  const onCleared = () => {
+    if (stable) contextsChanged = true;
+    contexts.clear();
+  };
+  cdp.on("Runtime.executionContextCreated", onCreated);
+  cdp.on("Runtime.executionContextDestroyed", onDestroyed);
+  cdp.on("Runtime.executionContextsCleared", onCleared);
   const onNavigate = () => {
     navigated = true;
   };
@@ -58,7 +92,7 @@ export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
   cdp.on("Page.navigatedWithinDocument", onNavigate);
   let monitorId: string | undefined;
   let windowId: string | undefined;
-  let mainWindowId: string | undefined;
+  const otherWindows: Array<string> = [];
   let focusId: string | undefined;
   const release = async (id: string | undefined) => {
     if (id !== undefined) await cdp.send("Runtime.releaseObject", { objectId: id }).catch(() => {});
@@ -69,6 +103,9 @@ export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
     page.off("framedetached", onNavigate);
     cdp.off("Page.frameStartedLoading", onNavigate);
     cdp.off("Page.navigatedWithinDocument", onNavigate);
+    cdp.off("Runtime.executionContextCreated", onCreated);
+    cdp.off("Runtime.executionContextDestroyed", onDestroyed);
+    cdp.off("Runtime.executionContextsCleared", onCleared);
     if (monitorId !== undefined)
       await cdp
         .send("Runtime.callFunctionOn", {
@@ -80,15 +117,17 @@ export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
     await Promise.all([
       release(monitorId),
       release(windowId),
-      release(mainWindowId),
+      ...otherWindows.map(release),
       release(focusId),
     ]);
+    await cdp.detach().catch(() => {});
   };
   try {
     if (page.frames().length !== 1) {
       await cleanup();
       return hidden();
     }
+    await cdp.send("Runtime.enable");
     await cdp.send("Page.enable");
     const tree = await cdp.send("Page.getFrameTree");
     const world = await cdp.send("Page.createIsolatedWorld", {
@@ -104,21 +143,31 @@ export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
       await cleanup();
       return hidden();
     }
-    const mainWindow = await cdp.send("Runtime.evaluate", { expression: "window" });
-    mainWindowId = mainWindow.result.objectId;
-    if (mainWindowId === undefined) {
+    contexts.add(world.executionContextId);
+    if (contexts.size > 16) {
       await cleanup();
       return hidden();
     }
+    stable = true;
     const captureListeners = async (id: string) =>
       (await cdp.send("DOMDebugger.getEventListeners", { objectId: id })).listeners.filter(
         (listener) =>
           listener.useCapture && (listener.type === "beforeinput" || listener.type === "input"),
       );
-    if (
-      (await captureListeners(windowId)).length > 0 ||
-      (await captureListeners(mainWindowId)).length > 0
-    ) {
+    for (const contextId of contexts) {
+      if (contextId === world.executionContextId) continue;
+      const other = await cdp.send("Runtime.evaluate", { expression: "window", contextId });
+      if (other.result.objectId === undefined || other.exceptionDetails !== undefined) {
+        await cleanup();
+        return hidden();
+      }
+      otherWindows.push(other.result.objectId);
+      if ((await captureListeners(other.result.objectId)).length > 0) {
+        await cleanup();
+        return hidden();
+      }
+    }
+    if (contextsChanged || (await captureListeners(windowId)).length > 0) {
       await cleanup();
       return hidden();
     }
@@ -163,7 +212,10 @@ export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
     if (
       count("beforeinput") !== 1 ||
       count("input") !== 1 ||
-      (await captureListeners(mainWindowId)).length > 0
+      contextsChanged ||
+      (await Promise.all(otherWindows.map(captureListeners))).some(
+        (listeners) => listeners.length > 0,
+      )
     ) {
       await cleanup();
       return hidden();
@@ -190,7 +242,10 @@ export async function startBrowserInputEvidence(page: Page, cdp: CDPSession) {
             navigated ||
             page.frames().length !== 1 ||
             addedShadow ||
-            (await captureListeners(mainWindowId)).length > 0 ||
+            contextsChanged ||
+            (await Promise.all(otherWindows.map(captureListeners))).some(
+              (listeners) => listeners.length > 0,
+            ) ||
             answer.exceptionDetails !== undefined ||
             !isEvidence(evidence) ||
             evidence.overflow
