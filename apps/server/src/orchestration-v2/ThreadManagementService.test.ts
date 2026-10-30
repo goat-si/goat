@@ -1043,6 +1043,15 @@ it.effect.each([
     refused: false,
     followup: "completed_general",
   },
+  // A round continued with continueFrom is a review task too; once it finishes, sends stay blocked.
+  {
+    role: "review",
+    status: "completed",
+    createdBy: "agent",
+    mode: "queue",
+    refused: true,
+    followup: "completed_continued_review",
+  },
   ...["completed", "failed", "cancelled", "interrupted"].flatMap((status) =>
     ["steer_when_ready", "queue", "restart"].map((mode) => ({
       role: "review",
@@ -1114,8 +1123,11 @@ it.effect.each([
                 id: NodeId.make("followup-task"),
                 origin: "app_owned",
                 childThreadId: childId,
-                role: scenario.followup === "running" ? "review" : "general",
+                role: scenario.followup === "completed_general" ? "general" : "review",
                 status: scenario.followup === "running" ? "running" : "completed",
+                ...(scenario.followup === "completed_continued_review"
+                  ? { continuedFrom: NodeId.make("review-task") }
+                  : {}),
               },
             ]
           : []),
