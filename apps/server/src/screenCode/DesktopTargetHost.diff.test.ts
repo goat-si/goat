@@ -850,7 +850,12 @@ it.live.each([
     expect(clicks.slice(0, scenario.count).map((entry) => entry.receipt.category)).toEqual(
       Array(scenario.count).fill("unverifiable"),
     );
-    expect(clicks[0]?.receipt.observedEffect).toMatchObject({ state: scenario.observed });
+    expect(clicks.slice(0, scenario.count).map((entry) => entry.receipt.observedEffect)).toEqual(
+      Array.from({ length: scenario.count }, () => ({
+        state: scenario.observed,
+        rows: scenario.observed === "change_seen" ? [scenario.diff] : [],
+      })),
+    );
     expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(3);
   }).pipe(
     Effect.provide(
@@ -866,10 +871,13 @@ it.live.each([
   );
 });
 
-it.live("a full read after input does not attach observation evidence", () => {
+it.live("a full-read fallback after input does not attach observation evidence", () => {
   const { host } = fixture({
     click: { effect: "unverifiable" },
-    get_window_state: (args: Record<string, unknown>) => goat2WindowState(args),
+    get_window_state: (args: Record<string, unknown>) => ({
+      ...goat2WindowState(args),
+      ...(args.since === undefined ? {} : { since_status: "unknown_snapshot" }),
+    }),
   });
   return Effect.gen(function* () {
     const service = yield* ScreenRunService;
@@ -879,7 +887,7 @@ it.live("a full read after input does not attach observation evidence", () => {
       threadId: "thread",
       environmentId: "env",
       invocation: context.invocation,
-      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await app.observe(); await app.click(1); const first = await app.observe({diff:false}); return first;`,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await app.observe(); await app.click(1); const first = await app.observe(); return first;`,
     });
     expect(result.value).toMatchObject({ mode: "full" });
     expect(result.value).not.toHaveProperty("effect");
