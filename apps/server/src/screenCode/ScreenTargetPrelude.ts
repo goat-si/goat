@@ -190,7 +190,16 @@ const __target = (binding, note, owner, extraProps = {}) => {
         : {};
     return { verdict, ...extra, ...(isObj && reply.v._noResult === true ? {} : { result: cleanResult }) };
   };
+  const checkEmptyTarget = (target) => {
+    if (target === undefined || target === null ||
+        (typeof target === 'number' && !Number.isFinite(target)) ||
+        (typeof target === 'object' && !Array.isArray(target) &&
+          (Object.getPrototypeOf(target) === Object.prototype || Object.getPrototypeOf(target) === null) &&
+          Reflect.ownKeys(target).length === 0))
+      throw new ScreenError('invalid_argument', 'target is undefined: observe({diff:false}) for numbers', true);
+  };
   const element = (target) => {
+    checkEmptyTarget(target);
     const observation = seen.observation;
     if (!observation)
       throw new ScreenError(
@@ -252,6 +261,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   // A misnamed key beside role and name or a window point (clickCount) would otherwise be dropped
   // unseen, so it is refused before any read or input.
   const checkTarget = (target) => {
+    checkEmptyTarget(target);
     if (target === null || typeof target !== 'object' || Array.isArray(target) || __legacy(target)) return;
     __only('A target', target, __winPt(target) ? ['window'] : ['role', 'name', 'id']);
   };
@@ -376,7 +386,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     targetRef: ref,
     ...(note === undefined ? {} : { note }),
     observe,
-    click: (target = {}, options = {}) => {
+    click: (target, options = {}) => {
       if (__legacy(target)) {
         if (options !== null && (typeof options !== 'object' || Object.keys(options).length > 0))
           throw new ScreenError('invalid_argument', 'click({selector, ...}) takes its options inside that object; nothing was sent.', true);
@@ -423,7 +433,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(!tab && options && options.send === true ? { send: true } : {}),
           ...(!tab && options && options.verify === true ? { verify: true } : {}),
         });
-      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
+      return target !== undefined && needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     press: async (key, target, options = {}) => {
       // An object naming no element is the options, so a misspelt key is refused rather than aimed at.
@@ -438,7 +448,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         throw new ScreenError('unsupported', 'Held keys are unavailable for tabs; nothing was sent.', true, { nextStep: 'Use an app target for held keys.' });
       if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
         throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
-      if (needsImplicitObserve(actualTarget)) await ensureObserved();
+      if (actualTarget !== undefined && needsImplicitObserve(actualTarget)) await ensureObserved();
       if (tab && actualTarget !== undefined) await common.click(actualTarget);
       return act('press', 'press_key', {
         ...__keys(key, tab),
@@ -463,7 +473,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           return act('scroll', 'scroll', { scrollCenter: true, direction, amount });
         return act('scroll', 'scroll', { ...aim(target), direction, amount });
       };
-      return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
+      return target !== null && target !== undefined && needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
     setValue: (target, value) => {
       if (value === undefined) return call('set_value', target ?? {});
@@ -476,6 +486,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     drag: (from, to, options = {}) => {
       if (to === undefined) return call('drag', from ?? {});
       options = __only('drag options', options, tab ? ['send'] : ['send', 'verify']);
+      checkTarget(from);
+      checkTarget(to);
       if (tab) {
         const source = aim(from);
         const target = aim(to);
