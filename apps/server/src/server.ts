@@ -226,6 +226,7 @@ import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as BrowserOriginGrants from "./preview/BrowserOriginGrantsLayer.ts";
+import * as BrowserClaimManifestModule from "./preview/BrowserClaimManifest.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
@@ -305,7 +306,6 @@ const layerProviderEventLoggers = Layer.effect(
     return { native: store.logger("native"), canonical: store.logger("canonical") };
   }),
 );
-
 const layerPtyAdapter = NodePtyAdapter.layer;
 
 export const layerServerSettings = ServerSettings.layer.pipe(
@@ -313,19 +313,16 @@ export const layerServerSettings = ServerSettings.layer.pipe(
   Layer.provide(ServerEnvironment.layerIdentity),
   Layer.provideMerge(SqlitePersistence.layerConfig),
 );
-
 const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
   Layer.provide(ResourceMonitorBinary.layer),
 );
 const layerDesktopTelemetryReceiver = DesktopTelemetryReceiver.layer.pipe(
   Layer.provideMerge(layerServerSettings),
 );
-
 const layerResourceTelemetry = ResourceTelemetry.layer.pipe(
   Layer.provideMerge(layerNativeTelemetry),
   Layer.provideMerge(layerDesktopTelemetryReceiver),
 );
-
 const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
 );
@@ -353,12 +350,10 @@ const layerLaunchWatches = LaunchWatchService.layer.pipe(
 const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
 );
-
 const layerBackground = BackgroundPolicy.layer.pipe(
   Layer.provide(layerHostPowerMonitor),
   Layer.provideMerge(layerServerSettings),
 );
-
 const layerUsage = UsageService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -379,7 +374,6 @@ const layerUsage = UsageService.layer.pipe(
   ),
   Layer.provide(layerServerSettings),
 );
-
 const layerResourceDiagnostics = Layer.mergeAll(
   HostResources.layer,
   layerResourceTelemetry,
@@ -616,9 +610,13 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
 );
 
-const layerBrowserOriginGrants = Layer.provide(BrowserOriginGrants.layer, layerServerEnvironment);
+const layerBrowserOriginGrants = Layer.provide(
+  BrowserOriginGrants.layer,
+  Layer.merge(layerServerEnvironment, BrowserClaimManifestModule.layer),
+);
 const layerCuaDriver = CuaDriver.layer.pipe(
   Layer.provide(layerBrowserOriginGrants),
+  Layer.provide(BrowserClaimManifestModule.layer),
   Layer.provide(layerDesktopTelemetryReceiver),
   Layer.provide(layerServerSettings),
   Layer.provide(LinuxHelperReport.layer),

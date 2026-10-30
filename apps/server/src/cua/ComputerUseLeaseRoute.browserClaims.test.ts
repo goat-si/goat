@@ -316,7 +316,10 @@ describe("computer use lease route", () => {
                   }),
                 ),
               }),
-              Layer.succeed(BrowserClaimManifest, { publish: () => Effect.void }),
+              Layer.succeed(BrowserClaimManifest, {
+                publish: () => Effect.succeed("a".repeat(64)),
+                install: () => Effect.void,
+              }),
             ),
           ),
         ),

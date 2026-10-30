@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// @effect-diagnostics nodeBuiltinImport:off -- The test observes the real atomic filesystem replacement.
+import { describe, expect, it } from "vite-plus/test";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";

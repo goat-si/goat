@@ -41,12 +41,19 @@ import {
   makeBrowserCapabilityLifecycle,
 } from "./BrowserDriverCapabilityProbe.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import {
+  BrowserClaimManifest,
+  BrowserClaimManifestUnavailable,
+} from "../preview/BrowserClaimManifest.ts";
+import type { Union } from "../preview/BrowserOriginGrants.ts";
 import { makeMacGrantObserver } from "./CuaDriverMacGrants.ts";
+import { x11DisplayOf } from "./CuaDriverDisplay.ts";
 
 import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopAppsListing from "./DesktopAppsListing.ts";
+import { makeDesktopBrowserManifest } from "./DesktopBrowserManifest.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
@@ -128,7 +135,6 @@ const currentBlock = (
     ? block
     : cuaAgentBlockUnder(block, readiness);
 };
-
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
@@ -142,6 +148,7 @@ export interface CuaDriverHost {
 export class CuaDriver extends Context.Service<
   CuaDriver,
   {
+    readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
     ) => Effect.Effect<void, CuaDriverHostError>;
@@ -206,19 +213,6 @@ export interface CuaX11Display {
   readonly XAUTHORITY?: string;
 }
 
-/** The X display among the variables a driver was started with. */
-const x11DisplayOf = (
-  environment: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
-): Option.Option<CuaX11Display> => {
-  const value = (name: string) => environment.find((variable) => variable.name === name)?.value;
-  const display = value("DISPLAY");
-  if (display === undefined || display.trim() === "") return Option.none();
-  const xauthority = value("XAUTHORITY");
-  return Option.some(
-    xauthority === undefined ? { DISPLAY: display } : { DISPLAY: display, XAUTHORITY: xauthority },
-  );
-};
-
 interface Acquisition {
   readonly result: Deferred.Deferred<Option.Option<CuaDriverMcpConfiguration>>;
   host?: CuaDriverHost;
@@ -236,7 +230,6 @@ interface Acquisition {
 export type CuaDriverHostFactory = (
   display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
 ) => Effect.Effect<CuaDriverHost, CuaDriverError>;
-
 const withoutEnvironment = (probe: CuaDisplay.CuaDisplayProbe): CuaDisplayCapability => ({
   capability: probe.capability,
   reason: probe.reason,
@@ -279,6 +272,7 @@ export interface CuaDriverOptions {
   >;
   /** The driver binary a start would run, for a readiness check before the first turn. */
   readonly binary?: Effect.Effect<string, CuaDriverHostError>;
+  readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
   readonly probeBrowserClaims?: (mcp: CuaDriverMcpConfiguration) => Effect.Effect<unknown>;
   readonly setDriverCapability?: (supported: boolean) => Effect.Effect<void>;
 }
@@ -295,6 +289,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   const freshProbe = invalidateProbe.pipe(Effect.andThen(cachedProbe));
   const lifecycle = yield* Semaphore.make(1);
   const capability = yield* makeBrowserCapabilityLifecycle(options);
+  const manifestLock = yield* Semaphore.make(1);
   let active: Acquisition | undefined;
   let closed = false;
   let failure = Option.none<CuaDriverError>();
@@ -317,7 +312,6 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     observeGrants,
     "10 seconds",
   );
-
   const stop = Effect.fnUntraced(function* (entry: Acquisition) {
     if (entry.watcher) yield* Fiber.interrupt(entry.watcher).pipe(Effect.forkDetach);
     if (!entry.cleanup && entry.host) {
@@ -333,7 +327,6 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     }
     if (entry.cleanup) yield* Fiber.join(entry.cleanup).pipe(Effect.timeoutOption("4 seconds"));
   });
-
   const revoke = Effect.fnUntraced(function* (entry: Acquisition) {
     entry.revoked = true;
     entry.running = false;
@@ -500,13 +493,21 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   ) {
     const entry = active;
     if (!entry?.running || !refresh) return;
-    if (yield* refresh(apps, entry.displayEnvironment ?? [])) {
+    if (yield* manifestLock.withPermits(1)(refresh(apps, entry.displayEnvironment ?? []))) {
       if (active !== entry || !entry.running) return;
       failure = Option.none();
       yield* revoke(entry);
     }
   }, lifecycle.withPermit);
   return CuaDriver.of({
+    publishBrowserManifest: Effect.fn("CuaDriver.publishBrowserManifest")((union: Union) =>
+      manifestLock.withPermits(1)(
+        options.publishBrowserManifest?.(union) ??
+          Effect.fail(
+            new BrowserClaimManifestUnavailable({ cause: "Driver manifest is unavailable." }),
+          ),
+      ),
+    ),
     ...(refresh ? { refreshManifest } : {}),
     acquire,
     x11Display: Effect.sync(() =>
@@ -872,9 +873,18 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const browserGrants = yield* BrowserOriginGrants;
+    const browserManifest = yield* BrowserClaimManifest;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
-    const { factory, install, helperReadiness, binary, requestListing, refreshManifest } =
+    const {
+      factory,
+      install,
+      helperReadiness,
+      binary,
+      requestListing,
+      refreshManifest,
+      publishBrowserManifest,
+    } =
       config.mode === "desktop"
         ? // The desktop app ships its driver, so there is nothing to install.
           {
@@ -884,6 +894,7 @@ export const layer = Layer.effect(
             binary: undefined,
             requestListing: undefined,
             refreshManifest: undefined,
+            publishBrowserManifest: yield* makeDesktopBrowserManifest(),
           }
         : yield* Effect.gen(function* () {
             const installation = yield* CuaDriverInstallation.makeCuaDriverInstallation({
@@ -939,7 +950,15 @@ export const layer = Layer.effect(
                   ),
                 ),
             );
-            return { factory, install, helperReadiness, binary, requestListing, refreshManifest };
+            return {
+              factory,
+              install,
+              helperReadiness,
+              binary,
+              requestListing,
+              refreshManifest,
+              publishBrowserManifest: manifest.publish,
+            };
           });
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -952,7 +971,7 @@ export const layer = Layer.effect(
       Effect.provideService(Path.Path, path),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
-    return yield* make(factory, probe, {
+    const driver = yield* make(factory, probe, {
       ...(config.mode === "desktop"
         ? yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
             Effect.map((request) => ({
@@ -961,6 +980,7 @@ export const layer = Layer.effect(
             })),
           )
         : {}),
+      publishBrowserManifest,
       probeBrowserClaims: yield* makeBrowserDriverCapabilityProbe(),
       setDriverCapability: (supported) =>
         browserGrants.setDriverCapability(supported).pipe(Effect.ignoreCause({ log: true })),
@@ -972,5 +992,8 @@ export const layer = Layer.effect(
       ...(platform === "darwin" ? { observeGrants: yield* makeMacGrantObserver() } : {}),
       ...(platform === "linux" ? { observeReadiness: yield* LinuxReadiness.makeObserver() } : {}),
     });
+    if (driver.publishBrowserManifest)
+      yield* browserManifest.install(driver.publishBrowserManifest);
+    return driver;
   }),
 );

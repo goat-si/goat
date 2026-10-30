@@ -47,7 +47,10 @@ it.effect("reports unsupported capability as unavailable and removes claims from
                 }),
               ),
             }),
-            Layer.succeed(BrowserClaimManifest, { publish: () => Effect.void }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () => Effect.succeed("a".repeat(64)),
+              install: () => Effect.void,
+            }),
             Layer.succeed(BrowserClaimBind, {
               bind: () =>
                 Effect.succeed({
@@ -97,7 +100,10 @@ it.effect("refuses an approved claim as unavailable when the bind service is abs
                 }),
               ),
             }),
-            Layer.succeed(BrowserClaimManifest, { publish: () => Effect.void }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () => Effect.succeed("a".repeat(64)),
+              install: () => Effect.void,
+            }),
           ),
         ),
       ),
@@ -142,3 +148,48 @@ it.effect(
       ),
     ),
 );
+
+it.effect("does not publish a browser union while driver capability is unavailable", () => {
+  let writes = 0;
+  return Effect.gen(function* () {
+    const service = yield* Grants.BrowserOriginGrants;
+    const result = yield* service.request({
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(result.status, "refused");
+    if (result.status === "refused") assert.equal(result.code, "unavailable");
+    assert.equal(writes, 0);
+  }).pipe(
+    Effect.provide(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.merge(
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () =>
+                Effect.sync(() => {
+                  writes++;
+                  return "a".repeat(64);
+                }),
+              install: () => Effect.void,
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+});

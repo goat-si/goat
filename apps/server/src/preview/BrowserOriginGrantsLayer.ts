@@ -23,7 +23,8 @@ const make = Effect.gen(function* () {
     environmentId,
     supported: () => supported && Option.isSome(manifest),
     bindAvailable: () => Option.isSome(bind),
-    publish: (union) => (Option.isSome(manifest) ? manifest.value.publish(union) : Effect.void),
+    publish: (union) =>
+      Option.isSome(manifest) ? manifest.value.publish(union).pipe(Effect.asVoid) : Effect.void,
     bind: (request) =>
       Option.isSome(bind)
         ? bind.value.bind(request)
