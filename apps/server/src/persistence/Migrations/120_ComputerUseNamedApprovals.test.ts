@@ -4,8 +4,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 
-for (const actor of ["client", "server"] as const) {
-  it.effect(`backfills a past ${actor} approval from the event history`, () =>
+it.effect.each(["client", "server"] as const)(
+  "backfills a past %s approval from the event history",
+  (actor) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* runMigrations({ toMigrationInclusive: 119 });
@@ -26,5 +27,4 @@ for (const actor of ["client", "server"] as const) {
         actor === "client" ? 1 : 0,
       );
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
-  );
-}
+);

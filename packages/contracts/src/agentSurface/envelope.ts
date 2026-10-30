@@ -265,6 +265,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   // Required desktop permissions are missing.
   not_granted: before("failed_precondition"),
   unknown_app: before("invalid_request"),
+  app_not_allowed: before("permission_denied"),
   // A newer, different request from the same thread replaced this one before anyone answered.
   superseded: before("cancelled"),
   // Browser preview control (PreviewAutomationControlReason)
