@@ -248,6 +248,7 @@ export type ScreenReadPhases = typeof ScreenReadPhases.Type;
 
 export const ScreenObservation = Schema.Struct({
   observationId: id,
+  snapshot: Schema.optionalKey(id),
   targetRef: ScreenTargetRef,
   targetGeneration: natural,
   surfaceGeneration: natural,
@@ -291,6 +292,7 @@ export const ScreenObservation = Schema.Struct({
   ).check(Schema.isMaxLength(4096)),
   image: Schema.optionalKey(ScreenImageMetadata),
   resetReason: Schema.optionalKey(text(200)),
+  warnings: Schema.optionalKey(Schema.Array(text(200)).check(Schema.isMaxLength(4))),
   /** What the observation covered: the whole window or page, interactive controls, or a scope. */
   scope: Schema.optionalKey(text(1024)),
   /** Regions the observation could not include, so absence there proves nothing. */
@@ -308,6 +310,10 @@ export const ScreenObservation = Schema.Struct({
   phases: Schema.optionalKey(ScreenReadPhases),
 }).check(Schema.makeFilter((value) => jsonBytes(value) <= 128 * 1024));
 export type ScreenObservation = typeof ScreenObservation.Type;
+
+export type ScreenModelObservation = Omit<ScreenObservation, "elements" | "indexedText"> & {
+  readonly text: string;
+};
 
 const ScreenOutcomeStatus = Schema.Literals(["confirmed", "refused", "failed", "unknown"]);
 
@@ -370,6 +376,8 @@ export const ScreenRunError = Schema.Struct({
     "target_ambiguous",
     "stale_reference",
     "permission_denied",
+    "user_interacting",
+    "screen_locked",
     "user_intervened",
     "stopped",
     "deadline",
@@ -446,6 +454,8 @@ export const ScreenHostReply = strict(
     error: Schema.optionalKey(ScreenRunError),
     /** The call's receipt category, so a Target method can report what the host confirmed. */
     category: Schema.optionalKey(ScreenEffectReceipt.fields.category),
+    evidence: Schema.optionalKey(Schema.Array(Schema.String)),
+    warnings: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 export type ScreenHostReply = typeof ScreenHostReply.Type;

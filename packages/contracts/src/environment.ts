@@ -273,6 +273,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
    * reconnects once this server is idle. Absent otherwise and on older servers.
    */
   appServerLive: Schema.optionalKey(Schema.Boolean),
+  /** "on" only on a development server started with GOAT_DEV_SSH=on, which may SSH elsewhere. */
+  devSsh: Schema.optionalKey(Schema.Literal("on")),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

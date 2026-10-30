@@ -24,11 +24,15 @@ updatedBy: user # user or agent
 ---
 ```
 
+GOAT writes this header back on every save, so a note that had none gains one, and its keys may be reordered. The note's text below the header, including a byte order mark at the start of the file, is kept as you wrote it.
+
 The notes folder is a git repository. GOAT commits every change a couple of seconds after it lands, including edits made outside GOAT, so you can see who changed what and restore an older version with ordinary git commands.
 
 ## Editing
 
-On web and desktop, notes open in a rich editor with headings, lists, checklists, quotes, and code blocks, and save as you type. Markdown that the editor cannot show exactly, such as HTML or tables, stays as an editable source block so it is never rewritten. On mobile, a note shows its checklists as checkboxes you can tap; use **Edit markdown** to change the text.
+On web and desktop, notes open in a rich editor with headings, lists, checklists, quotes, and code blocks, and save as you type. Markdown that the editor cannot show exactly, such as HTML or tables, stays as an editable source block so it is never rewritten.
+
+On mobile, a note shows formatted text, and the line you are typing on shows its markdown. Tap a checkbox to tick it, or tap into the text to write; the bar above the keyboard adds bold, italic, headings, lists, and checklists, and its code button shows the whole note as markdown. Edits stay on the phone until you choose **Save on phone**; a ticked checkbox saves at once. Tables stay as markdown text. A note that mixes Windows and Unix line endings opens as markdown source instead, so its line endings are kept exactly; use **Edit markdown** to change it.
 
 To delete a note, choose **Delete…** from its **⋯** menu on web and desktop, or **Delete note** on mobile. Deleting needs a connection to the hub, and a phone holding unsent edits for the note must sync or discard them first. If the note changed since you opened it, GOAT keeps it and shows the current version so you can decide again.
 

@@ -419,7 +419,9 @@ export async function runScreenChild(
         settlePlace(reply.callId);
         const value = vm.newString(
           JSON.stringify(
-            reply.outcome === "ok" ? { v: reply.value, c: reply.category } : reply.error,
+            reply.outcome === "ok"
+              ? { v: reply.value, c: reply.category, e: reply.evidence, w: reply.warnings }
+              : reply.error,
           ),
         );
         if (reply.outcome === "ok") promise.resolve(value);

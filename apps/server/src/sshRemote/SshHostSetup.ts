@@ -375,7 +375,7 @@ export const make = (
             return yield* new HandoffError({ reason: "conflict" });
         }
         const resolved = yield* runner.run({
-          command: "ssh",
+          command: yield* resolveSshCommand,
           args: [
             "-G",
             ...(input.user ? ["-l", input.user] : []),
@@ -521,7 +521,7 @@ export const make = (
             if (config === null || !matchesSettings(config)) return false;
             // OpenSSH's first matching setting can override the managed file.
             const effective = yield* runner.run({
-              command: "ssh",
+              command: yield* resolveSshCommand,
               args: ["-G", alias],
               timeout: "20 seconds",
             });
@@ -836,7 +836,7 @@ export const make = (
         };
         const identityFile = fields.get("identityfile")?.replace(/^"|"$/gu, "");
         const resolved = yield* runner.run({
-          command: "ssh",
+          command: yield* resolveSshCommand,
           args: ["-G", host],
           timeout: "20 seconds",
         });

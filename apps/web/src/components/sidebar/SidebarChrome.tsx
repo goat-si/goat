@@ -12,6 +12,7 @@ import { usePullRequestsSupported } from "../../state/environments";
 import { GoatWordmark } from "../GoatWordmark";
 import { useBrandChannel } from "./brandChannel";
 import { BrandChannelPill } from "./BrandChannelPill";
+import { DevSshBadge } from "./DevSshBadge";
 import {
   SidebarFooter,
   SidebarMenu,
@@ -87,6 +88,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
             <BrandChannelPill channel={channel} />
           </div>
         ) : null}
+        <DevSshBadge />
       </div>
       {!isOnSettings ? <SidebarViewToggles /> : null}
     </div>

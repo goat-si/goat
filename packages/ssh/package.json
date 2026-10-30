@@ -23,6 +23,10 @@
       "types": "./src/hostKey.ts",
       "import": "./src/hostKey.ts"
     },
+    "./hostAccess": {
+      "types": "./src/hostAccess.ts",
+      "import": "./src/hostAccess.ts"
+    },
     "./tunnel": {
       "types": "./src/tunnel.ts",
       "import": "./src/tunnel.ts"

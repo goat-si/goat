@@ -21,7 +21,7 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { BoatIcon } from "../Icons";
 import { GoatWordmark } from "../GoatWordmark";
 import { renderProviderGlyph } from "../chat/ProviderInstanceIcon";
-import { fleetMachineSubtitle } from "./describeMachine";
+import { fleetMachineSubtitle } from "@goat/client-runtime/state/fleet-machine-description";
 import {
   fleetConnectionVisual,
   UNKNOWN_FLEET_CONNECTION,
