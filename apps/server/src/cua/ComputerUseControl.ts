@@ -13,6 +13,7 @@ import type * as DateTime from "effect/DateTime";
 export interface ComputerUseControl {
   readonly controlId: string;
   readonly threadId: ThreadId;
+  readonly nonPersonFullAccess?: boolean;
   readonly expiresAt: DateTime.Utc;
   /** The grant an unattended control lives on; interactive controls have none. */
   readonly handoffId?: TurnItemId;

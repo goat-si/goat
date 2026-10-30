@@ -371,7 +371,12 @@ const callLayer = HttpRouter.add(
     );
     if (Option.isNone(settings)) return HttpServerResponse.empty({ status: 503 });
     if (call.value.action === "reserve") {
-      const app = deniedCallApp(call.value, settings.value.cuaDeniedApps);
+      const control = yield* leases.currentControl(threadId);
+      const nonPerson =
+        Option.isSome(control) &&
+        control.value.controlId === call.value.controlId &&
+        control.value.nonPersonFullAccess === true;
+      const app = deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson);
       if (app !== undefined)
         return HttpServerResponse.text(
           encodeAdmission({ status: "refused", detail: "app_not_allowed", app }),

@@ -43,6 +43,19 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
   ),
 );
 
+it.effect("updates the origin policy when a full access control is reused", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-origin-policy");
+    yield* threadIn(owner, "full-access");
+    yield* leases.everyAppControl(owner, false, { nonPerson: true });
+    assert.isTrue(Option.getOrThrow(yield* leases.currentControl(owner)).nonPersonFullAccess);
+    yield* leases.everyAppControl(owner, false, { nonPerson: false });
+    assert.isFalse(Option.getOrThrow(yield* leases.currentControl(owner)).nonPersonFullAccess);
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect.each(["replacement", "approval after Stop"] as const)(
   "a suspended full access read cannot revoke a newer %s",
   (transition) =>

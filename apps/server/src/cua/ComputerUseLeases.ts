@@ -162,7 +162,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly everyAppControl: (
       threadId: ThreadId,
       unattended: boolean,
-      run?: { readonly runId?: RunId },
+      run?: { readonly runId?: RunId; readonly nonPerson?: boolean },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
      * Apps a run with every app or the whole screen named in a request. The host adds them to the
@@ -399,6 +399,7 @@ const make = Effect.gen(function* () {
     lease: Option.Option<ComputerUseLease>,
     everyApp: ControlRecord["everyApp"],
     runId?: RunId,
+    nonPerson = false,
   ) {
     const now = yield* DateTime.now;
     // Checked and claimed with no yield between, so two unattended turns cannot both pass.
@@ -422,6 +423,7 @@ const make = Effect.gen(function* () {
         ) {
           const reused: ControlRecord = {
             ...nextTurn(existing),
+            nonPersonFullAccess: everyApp !== undefined && nonPerson,
             uses: existing.uses + 1,
             // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
             ...(Option.isSome(lease) ? {} : { expiresAt: controlExpiry(now) }),
@@ -440,6 +442,7 @@ const make = Effect.gen(function* () {
           expiresAt: Option.isSome(lease) ? lease.value.expiresAt : controlExpiry(now),
           ...(handoffId === undefined ? {} : { handoffId }),
           ...(everyApp === undefined ? {} : { everyApp }),
+          nonPersonFullAccess: everyApp !== undefined && nonPerson,
           ...(runId === undefined ? {} : { runId }),
           uses: 0,
         };
@@ -469,15 +472,19 @@ const make = Effect.gen(function* () {
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
-    run?: { readonly runId?: RunId },
+    run?: { readonly runId?: RunId; readonly nonPerson?: boolean },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "person", run?.runId));
+      return Option.fromNullishOr(
+        yield* mint(threadId, Option.none(), "person", run?.runId, run?.nonPerson),
+      );
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
-        return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended", run?.runId));
+        return Option.fromNullishOr(
+          yield* mint(threadId, Option.none(), "unattended", run?.runId, true),
+        );
       }),
     );
   });

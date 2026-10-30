@@ -4,6 +4,7 @@ import { batchAppScope } from "./ComputerUseBatchScope.ts";
 export const deniedCallApp = (
   call: { readonly name: string; readonly args: unknown; readonly app?: string },
   denied: ReadonlyArray<string>,
+  nonPersonFullAccess = false,
 ): string | undefined => {
   const keys = new Set(denied.map(cuaAppKey));
   const args =
@@ -21,6 +22,13 @@ export const deniedCallApp = (
       : [];
   const apps = [call.app, ...named, ...(batchAppScope(call.name, call.args)?.apps ?? [])];
   return apps.find(
-    (app) => app !== undefined && (isExcludedCuaApplication(app) || keys.has(cuaAppKey(app))),
+    (app) =>
+      app !== undefined &&
+      (isExcludedCuaApplication(app) ||
+        keys.has(cuaAppKey(app)) ||
+        (nonPersonFullAccess &&
+          ["com.apple.terminal", "com.googlecode.iterm2", "terminal", "iterm", "iterm2"].includes(
+            cuaAppKey(app),
+          ))),
   );
 };

@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 
 describe("computer use call safety", () => {
+  it("refuses terminal for non-person full access but allows a person's terminal", () => {
+    const call = { name: "click", args: {}, app: "com.apple.Terminal" };
+    expect(deniedCallApp(call, [], true)).toBe("com.apple.Terminal");
+    expect(deniedCallApp(call, [], false)).toBeUndefined();
+  });
   it("refuses organization-denied apps and batch scopes", () => {
     const denied = ["com.example.Blocked"];
     expect(deniedCallApp({ name: "click", args: {}, app: "COM.EXAMPLE.BLOCKED" }, denied)).toBe(
