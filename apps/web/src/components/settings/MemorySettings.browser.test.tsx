@@ -185,6 +185,7 @@ vi.mock("../../state/entities", () => ({
 }));
 // Covered by its own controls; this page test exercises the memory browser and sharing flows.
 vi.mock("./MemoryGenerationSettings", () => ({ MemoryGenerationSettings: () => null }));
+vi.mock("./MemorySitesSettings", () => ({ MemorySitesSettings: () => null }));
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentSettings: (_id: string, selector: (settings: unknown) => unknown) => {
     useFixtureVersion();
