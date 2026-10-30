@@ -205,6 +205,7 @@ import {
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as ClaudeRuntimeSkills from "./ClaudeRuntimeSkills.ts";
+import { claudeNativeSubagentPolicy } from "./ClaudeNativeSubagentPolicy.ts";
 import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
@@ -1450,6 +1451,7 @@ export function makeClaudeQueryOptions(input: {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
+  readonly flagEnvironment?: Readonly<Record<string, string>>;
   readonly toolSearchOverride?: "true";
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
@@ -1495,13 +1497,19 @@ export function makeClaudeQueryOptions(input: {
           ...(typeof querySettings === "object" && querySettings !== null ? querySettings : {}),
           autoCompactWindow: Number(input.settings.autoCompactWindow),
         } as ClaudeSdkSettings);
+  const flagEnvironment = {
+    ...input.flagEnvironment,
+    ...(input.toolSearchOverride === undefined
+      ? {}
+      : { ENABLE_TOOL_SEARCH: input.toolSearchOverride }),
+  };
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
-    input.toolSearchOverride === undefined || typeof compactQuerySettings === "string"
+    Object.keys(flagEnvironment).length === 0 || typeof compactQuerySettings === "string"
       ? compactQuerySettings
       : ({
           ...compactQuerySettings,
-          env: { ...compactQuerySettings?.env, ENABLE_TOOL_SEARCH: input.toolSearchOverride },
+          env: { ...compactQuerySettings?.env, ...flagEnvironment },
         } as ClaudeSdkSettings);
   const options: ClaudeAgentSdkQueryOptions = {
     model: compiledSelection.apiModelId,
@@ -9714,8 +9722,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
+          const subagentPolicy = claudeNativeSubagentPolicy(
+            mcpSession?.nativeSubagentLimit,
+            isGoatBotSessionThreadId(turnInput.threadId),
+          );
           const queryPolicyKey =
-            String(isGoatBotSessionThreadId(turnInput.threadId)) +
+            subagentPolicy.key +
+            ":" +
             claudeEffectiveQueryPolicyKey(queryPolicy, {
               ...mcpOverrides,
               allowedTools: mcpOverrides.allowedTools?.filter(
@@ -9860,7 +9873,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ...(launchArgSettings === undefined ? {} : { sdkSettings: launchArgSettings }),
             environment: claudeQueryEnvironment(
               McpProviderSession.withThreadAgentEnvironment(
-                { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+                {
+                  ...adapterOptions.environment,
+                  ...mcpOverrides.mcpEnvironment,
+                  ...subagentPolicy.environment,
+                },
                 mcpSession,
               ),
               turnInput.appThread,
@@ -9869,8 +9886,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 : undefined,
             ),
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
-            ...(isGoatBotSessionThreadId(turnInput.threadId)
-              ? { disallowedTools: ["Agent", "Task"] }
+            ...("disallowedTools" in subagentPolicy
+              ? { disallowedTools: subagentPolicy.disallowedTools }
               : {}),
             ...(mcpOverrides.allowedTools === undefined
               ? {}
@@ -9888,6 +9905,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             onUserDialog,
             supportedDialogKinds: ["resume_return"],
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
+            flagEnvironment: subagentPolicy.environment,
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
           });
           const querySession = yield* queryRunner
