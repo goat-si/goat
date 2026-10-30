@@ -27,7 +27,7 @@ export const previewTargetFailure = (
     return {
       code: "blocked_url",
       effectStarted: false,
-      nextStep: "This tab is blocked for the rest of this turn.",
+      nextStep: "A person can change the blocked host setting.",
     };
   }
   const effectStarted =
