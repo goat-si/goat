@@ -10,6 +10,14 @@ describe("computer use call safety", () => {
       "Editor",
     );
   });
+  it("does not allow a batch whose scope cannot be checked against policy", () => {
+    const call = {
+      name: "run_script",
+      args: { app_scope: { apps: ["Editor"], delivery: "background" } },
+    };
+    expect(deniedCallApp(call, ["com.example.Blocked"])).toBe("Editor");
+    expect(deniedCallApp(call, [], true)).toBe("Editor");
+  });
   it("refuses terminal for non-person full access but allows a person's terminal", () => {
     const call = { name: "click", args: {}, app: "com.apple.Terminal" };
     expect(deniedCallApp(call, [], true)).toBe("com.apple.Terminal");

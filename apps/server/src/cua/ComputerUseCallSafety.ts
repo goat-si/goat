@@ -31,12 +31,9 @@ export const deniedCallApp = (
     );
     if (name !== undefined) return String(name[1]);
   }
-  const apps = [
-    call.app,
-    ...(call.safetyApps ?? []),
-    ...named,
-    ...(batchAppScope(call.name, call.args)?.apps ?? []),
-  ];
+  const scope = batchAppScope(call.name, call.args);
+  if (scope !== undefined && (denied.length > 0 || nonPersonFullAccess)) return scope.apps[0];
+  const apps = [call.app, ...(call.safetyApps ?? []), ...named, ...(scope?.apps ?? [])];
   return apps.find(
     (app) =>
       app !== undefined &&
