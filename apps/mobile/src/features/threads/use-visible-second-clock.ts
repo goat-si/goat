@@ -12,12 +12,15 @@ const subscribeNever = () => () => undefined;
  */
 export function useVisibleSecondClock(
   enabled: boolean,
-  /** The iPad sidebar stays on screen while the route that mounts it loses focus to a thread. */
-  options?: { readonly whileUnfocused?: boolean },
+  /**
+   * A pane whose layout knows whether it is shown, such as the iPad sidebar, which stays mounted
+   * when hidden and keeps or loses navigation focus independently of being on screen.
+   */
+  options?: { readonly paneVisible?: boolean | undefined },
 ): number {
   const focused = useIsFocused();
   const appActive = useAppActive();
-  const ticking = enabled && (focused || options?.whileUnfocused === true) && appActive;
+  const ticking = enabled && (options?.paneVisible ?? focused) && appActive;
   // While paused the snapshot still reads the shared tick, so resuming shows
   // the current second rather than the one the clock stopped on.
   return useSyncExternalStore(

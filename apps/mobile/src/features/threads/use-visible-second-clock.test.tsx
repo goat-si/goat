@@ -61,7 +61,7 @@ it("keeps an always-visible pane's label ticking while its route is unfocused, u
   state.active = true;
   const container = document.createElement("div");
   const root = createRoot(container);
-  const Sidebar = () => <span>{useVisibleSecondClock(true, { whileUnfocused: true })}</span>;
+  const Sidebar = () => <span>{useVisibleSecondClock(true, { paneVisible: true })}</span>;
   try {
     await act(async () => root.render(<Sidebar />));
     expect(vi.getTimerCount()).toBe(1);
@@ -98,6 +98,10 @@ it("ticks a sidebar row's elapsed time only while the sidebar pane is shown", as
     expect(vi.getTimerCount()).toBe(0);
     await act(async () => root.render(row(true)));
     expect(vi.getTimerCount()).toBe(1);
+    // A hidden sidebar's own navigation screen can stay focused; it still stops.
+    state.focused = true;
+    await act(async () => root.render(row(false)));
+    expect(vi.getTimerCount()).toBe(0);
   } finally {
     await act(async () => root.unmount());
     vi.useRealTimers();
