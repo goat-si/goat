@@ -205,7 +205,10 @@ import {
 } from "@goat/provider-core/server/orchestrationInstructions";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as ClaudeRuntimeSkills from "./ClaudeRuntimeSkills.ts";
-import { claudeNativeSubagentPolicy } from "./ClaudeNativeSubagentPolicy.ts";
+import {
+  claudeIgnoresSubagentCap,
+  claudeNativeSubagentPolicy,
+} from "./ClaudeNativeSubagentPolicy.ts";
 import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
@@ -9974,6 +9977,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.openedPermissionMode =
                       message.permissionMode ?? context.openedPermissionMode;
                     context.receivedInit = true;
+                    if (
+                      subagentPolicy.key.startsWith("cap:") &&
+                      claudeIgnoresSubagentCap(message.claude_code_version)
+                    )
+                      return Effect.logWarning(
+                        "This Claude Code cannot cap native subagents; they stay off for this process.",
+                        { version: message.claude_code_version },
+                      ).pipe(
+                        Effect.andThen(
+                          querySession.applyFlagSettings({
+                            permissions: { deny: ["Agent", "Task"] },
+                          }),
+                        ),
+                        Effect.ignore({ log: true }),
+                        Effect.andThen(handleSdkMessage({ query: querySession, message })),
+                      );
                   }
                   if (
                     message.type === "system" &&

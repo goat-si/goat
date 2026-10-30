@@ -76,6 +76,7 @@ it.effect(
         const sdkMessages = yield* Queue.unbounded<SDKMessage>();
         const offers: SDKUserMessage[] = [];
         const opened: Array<ReturnType<typeof subagentPolicy>> = [];
+        const flagSettings: unknown[] = [];
         const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: modelSelection.instanceId,
           settings,
@@ -95,7 +96,7 @@ it.effect(
                   offer: (message) => Effect.sync(() => void offers.push(message)),
                   setMcpServers: () => Effect.void,
                   setModel: () => Effect.void,
-                  applyFlagSettings: () => Effect.void,
+                  applyFlagSettings: (value) => Effect.sync(() => void flagSettings.push(value)),
                   setPermissionMode: () => Effect.void,
                   backgroundTasks: () => Effect.succeed(false),
                   stopTask: () => Effect.void,
@@ -169,12 +170,24 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
-        const runTurn = (ordinal: number, nativeSubagentLimit: number | undefined) =>
+        const runTurn = (
+          ordinal: number,
+          nativeSubagentLimit: number | undefined,
+          claudeCodeVersion = "2.1.304",
+        ) =>
           Effect.gen(function* () {
             yield* sessions.set(
               nativeSubagentLimit === undefined ? config : { ...config, nativeSubagentLimit },
             );
             yield* runtime.startTurn(turn(ordinal));
+            yield* Queue.offer(sdkMessages, {
+              type: "system",
+              subtype: "init",
+              claude_code_version: claudeCodeVersion,
+              permissionMode: "bypassPermissions",
+              session_id: nativeSessionId,
+              uuid: `00000000-0000-4000-8000-00000000011${ordinal}`,
+            } as unknown as SDKMessage);
             const offer = offers.at(-1);
             expect(offer).toBeDefined();
             yield* Queue.offer(sdkMessages, { ...offer!, session_id: nativeSessionId });
@@ -213,10 +226,14 @@ it.effect(
         yield* runTurn(2, 3);
         yield* runTurn(3, 0);
         yield* runTurn(4, undefined);
+        // Claude Code before 2.1.217 ignores the cap, so that process keeps Agent off instead.
+        yield* runTurn(5, 2, "2.1.200");
+        expect(flagSettings).toEqual([{ permissions: { deny: ["Agent", "Task"] } }]);
         expect(opened).toEqual([
           { disallowedTools: undefined, flagCap: "3", processCap: "3" },
           { disallowedTools: ["Agent", "Task"], flagCap: undefined, processCap: undefined },
           { disallowedTools: undefined, flagCap: undefined, processCap: undefined },
+          { disallowedTools: undefined, flagCap: "2", processCap: "2" },
         ]);
       }),
     ).pipe(

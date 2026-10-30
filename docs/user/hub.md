@@ -140,7 +140,8 @@ with, such as ones forwarded from another machine, leave merging out. Turn it on
 **Settings → Hub**.
 
 A profile's lane limit (`maxLanes`) also covers the subagents a coding agent
-starts by itself. Codex and Claude run no more of them at once than the limit.
+starts by itself. Codex and Claude run no more of them at once than the limit;
+Claude Code older than 2.1.217 cannot count them, so GOAT keeps them off there.
 Cursor, OpenCode and Pi can only turn them off, which GOAT does when the limit is 0. Grok, Antigravity, Fx and Muse cannot be limited. A changed limit applies from
 the agent's next message; subagents already running keep going.
 

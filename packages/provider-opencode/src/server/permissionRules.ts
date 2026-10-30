@@ -27,21 +27,6 @@ const OPENCODE_RESTRICTED_PERMISSIONS = [
 /** OpenCode has no OS sandbox; permission rules must enforce non-interactive policies too. */
 export function openCodePermissionRules(
   runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  subagentsOff = false,
-): PermissionRuleset {
-  const rules = openCodeRuntimePermissionRules(runtimePolicy);
-  // OpenCode checks `task` before launching a subagent but has no concurrency cap: a goatclaw
-  // limit of zero denies it last, and other limits leave subagents uncapped.
-  return subagentsOff ? [...rules, OPENCODE_SUBAGENT_DENY] : rules;
-}
-
-const OPENCODE_SUBAGENT_DENY = { permission: "task", pattern: "*", action: "deny" } as const;
-
-export const openCodeDeniesSubagents = (rules: PermissionRuleset) =>
-  rules.some((rule) => permissionRuleEquals(rule, OPENCODE_SUBAGENT_DENY));
-
-function openCodeRuntimePermissionRules(
-  runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
 ): PermissionRuleset {
   const sandboxPolicy = recordValue(runtimePolicy, "sandboxPolicy");
   const sandboxType = recordString(sandboxPolicy, "type");
@@ -147,7 +132,7 @@ export function openCodeChildPermissionRules(
   nativeChildRules: PermissionRuleset,
   subagentsOff = false,
 ): PermissionRuleset {
-  const parentRules = openCodePermissionRules(runtimePolicy, subagentsOff);
+  const parentRules = openCodePermissionRules(runtimePolicy);
   const inheritedRules = parentRules.filter(
     (rule) => rule.permission === "external_directory" || rule.action === "deny",
   );
@@ -155,5 +140,34 @@ export function openCodeChildPermissionRules(
     (childRule) =>
       !inheritedRules.some((inheritedRule) => permissionRuleEquals(childRule, inheritedRule)),
   );
-  return [...parentRules, ...childSpecificRules];
+  return withOpenCodeSubagentDeny([...parentRules, ...childSpecificRules], false, subagentsOff);
+}
+
+// OpenCode checks `task` before launching a subagent but has no concurrency cap: a goatclaw limit of
+// zero appends this deny last, and other limits leave subagents uncapped.
+const OPENCODE_SUBAGENT_DENY = { permission: "task", pattern: "*", action: "deny" } as const;
+
+/** Session metadata that marks the trailing deny as GOAT's, so a deny GOAT did not add stays. */
+export const OPENCODE_GOAT_SUBAGENT_DENY_KEY = "goatSubagentDeny";
+
+const endsWithSubagentDeny = (rules: PermissionRuleset) => {
+  const last = rules.at(-1);
+  return last !== undefined && permissionRuleEquals(last, OPENCODE_SUBAGENT_DENY);
+};
+
+export const openCodeOwnsSubagentDeny = (session: {
+  readonly permission?: PermissionRuleset;
+  readonly metadata?: { readonly [key: string]: unknown };
+}) =>
+  session.metadata?.[OPENCODE_GOAT_SUBAGENT_DENY_KEY] === true &&
+  endsWithSubagentDeny(session.permission ?? []);
+
+/** The rules with GOAT's trailing deny added or, when GOAT owns it, removed. */
+export function withOpenCodeSubagentDeny(
+  rules: PermissionRuleset,
+  goatOwnsDeny: boolean,
+  subagentsOff: boolean,
+): PermissionRuleset {
+  const base = goatOwnsDeny && endsWithSubagentDeny(rules) ? rules.slice(0, -1) : rules;
+  return subagentsOff ? [...base, OPENCODE_SUBAGENT_DENY] : base;
 }
