@@ -85,7 +85,7 @@ export type OrchestrationV2ReviewContinueCommand = typeof OrchestrationV2ReviewC
 
 export const OrchestratorMcpContinueFrom = NodeId.annotate({
   description:
-    "Review rounds only: an earlier finished review taskId of this thread. Continues that reviewer's conversation as a new task with its own ledger.",
+    "Review rounds only: the previous finished review round's taskId. Continues that reviewer's conversation as a new task.",
 });
 
 /**
