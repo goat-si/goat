@@ -337,3 +337,40 @@ it.effect("a concurrent re-enable cannot revive a session ended by turning compu
     ),
   ),
 );
+
+it.effect(
+  "removal waits for an in-flight automatic grant and ends it before the next request",
+  () =>
+    withHarness(({ orchestrator }) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        yield* withRequests(
+          orchestrator,
+          supported,
+          ({ request }) =>
+            Effect.gen(function* () {
+              const settings = yield* ServerSettings.ServerSettingsService;
+              yield* settings.updateSettings({ cuaAllowedApps: ["com.example.Editor"] });
+              const first = yield* request({ apps: ["com.example.Editor"] }).pipe(Effect.forkChild);
+              yield* Deferred.await(entered);
+              const remove = yield* settings
+                .updateSettings({ cuaAllowedApps: [] })
+                .pipe(Effect.forkChild);
+              yield* Deferred.succeed(release, undefined);
+              assert.equal((yield* Fiber.join(first)).kind, "available");
+              yield* Fiber.join(remove);
+              assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+            }),
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          (command) =>
+            command.type === "handoff.create" && command.handoff.state === "completed"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+        );
+      }),
+    ),
+);
