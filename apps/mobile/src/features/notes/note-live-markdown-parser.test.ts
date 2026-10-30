@@ -10,13 +10,18 @@ function styled(text: string, type: NoteMarkdownRangeType) {
 
 describe("note live markdown parser", () => {
   it.each(Object.entries({ ...noteSourceFixtures, ...noteFallbackFixtures }))(
-    "returns sorted, in-bounds, non-empty ranges for %s",
+    "returns in-bounds, non-empty ranges in order, containers first, for %s",
     (_name, text) => {
       const ranges = parseNoteMarkdown(text);
       for (const [index, range] of ranges.entries()) {
         expect(range.length).toBeGreaterThan(0);
         expect(range.start + range.length).toBeLessThanOrEqual(text.length);
-        if (index > 0) expect(range.start).toBeGreaterThanOrEqual(ranges[index - 1]!.start);
+        const previous = ranges[index - 1];
+        if (!previous) continue;
+        // Native formatters apply ranges in order, so an outer style must precede inner ones.
+        expect(range.start).toBeGreaterThanOrEqual(previous.start);
+        if (range.start === previous.start)
+          expect(range.length).toBeLessThanOrEqual(previous.length);
       }
     },
   );

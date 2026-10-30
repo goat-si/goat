@@ -1,0 +1,67 @@
+diff --git a/apple/MarkdownTextInputDecoratorComponentView.mm b/apple/MarkdownTextInputDecoratorComponentView.mm
+index b6cabe880b9fb3ab5b4a28ece9893bd2c2c624d3..eb2c568d96f3794536335da60d677930a648765e 100644
+--- a/apple/MarkdownTextInputDecoratorComponentView.mm
++++ b/apple/MarkdownTextInputDecoratorComponentView.mm
+@@ -86,8 +86,7 @@ using namespace facebook::react;
+     // make sure `adjustsFontSizeToFitWidth` is disabled, otherwise formatting will be overwritten
+     react_native_assert(_textField.adjustsFontSizeToFitWidth == NO);
+ 
+-    // Enable TextField AdaptiveImageGlyph support for iOS 18.0+
+-    [self enableAdaptiveImageGlyphSupport:_textField];
++    // GOAT: Genmoji would enter the markdown source as U+FFFC, so keep them off.
+ 
+     _markdownTextFieldObserver = [[MarkdownTextFieldObserver alloc] initWithTextField:_textField markdownUtils:_markdownUtils];
+ 
+@@ -120,8 +119,7 @@ using namespace facebook::react;
+   } else if ([backedTextInputView isKindOfClass:[RCTUITextView class]]) {
+     _textView = (RCTUITextView *)backedTextInputView;
+ 
+-    // Enable TextView AdaptiveImageGlyph support for iOS 18.0+
+-    [self enableAdaptiveImageGlyphSupport:_textView];
++    // GOAT: Genmoji would enter the markdown source as U+FFFC, so keep them off.
+ 
+     // register delegate for future edits
+     react_native_assert(_textView.textStorage.delegate == nil);
+diff --git a/apple/RCTTextInput+AdaptiveImageGlyph.mm b/apple/RCTTextInput+AdaptiveImageGlyph.mm
+index 54c10d3e719e1109acb7407e13df0125db57f2ff..503f5b1ab861c70968c130eb7fdb2827cea44f64 100644
+--- a/apple/RCTTextInput+AdaptiveImageGlyph.mm
++++ b/apple/RCTTextInput+AdaptiveImageGlyph.mm
+@@ -3,7 +3,7 @@
+ #import <objc/runtime.h>
+ 
+ // Helper method to setup method swizzling for adaptive image glyph
+-static void setupAdaptiveImageGlyphSwizzling(Class targetClass, SEL swizzledSelector) {
++__attribute__((unused)) static void setupAdaptiveImageGlyphSwizzling(Class targetClass, SEL swizzledSelector) {
+   if (@available(iOS 18.0, *)) {
+     SEL originalSelector = @selector(insertAdaptiveImageGlyph:replacementRange:);
+     
+@@ -95,12 +95,8 @@ static void handleAdaptiveImageGlyphPasteEvent(UIView *textInputView, id glyph,
+ 
+ @implementation RCTUITextField (AdaptiveImageGlyph)
+ 
+-+ (void)load {
+-  static dispatch_once_t onceToken;
+-  dispatch_once(&onceToken, ^{
+-    setupAdaptiveImageGlyphSwizzling([self class], @selector(liveMarkdown_insertAdaptiveImageGlyph:replacementRange:));
+-  });
+-}
++// GOAT: no +load swizzle. It turned Genmoji into clipboard image pastes in every text input in
++// the app, not only markdown inputs.
+ 
+ - (void)liveMarkdown_insertAdaptiveImageGlyph:(id)glyph replacementRange:(NSRange)replacementRange {
+   if (@available(iOS 18.0, *)) {
+@@ -112,12 +108,8 @@ static void handleAdaptiveImageGlyphPasteEvent(UIView *textInputView, id glyph,
+ 
+ @implementation RCTUITextView (AdaptiveImageGlyph)
+ 
+-+ (void)load {
+-  static dispatch_once_t onceToken;
+-  dispatch_once(&onceToken, ^{
+-    setupAdaptiveImageGlyphSwizzling([self class], @selector(liveMarkdown_insertAdaptiveImageGlyph:replacementRange:));
+-  });
+-}
++// GOAT: no +load swizzle. It turned Genmoji into clipboard image pastes in every text input in
++// the app, not only markdown inputs.
+ 
+ - (void)liveMarkdown_insertAdaptiveImageGlyph:(id)glyph replacementRange:(NSRange)replacementRange {
+   if (@available(iOS 18.0, *)) {

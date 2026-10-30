@@ -1,8 +1,8 @@
 // Native text inputs may not keep CRLF, so the editor shows an LF view and each change is
 // spliced back into the exact source; text outside the changed span keeps its original bytes.
 
-/** Above this size every keystroke's full reparse costs more than formatting is worth. */
-export const LIVE_MARKDOWN_MAX_LENGTH = 200_000;
+/** Above this, the full reparse on every keystroke (UI thread on Android) can drop frames. */
+export const LIVE_MARKDOWN_MAX_LENGTH = 100_000;
 
 export type NoteEditorFallback = "large" | "control-characters" | "carriage-returns";
 
