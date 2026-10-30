@@ -166,7 +166,8 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
         : currentOriginPairingUrl);
   const [failedCopyValue, setFailedCopyValue] = useState<string | null>(null);
   const revealValue = failedCopyValue ?? shareablePairingUrl ?? credential ?? "";
-  const isRevealValueUrl = revealValue !== credential;
+  // A link this client did not create has no credential here, so there is nothing to reveal.
+  const isRevealValueUrl = revealValue !== "" && revealValue !== credential;
   const isRevealValueHostedAppPairingUrl = isRevealValueUrl && isHostedAppPairingUrl(revealValue);
   const isRevealValueQrShareable =
     endpointCopyOptions.find((option) => option.url === revealValue)?.qrShareable ?? true;
