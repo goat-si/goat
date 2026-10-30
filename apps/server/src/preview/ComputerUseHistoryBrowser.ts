@@ -22,6 +22,9 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
     readonly verdict: "sent" | "refused" | "unknown_outcome";
     readonly refusalCode?: string;
     readonly typedText?: string;
+    readonly keepTypedText?: boolean;
+    readonly normalField?: boolean;
+    readonly secretProtected?: boolean;
   },
 ) {
   const host = hostOf(input.url);
@@ -33,7 +36,18 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
     ...(input.refusalCode === undefined ? {} : { refusalCode: input.refusalCode }),
     ...(input.typedText === undefined
       ? {}
-      : { typed: { length: input.typedText.length, keep: false, field: "unknown" } }),
+      : {
+          typed: {
+            length: input.typedText.length,
+            ...(input.keepTypedText === true &&
+            input.normalField === true &&
+            input.secretProtected === false
+              ? { value: input.typedText }
+              : {}),
+            keep: input.keepTypedText === true && input.secretProtected === false,
+            field: input.normalField === true ? "normal" : "unknown",
+          },
+        }),
   });
 });
 

@@ -32,4 +32,52 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("browser history", (i
       assert.deepEqual(yield* history.listForThread("thread:b"), []);
     }),
   );
+  it.effect(
+    "keeps text only for an inspected normal field with consent and no secret protection",
+    () =>
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const history = yield* makeComputerUseHistory;
+        const entry = {
+          threadId: "thread:retention",
+          url: "https://example.test/",
+          action: "type",
+          verdict: "sent",
+          typedText: "hello",
+        } as const;
+        yield* recordBrowserAction(history, {
+          ...entry,
+          keepTypedText: true,
+          normalField: true,
+          secretProtected: false,
+        });
+        yield* recordBrowserAction(history, {
+          ...entry,
+          keepTypedText: true,
+          normalField: false,
+          secretProtected: false,
+        });
+        yield* recordBrowserAction(history, {
+          ...entry,
+          keepTypedText: false,
+          normalField: true,
+          secretProtected: false,
+        });
+        yield* recordBrowserAction(history, {
+          ...entry,
+          keepTypedText: true,
+          normalField: true,
+          secretProtected: true,
+        });
+        const entries = yield* history.listForThread("thread:retention");
+        assert.deepEqual(
+          entries.map((entry) => entry.typedText),
+          [null, null, null, "hello"],
+        );
+        assert.deepEqual(
+          entries.map((entry) => entry.typedLength),
+          [5, 5, 5, 5],
+        );
+      }),
+  );
 });

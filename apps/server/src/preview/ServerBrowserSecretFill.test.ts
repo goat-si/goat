@@ -659,3 +659,11 @@ it.live("drops an image a tab sharing sign-ins took while a password was filled"
     expect(answer.ok).toBe(false);
   });
 });
+
+it.live("never permits history text retention on a secret-fill target", () => {
+  const { tab } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    expect(await fill.historyField(tab, threadId)).toBeUndefined();
+  });
+});
