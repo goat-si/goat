@@ -71,9 +71,9 @@ export const makeComputerUseStanding = (deps: {
     use: (list: ReadonlyArray<string>, enabled: boolean) => Effect.Effect<A, HandoffError>,
   ) =>
     Option.isSome(settings)
-      ? settings.value
-          .withSettingsSnapshot((snapshot) => use(snapshot.cuaAllowedApps, snapshot.enableCua))
-          .pipe(Effect.mapError(unavailable))
+      ? (settings.value.withStoredSettingsSnapshot ?? settings.value.withSettingsSnapshot)(
+          (snapshot) => use(snapshot.cuaAllowedApps, snapshot.enableCua),
+        ).pipe(Effect.mapError(unavailable))
       : use([], false);
   const validate = Effect.fn("Handoffs.validateComputerUseScope")((
     input: HandoffRespondInput,
