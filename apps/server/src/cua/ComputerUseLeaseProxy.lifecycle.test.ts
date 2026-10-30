@@ -73,6 +73,28 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
     }),
   );
 
+  it.effect("a screen lock during the proxy's display proof pauses the session", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ screenLock: true, elsewhere: new Set() });
+      yield* h.push(active());
+      yield* h.send(call(82, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      const proof = yield* h.nextToDriver;
+      assert.deepEqual(proof.params, { name: "list_windows", arguments: {} });
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: proof.id,
+          result: { isError: true, content: [], structuredContent: { code: "screen_locked" } },
+        }),
+      );
+      yield* h.screenLockedReported;
+      yield* h.killed;
+      const answer = yield* h.nextToProvider;
+      assert.equal(answer.id, 82);
+      assert.deepInclude(answer.result, { isError: true });
+    }),
+  );
+
   it.effect("a screen lock reported after cancellation still pauses the session", () =>
     Effect.gen(function* () {
       const h = yield* harness({ screenLock: true });

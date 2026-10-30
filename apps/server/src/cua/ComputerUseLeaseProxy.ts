@@ -275,7 +275,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const message = parse(line);
       let delivered = line;
       let tool: string | undefined;
-      let screenLocked = false;
       let sink = providerSink;
       if (message?.id !== undefined && message.id !== null && message.method === undefined) {
         const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
@@ -287,15 +286,23 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         if (own) {
           const waiter = ownAnswers.get(message.id);
           ownAnswers.delete(message.id);
-          if (waiter !== undefined) yield* Deferred.succeed(waiter, message);
+          if (waiter !== undefined) {
+            if (driverScreenLocked(message)) {
+              screenLockPending = true;
+              yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
+            }
+            yield* Deferred.succeed(waiter, message);
+          }
           return;
         }
         const key = JSON.stringify(message.id);
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
-        screenLocked = driverScreenLocked(message);
-        if (screenLocked) screenLockPending = true;
+        if (driverScreenLocked(message)) {
+          screenLockPending = true;
+          yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
+        }
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
@@ -315,7 +322,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         if (request.cancelled) {
           yield* drawOverlay({ type: "reply", id: key, failed: true });
           yield* release(request, true, driverRefused(request.tool, message, request.args));
-          if (screenLocked) yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
           if (gone() || paused !== undefined || idle) return;
           outstanding.delete(key);
           options.onCancelledRequestSettled?.(key);
@@ -380,7 +386,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
       if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
       yield* sink.answer(admitDriverReplyScreenshots(delivered), "settled", { tool });
-      if (screenLocked) yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
     });
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
