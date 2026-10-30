@@ -113,6 +113,7 @@ export interface BoundWindow {
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
   diffBaseline?: boolean;
+  lastReadCut?: boolean;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
   pointsStale?: "input" | "restart";
   /** Input ran without a post-input 60 ms settle sleep; the next screenshot settles first. */
@@ -307,12 +308,22 @@ export const createDesktopTargetHost = (deps: {
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
+    delete bound.diffBaseline;
+    delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;
     bound.screenshots?.clear();
     delete bound.latestScreenshot;
     bound.pointsStale = "restart";
-    return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
+    const { since: _since, ...freshArgs } = args;
+    return yield* request(
+      tool,
+      tool === "get_window_state" ? freshArgs : args,
+      call,
+      context,
+      bound.connectionGeneration,
+      cursor,
+    );
   });
   /** The driver token behind an element ref of the bound window's latest observation. */
   const tokenOf = (element: Record<string, unknown>, bound: BoundWindow) => {

@@ -695,7 +695,9 @@ export class ScreenObservations {
           }
         }
         text = cut(
-          cutTreeText(plain, gone, cutPlan.compactRows, (index) => words.get(index) ?? ""),
+          input.prediffed
+            ? plain
+            : cutTreeText(plain, gone, cutPlan.compactRows, (index) => words.get(index) ?? ""),
         );
         truncated = true;
       }
@@ -714,8 +716,9 @@ export class ScreenObservations {
     }
     if (app) {
       const carried = new Set(elements.map((element) => element.index));
-      text = text.replace(/- \[(\d+)\] /g, (marker, number: string) =>
-        carried.has(Number(number)) ? marker : "- ",
+      const rowMarker = input.prediffed ? /^([+~]) \[(\d+)\] /gm : /(^\s*- )\[(\d+)\] /gm;
+      text = text.replace(rowMarker, (marker, prefix: string, number: string) =>
+        carried.has(Number(number)) ? marker : `${prefix}${input.prediffed ? " " : ""}`,
       );
     }
     if (dropped.length > 0 && draft.targetRef.kind === "tab")
