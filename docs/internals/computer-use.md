@@ -211,6 +211,10 @@ turn can run later cells with computation values intact while its child remains 
 reset clears those values, not a tab, app, grant or approval. Process and WASM limits bound
 accidental guest work, but are not an OS sandbox against same-user code.
 
+App click modifiers use `cmd`, `shift`, `alt`, and `ctrl`; tabs refuse them.
+App click named actions must be advertised by the latest observation.
+App `press` accepts `holdMs` from 0 to 30000 only with a supporting driver; tabs refuse it before input.
+
 Each Target call crosses `ScreenHostBridge`. The host resolves an exact tab or app window and
 checks the current run, turn, reference generation and caller's browser or computer-use authority
 before dispatch. A preview tile gives no authority to a cell. A tab mention is a binding hint,
