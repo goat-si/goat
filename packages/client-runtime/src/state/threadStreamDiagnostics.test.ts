@@ -1,91 +1,132 @@
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   formatThreadStreamReport,
-  noteThreadFeedRendered,
+  noteThreadFeedReplyDrawn,
   noteThreadStreamClosed,
   noteThreadStreamEvents,
   noteThreadStreamOpened,
   noteThreadStreamSnapshot,
+  noteThreadStreamStatus,
   noteThreadStreamSubscribed,
+  noteThreadStreamSynchronized,
   readThreadStreamDiagnostics,
   resetThreadStreamDiagnosticsForTest,
   subscribeThreadStreamDiagnostics,
 } from "./threadStreamDiagnostics.ts";
 
-const event = (sequence: number, itemOrdinal: number | null = null) => ({
-  count: 1,
+const events = (
+  sequence: number,
+  options: { readonly unknown?: number; readonly reply?: [number, number | null] } = {},
+) => ({
+  known: options.unknown === undefined ? 1 : 0,
+  unknown: options.unknown ?? 0,
   sequence,
-  eventType: itemOrdinal === null ? "thread.updated" : "turn-item.updated",
-  itemOrdinal,
-  visibleItems: 3,
+  eventType: options.reply === undefined ? null : "turn-item.updated",
+  reply:
+    options.reply === undefined
+      ? null
+      : {
+          messageId: "message-1",
+          receivedLength: options.reply[0],
+          appliedLength: options.reply[1],
+        },
   status: "live",
-  error: null,
+  hasError: false,
 });
 
+function setup() {
+  let now = 1_000;
+  resetThreadStreamDiagnosticsForTest(() => now);
+  noteThreadStreamOpened("env", "thread");
+  return {
+    advance: (ms: number) => {
+      now += ms;
+    },
+    thread: () => readThreadStreamDiagnostics()[0],
+  };
+}
+
 describe("thread stream diagnostics", () => {
-  let now = 0;
-  beforeEach(() => {
-    now = 1_000;
-    resetThreadStreamDiagnosticsForTest(() => now);
+  it("names how each subscription attempt started", () => {
+    const { thread } = setup();
+    noteThreadStreamSnapshot("env", "thread", { sequence: 4, source: "http" });
+    noteThreadStreamSubscribed("env", "thread", { afterSequence: 4, completionMarker: true });
+    expect(thread()?.lastStart).toBe("http snapshot");
+
+    noteThreadStreamSubscribed("env", "thread", { afterSequence: 4, completionMarker: true });
+    noteThreadStreamSynchronized("env", "thread");
+    noteThreadStreamEvents("env", "thread", events(5));
+    expect(thread()).toMatchObject({ lastStart: "up to date", replayedEvents: 0, liveEvents: 1 });
+
+    noteThreadStreamSubscribed("env", "thread", { afterSequence: 5, completionMarker: true });
+    noteThreadStreamEvents("env", "thread", events(6));
+    noteThreadStreamSynchronized("env", "thread");
+    expect(thread()).toMatchObject({ lastStart: "replay", replayedEvents: 1, subscriptions: 3 });
+
+    noteThreadStreamSubscribed("env", "thread", { afterSequence: 6, completionMarker: false });
+    noteThreadStreamEvents("env", "thread", events(7));
+    expect(thread()?.lastStart).toBe("live events");
   });
 
-  it("names how each subscription restarted: a snapshot reload or an event replay", () => {
-    noteThreadStreamOpened("env", "thread");
-    noteThreadStreamSubscribed("env", "thread", null);
-    noteThreadStreamSnapshot("env", "thread", 5, 2);
-    expect(readThreadStreamDiagnostics()[0]).toMatchObject({
-      subscriptions: 1,
-      lastStart: "snapshot",
-    });
-
-    noteThreadStreamSubscribed("env", "thread", 5);
-    noteThreadStreamEvents("env", "thread", event(6, 4));
-    noteThreadStreamEvents("env", "thread", event(7));
-    expect(readThreadStreamDiagnostics()[0]).toMatchObject({
-      subscriptions: 2,
-      lastStart: "replay",
-      events: 2,
-      lastSequence: 7,
-      latestItemOrdinal: 4,
-      lastEventType: "thread.updated",
-    });
+  it("counts unknown events and the cursor they advance", () => {
+    const { thread } = setup();
+    noteThreadStreamSubscribed("env", "thread", { afterSequence: null, completionMarker: false });
+    noteThreadStreamEvents("env", "thread", events(9, { unknown: 2 }));
+    expect(thread()).toMatchObject({ liveEvents: 2, unknownEvents: 2, lastSequence: 9 });
   });
 
-  it("separates a stalled list from a stalled stream in the copied report", () => {
-    noteThreadStreamOpened("env", "thread");
-    noteThreadStreamSubscribed("env", "thread", null);
-    noteThreadStreamEvents("env", "thread", event(9, 12));
-    noteThreadFeedRendered("env", "thread", 1);
+  it.each([
+    { layer: "the client state", applied: 10, expected: "in state 10, drawn 10" },
+    { layer: "the list", applied: 40, expected: "in state 40, drawn 10" },
+  ])("shows a reply that grew on the socket but stalled at $layer", ({ applied, expected }) => {
+    setup();
+    noteThreadStreamEvents("env", "thread", events(1, { reply: [10, 10] }));
+    noteThreadFeedReplyDrawn("env", "thread", "message-1", 10);
+    noteThreadStreamEvents("env", "thread", events(2, { reply: [40, applied] }));
     const report = formatThreadStreamReport(readThreadStreamDiagnostics());
-    expect(report).toContain("events: 1, last #9 turn-item.updated at 00:00:01 UTC");
-    expect(report).toContain("visible items: 3, feed rows drawn: 1 at 00:00:01 UTC");
-    expect(report).toContain("subscriptions: 1, last 00:00:01 UTC, started by replay");
+    expect(report).toContain("latest reply message-1: received 40 chars");
+    expect(report).toContain(expected);
   });
 
-  it("keeps a bounded number of threads and transitions", () => {
-    for (let index = 0; index < 25; index += 1) noteThreadStreamOpened("env", `thread-${index}`);
+  it("keeps error text out of the report", () => {
+    const { thread } = setup();
+    noteThreadStreamStatus("env", "thread", "cached", true);
+    const report = formatThreadStreamReport(readThreadStreamDiagnostics());
+    expect(thread()?.hasError).toBe(true);
+    expect(report).toContain("status: cached with error");
+    expect(Object.values(thread() ?? {})).not.toContain("Could not synchronize the thread.");
+  });
+
+  it("starts a reopened thread fresh and as the most recent entry", () => {
+    const { thread, advance } = setup();
+    noteThreadStreamEvents("env", "thread", events(3, { reply: [5, 5] }));
+    noteThreadStreamClosed("env", "thread");
+    for (let index = 0; index < 19; index += 1) noteThreadStreamOpened("env", `other-${index}`);
+    advance(1_000);
+    noteThreadStreamOpened("env", "thread");
+    noteThreadStreamOpened("env", "newest");
     const threads = readThreadStreamDiagnostics();
     expect(threads).toHaveLength(20);
-    expect(threads[0]?.threadId).toBe("thread-24");
-    expect(threads.at(-1)?.threadId).toBe("thread-5");
-
-    for (let index = 0; index < 30; index += 1)
-      noteThreadStreamSubscribed("env", "thread-24", index);
-    expect(readThreadStreamDiagnostics()[0]?.transitions).toHaveLength(12);
+    expect(threads[1]).toMatchObject({
+      threadId: "thread",
+      reply: null,
+      closedAt: null,
+      openedAt: 2_000,
+    });
+    expect(threads.some((entry) => entry.threadId === "other-0")).toBe(false);
+    expect(thread()?.threadId).toBe("newest");
   });
 
-  it("notifies an open screen and keeps a closed thread readable", () => {
+  it("notifies only a subscribed screen", () => {
+    setup();
     let notified = 0;
     const unsubscribe = subscribeThreadStreamDiagnostics(() => {
       notified += 1;
     });
-    noteThreadStreamOpened("env", "thread");
-    noteThreadStreamEvents("env", "thread", event(1));
-    noteThreadStreamClosed("env", "thread");
+    noteThreadStreamEvents("env", "thread", events(1));
     unsubscribe();
-    noteThreadStreamEvents("env", "thread", event(2));
-    expect(notified).toBe(3);
-    expect(readThreadStreamDiagnostics()[0]).toMatchObject({ closedAt: 1_000, lastSequence: 2 });
+    noteThreadStreamEvents("env", "thread", events(2));
+    expect(notified).toBe(1);
   });
 });

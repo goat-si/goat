@@ -299,7 +299,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         environmentId,
         threadId,
         current.status,
-        Option.getOrNull(current.error),
+        Option.isSome(current.error),
       ),
     ),
   );
@@ -422,11 +422,26 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     OrchestrationV2ThreadStreamItem,
     { kind: "event" | "unknown-event" }
   >;
+  const noteEvents = (fresh: ReadonlyArray<EventItem>, unknown: number, sequence: number) =>
+    SubscriptionRef.get(state).pipe(
+      Effect.map((latest) =>
+        StreamDiagnostics.noteThreadStreamEvents(environmentId, threadId, {
+          known: fresh.length,
+          unknown,
+          sequence,
+          eventType: fresh.at(-1)?.event.type ?? null,
+          reply: StreamDiagnostics.replyProgress(fresh, Option.getOrNull(latest.data)),
+          status: latest.status,
+          hasError: Option.isSome(latest.error),
+        }),
+      ),
+    );
   const applyEventsLocked = Effect.fn("EnvironmentThreadState.applyEventsLocked")(function* (
     items: ReadonlyArray<SequencedItem>,
   ) {
     const appliedSequence = yield* SubscriptionRef.get(lastSequence);
     let sequence = appliedSequence;
+    let unknown = 0;
     const fresh: EventItem[] = [];
     for (const item of items) {
       if (item.sequence <= sequence) continue;
@@ -435,6 +450,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         fresh.push(item);
         continue;
       }
+      unknown += 1;
       yield* Effect.logDebug("Skipped a thread event type this client does not know.").pipe(
         Effect.annotateLogs({
           environmentId,
@@ -446,7 +462,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
     if (sequence === appliedSequence) return;
     yield* SubscriptionRef.set(lastSequence, sequence);
-    if (fresh.length === 0) return;
+    if (fresh.length === 0) return yield* noteEvents(fresh, unknown, sequence);
 
     const waiting = yield* Ref.get(awaitingCompletion);
     // Apply against the latest projection/history in one update so a concurrent
@@ -524,18 +540,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         return [result, current];
       },
     );
-    const latest = yield* SubscriptionRef.get(state);
-    const lastItem = fresh.findLast((item) => item.event.type === "turn-item.updated");
-    StreamDiagnostics.noteThreadStreamEvents(environmentId, threadId, {
-      count: fresh.length,
-      sequence,
-      eventType: fresh.at(-1)?.event.type ?? null,
-      itemOrdinal:
-        lastItem?.event.type === "turn-item.updated" ? lastItem.event.payload.ordinal : null,
-      visibleItems: Option.getOrNull(latest.data)?.visibleTurnItems.length ?? null,
-      status: latest.status,
-      error: Option.getOrNull(latest.error),
-    });
+    yield* noteEvents(fresh, unknown, sequence);
 
     if (result._tag === "delete") {
       yield* setDeleted();
@@ -564,19 +569,19 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ? { ...current, status: "live" as const, error: Option.none() }
           : current,
       );
+      StreamDiagnostics.noteThreadStreamSynchronized(environmentId, threadId);
       yield* noteStatus;
       return;
     }
 
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
-      const projection = boundedSnapshotProjection(item);
       const hasProgressiveHistory =
         item.historyCursor !== undefined ||
         item.hasMoreHistory !== undefined ||
         item.latestLocalTurnOrdinal !== undefined;
       yield* setThread(
-        projection,
+        boundedSnapshotProjection(item),
         hasProgressiveHistory
           ? {
               history: {
@@ -590,12 +595,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             }
           : { resetHistory: true },
       );
-      StreamDiagnostics.noteThreadStreamSnapshot(
-        environmentId,
-        threadId,
-        item.snapshotSequence,
-        projection.visibleTurnItems.length,
-      );
+      StreamDiagnostics.noteThreadStreamSnapshot(environmentId, threadId, {
+        sequence: item.snapshotSequence,
+        source: "socket",
+      });
       yield* noteStatus;
       return;
     }
@@ -960,12 +963,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                         }
                       : EMPTY_THREAD_HISTORY_META;
                   yield* setThread(httpResult.snapshot.projection, { history });
-                  StreamDiagnostics.noteThreadStreamSnapshot(
-                    environmentId,
-                    threadId,
-                    httpResult.snapshot.snapshotSequence,
-                    httpResult.snapshot.projection.visibleTurnItems.length,
-                  );
+                  StreamDiagnostics.noteThreadStreamSnapshot(environmentId, threadId, {
+                    sequence: httpResult.snapshot.snapshotSequence,
+                    source: "http",
+                  });
                   yield* remember;
                 }),
               );
@@ -985,11 +986,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         const sequence = yield* SubscriptionRef.get(lastSequence);
         const canResume = Option.isSome(current.data);
         const acceptBoundedSnapshot = yield* Ref.get(acceptsBoundedSocketSnapshots);
-        StreamDiagnostics.noteThreadStreamSubscribed(
-          environmentId,
-          threadId,
-          canResume ? sequence : null,
-        );
+        StreamDiagnostics.noteThreadStreamSubscribed(environmentId, threadId, {
+          afterSequence: canResume ? sequence : null,
+          completionMarker: supportsCompletionMarker,
+        });
         if (!supportsCompletionMarker && canResume) {
           yield* SubscriptionRef.update(state, (value) => ({
             ...value,

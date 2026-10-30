@@ -159,7 +159,7 @@ import {
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { ThreadFeedPlaceholder } from "./ThreadFeedPlaceholder";
-import { ThreadFeedRenderProbe } from "./ThreadFeedRenderProbe";
+import { ThreadFeedReplyProbe } from "./ThreadFeedReplyProbe";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
@@ -3097,6 +3097,14 @@ export const ThreadFeed = memo(function ThreadFeed({
       key={info.item.id}
       entering={disclosureToggleSettling ? THREAD_FEED_DISCLOSURE_ENTER_TRANSITION : undefined}
     >
+      {info.item.type === "message" && info.item.message.role === "assistant" ? (
+        <ThreadFeedReplyProbe
+          environmentId={String(props.environmentId)}
+          threadId={String(props.threadId)}
+          messageId={String(info.item.message.id)}
+          length={info.item.message.text.length}
+        />
+      ) : null}
       <MessageImageGalleryScope
         entry={info.item}
         environmentId={props.environmentId}
@@ -3319,11 +3327,6 @@ export const ThreadFeed = memo(function ThreadFeed({
           </View>
         ) : null}
         <VideoPreviewModal source={expandedVideo} onRequestClose={closeVideoPreview} />
-        <ThreadFeedRenderProbe
-          environmentId={String(props.environmentId)}
-          threadId={String(props.threadId)}
-          rows={presentedFeed.length}
-        />
         <FilePreviewModal source={expandedFile} onRequestClose={closeFilePreview} />
       </View>
     </PresentationSource>

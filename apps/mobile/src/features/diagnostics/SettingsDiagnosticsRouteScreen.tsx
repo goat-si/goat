@@ -139,8 +139,8 @@ export function SettingsDiagnosticsRouteScreen() {
           <Text className="px-2 text-sm leading-normal text-foreground-muted">
             Paste the report into a GitHub issue. It contains the app version, the JavaScript error
             message, and the component stack. Error messages can quote values from the app, so read
-            it over before sharing. The stream report lists thread ids, event counts and times; it
-            stays on this device until you paste it.
+            it over before sharing. The stream report holds only ids, counts, reply lengths and
+            times, never message text, and stays on this device until you paste it.
           </Text>
         </View>
       </ScrollView>

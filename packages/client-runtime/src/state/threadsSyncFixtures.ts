@@ -1,7 +1,9 @@
 import {
   EventId,
+  MessageId,
   NodeId,
   RuntimeRequestId,
+  TurnItemId,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
 } from "@goat/contracts";
@@ -10,6 +12,40 @@ import * as DateTime from "effect/DateTime";
 import { v2Now, v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 
 const THREAD_ID = v2ThreadId;
+
+export const assistantReply = (text: string, sequence: number): OrchestrationV2ThreadStreamItem => {
+  const at = DateTime.makeUnsafe("2026-06-20T01:30:00.000Z");
+  return {
+    kind: "event",
+    sequence,
+    event: {
+      id: EventId.make(`event-reply-${sequence}`),
+      type: "turn-item.updated",
+      threadId: THREAD_ID,
+      occurredAt: at,
+      payload: {
+        id: TurnItemId.make("item-reply"),
+        threadId: THREAD_ID,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 40,
+        status: "running",
+        title: null,
+        startedAt: at,
+        completedAt: null,
+        updatedAt: at,
+        type: "assistant_message",
+        messageId: MessageId.make("message-reply"),
+        text,
+        streaming: true,
+      },
+    },
+  };
+};
 
 export const snapshot = (
   projection: OrchestrationV2ThreadProjection,

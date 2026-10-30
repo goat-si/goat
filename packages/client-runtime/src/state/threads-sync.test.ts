@@ -46,6 +46,7 @@ import * as RpcSession from "../rpc/session.ts";
 import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
 import {
   PENDING_QUESTION,
+  assistantReply,
   deleted,
   questionResolved,
   snapshot,
@@ -654,7 +655,11 @@ describe("EnvironmentThreads", () => {
         Stream.filter((count) => count === 2),
         Stream.runHead,
       );
-      yield* Queue.offer(harness.inputs, titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 2));
+      yield* Queue.offerAll(harness.inputs, [
+        { kind: "unknown-event", sequence: CACHED_SNAPSHOT_SEQUENCE + 2, eventType: "future" },
+        assistantReply("Hel", CACHED_SNAPSHOT_SEQUENCE + 3),
+        titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 4),
+      ]);
       yield* awaitThreadState(
         harness.observed,
         (value) => Option.getOrNull(value.data)?.thread.title === "After",
@@ -663,10 +668,11 @@ describe("EnvironmentThreads", () => {
       expect(StreamDiagnostics.readThreadStreamDiagnostics()[0]).toMatchObject({
         threadId: String(THREAD_ID),
         subscriptions: 2,
-        lastStart: "replay",
-        events: 2,
-        lastSequence: CACHED_SNAPSHOT_SEQUENCE + 2,
-        lastEventType: "thread.metadata-updated",
+        lastStart: "live events",
+        liveEvents: 4,
+        unknownEvents: 1,
+        lastSequence: CACHED_SNAPSHOT_SEQUENCE + 4,
+        reply: { messageId: "message-reply", receivedLength: 3, appliedLength: 3 },
       });
     }),
   );
