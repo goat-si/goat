@@ -1,5 +1,4 @@
 import * as HostProcess from "@goat/shared/HostProcess";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -12,16 +11,11 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
  * optional launcher and Homebrew); the app bundle binary is the last resort.
  * https://tailscale.com/docs/reference/tailscale-cli (macOS)
  */
-export const MacTailscaleFallbackPaths = Context.Reference<ReadonlyArray<string>>(
-  "@goat/tailscale/MacTailscaleFallbackPaths",
-  {
-    defaultValue: () => [
-      "/usr/local/bin/tailscale",
-      "/opt/homebrew/bin/tailscale",
-      "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-    ],
-  },
-);
+const MAC_FALLBACK_PATHS = [
+  "/usr/local/bin/tailscale",
+  "/opt/homebrew/bin/tailscale",
+  "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+];
 
 /**
  * The app bundle binary opens the GUI unless it sees terminal variables
@@ -71,12 +65,11 @@ export const spawnTailscale = Effect.fn("tailscale.spawnTailscale")(function* (
   if ((yield* HostProcess.Platform) !== "darwin") {
     return yield* first;
   }
-  const fallbacks = yield* MacTailscaleFallbackPaths;
   const tryFallback = (
     index: number,
     pathMiss: TailscaleSpawnFailure,
   ): ReturnType<typeof spawnOnce> => {
-    const executable = fallbacks[index];
+    const executable = MAC_FALLBACK_PATHS[index];
     return executable === undefined
       ? Effect.fail(pathMiss)
       : spawnOnce(executable, MAC_CLI_ENV).pipe(

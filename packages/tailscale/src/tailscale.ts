@@ -228,7 +228,7 @@ const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function*
   args: readonly string[],
 ) {
   const hostPlatform = yield* HostProcess.Platform;
-  const executable = tailscaleCommandForPlatform(hostPlatform);
+  const executable: string = tailscaleCommandForPlatform(hostPlatform);
   const commandContext = {
     executable,
     subcommand,
@@ -244,7 +244,8 @@ const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function*
       ),
     );
     const child = spawned.handle;
-    const spawnedContext = { ...commandContext, executable: spawned.executable };
+    // Every later error, the timeout included, names the executable that ran.
+    commandContext.executable = spawned.executable;
     const [stdout, stderr, exitCode] = yield* Effect.all(
       [
         collectStdout(child.stdout),
@@ -253,11 +254,11 @@ const readTailscaleOutput = Effect.fn("tailscale.readTailscaleOutput")(function*
       ],
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.mapError((cause) => new TailscaleCommandOutputError({ ...spawnedContext, cause })),
+      Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
     );
     if (exitCode !== 0) {
       return yield* new TailscaleCommandExitError({
-        ...spawnedContext,
+        ...commandContext,
         exitCode,
         stdoutLength: stdout.length,
         stderrLength: stderr.length,
@@ -379,7 +380,7 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
   timeoutInput: Duration.Input,
 ): Effect.fn.Return<void, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
   const hostPlatform = yield* HostProcess.Platform;
-  const executable = tailscaleCommandForPlatform(hostPlatform);
+  const executable: string = tailscaleCommandForPlatform(hostPlatform);
   const commandContext = {
     executable,
     subcommand: "serve" as const,
@@ -396,16 +397,16 @@ const runTailscaleCommand = Effect.fn("tailscale.runTailscaleCommand")(function*
       ),
     );
     const child = spawned.handle;
-    const spawnedContext = { ...commandContext, executable: spawned.executable };
+    commandContext.executable = spawned.executable;
     const [stderr, exitCode] = yield* Effect.all(
       [collectStderr(child.stderr), child.exitCode.pipe(Effect.map(Number))],
       { concurrency: "unbounded" },
     ).pipe(
-      Effect.mapError((cause) => new TailscaleCommandOutputError({ ...spawnedContext, cause })),
+      Effect.mapError((cause) => new TailscaleCommandOutputError({ ...commandContext, cause })),
     );
     if (exitCode !== 0) {
       return yield* new TailscaleCommandExitError({
-        ...spawnedContext,
+        ...commandContext,
         exitCode,
         stderrLength: stderr.length,
         ...(stderrDiagnosticOf(stderr) !== undefined
