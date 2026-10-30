@@ -7,6 +7,7 @@ import {
   type ComputerUseApp,
   EnvironmentId,
   ScheduledTaskId,
+  type ServerSettingsError,
   ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -137,6 +138,7 @@ export const withRequests = <A, E, R>(
   /** Hears what the leases tell the desktop to watch and admit to the driver's manifest. */
   setCuaWatch?: DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]["setCuaWatch"],
   catalog: ReadonlyArray<ComputerUseApp> = [],
+  settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService, ServerSettingsError>,
 ) => {
   let current = failure;
   return Effect.gen(function* () {
@@ -180,7 +182,7 @@ export const withRequests = <A, E, R>(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        ServerSettings.layerTest({ enableCua: true }),
+        settingsLayer ?? ServerSettings.layerTest({ enableCua: true }),
         leasesDetecting(signals, setCuaWatch),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),

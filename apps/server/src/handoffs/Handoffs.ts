@@ -45,6 +45,7 @@ import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
 import { CONSUMED, makeComputerUseContinuations } from "./computerUseContinuations.ts";
 import { makeExpiryHolds } from "./expiryHolds.ts";
 import { makeComputerUseStanding, type CreateInput } from "./computerUseStanding.ts";
+import { startComputerUseSettingsObserver } from "./computerUseSettingsObserver.ts";
 import { makeHandoffClientLabel } from "./handoffClientLabel.ts";
 import { targetKey } from "./targetKey.ts";
 import { storeName, matchesArgs } from "./handoffDigest.ts";
@@ -634,6 +635,8 @@ const make = Effect.gen(function* () {
         );
       }),
   });
+  if (Option.isSome(settings))
+    yield* startComputerUseSettingsObserver(settings.value, standing.observeSettings);
 
   const expiryHolds = makeExpiryHolds();
   const expirePending = Effect.fn("Handoffs.expirePending")(function* (threadId?: string) {
