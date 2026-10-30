@@ -34,17 +34,17 @@ it.effect("a blocked visit during a locator drag prevents the drop", () =>
           `<div id="a" draggable="true" style="width:80px;height:80px">a</div><div id="b" style="width:80px;height:80px">b</div><script>a.addEventListener('mousedown',()=>location.href='https://blocked.test/');b.addEventListener('dragover',e=>e.preventDefault());b.addEventListener('drop',e=>{e.preventDefault();reportDrop()})</script>`,
         ),
       );
-      const result = yield* Effect.tryPromise({
-        try: () =>
-          ServerBrowserPage.drag(page, { source: "#a", target: "#b" }, undefined, async () => {
-            if (++gates === 3) await visit.promise;
-            if (blocked) throw new BrowserControlInterrupted("blocked", "blocked_url");
-          }),
-        catch: (error) => error,
-      }).pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      const result = yield* Effect.promise(() =>
+        ServerBrowserPage.drag(page, { source: "#a", target: "#b" }, undefined, async () => {
+          if (++gates === 3) await visit.promise;
+          if (blocked) throw new BrowserControlInterrupted("blocked", "blocked_url");
+        }).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toMatchObject({ reason: "blocked_url" });
       expect(drops).toBe(0);
     }),
   ),
@@ -65,6 +65,34 @@ it.effect("a locator drag still delivers a normal drop", () =>
       );
       yield* Effect.promise(() => ServerBrowserPage.drag(page, { source: "#a", target: "#b" }));
       expect(yield* Effect.promise(() => page.evaluate("drops"))).toBe(1);
+    }),
+  ),
+);
+
+it.effect("a refusal before release does not drop on the target", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Effect.acquireRelease(
+        Effect.promise(() => chromium.launch({ headless: true })),
+        (browser) => Effect.promise(() => browser.close()),
+      );
+      const page = yield* Effect.promise(() => browser.newPage());
+      yield* Effect.promise(() =>
+        page.setContent(
+          `<div id="a" draggable="true" style="width:80px;height:80px">a</div><div id="b" style="width:80px;height:80px">b</div><script>window.drops=0;b.addEventListener('dragover',e=>e.preventDefault());b.addEventListener('drop',e=>{e.preventDefault();drops++})</script>`,
+        ),
+      );
+      let gates = 0;
+      const result = yield* Effect.promise(() =>
+        ServerBrowserPage.drag(page, { source: "#a", target: "#b" }, undefined, () => {
+          if (++gates === 13) throw new BrowserControlInterrupted("blocked", "blocked_url", false);
+        }).then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        ),
+      );
+      expect(result.ok).toBe(false);
+      expect(yield* Effect.promise(() => page.evaluate("drops"))).toBe(0);
     }),
   ),
 );
