@@ -52,9 +52,9 @@ const fixture = Effect.fnUntraced(function* (
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     blocked: () => Effect.die("unused"),
     blockedTurns: Effect.die("unused"),
-    active: () => Effect.succeed(Option.none()),
-    holder: () => Effect.succeed(Option.none()),
-    channelOrigin: () => Effect.succeed(undefined),
+    active: () => Effect.succeedNone,
+    holder: () => Effect.succeedNone,
+    channelOrigin: () => Effect.undefined,
     state: () => Effect.die("unused"),
     control: () => Effect.die("unused"),
     attached: () => Effect.succeedNone,
@@ -546,7 +546,7 @@ describe("computer use lease route", () => {
           Context.add(
             ComputerUseLeases.ComputerUseLeases,
             yield* ComputerUseLeases.ComputerUseLeases.pipe(
-              Effect.provide(Layer.mock(ComputerUseLeases.ComputerUseLeases)({})),
+              Effect.provide(Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined })),
             ),
           ),
         );

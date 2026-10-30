@@ -74,8 +74,12 @@ describe("ComputerUseLeaseRoute reports", () => {
           }),
         ),
       );
+      const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+        Effect.provide(Layer.mock(ComputerUseLeases.ComputerUseLeases)({ proxy: undefined })),
+      );
       const services = Context.make(McpSessionRegistry.McpSessionRegistry, registry).pipe(
         Context.add(BrowserOriginGrants, { ...grants, reportDriverCapability: () => Effect.void }),
+        Context.add(ComputerUseLeases.ComputerUseLeases, leases),
       );
       const { handler, dispose } = HttpRouter.toWebHandler(reportLayer, { disableLogger: true });
       const post = (token: string) =>
