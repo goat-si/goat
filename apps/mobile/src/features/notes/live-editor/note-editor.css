@@ -8,118 +8,118 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 #editor,
-.cm-editor {
+#editor .cm-editor {
   height: 100%;
 }
-.cm-editor.cm-focused {
+#editor .cm-editor.cm-focused {
   outline: none;
 }
-.cm-scroller {
+#editor .cm-scroller {
   font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
   font-size: var(--goat-font-size);
   line-height: var(--goat-line-height);
   overscroll-behavior: contain;
 }
-.cm-content {
+#editor .cm-content {
   padding: 12px 0 35vh;
   color: var(--goat-text);
   caret-color: var(--goat-accent);
 }
-.cm-line {
+#editor .cm-line {
   padding: 0 16px;
 }
-.cm-placeholder {
+#editor .cm-placeholder {
   color: var(--goat-muted);
 }
-.cm-goat-h1,
-.cm-goat-h2,
-.cm-goat-h3,
-.cm-goat-h4,
-.cm-goat-h5,
-.cm-goat-h6 {
+#editor .cm-goat-h1,
+#editor .cm-goat-h2,
+#editor .cm-goat-h3,
+#editor .cm-goat-h4,
+#editor .cm-goat-h5,
+#editor .cm-goat-h6 {
   font-weight: 700;
   line-height: 1.3;
   color: var(--goat-strong);
 }
-.cm-goat-h1 {
+#editor .cm-goat-h1 {
   font-size: var(--goat-h1);
 }
-.cm-goat-h2 {
+#editor .cm-goat-h2 {
   font-size: var(--goat-h2);
 }
-.cm-goat-h3 {
+#editor .cm-goat-h3 {
   font-size: var(--goat-h3);
 }
-.cm-goat-h4 {
+#editor .cm-goat-h4 {
   font-size: var(--goat-h4);
 }
-.cm-goat-h5 {
+#editor .cm-goat-h5 {
   font-size: var(--goat-h5);
 }
-.cm-goat-h6 {
+#editor .cm-goat-h6 {
   font-size: var(--goat-h6);
 }
-.cm-goat-setext-mark,
-.cm-goat-meta,
-.cm-goat-fence,
-.cm-goat-frontmatter,
-.cm-goat-html {
+#editor .cm-goat-setext-mark,
+#editor .cm-goat-meta,
+#editor .cm-goat-fence,
+#editor .cm-goat-frontmatter,
+#editor .cm-goat-html {
   color: var(--goat-muted);
 }
-.cm-goat-strong {
+#editor .cm-goat-strong {
   font-weight: 700;
   color: var(--goat-strong);
 }
-.cm-goat-em {
+#editor .cm-goat-em {
   font-style: italic;
 }
-.cm-goat-strike,
-.cm-goat-done {
+#editor .cm-goat-strike,
+#editor .cm-goat-done {
   text-decoration: line-through;
 }
-.cm-goat-done {
+#editor .cm-goat-done {
   color: var(--goat-muted);
 }
-.cm-goat-code,
-.cm-goat-codeblock,
-.cm-goat-table,
-.cm-goat-frontmatter,
-.cm-goat-html {
+#editor .cm-goat-code,
+#editor .cm-goat-codeblock,
+#editor .cm-goat-table,
+#editor .cm-goat-frontmatter,
+#editor .cm-goat-html {
   font-family: ui-monospace, Menlo, "SF Mono", monospace;
   font-size: 0.88em;
 }
-.cm-goat-code {
+#editor .cm-goat-code {
   padding: 0.1em 0.25em;
   border-radius: 4px;
   background: var(--goat-code-bg);
   color: var(--goat-code-text);
 }
-.cm-goat-codeblock {
+#editor .cm-goat-codeblock {
   background: var(--goat-code-bg);
   color: var(--goat-code-text);
 }
-.cm-goat-link {
+#editor .cm-goat-link {
   color: var(--goat-link);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.cm-goat-quote {
+#editor .cm-goat-quote {
   box-shadow:
     inset 19px 0 0 var(--goat-bg),
     inset 22px 0 0 var(--goat-quote);
   padding-left: 32px;
   color: var(--goat-muted);
 }
-.cm-goat-hr {
+#editor .cm-goat-hr {
   background: linear-gradient(var(--goat-rule), var(--goat-rule)) no-repeat center /
     calc(100% - 32px) 1px;
 }
-.cm-goat-bullet {
+#editor .cm-goat-bullet {
   display: inline-block;
   min-width: 0.8em;
   color: var(--goat-muted);
 }
-.cm-goat-task {
+#editor .cm-goat-task {
   display: inline-block;
   box-sizing: border-box;
   width: 1.1em;
@@ -130,19 +130,19 @@ body {
   border-radius: 5px;
   cursor: pointer;
 }
-.cm-goat-task-checked {
+#editor .cm-goat-task-checked {
   border-color: var(--goat-accent);
   background: var(--goat-accent)
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     center / 85% no-repeat;
 }
-.cm-goat-image {
+#editor .cm-goat-image {
   max-width: 100%;
   max-height: 50vh;
   border-radius: 8px;
   vertical-align: bottom;
 }
-.cm-goat-image-label {
+#editor .cm-goat-image-label {
   padding: 0 0.4em;
   border: 1px dashed var(--goat-muted);
   border-radius: 6px;
