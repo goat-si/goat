@@ -428,6 +428,12 @@ export class CellWindowTracker {
   ): CellWindowsOutcome {
     if (this.startByPid.size === 0) return {};
     const opened: ScreenWindowSummary[] = [];
+    const listedIds = new Set<number>();
+    const list = (summary: ScreenWindowSummary) => {
+      if (listedIds.has(summary.window_id)) return;
+      listedIds.add(summary.window_id);
+      opened.push(summary);
+    };
     let unverified = false;
     for (const [pid, start] of this.startByPid) {
       const end = endByPid?.get(pid);
@@ -439,16 +445,15 @@ export class CellWindowTracker {
         end.some((w) => startIds.has(w.window_id));
       if (witness && end && startIds) {
         for (const w of end) {
-          if (!startIds.has(w.window_id)) opened.push(toSummary(w));
+          if (!startIds.has(w.window_id)) list(toSummary(w));
         }
       } else {
         unverified = true;
         // No window of the start list is in the end list, so nothing proves these are new; they
         // are still listed, flagged unverified, rather than dropped.
         if (start !== undefined && end !== undefined && startIds !== undefined)
-          for (const w of end) if (!startIds.has(w.window_id)) opened.push(toSummary(w));
-        const fallback = this.seenOpened.get(pid);
-        if (fallback) opened.push(...fallback.values());
+          for (const w of end) if (!startIds.has(w.window_id)) list(toSummary(w));
+        for (const summary of this.seenOpened.get(pid)?.values() ?? []) list(summary);
       }
     }
     const truncated = opened.length > 16;

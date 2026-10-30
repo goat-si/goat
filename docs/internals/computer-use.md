@@ -53,13 +53,14 @@ provider (Codex, Claude, ...)
 - Most macOS input answers `unverifiable`, and the proxy passes that on without reading the
   window itself. A read of its own would cost every action a tree walk and retire the agent's
   tokens; the agent instead checks a batch with one `since: "latest"` read of its own.
-  `unverifiable` is a success for flow control: the input was sent and its effect was not
-  checked, so nothing waits on it, retries it or reads around it. The one rule it carries is
+  `unverifiable` is a success for flow control: the input was sent and no proof of its effect was
+  found, so nothing waits on it, retries it or reads around it. The one rule it carries is
   never to resend. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
   per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
-  member, or one that opens a Go to Folder sheet, reads the process's windows and the acted
-  element around the input; those reads run in parallel, and a verdict is upgraded to
-  `confirmed` only by what they show. Without them an input that opens or closes a window keeps
+  member, or one that opens a Go to Folder sheet, reads the process's window list around the
+  input, and the acted element only when a unique label with text or selection names it (a 60 ms
+  settle follows that read); those reads run in parallel. Element changes are `observed:`
+  evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
   `unverifiable` even when the driver says done, and the cell's end read lists the new windows
   (flagged unverified when no baseline window is still listed). A cell's window
   baseline comes from its bind, or from one read for the first input on a process, and its end

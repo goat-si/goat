@@ -568,3 +568,15 @@ it.live("a window an input opens is in the cell's report from its end read alone
     ]);
   });
 });
+
+it.live("a window the verify path saw open is listed once when the end read lists it too", () => {
+  const { host } = desktop(listing([7]), [listing([8])]);
+  return Effect.gen(function* () {
+    const result = yield* runCellOn(
+      host,
+      "const a = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await a.press('cmd+t', {verify: true}); return 1;",
+    );
+    expect(result.windowsOpened?.map((each) => each.window_id)).toEqual([8]);
+    expect(result.windowsOpenedUnverified).toBe(true);
+  });
+});
