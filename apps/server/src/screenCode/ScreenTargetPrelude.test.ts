@@ -3,7 +3,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   PreviewAutomationTimeoutError,
   PreviewAutomationExecutionError,
-  PreviewAutomationControlInterruptedError,
   SCREEN_TARGET_CONTRACT_VERSION,
   PreviewTabId,
   type EnvironmentId,
@@ -923,10 +922,11 @@ it.live("tab dialog reports no pending dialog as unsent", () => {
     invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
       request.operation === "dialog"
         ? Effect.fail(
-            new PreviewAutomationControlInterruptedError({
+            new PreviewAutomationExecutionError({
               ...actionErrorContext,
               operation: "dialog",
-              reason: "dialogPending",
+              reason: "No dialog is pending.",
+              dispatched: false,
             }),
           )
         : Effect.succeed({
@@ -936,12 +936,15 @@ it.live("tab dialog reports no pending dialog as unsent", () => {
           } as A),
   };
   return runCells(broker, [
-    `const tab = await screen.tab('form'); try { await tab.dialog('dismiss'); } catch (e) { return e.nothingSent; }`,
+    `const tab = await screen.tab('form'); try { await tab.dialog('dismiss'); } catch (e) { return [e.nothingSent, e.message]; }`,
   ]).pipe(
     Effect.map(([result]) =>
       expect(result).toMatchObject({
         _tag: "Success",
-        success: { status: "completed", value: true },
+        success: {
+          status: "completed",
+          value: [true, expect.stringContaining("No dialog is pending.")],
+        },
       }),
     ),
   );

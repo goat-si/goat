@@ -1238,6 +1238,14 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         input: {},
       });
       expect(resolved.dialog).toBeNull();
+      const absent = yield* broker
+        .invoke({ scope, tabId, operation: "dialog", input: { accept: false } })
+        .pipe(Effect.flip);
+      expect(absent).toMatchObject({
+        _tag: "PreviewAutomationExecutionError",
+        reason: "No dialog is pending.",
+        dispatched: false,
+      });
     }),
   ).pipe(Effect.provide(layer)),
 );

@@ -65,7 +65,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls; a selector matching several hovers the first
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>;
-  fillSecret(t: Target | { selector: string }, secretRef: string): Promise<object>; // observed elements and names are clicked first; {selector} always uses CSS
+  fillSecret(t: Target | { selector: string }, secretRef: string): Promise<object>; // observed elements and exact observed names are focused first; any other string is a CSS selector
   upload(t: Target, files: string[]): Promise<object>;
   dialog(action: "accept" | "dismiss", promptText?: string): Promise<object>;
   evaluate(expression: string): Promise<unknown>;

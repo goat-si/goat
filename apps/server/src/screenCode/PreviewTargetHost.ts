@@ -562,6 +562,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ),
         );
       }
+      if (["tab_fill_secret", "tab_dialog", "tab_evaluate"].includes(call.method))
+        observations.index.invalidatePoints(bound.ref.id);
       if (call.method === "tab_fill_secret")
         return yield* fillTabSecret(arg, (input) => invoke(bound, context, "fillSecret", input));
       if (call.method === "tab_dialog")
@@ -590,8 +592,6 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           : selector;
       if (arg.ref && !locator)
         return yield* Effect.fail(fail("stale_reference", "Observe the current tab again."));
-      if (call.method === "tab_upload")
-        return yield* uploadTab(arg, locator, (input) => invoke(bound, context, "upload", input));
       if (
         call.method === "set_value" &&
         selector === undefined &&
@@ -646,6 +646,19 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that observation. Observe it again."),
         );
+      if (call.method === "tab_upload") {
+        observations.index.invalidatePoints(bound.ref.id);
+        return yield* uploadTab(arg, locator, (input) =>
+          invoke(
+            bound,
+            context,
+            "upload",
+            input,
+            cellBudgetMs,
+            documentBound ? bound.documentGeneration : undefined,
+          ),
+        );
+      }
       if (point?.kind === "document")
         return yield* Effect.fail(
           fail(

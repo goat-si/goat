@@ -424,7 +424,12 @@ const make = Effect.gen(function* () {
 
   const resolveDialog = async (tab: ServerTab, input: PreviewAutomationDialogInput) => {
     const dialog = tab.dialog;
-    if (!dialog) throw new BrowserControlInterrupted("No dialog is pending.", "dialogPending");
+    if (!dialog)
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "No dialog is pending.",
+        { beforeInput: true },
+      );
     if (input.accept) await dialog.accept(input.promptText);
     else await dialog.dismiss();
     if (tab.dialog === dialog) tab.dialog = null;
