@@ -491,7 +491,10 @@ it.effect("refuses the next input after navigation during an input", () =>
         await page.goto("https://example.com/");
       });
       const input = { scope, tabId, operation: "press" as const, input: { key: "Enter" } };
-      expect((yield* broker.invoke(input).pipe(Effect.result))._tag).toBe("Success");
+      const interrupted = yield* broker.invoke(input).pipe(Effect.result);
+      expect(interrupted._tag).toBe("Failure");
+      if (interrupted._tag === "Failure")
+        expect(interrupted.failure).toMatchObject({ reason: "blocked_url" });
       yield* Effect.promise(() => page.goto("https://safe.example/"));
       const next = yield* broker.invoke(input).pipe(Effect.result);
       expect(next._tag).toBe("Failure");

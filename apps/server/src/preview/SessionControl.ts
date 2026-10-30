@@ -208,7 +208,13 @@ export class SessionControl {
   }
 
   cutBlockedUrl() {
-    this.cut(new BrowserControlInterrupted("This browser host is blocked.", "blocked_url", false));
+    this.cut(
+      new BrowserControlInterrupted(
+        "This browser host is blocked.",
+        "blocked_url",
+        !this.activeAgentDispatching,
+      ),
+    );
   }
 
   private cut(reason: BrowserControlInterrupted) {
