@@ -3,7 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-export const helperSource = NodeURL.fileURLToPath(
+const helperSource = NodeURL.fileURLToPath(
   new URL("../native/computer-use-helper/", import.meta.url),
 );
 
