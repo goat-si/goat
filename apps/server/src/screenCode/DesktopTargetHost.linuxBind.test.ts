@@ -92,6 +92,8 @@ it.live.each([
       window_id: 4194307,
     });
     expect(tools(sent)).not.toContain("launch_app");
+    const bind = result.journal.find((entry) => entry.receipt.method === "bind_app");
+    expect(bind?.receipt.safety?.code).toBe("read_completed");
   });
 });
 
@@ -131,3 +133,31 @@ it.live("a window_id no window has is refused as gone", () => {
     expect(result.value).toMatchObject({ code: "target_missing" });
   });
 });
+
+it.live(
+  "discovery that returned its lists is a completed read; a cut list stays indeterminate",
+  () => {
+    const whole = linux();
+    const cut = fixture({
+      list_apps: { message: "Driver reply exceeded the primitive channel limit." },
+    });
+    return Effect.gen(function* () {
+      const listed = yield* cell(whole.host, "await screen.discover(); return 1;");
+      const codes = (result: typeof listed) =>
+        Object.fromEntries(
+          result.journal
+            .filter((entry) => entry.receipt.method.startsWith("list_"))
+            .map((entry) => [entry.receipt.method, entry.receipt.safety?.code]),
+        );
+      expect(codes(listed)).toMatchObject({
+        list_apps: "read_completed",
+        list_windows: "read_completed",
+      });
+      const partial = yield* cell(cut.host, "await screen.discover(); return 1;");
+      expect(codes(partial)).toMatchObject({
+        list_apps: "read_indeterminate",
+        list_windows: "read_completed",
+      });
+    });
+  },
+);

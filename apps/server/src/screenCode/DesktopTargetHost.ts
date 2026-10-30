@@ -433,7 +433,11 @@ export const createDesktopTargetHost = (deps: {
         created.boundWindows = parseWindowList(driverValue(windowsReply), pid);
         created.boundInCellId = context.cellId;
       }
-      return { value: ref, category: "unverifiable" };
+      return {
+        value: ref,
+        category: "confirmed",
+        evidence: [`Window ${requestedWindow} of pid ${pid} is in the driver's window list`],
+      };
     },
   );
   const bindWindow = makeBindWindow({

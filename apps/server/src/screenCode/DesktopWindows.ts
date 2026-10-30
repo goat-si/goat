@@ -638,8 +638,13 @@ export const withHolders = Effect.fn("DesktopWindows.withHolders")(function* (
   const key = call.method === "list_apps" ? "apps" : "windows";
   const listed = object(value);
   const rows = listed?.[key];
-  const answer = (next: unknown) => ({ value: next, category: "unverifiable" as const });
-  if (!listed || !Array.isArray(rows)) return answer(value);
+  if (!listed || !Array.isArray(rows)) return { value, category: "unverifiable" as const };
+  // The driver answered with its list: a completed read, whether or not holders are known.
+  const answer = (next: unknown) => ({
+    value: next,
+    category: "confirmed" as const,
+    evidence: [`The driver listed ${rows.length} ${key}`],
+  });
   const unknown = { ...listed, holdersUnknown: true };
   const holders = leases.appHolders
     ? yield* leases.appHolders(context.invocation.thread.threadId)
