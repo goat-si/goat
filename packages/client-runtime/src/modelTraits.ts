@@ -175,3 +175,59 @@ export function buildTraitsTriggerDisplay(input: {
   }
   return { label: labels.join(" · ") };
 }
+
+type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
+
+// A slider claims an order; choices outside this ladder, or out of order, keep the list picker.
+const REASONING_LEVEL_RANK: ReadonlyMap<string, number> = new Map([
+  ["none", 0],
+  ["off", 0],
+  ["minimal", 1],
+  ["low", 2],
+  ["medium", 3],
+  ["high", 4],
+  ["xhigh", 5],
+  ["max", 6],
+  ["ultra", 7],
+  ["ultracode", 8],
+  ["ultrathink", 9],
+]);
+
+const REASONING_SLIDER_DESCRIPTOR_IDS: ReadonlySet<string> = new Set(
+  [...REASONING_SELECT_DESCRIPTOR_IDS].filter((id) => id !== "variant"),
+);
+
+export function isReasoningSliderDescriptor(
+  descriptor: ProviderOptionDescriptor,
+): descriptor is SelectDescriptor {
+  if (
+    descriptor.type !== "select" ||
+    !REASONING_SLIDER_DESCRIPTOR_IDS.has(descriptor.id) ||
+    descriptor.options.length < 2
+  ) {
+    return false;
+  }
+  let previousRank = -1;
+  for (const option of descriptor.options) {
+    const rank = REASONING_LEVEL_RANK.get(option.id);
+    if (rank === undefined || rank <= previousRank) return false;
+    previousRank = rank;
+  }
+  return true;
+}
+
+/** Null when the current value is not one of the stops, so the caller keeps the list picker. */
+export function reasoningSliderPosition(
+  descriptor: SelectDescriptor,
+  currentValue: string | boolean | undefined,
+): { readonly index: number; readonly defaultIndex: number | null } | null {
+  const defaultIndex = descriptor.options.findIndex((option) => option.isDefault === true);
+  const index =
+    currentValue === undefined
+      ? defaultIndex
+      : typeof currentValue === "string"
+        ? descriptor.options.findIndex((option) => option.id === currentValue)
+        : -1;
+  if (index === -1) return null;
+  return { index, defaultIndex: defaultIndex === -1 ? null : defaultIndex };
+}
