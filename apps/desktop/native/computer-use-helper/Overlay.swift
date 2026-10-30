@@ -19,6 +19,8 @@ final class AgentOverlayView: NSView {
     didSet { if showsBorder != oldValue { needsDisplay = true } }
   }
 
+  var statusText = "" { didSet { if statusText != oldValue { needsDisplay = true } } }
+
   private let accent = NSColor(srgbRed: 0.27, green: 0.52, blue: 1.0, alpha: 1)
 
   override func draw(_ dirtyRect: NSRect) {
@@ -27,6 +29,19 @@ final class AgentOverlayView: NSView {
     glow.lineWidth = acting ? 4 : 2
     accent.withAlphaComponent(acting ? 0.9 : 0.45).setStroke()
     glow.stroke()
+    if !statusText.isEmpty {
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+        .foregroundColor: NSColor.white,
+      ]
+      let label = NSAttributedString(string: statusText, attributes: attributes)
+      let size = label.size()
+      let box = NSRect(x: windowRect.minX + 8, y: windowRect.maxY - size.height - 14,
+        width: size.width + 16, height: size.height + 8)
+      NSColor.black.withAlphaComponent(0.8).setFill()
+      NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
+      label.draw(at: NSPoint(x: box.minX + 8, y: box.minY + 4))
+    }
   }
 }
 
@@ -87,6 +102,7 @@ final class AgentOverlay {
     })
   private var settledPoint: CGPoint?
   private var reducedMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+  var escapeAvailable = false
   private var currentPhase = "resting"
   private var motionObserver: NSObjectProtocol?
 
@@ -162,6 +178,10 @@ final class AgentOverlay {
     {
       point = CGPoint(x: fx, y: fy)
     }
+    let pid = command["pid"] as? Int
+    let app = pid.flatMap { NSRunningApplication(processIdentifier: pid_t($0))?.localizedName } ?? "an app"
+    let stopHint = escapeAvailable ? "press Esc to stop" : "use Stop in GOAT"
+    view.statusText = "GOAT is using \(app) — \(stopHint)"
     let phase = command["phase"] as? String ?? "resting"
     currentPhase = phase
     view.acting = phase == "acting" || phase == "moving"
@@ -346,6 +366,7 @@ final class OverlayChannel: SessionOverlay {
     })
     self.input = input
     input.start()
+    overlay.escapeAvailable = input.escapeAvailable
     let overlay = self.overlay
     Thread.detachNewThread { [self] in
       var buffer = [UInt8]()
