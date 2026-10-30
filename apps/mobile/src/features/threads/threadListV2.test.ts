@@ -1588,20 +1588,17 @@ describe("Working section beta", () => {
   const ids = (layout: ReturnType<typeof buildThreadListV2Items>) =>
     layout.items.map((item) => item.thread.id);
 
-  it("folds unpinned working threads into a collapsed shelf", () => {
+  it("ranks running work into Priority, as the web sidebar does, and leaves the shelf empty", () => {
     const layout = build();
     expect(ids(layout)).toEqual([
-      "pinned-working",
-      "finished-late",
       "asks-approval",
+      "pinned-working",
+      "working",
+      "finished-late",
       "finished-early",
     ]);
-    expect(layout.workingCount).toBe(1);
-    expect(layout.workingShelfHeaderIndex).toBe(4);
-
-    const off = build({ workingShelfEnabled: false });
-    expect(ids(off)).toContain("working");
-    expect(off.workingCount).toBe(0);
+    expect(layout.priorityCount).toBe(3);
+    expect(layout.workingCount).toBe(0);
   });
 
   it("keeps an inactive row in Working during the shared grace and returns it on expiry", () => {
@@ -1637,14 +1634,14 @@ describe("Working section beta", () => {
       inboxReturnAt: (thread) =>
         thread.id === "finished-early" ? Date.parse("2026-06-01T04:00:00.000Z") : undefined,
     });
-    expect(ids(layout).slice(1)).toEqual(["finished-early", "finished-late", "asks-approval"]);
+    expect(ids(layout).slice(layout.priorityCount)).toEqual(["finished-early", "finished-late"]);
   });
 
   it("places the shelf after queued tasks and before snoozed and settled threads", () => {
     const layout = buildThreadListV2Items({
       threads: [
         makeThread({ id: ThreadId.make("active"), title: "active" }),
-        makeThread({ id: ThreadId.make("working"), title: "working", runtime: running }),
+        makeThread({ id: ThreadId.make("working"), title: "working" }),
         makeThread({
           id: ThreadId.make("snoozed"),
           title: "snoozed",
@@ -1664,11 +1661,13 @@ describe("Working section beta", () => {
       now: NOW,
       workingShelfEnabled: true,
       workingShelfExpanded: true,
+      isWorking: (thread) => thread.id === "working",
       snoozedShelfExpanded: true,
     });
     const items = buildThreadListV2ListItems({
       items: layout.items,
       pendingTasks: [makePendingTask("queued")],
+      priorityCount: layout.priorityCount,
       workingCount: layout.workingCount,
       workingShelfExpanded: true,
       workingShelfHeaderIndex: layout.workingShelfHeaderIndex,

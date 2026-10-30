@@ -159,6 +159,10 @@ can change, **Clear read threads** appears beside its menu. It marks those unrea
 moves all of them out of Priority at once. Work in progress, pending requests, and unread threads
 on connections you cannot change stay. Nothing is archived or deleted.
 
+On mobile, **Priority** leads the thread list on the home screen and in the iPad sidebar, and holds
+the same threads. A thread you read stays there while the list is open; choose **Clear read
+threads** or **Mark all as read** from the menu beside **Priority** to move read threads out.
+
 ### Answer waiting decisions
 
 Open **Decisions** at the top of the thread sidebar, or search for it in the command palette,
@@ -269,13 +273,10 @@ stay reachable from the command palette or Settings.
 
 ### Working threads
 
-Threads that are working or waiting on work they will resume from move into a collapsed
-**Working** section below the active list. A thread returns to the top of the active list when it
-finishes, fails, or needs an approval or answer. The Working section lists the thread you last
-sent work to first. Pinned threads stay in the pinned section.
-
-While this is on, the active list is ordered by when each thread last came back to you, so you
-cannot drag or move threads within it. Your saved order returns when you turn it off.
+Threads that are working or waiting on work they will resume from sit in **Priority**, with a
+spinner on their row. With **Working section** on, in **Settings → Beta** on web and desktop or
+**Settings → Threads** on mobile, the active list is ordered by when each thread last came back to
+you, so you cannot drag or move threads within it. Your saved order returns when you turn it off.
 
 ## Settle finished work
 

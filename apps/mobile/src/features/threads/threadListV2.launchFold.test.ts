@@ -204,12 +204,12 @@ describe("mobile thread list launch folds", () => {
     expect(liftedThreadListV2Status("ready", "working")).toBe("ready");
   });
 
-  it("keeps a launch group with its launcher at a shelf boundary", () => {
+  it("keeps a launch group with its launcher at a section boundary", () => {
     const layout = layoutOf(
       [
-        shell("launcher"),
+        shell("launcher", { running: true }),
         shell("done", { launchedBy: "launcher" }),
-        shell("busy-elsewhere", { running: true }),
+        shell("idle-elsewhere"),
       ],
       { workingShelfEnabled: true, workingShelfExpanded: true },
     );
@@ -217,14 +217,12 @@ describe("mobile thread list launch folds", () => {
       items: layout.items,
       launchMarkers: layout.launchMarkers,
       pendingTasks: [],
-      workingCount: layout.workingCount,
-      workingShelfExpanded: true,
-      workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+      priorityCount: layout.priorityCount,
     });
     expect(list.map((item) => item.type)).toEqual([
+      "v2-priority-header",
       "v2-thread",
       "v2-launch-group",
-      "v2-working-shelf",
       "v2-thread",
     ]);
   });

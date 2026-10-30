@@ -16,18 +16,14 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useVisibleSecondClock } from "./use-visible-second-clock";
 import type { ThreadMoveDestination } from "./threadOrder";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
-import {
-  formatWorkingDurationLabel,
-  resolveThreadWorkingStartedAt,
-} from "@goat/client-runtime/state/models";
+import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
 import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@goat/contracts";
 import { canSnooze } from "@goat/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
-import { memo, useCallback, useMemo, useState, type ComponentProps } from "react";
+import { memo, useCallback, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
@@ -75,6 +71,8 @@ import { liftedThreadListV2Status, type LaunchLift } from "./threadListV2LaunchF
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
+import { ThreadListV2Duration } from "./thread-list-pane-clock";
+import { ThreadListV2RowOrigin, ThreadListV2WorkingSpinner } from "./thread-list-v2-row-meta";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -141,15 +139,9 @@ const DONE_STATUS_LABEL: StatusLabel = {
   iconTintClassName: "accent-adaptive-emerald-700-300",
 };
 
-function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
-  const startedAtMs = Date.parse(props.startedAt ?? "");
-  const nowMs = useVisibleSecondClock(Number.isFinite(startedAtMs));
-  if (!Number.isFinite(startedAtMs)) return null;
-  return ` ${formatWorkingDurationLabel(nowMs - startedAtMs)}`;
-}
-
-function ThreadListV2Section(props: {
+export function ThreadListV2Section(props: {
   readonly label: string;
+  readonly trailing?: ReactNode;
   readonly pane?: "screen" | "sidebar";
   readonly tone?: "default" | "snoozed";
   readonly disclosure?: {
@@ -201,6 +193,7 @@ function ThreadListV2Section(props: {
           style={{ transform: [{ rotate: props.disclosure.expanded ? "180deg" : "0deg" }] }}
         />
       ) : null}
+      {props.trailing}
     </>
   );
 
@@ -668,7 +661,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
 
-  const canUnsettle = variant === "slim";
+  // A settled thread lifted into Priority shows as a card but still un-settles.
+  const canUnsettle =
+    variant === "slim" || (props.settlementSupported && thread.settledOverride === "settled");
   // The gate's only time-dependent edge is the queued-turn grace window, so its
   // expiry is known without a clock: evaluate at the message's own timestamp.
   // A gate held by runtime status has no expiry, and no clock tick opens it.
@@ -680,6 +675,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const snoozeGateNow = new Date(snoozeGateNowMs).toISOString();
   const swipeActions = resolveThreadListV2SwipeActions({
     variant,
+    settled: thread.settledOverride === "settled",
     settlementSupported: props.settlementSupported,
     snoozeSupported: props.snoozeSupported,
     snoozable: canSnooze(thread, { now: snoozeGateNow }),
@@ -1026,17 +1022,27 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </Pressable>
           ) : statusLabel ? (
             <View className="flex-row items-center gap-1">
-              <SymbolView
-                name={statusLabel.icon}
-                size={13}
-                tintColorClassName={
-                  selected
-                    ? selectedThreadRowColors.iconTintClassName
-                    : statusLabel.iconTintClassName
-                }
-                type="monochrome"
-                weight="semibold"
-              />
+              {status === "working" ? (
+                <ThreadListV2WorkingSpinner
+                  tintClassName={
+                    selected
+                      ? selectedThreadRowColors.iconTintClassName
+                      : statusLabel.iconTintClassName
+                  }
+                />
+              ) : (
+                <SymbolView
+                  name={statusLabel.icon}
+                  size={13}
+                  tintColorClassName={
+                    selected
+                      ? selectedThreadRowColors.iconTintClassName
+                      : statusLabel.iconTintClassName
+                  }
+                  type="monochrome"
+                  weight="semibold"
+                />
+              )}
               <Text
                 className={cn(
                   "text-xs font-goat-bold",
@@ -1045,10 +1051,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 )}
               >
                 {statusLabel.label}
-                {status === "working" ? (
-                  <ThreadListV2Duration startedAt={resolveThreadWorkingStartedAt(thread)} />
-                ) : status === "waiting" ? (
-                  <ThreadListV2Duration startedAt={thread.latestRun?.completedAt ?? null} />
+                {status === "working" || status === "waiting" ? (
+                  <ThreadListV2Duration
+                    startedAt={
+                      status === "working"
+                        ? resolveThreadWorkingStartedAt(thread)
+                        : (thread.latestRun?.completedAt ?? null)
+                    }
+                  />
                 ) : null}
               </Text>
             </View>
@@ -1091,33 +1101,17 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {thread.runtime.lastError}
           </Text>
-        ) : props.environmentLabel ? (
-          <View className="min-w-0 flex-1 flex-row items-center gap-1">
-            {props.environmentMachine ? (
-              <EnvironmentMachineSymbol
-                kind={props.environmentMachine}
-                size={11}
-                tintColorClassName={
-                  selected
-                    ? selectedThreadRowColors.mutedIconTintClassName
-                    : rowAppearance.tertiaryIconTintClassName
-                }
-              />
-            ) : null}
-            <Text
-              className={cn(
-                "shrink text-xs",
-                selected
-                  ? selectedThreadRowColors.mutedForegroundClassName
-                  : rowAppearance.tertiaryForegroundClassName,
-              )}
-              numberOfLines={1}
-            >
-              {props.environmentLabel}
-            </Text>
-          </View>
         ) : (
-          <View className="flex-1" />
+          <ThreadListV2RowOrigin
+            thread={thread}
+            project={props.project}
+            className={cn(
+              "min-w-0 flex-1",
+              selected
+                ? selectedThreadRowColors.mutedForegroundClassName
+                : rowAppearance.tertiaryForegroundClassName,
+            )}
+          />
         )}
         {pr ? (
           <Pressable
@@ -1158,6 +1152,32 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               {pr.label}
             </Text>
           </Pressable>
+        ) : null}
+        {props.environmentLabel ? (
+          <View className="min-w-0 max-w-[40%] flex-row items-center gap-1">
+            {props.environmentMachine ? (
+              <EnvironmentMachineSymbol
+                kind={props.environmentMachine}
+                size={11}
+                tintColorClassName={
+                  selected
+                    ? selectedThreadRowColors.mutedIconTintClassName
+                    : rowAppearance.tertiaryIconTintClassName
+                }
+              />
+            ) : null}
+            <Text
+              className={cn(
+                "shrink text-xs",
+                selected
+                  ? selectedThreadRowColors.mutedForegroundClassName
+                  : rowAppearance.tertiaryForegroundClassName,
+              )}
+              numberOfLines={1}
+            >
+              {props.environmentLabel}
+            </Text>
+          </View>
         ) : null}
         {providerInstance ? (
           <View className="flex-row items-center">
@@ -1289,6 +1309,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   ? "Archived, restores on open"
                   : "Tool history deleted"}
               </Text>
+            ) : !props.searchMatch ? (
+              <ThreadListV2RowOrigin
+                thread={thread}
+                project={props.project}
+                className={
+                  selected
+                    ? selectedThreadRowColors.mutedForegroundClassName
+                    : rowAppearance.tertiaryForegroundClassName
+                }
+              />
             ) : null}
             {props.searchMatch ? (
               <ThreadSearchMatchExcerpt

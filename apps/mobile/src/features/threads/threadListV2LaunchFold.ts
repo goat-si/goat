@@ -1,6 +1,7 @@
 import {
   foldLaunchedThreads,
   LAUNCH_GROUP_CHILD_LIMIT,
+  liftedPriorityRank,
   launchGroupSummaryText,
   shownLaunchChildren,
   summarizeLaunchGroup,
@@ -9,11 +10,18 @@ import {
   type LaunchLift,
 } from "@goat/client-runtime/state/launch-fold";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import {
+  hasUnseenCompletion as threadHasUnseenCompletion,
+  resolveThreadPriorityRank,
+  type ThreadPriorityRank,
+} from "@goat/client-runtime/state/thread-list-priority";
 import { effectiveSnoozed, threadWokeAt } from "@goat/client-runtime/state/thread-settled";
 import type { EnvironmentId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
 
-export { LAUNCH_GROUP_CHILD_LIMIT, type LaunchLift };
+import { heldPriorityKeys } from "./threadListV2PriorityHolds";
+
+export { LAUNCH_GROUP_CHILD_LIMIT, threadHasUnseenCompletion, type LaunchLift };
 
 /** A subagent's identity, enough to find the row that owns a thread it launched. */
 export type LaunchSubagentRow = Pick<EnvironmentThreadShell, "environmentId" | "id" | "lineage">;
@@ -58,24 +66,6 @@ export function projectLaunchSubagentRows(
   return same ? previous : next;
 }
 
-export function threadHasUnseenCompletion(
-  thread: Pick<
-    EnvironmentThreadShell,
-    "latestRun" | "lastVisitedAt" | "notificationCompletedAt" | "markedUnreadCompletionAt"
-  >,
-): boolean {
-  const automatic =
-    thread.notificationCompletedAt === undefined
-      ? thread.latestRun?.completedAt
-      : thread.notificationCompletedAt;
-  const times = [automatic, thread.markedUnreadCompletionAt]
-    .map((at) => Date.parse(at ?? ""))
-    .filter(Number.isFinite);
-  if (times.length === 0 || !thread.lastVisitedAt) return false;
-  const visited = Date.parse(thread.lastVisitedAt);
-  return Number.isNaN(visited) || Math.max(...times) > visited;
-}
-
 export function resolveThreadListV2WokeAt(
   thread: EnvironmentThreadShell,
   options: { readonly now: string },
@@ -117,6 +107,21 @@ export function threadListV2Settled(
  * finished thread is unread when its own row would show it unread; settled ones count, as in
  * the web's Priority.
  */
+/** A row's Priority rank, as the web sidebar ranks it: requests, running work, then unread. */
+export function threadListV2PriorityRank(
+  thread: EnvironmentThreadShell,
+  lift: LaunchLift | undefined,
+  lifecycle: ThreadListV2Lifecycle,
+): ThreadPriorityRank | null {
+  if (threadListV2Snoozed(thread, lifecycle)) return null;
+  const rank = resolveThreadPriorityRank({
+    thread,
+    wokeAt: resolveThreadListV2WokeAt(thread, { now: lifecycle.now }),
+    hasChildAttention: false,
+  });
+  return liftedPriorityRank(rank, lift);
+}
+
 export function foldThreadListV2(input: {
   readonly listed: readonly EnvironmentThreadShell[];
   /** Threads that may launch work without a row of their own; subagents, for the home list. */
@@ -143,13 +148,15 @@ export function foldThreadListV2(input: {
   });
 }
 
-/** Rows the ordered sections leave out: folded threads, and lifted rows placed by urgency. */
+/** Rows the ordered sections leave out: folded threads, and Priority rows placed by urgency. */
 export function launchReorderExcludedKeys(
   fold: Pick<LaunchFold<EnvironmentThreadShell>, "folded" | "roots" | "liftByKey">,
+  lifecycle: ThreadListV2Lifecycle,
 ): ReadonlySet<string> {
   const keys = new Set(fold.folded.map(keyOf));
   for (const root of fold.roots) {
-    if (root.pinnedAt == null && fold.liftByKey.has(keyOf(root))) keys.add(keyOf(root));
+    if (threadListV2PriorityRank(root, fold.liftByKey.get(keyOf(root)), lifecycle) !== null)
+      keys.add(keyOf(root));
   }
   return keys;
 }
@@ -167,8 +174,11 @@ export function threadListV2ReorderExcludedKeys(
     /** Subagent rows when `threads` leaves them out. */
     readonly owners?: readonly LaunchSubagentRow[] | undefined;
     readonly hiddenBotThreadKeys?: ReadonlySet<string> | undefined;
+    /** The list asking, which leaves its own Priority rows out itself. */
+    readonly listId?: string | undefined;
   },
 ): ReadonlySet<string> {
+  const held = heldPriorityKeys(input.listId);
   const args = [
     input.threads,
     input.owners,
@@ -177,6 +187,7 @@ export function threadListV2ReorderExcludedKeys(
     input.settlementEnvironmentIds,
     input.snoozeEnvironmentIds,
     input.queuedThreadKeys,
+    held,
   ];
   if (
     args.length === lastExcludedInput.length &&
@@ -191,27 +202,14 @@ export function threadListV2ReorderExcludedKeys(
       input.hiddenBotThreadKeys?.has(keyOf(thread)) !== true,
   );
   lastExcludedInput = args;
-  lastExcludedKeys = launchReorderExcludedKeys(
-    foldThreadListV2({ listed, owners: input.owners ?? input.threads, lifecycle: input }),
-  );
+  lastExcludedKeys = new Set([
+    ...launchReorderExcludedKeys(
+      foldThreadListV2({ listed, owners: input.owners ?? input.threads, lifecycle: input }),
+      input,
+    ),
+    ...held,
+  ]);
   return lastExcludedKeys;
-}
-
-const LIFT_ORDER: Record<LaunchLift, number> = { approval: 0, input: 1, working: 2, unseen: 3 };
-
-/** Lifted rows lead the active list, people first, then running work, then unread. */
-export function sortLiftedThreads(
-  threads: readonly EnvironmentThreadShell[],
-  liftByKey: ReadonlyMap<string, LaunchLift>,
-): EnvironmentThreadShell[] {
-  return threads
-    .map((thread, index) => ({
-      thread,
-      index,
-      rank: LIFT_ORDER[liftByKey.get(keyOf(thread)) ?? "unseen"],
-    }))
-    .sort((left, right) => left.rank - right.rank || left.index - right.index)
-    .map((entry) => entry.thread);
 }
 
 /** A row's status with a request waiting in work folded under it; its own requests come first. */

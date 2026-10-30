@@ -1,5 +1,4 @@
 import {
-  canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
   pickSnoozePreset,
@@ -23,8 +22,15 @@ import {
   sortWorkingThreadsBySend,
 } from "@goat/client-runtime/state/thread-inbox";
 import {
+  holdThreadPriorityRank,
+  resolveThreadListSection,
+  resolveThreadListStatus,
+  type ThreadListStatus,
+  type ThreadPriorityHolds,
+} from "@goat/client-runtime/state/thread-list-priority";
+import {
   sortActiveThreadsByOrderKey,
-  resolveSettledThreadTimestamp,
+  sortByRankThenPrompt,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@goat/client-runtime/state/thread-sort";
@@ -32,10 +38,6 @@ import type { EnvironmentId, ProjectId, SnoozePresetSetting } from "@goat/contra
 import { isSideChatThread } from "@goat/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
-import type { ThreadMoveAvailability } from "./threadOrder";
-
-import { relativeTime } from "../../lib/time";
-import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
 import {
   applyPendingThreadOrder,
@@ -45,19 +47,21 @@ import {
 import {
   appendWithLaunchChildren,
   foldThreadListV2,
-  liftedThreadListV2Status,
   resolveThreadListV2WokeAt,
-  sortLiftedThreads,
   threadHasUnseenCompletion,
+  threadListV2PriorityRank,
   threadListV2Settled,
   threadListV2Snoozed,
   type LaunchLift,
   type LaunchSubagentRow,
-  type ThreadListV2LaunchGroupEntry,
   type ThreadListV2LaunchGroupState,
   type ThreadListV2LaunchMarker,
 } from "./threadListV2LaunchFold";
-import { launchAncestorKeys, launchRootKey } from "@goat/client-runtime/state/launch-fold";
+import {
+  foldedUnseenUnder,
+  launchAncestorKeys,
+  launchRootKey,
+} from "@goat/client-runtime/state/launch-fold";
 
 export { resolveThreadListV2WokeAt, snoozeWakeLabel, threadHasUnseenCompletion };
 
@@ -79,15 +83,8 @@ export function resolveThreadListV2ProviderDrivers(
   return currentDriver === undefined ? [] : drivers;
 }
 
-export type ThreadListV2Status =
-  | "approval"
-  | "input"
-  | "request"
-  | "working"
-  | "waiting"
-  | "failed"
-  | "limited"
-  | "ready";
+export type ThreadListV2Status = ThreadListStatus;
+export const resolveThreadListV2Status = resolveThreadListStatus;
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 export type ThreadListV2SnoozePresetSettings = ReadonlyArray<SnoozePresetSetting> | undefined;
 
@@ -125,6 +122,8 @@ export function resolveThreadListV2SwipeActions(input: {
   readonly snoozeSupported: boolean;
   readonly snoozable: boolean;
   readonly snoozed?: boolean;
+  /** Settled, though a Priority row shows it as a card. */
+  readonly settled?: boolean;
 }): {
   readonly primary: Exclude<ThreadListV2SwipeAction, "snooze">;
   readonly secondary: "snooze" | null;
@@ -133,7 +132,7 @@ export function resolveThreadListV2SwipeActions(input: {
     return { primary: "unsnooze", secondary: null };
   }
   const primary = input.settlementSupported
-    ? input.variant === "slim"
+    ? input.variant === "slim" || input.settled === true
       ? "unsettle"
       : "settle"
     : "archive";
@@ -177,6 +176,8 @@ export function nextSnoozeWakeAfter(
   return next;
 }
 
+const NO_PRIORITY_HOLDS: ThreadPriorityHolds = new Map();
+
 export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
@@ -192,45 +193,6 @@ export function canMarkThreadUnread(
     thread.latestRun?.completedAt != null &&
     !threadHasUnseenCompletion(thread)
   );
-}
-
-export function resolveThreadListV2Status(
-  thread: Pick<
-    EnvironmentThreadShell,
-    | "hasPendingApprovals"
-    | "hasPendingUserInput"
-    | "pendingSubagentRequest"
-    | "pendingGuestMessageCount"
-    | "runtime"
-    | "blockedOnThreadWait"
-  >,
-): ThreadListV2Status {
-  if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
-    return "approval";
-  }
-  if (thread.hasPendingUserInput || thread.pendingSubagentRequest === "user_input") {
-    return "input";
-  }
-  // A guest is waiting on the owner; the agent's own requests come first.
-  if ((thread.pendingGuestMessageCount ?? 0) > 0) {
-    return "request";
-  }
-  if (thread.runtime?.status === "running" && thread.blockedOnThreadWait === true) {
-    return "waiting";
-  }
-  if (
-    thread.runtime !== null &&
-    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
-  ) {
-    return "working";
-  }
-  if (thread.runtime?.status === "idle") {
-    return "waiting";
-  }
-  if (thread.runtime?.status === "failed") {
-    return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
-  }
-  return "ready";
 }
 
 function parseTimestampMs(isoDate: string): number {
@@ -312,8 +274,19 @@ export interface ThreadListV2Item {
   readonly lift?: LaunchLift | null;
 }
 
+/** An unread thread folded under a Priority row; Priority's read actions read it with the row. */
+export interface ThreadListV2FoldedUnseen {
+  readonly rowKey: string;
+  readonly thread: EnvironmentThreadShell;
+}
+
 export interface ThreadListV2Layout {
   readonly items: ThreadListV2Item[];
+  /** Items at the start of `items` that sit in Priority, launch children included. */
+  readonly priorityCount: number;
+  /** Priority's rows in order; null while searching, which lists matches without sections. */
+  readonly priorityThreads: ReadonlyArray<EnvironmentThreadShell> | null;
+  readonly priorityFoldedUnseen: ReadonlyArray<ThreadListV2FoldedUnseen>;
   /** Launch group lines and "+N more", each after the row it follows, in order. */
   readonly launchMarkers?: readonly ThreadListV2LaunchMarker[];
   readonly hiddenSettledCount: number;
@@ -335,332 +308,20 @@ export interface ThreadListV2Layout {
   readonly launchRouteAncestorKeys: readonly string[];
 }
 
-export interface ThreadListV2ThreadListItem {
-  readonly type: "v2-thread";
-  readonly key: string;
-  readonly item: ThreadListV2Item;
-  readonly snoozeWakeLabelText: string | undefined;
-  readonly timeLabel: string;
-  readonly snoozePresetMinute: string | undefined;
-  readonly showTrailingDivider: boolean;
-  /** Include queued state in item equality; outbox writes do not update thread shells. */
-  readonly hasQueuedMessages: boolean;
-  readonly canMoveUp: boolean;
-  readonly canMoveDown: boolean;
-}
-
-export interface ThreadListV2PendingListItem {
-  readonly type: "v2-pending";
-  readonly key: string;
-  readonly pendingTask: PendingNewTask;
-  readonly showPendingDivider: boolean;
-  readonly showTrailingDivider: boolean;
-}
-
-export interface ThreadListV2WorkingShelfListItem {
-  readonly type: "v2-working-shelf";
-  readonly key: "v2-working-shelf";
-  readonly count: number;
-  readonly expanded: boolean;
-  readonly disabled: boolean;
-}
-
-export interface ThreadListV2SnoozedShelfListItem {
-  readonly type: "v2-snoozed-shelf";
-  readonly key: "v2-snoozed-shelf";
-  readonly count: number;
-  readonly expanded: boolean;
-  /** Include disabled state in item equality; recycled cells ignore render-closure updates. */
-  readonly disabled: boolean;
-}
-
-export interface ThreadListV2SettledShelfListItem {
-  readonly type: "v2-settled-shelf";
-  readonly key: "v2-settled-shelf";
-  readonly count: number;
-  readonly expanded: boolean;
-  readonly disabled: boolean;
-}
-
-export interface ThreadListV2LaunchGroupListItem {
-  readonly type: "v2-launch-group";
-  readonly key: string;
-  readonly parentKey: string;
-  readonly depth: number;
-  readonly label: string;
-  readonly states: ThreadListV2LaunchGroupEntry["states"];
-  readonly expanded: boolean;
-  readonly disabled: boolean;
-}
-
-export interface ThreadListV2LaunchMoreListItem {
-  readonly type: "v2-launch-more";
-  readonly key: string;
-  readonly parentKey: string;
-  readonly depth: number;
-  readonly hidden: number;
-}
-
-export type ThreadListV2ListItem =
-  | ThreadListV2ThreadListItem
-  | ThreadListV2PendingListItem
-  | ThreadListV2WorkingShelfListItem
-  | ThreadListV2SnoozedShelfListItem
-  | ThreadListV2SettledShelfListItem
-  | ThreadListV2LaunchGroupListItem
-  | ThreadListV2LaunchMoreListItem;
-
-export function isThreadListV2ListItem(value: {
-  readonly type: string;
-}): value is ThreadListV2ListItem {
-  return (
-    value.type === "v2-thread" ||
-    value.type === "v2-pending" ||
-    value.type === "v2-working-shelf" ||
-    value.type === "v2-snoozed-shelf" ||
-    value.type === "v2-settled-shelf" ||
-    value.type === "v2-launch-group" ||
-    value.type === "v2-launch-more"
-  );
-}
-
-/** Compare rebuilt items by content so minute ticks and partition runs do not re-render every mounted row. */
-export function threadListV2ListItemsAreEqual(
-  previous: ThreadListV2ListItem,
-  item: ThreadListV2ListItem,
-): boolean {
-  switch (item.type) {
-    case "v2-thread":
-      return (
-        previous.type === "v2-thread" &&
-        previous.key === item.key &&
-        previous.item.thread === item.item.thread &&
-        previous.item.variant === item.item.variant &&
-        previous.item.snoozed === item.item.snoozed &&
-        previous.item.pinned === item.item.pinned &&
-        previous.item.wokeAt === item.item.wokeAt &&
-        (previous.item.depth ?? 0) === (item.item.depth ?? 0) &&
-        (previous.item.lift ?? null) === (item.item.lift ?? null) &&
-        previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
-        previous.timeLabel === item.timeLabel &&
-        previous.snoozePresetMinute === item.snoozePresetMinute &&
-        previous.showTrailingDivider === item.showTrailingDivider &&
-        previous.hasQueuedMessages === item.hasQueuedMessages &&
-        previous.canMoveUp === item.canMoveUp &&
-        previous.canMoveDown === item.canMoveDown
-      );
-    case "v2-pending":
-      return (
-        previous.type === "v2-pending" &&
-        previous.key === item.key &&
-        previous.pendingTask === item.pendingTask &&
-        previous.showPendingDivider === item.showPendingDivider &&
-        previous.showTrailingDivider === item.showTrailingDivider
-      );
-    case "v2-working-shelf":
-      return (
-        previous.type === "v2-working-shelf" &&
-        previous.count === item.count &&
-        previous.expanded === item.expanded &&
-        previous.disabled === item.disabled
-      );
-    case "v2-snoozed-shelf":
-      return (
-        previous.type === "v2-snoozed-shelf" &&
-        previous.count === item.count &&
-        previous.expanded === item.expanded &&
-        previous.disabled === item.disabled
-      );
-    case "v2-settled-shelf":
-      return (
-        previous.type === "v2-settled-shelf" &&
-        previous.count === item.count &&
-        previous.expanded === item.expanded &&
-        previous.disabled === item.disabled
-      );
-    case "v2-launch-group":
-      return (
-        previous.type === "v2-launch-group" &&
-        previous.key === item.key &&
-        previous.depth === item.depth &&
-        previous.label === item.label &&
-        previous.expanded === item.expanded &&
-        previous.disabled === item.disabled &&
-        previous.states.length === item.states.length &&
-        previous.states.every((state, index) => state === item.states[index])
-      );
-    case "v2-launch-more":
-      return (
-        previous.type === "v2-launch-more" &&
-        previous.key === item.key &&
-        previous.depth === item.depth &&
-        previous.hidden === item.hidden
-      );
-  }
-}
-
-function resolveThreadListV2ItemTimeLabel(
-  item: ThreadListV2Item,
-  showSnoozeWakeLabel: boolean,
-): string {
-  const { thread, variant, snoozed } = item;
-  if (showSnoozeWakeLabel) return "";
-  if (
-    variant === "card" &&
-    (liftedThreadListV2Status(resolveThreadListV2Status(thread), item.lift) !== "ready" ||
-      item.lift === "unseen" ||
-      item.wokeAt !== null ||
-      threadHasUnseenCompletion(thread))
-  )
-    return "";
-  const settledTimestamp =
-    variant === "slim" && !snoozed ? resolveSettledThreadTimestamp(thread) : null;
-  return relativeTime(
-    settledTimestamp ?? thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
-  );
-}
-
-export function buildThreadListV2ListItems(input: {
-  readonly items: ReadonlyArray<ThreadListV2Item>;
-  readonly launchMarkers?: readonly ThreadListV2LaunchMarker[];
-  readonly pendingTasks: ReadonlyArray<PendingNewTask>;
-  readonly workingCount?: number;
-  readonly workingShelfExpanded?: boolean;
-  readonly workingShelfHeaderIndex?: number | null;
-  readonly snoozedCount?: number;
-  readonly snoozedShelfExpanded?: boolean;
-  readonly snoozedShelfHeaderIndex?: number | null;
-  readonly settledCount?: number;
-  readonly settledShelfExpanded?: boolean;
-  readonly settledShelfHeaderIndex?: number | null;
-  readonly snoozeLabelNow?: string;
-  readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
-  readonly queuedThreadKeys?: ReadonlySet<string>;
-  readonly moveAvailability?: ReadonlyMap<string, ThreadMoveAvailability>;
-  readonly shelfPreferencesLoading?: boolean;
-  /** Launch groups toggle once this device's preferences load. */
-  readonly launchGroupsLoading?: boolean;
-}): ThreadListV2ListItem[] {
-  const queuedThreadKeys = input.queuedThreadKeys?.size ? input.queuedThreadKeys : undefined;
-  const launchLine = ({ entry }: ThreadListV2LaunchMarker): ThreadListV2ListItem =>
-    entry.kind === "launch-group"
-      ? {
-          type: "v2-launch-group",
-          key: `v2-launch-group:${entry.parentKey}`,
-          parentKey: entry.parentKey,
-          depth: entry.depth,
-          label: entry.label,
-          states: entry.states,
-          expanded: entry.expanded,
-          disabled: input.launchGroupsLoading === true,
-        }
-      : {
-          type: "v2-launch-more",
-          key: `v2-launch-more:${entry.parentKey}`,
-          parentKey: entry.parentKey,
-          depth: entry.depth,
-          hidden: entry.hidden,
-        };
-  const markersAfter = new Map<number, ThreadListV2ListItem[]>();
-  for (const marker of input.launchMarkers ?? []) {
-    const lines = markersAfter.get(marker.afterIndex);
-    if (lines === undefined) markersAfter.set(marker.afterIndex, [launchLine(marker)]);
-    else lines.push(launchLine(marker));
-  }
-  const threadRows = input.items.map((item): ThreadListV2ListItem => {
-    const snoozeWakeLabelText =
-      item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
-        ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
-        : undefined;
-    // Put the clock on items so recycler equality limits ticks to rows displaying snooze preset times.
-    const snoozePresetMinute =
-      !item.snoozed &&
-      input.snoozeLabelNow !== undefined &&
-      (input.snoozeEnvironmentIds?.has(item.thread.environmentId) ?? true) &&
-      canSnooze(item.thread, { now: input.snoozeLabelNow })
-        ? input.snoozeLabelNow
-        : undefined;
-    const move =
-      item.variant === "card"
-        ? input.moveAvailability?.get(`${item.thread.environmentId}:${item.thread.id}`)
-        : undefined;
-    return {
-      type: "v2-thread",
-      key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
-      item,
-      snoozeWakeLabelText,
-      timeLabel: resolveThreadListV2ItemTimeLabel(item, snoozeWakeLabelText !== undefined),
-      snoozePresetMinute,
-      showTrailingDivider: false,
-      hasQueuedMessages:
-        queuedThreadKeys?.has(`${item.thread.environmentId}:${item.thread.id}`) === true,
-      canMoveUp: move?.canMoveUp === true,
-      canMoveDown: move?.canMoveDown === true,
-    };
-  });
-  // Each row carries the launch lines after it, so shelf slices keep a group with its launcher.
-  const threadItems = threadRows.map((row, index) => [row, ...(markersAfter.get(index) ?? [])]);
-  const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
-    type: "v2-pending",
-    key: `v2-${pendingTask.key}`,
-    pendingTask,
-    showPendingDivider: index === 0,
-    showTrailingDivider: false,
-  }));
-  const workingCount = input.workingCount ?? 0;
-  const workingShelfHeaderIndex = input.workingShelfHeaderIndex ?? null;
-  const snoozedCount = input.snoozedCount ?? 0;
-  const snoozedShelfHeaderIndex = input.snoozedShelfHeaderIndex ?? null;
-  const settledCount = input.settledCount ?? 0;
-  const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
-  const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const workingEnd = snoozedShelfHeaderIndex ?? snoozedEnd;
-  const activeEnd = workingShelfHeaderIndex ?? workingEnd;
-  const result: ThreadListV2ListItem[] = [
-    ...pendingItems,
-    ...threadItems.slice(0, activeEnd).flat(),
-  ];
-  const shelfDisabled = input.shelfPreferencesLoading === true;
-  if (workingShelfHeaderIndex !== null && workingCount > 0) {
-    result.push({
-      type: "v2-working-shelf",
-      key: "v2-working-shelf",
-      count: workingCount,
-      expanded: input.workingShelfExpanded === true,
-      disabled: shelfDisabled,
-    });
-    result.push(...threadItems.slice(workingShelfHeaderIndex, workingEnd).flat());
-  }
-  if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
-    result.push({
-      type: "v2-snoozed-shelf",
-      key: "v2-snoozed-shelf",
-      count: snoozedCount,
-      expanded: input.snoozedShelfExpanded === true,
-      disabled: shelfDisabled,
-    });
-    result.push(...threadItems.slice(snoozedShelfHeaderIndex, snoozedEnd).flat());
-  }
-  if (settledShelfHeaderIndex !== null && settledCount > 0) {
-    result.push({
-      type: "v2-settled-shelf",
-      key: "v2-settled-shelf",
-      count: settledCount,
-      expanded: input.settledShelfExpanded !== false,
-      disabled: shelfDisabled,
-    });
-    result.push(...threadItems.slice(settledShelfHeaderIndex).flat());
-  }
-  return result.map((entry, index) => {
-    if (entry.type !== "v2-thread" && entry.type !== "v2-pending") return entry;
-    const next = result[index + 1];
-    const showTrailingDivider =
-      next?.type === "v2-thread" || (next?.type === "v2-pending" && !next.showPendingDivider);
-    return showTrailingDivider === entry.showTrailingDivider
-      ? entry
-      : { ...entry, showTrailingDivider };
-  });
-}
+export {
+  buildThreadListV2ListItems,
+  isThreadListV2ListItem,
+  threadListV2ListItemsAreEqual,
+  type ThreadListV2LaunchGroupListItem,
+  type ThreadListV2LaunchMoreListItem,
+  type ThreadListV2ListItem,
+  type ThreadListV2PendingListItem,
+  type ThreadListV2PriorityHeaderListItem,
+  type ThreadListV2SettledShelfListItem,
+  type ThreadListV2SnoozedShelfListItem,
+  type ThreadListV2ThreadListItem,
+  type ThreadListV2WorkingShelfListItem,
+} from "./threadListV2ListItems";
 
 // Immutable shells and field-only sorting make element-identical inputs produce identical output.
 let lastSettledInput: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -718,6 +379,9 @@ export function buildThreadListV2Items(input: {
   readonly launchGroups?: ThreadListV2LaunchGroupState;
   /** Rows every reorder path leaves out (threadListV2ReorderExcludedKeys). */
   readonly reorderExcludedKeys?: ReadonlySet<string>;
+  /** Rows Priority showed last, kept there once read until Clear read releases them. */
+  readonly priorityHolds?: ThreadPriorityHolds;
+  readonly priorityReleases?: ReadonlySet<string>;
 }): ThreadListV2Layout {
   const now = input.now;
   const lifecycle = {
@@ -726,6 +390,10 @@ export function buildThreadListV2Items(input: {
     snoozeEnvironmentIds: input.snoozeEnvironmentIds,
     queuedThreadKeys: input.queuedThreadKeys,
   };
+  // Rows this list holds in Priority are out of the move planner's order, so out of this one too.
+  const heldKeys = [...(input.priorityHolds?.keys() ?? [])].filter(
+    (key) => input.priorityReleases?.has(key) !== true,
+  );
   const pending =
     input.pendingOrder == null
       ? null
@@ -735,7 +403,10 @@ export function buildThreadListV2Items(input: {
             ...input,
             section: input.pendingOrder.section,
             pendingOrder: null,
-            excludedThreadKeys: input.reorderExcludedKeys,
+            excludedThreadKeys:
+              heldKeys.length === 0
+                ? input.reorderExcludedKeys
+                : new Set([...(input.reorderExcludedKeys ?? []), ...heldKeys]),
           }),
         );
   const query = foldSearchQuery(input.searchQuery);
@@ -745,6 +416,8 @@ export function buildThreadListV2Items(input: {
     : null;
 
   const workingShelfEnabled = input.workingShelfEnabled === true;
+  const priority: EnvironmentThreadShell[] = [];
+  const priorityRanks = new Map<string, number>();
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
   const working: EnvironmentThreadShell[] = [];
@@ -785,7 +458,6 @@ export function buildThreadListV2Items(input: {
     rankedMatches === null
       ? foldThreadListV2({ listed: listedThreads, owners: input.launchOwners ?? [], lifecycle })
       : null;
-  const lifted: EnvironmentThreadShell[] = [];
   for (const thread of listedThreads) {
     if (thread.snoozedUntil == null || !threadListV2Snoozed(thread, lifecycle)) continue;
     if (
@@ -804,22 +476,25 @@ export function buildThreadListV2Items(input: {
       if (input.matchedThreadKeys?.has(key) !== true) continue;
       contentOnlyThreadKeys.add(key);
     }
-    if (threadListV2Snoozed(thread, lifecycle)) {
-      snoozed.push(thread);
-      continue;
-    }
-    // Work folded under a row carries it where the web's Priority would: never in a shelf.
-    if (fold?.liftByKey.has(`${thread.environmentId}:${thread.id}`) === true) {
-      (thread.pinnedAt != null ? pinned : lifted).push(thread);
-    } else if (threadListV2Settled(thread, lifecycle)) {
-      settled.push(thread);
-    } else if (thread.pinnedAt != null) {
-      pinned.push(thread);
-    } else if (workingShelfEnabled && (input.isWorking ?? isThreadWorking)(thread)) {
+    const key = `${thread.environmentId}:${thread.id}`;
+    const rank = holdThreadPriorityRank({
+      rank: threadListV2PriorityRank(thread, fold?.liftByKey.get(key), lifecycle),
+      key,
+      settledOverride: thread.settledOverride,
+      holds: input.priorityHolds ?? NO_PRIORITY_HOLDS,
+      released: input.priorityReleases?.has(key) === true,
+    });
+    if (rank !== null) priorityRanks.set(key, rank);
+    const section = resolveThreadListSection({
+      snoozed: threadListV2Snoozed(thread, lifecycle),
+      settled: threadListV2Settled(thread, lifecycle),
+      pinned: thread.pinnedAt != null,
+      priority: rank !== null,
+    });
+    // Web's Working shelf takes only inbox rows; running work ranks into Priority first.
+    if (section === "active" && workingShelfEnabled && (input.isWorking ?? isThreadWorking)(thread))
       working.push(thread);
-    } else {
-      active.push(thread);
-    }
+    else ({ priority, pinned, active, snoozed, settled } as const)[section].push(thread);
   }
 
   if (rankedMatches !== null) {
@@ -829,6 +504,7 @@ export function buildThreadListV2Items(input: {
     const slim = new Set([...snoozed, ...settled]);
     const snoozedThreads = new Set(snoozed);
     const pinnedThreads = new Set(pinned);
+    const priorityThreads = new Set(priority);
     const threadByKey = new Map(
       listedThreads.map((thread) => [
         threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
@@ -845,10 +521,14 @@ export function buildThreadListV2Items(input: {
         thread,
         variant: slim.has(thread) ? "slim" : "card",
         snoozed: snoozedThreads.has(thread),
-        pinned: pinnedThreads.has(thread),
+        pinned:
+          pinnedThreads.has(thread) || (priorityThreads.has(thread) && thread.pinnedAt != null),
         wokeAt: slim.has(thread) ? null : resolveThreadListV2WokeAt(thread, { now }),
         isLast: index === results.length - 1,
       })),
+      priorityCount: 0,
+      priorityThreads: null,
+      priorityFoldedUnseen: [],
       hiddenSettledCount: 0,
       listedSettledThreads: [],
       workingCount: 0,
@@ -951,17 +631,20 @@ export function buildThreadListV2Items(input: {
       pinned: pinnedRow,
       wokeAt: resolveThreadListV2WokeAt(thread, { now }),
     });
+  const priorityKey = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
+  const orderedPriority = sortByRankThenPrompt(
+    priority,
+    (thread) => priorityRanks.get(priorityKey(thread)) ?? 2,
+    priorityKey,
+  );
+  for (const thread of orderedPriority) card(thread, thread.pinnedAt != null);
+  const priorityCount = items.length;
   for (const thread of applyPendingThreadOrder(
     sortPinnedThreadsByOrderKey(pinned),
     "pinned",
     pending,
   )) {
     card(thread, true);
-  }
-  for (const thread of fold === null
-    ? []
-    : sortLiftedThreads(sortThreadsForListV2(lifted), fold.liftByKey)) {
-    card(thread, false);
   }
   for (const thread of orderedActive) card(thread, false);
   const workingShelfHeaderIndex = orderedWorking.length > 0 ? items.length : null;
@@ -981,6 +664,17 @@ export function buildThreadListV2Items(input: {
   return {
     items,
     launchMarkers,
+    priorityCount,
+    priorityThreads: orderedPriority,
+    priorityFoldedUnseen:
+      fold === null
+        ? []
+        : orderedPriority.flatMap((row) =>
+            foldedUnseenUnder(fold, priorityKey(row)).map((thread) => ({
+              rowKey: priorityKey(row),
+              thread,
+            })),
+          ),
     hiddenSettledCount: Math.max(0, settledTotal - pagedSettled.length),
     listedSettledThreads: listedSettled,
     workingCount: orderedWorking.length,

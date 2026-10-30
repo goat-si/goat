@@ -1,7 +1,9 @@
 import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { useMemo, useSyncExternalStore } from "react";
+import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
+import type { ThreadPriorityHolds } from "@goat/client-runtime/state/thread-list-priority";
+import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
@@ -15,6 +17,11 @@ import {
   threadListInboxReturns,
 } from "./threadListV2";
 import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
+import {
+  heldPriorityKeys,
+  publishHeldPriorityKeys,
+  subscribeHeldPriorityKeys,
+} from "./threadListV2PriorityHolds";
 import { computeThreadMoveAvailability } from "./threadOrder";
 import {
   useRevealLaunchGroups,
@@ -34,6 +41,52 @@ function useKeySet(newlineSeparatedKeys: string): ReadonlySet<string> {
 }
 
 type LayoutInput = Parameters<typeof buildThreadListV2Items>[0];
+
+const sameHolds = (left: ThreadPriorityHolds, right: ThreadPriorityHolds) =>
+  left.size === right.size &&
+  [...left].every(([key, settled]) => right.has(key) && right.get(key) === settled);
+
+/**
+ * Priority keeps a row once read, as the web sidebar does, until Clear read or Mark all as read
+ * releases it. Holds last while the list is mounted.
+ */
+function usePriorityHolds() {
+  const listId = useId();
+  const [holds, setHolds] = useState<ThreadPriorityHolds>(() => new Map());
+  const [releases, setReleases] = useState<ReadonlySet<string>>(() => new Set());
+  const heldKeys = [...holds.keys()].sort().join("\n");
+  // oxlint-disable-next-line goat/react-effect-budget -- row menus and Arrange threads plan moves outside React and must skip rows this list holds
+  useEffect(() => {
+    publishHeldPriorityKeys(listId, new Set(heldKeys.length === 0 ? [] : heldKeys.split("\n")));
+    return () => publishHeldPriorityKeys(listId, null);
+  }, [listId, heldKeys]);
+  const observe = (rows: ReadonlyArray<EnvironmentThreadShell> | null) => {
+    if (rows === null) return;
+    const next: ThreadPriorityHolds = new Map(
+      rows.map((thread) => [`${thread.environmentId}:${thread.id}`, thread.settledOverride]),
+    );
+    if (sameHolds(next, holds)) return;
+    setHolds(next);
+    setReleases((current) =>
+      [...current].every((key) => next.has(key))
+        ? current
+        : new Set([...current].filter((key) => next.has(key))),
+    );
+  };
+  return {
+    listId,
+    holds,
+    releases,
+    observe,
+    release: (keys: readonly string[]) => setReleases((current) => new Set([...current, ...keys])),
+    restore: (key: string) =>
+      setReleases((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      }),
+  };
+}
 
 /**
  * Home's and the thread sidebar's thread list. Its result is one value a screen only reads:
@@ -67,6 +120,9 @@ export function useThreadListV2(input: {
   const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
   const launchOwners = useAtomValue(launchSubagentRowsAtom);
   const launchGroups = useThreadListV2LaunchGroups(input.selectedThreadKey);
+  const priority = usePriorityHolds();
+  // Other lists' held rows; this list's own Priority rows come from its layout below.
+  useSyncExternalStore(subscribeHeldPriorityKeys, () => heldPriorityKeys(priority.listId));
   // Folded and lifted rows sit outside the ordered sections on every reorder path.
   const reorderExcludedKeys = threadListV2ReorderExcludedKeys({
     threads,
@@ -76,6 +132,7 @@ export function useThreadListV2(input: {
     settlementEnvironmentIds: input.settlementEnvironmentIds,
     snoozeEnvironmentIds: input.snoozeEnvironmentIds,
     queuedThreadKeys: input.queuedThreadKeys,
+    listId: priority.listId,
   });
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(
@@ -87,32 +144,6 @@ export function useThreadListV2(input: {
     // oxlint-disable-next-line react/memo-dependencies -- the version signals an expired grace
     [threads, workingShelfEnabled, inboxVersion],
   );
-  // Up/down menu availability for every card, computed once per section per
-  // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
-  // list construction quadratic, and this list rebuilds on every minute tick.
-  const sectionAvailability = (section: "pinned" | "active") =>
-    computeThreadMoveAvailability({
-      allThreads: threads,
-      section,
-      pendingOrder: input.pendingOrder,
-      reorderableEnvironmentIds:
-        section === "pinned" ? input.pinReorderEnvironmentIds : input.activeReorderEnvironmentIds,
-      ordered: getThreadListV2OrderedSection({
-        threads,
-        section,
-        pendingOrder: input.pendingOrder,
-        now: input.now,
-        settlementEnvironmentIds: input.settlementEnvironmentIds,
-        snoozeEnvironmentIds: input.snoozeEnvironmentIds,
-        queuedThreadKeys: input.queuedThreadKeys,
-        hiddenBotThreadKeys,
-        excludedThreadKeys: reorderExcludedKeys,
-      }),
-    });
-  const moveAvailability = new Map([
-    ...sectionAvailability("pinned"),
-    ...(workingShelfEnabled ? [] : sectionAvailability("active")),
-  ]);
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
   const scopes = olderSettledScopes(input);
   const olderSettledShelf = useOlderSettledShelf({
@@ -144,6 +175,8 @@ export function useThreadListV2(input: {
     launchOwners,
     launchGroups: launchGroups.state,
     reorderExcludedKeys,
+    priorityHolds: priority.holds,
+    priorityReleases: priority.releases,
     isListedSettled: olderSettledShelf.isListed,
     unloadedSettledCount: olderSettledShelf.unloadedCount(
       threads.filter(
@@ -157,7 +190,40 @@ export function useThreadListV2(input: {
       ),
     ),
   });
+  priority.observe(layout.priorityThreads);
   useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);
+  // The shared excluded keys miss rows held in Priority; ordering leaves out every Priority row.
+  const orderExcludedKeys = new Set([
+    ...reorderExcludedKeys,
+    ...(layout.priorityThreads ?? []).map((thread) => `${thread.environmentId}:${thread.id}`),
+  ]);
+  // Up/down menu availability for every card, computed once per section per
+  // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
+  // list construction quadratic, and this list rebuilds on every minute tick.
+  const sectionAvailability = (section: "pinned" | "active") =>
+    computeThreadMoveAvailability({
+      allThreads: threads,
+      section,
+      pendingOrder: input.pendingOrder,
+      reorderableEnvironmentIds:
+        section === "pinned" ? input.pinReorderEnvironmentIds : input.activeReorderEnvironmentIds,
+      ordered: getThreadListV2OrderedSection({
+        threads,
+        section,
+        pendingOrder: input.pendingOrder,
+        now: input.now,
+        settlementEnvironmentIds: input.settlementEnvironmentIds,
+        snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+        queuedThreadKeys: input.queuedThreadKeys,
+        hiddenBotThreadKeys,
+        excludedThreadKeys: orderExcludedKeys,
+      }),
+    });
+  const moveAvailability = new Map([
+    ...sectionAvailability("pinned"),
+    ...(workingShelfEnabled ? [] : sectionAvailability("active")),
+  ]);
+
   useRevealLaunchGroups(launchGroups, layout.launchRevealKeys);
   const contentOnlyThreadKeys = useKeySet([...layout.contentOnlyThreadKeys].sort().join("\n"));
   const scopedProjectKeys =
@@ -178,6 +244,8 @@ export function useThreadListV2(input: {
     items: layout.items,
     launchMarkers: layout.launchMarkers,
     pendingTasks,
+    priorityCount: layout.priorityCount,
+    priorityFoldedUnseen: layout.priorityFoldedUnseen,
     workingCount: layout.workingCount,
     workingShelfExpanded: input.workingShelfExpanded,
     workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
@@ -200,6 +268,7 @@ export function useThreadListV2(input: {
     items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    priorityRead: { release: priority.release, restore: priority.restore },
     launchGroups: {
       toggle: (parentKey: string, expanded: boolean) =>
         launchGroups.toggle(parentKey, expanded, routeAncestorKeys.includes(parentKey)),

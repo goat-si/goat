@@ -8,7 +8,6 @@ import {
   resolveSidebarWokeAtForRow,
   type SidebarPriorityHolds,
 } from "../Sidebar.logic";
-import type { SidebarPriorityReadPlan } from "./priorityRead";
 
 type PriorityMember = Parameters<typeof isSidebarPriorityMember>[0]["thread"];
 type Keyed = { readonly environmentId: EnvironmentId; readonly id: ThreadId };
@@ -84,40 +83,4 @@ export function foldedPriorityMember<T extends PriorityMember & Keyed>(input: {
       })
     );
   };
-}
-
-/**
- * Reads the unread work folded under Priority rows along with a plan: each row's operable folded
- * unread threads are visited, and a failed visit restores the row. A row is released when the plan
- * already releases it or it sits in Priority only through that work; attention and working lifts
- * keep it there either way.
- */
-export function withFoldedUnseen<T extends Keyed>(
-  plan: SidebarPriorityReadPlan<T>,
-  input: {
-    readonly rows: readonly T[];
-    readonly unseenUnder: (key: string) => readonly T[];
-    readonly canOperate: (thread: T) => boolean;
-    readonly liftedOnly: (row: T) => boolean;
-  },
-): SidebarPriorityReadPlan<T> {
-  const markRead = [...plan.markRead];
-  const releaseKeys = [...plan.releaseKeys];
-  const visiting = new Set(markRead.map(keyOf));
-  const restoreKeyByKey = new Map(plan.restoreKeyByKey ?? []);
-  for (const row of input.rows) {
-    const rowKey = keyOf(row);
-    const children = input.unseenUnder(rowKey).filter(input.canOperate);
-    if (children.length === 0) continue;
-    for (const child of children) {
-      const childKey = keyOf(child);
-      if (!visiting.has(childKey)) {
-        visiting.add(childKey);
-        markRead.push(child);
-      }
-      restoreKeyByKey.set(childKey, rowKey);
-    }
-    if (!releaseKeys.includes(rowKey) && input.liftedOnly(row)) releaseKeys.push(rowKey);
-  }
-  return { markRead, releaseKeys, restoreKeyByKey };
 }

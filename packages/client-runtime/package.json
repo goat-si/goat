@@ -447,6 +447,10 @@
       "types": "./src/state/threadInbox.ts",
       "default": "./src/state/threadInbox.ts"
     },
+    "./state/thread-list-priority": {
+      "types": "./src/state/threadListPriority.ts",
+      "default": "./src/state/threadListPriority.ts"
+    },
     "./state/thread-relationships": {
       "types": "./src/state/threadRelationships.ts",
       "default": "./src/state/threadRelationships.ts"

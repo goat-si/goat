@@ -5,7 +5,10 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadFixture, type ThreadFixtureOverrides } from "../../test-fixtures";
 import type { Thread } from "../../types";
-import { markSidebarPriorityRead, selectSidebarPriorityClear } from "./priorityRead";
+import {
+  markPriorityRead,
+  selectPriorityClear,
+} from "@goat/client-runtime/state/thread-list-priority";
 
 const local = EnvironmentId.make("environment-local");
 const readOnly = EnvironmentId.make("environment-read-only");
@@ -74,7 +77,7 @@ function priorityRows() {
 }
 
 function planClear(rows: ReturnType<typeof priorityRows>) {
-  return selectSidebarPriorityClear({
+  return selectPriorityClear({
     threads: Object.values(rows),
     localLastVisitedAtByKey: {},
     // Priority ranks rows with effective wakes; settling acknowledged this one.
@@ -103,7 +106,7 @@ describe("Clear read threads in Priority", () => {
     const released = new Set<string>();
     const visited: string[] = [];
 
-    await markSidebarPriorityRead({
+    await markPriorityRead({
       plan: planClear(rows),
       release: (keys) => keys.forEach((key) => released.add(key)),
       restore: (key) => released.delete(key),

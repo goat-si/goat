@@ -14,12 +14,12 @@ import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarPriorityRank, selectSidebarMarkReadTargets } from "../Sidebar.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
-import { withFoldedUnseen } from "./foldedPriority";
 import {
-  markSidebarPriorityRead,
-  selectSidebarPriorityClear,
-  type SidebarPriorityReadPlan,
-} from "./priorityRead";
+  markPriorityRead,
+  withFoldedUnseen,
+  selectPriorityClear,
+  type ThreadPriorityReadPlan,
+} from "@goat/client-runtime/state/thread-list-priority";
 
 const threadKey = (thread: EnvironmentThreadShell) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
@@ -63,7 +63,7 @@ export function useSidebarPriorityRead(input: {
       hasChildAttention: input.attentionByOwnerKey.has(threadKey(row)),
     }) === null;
   const withFolded = (
-    plan: SidebarPriorityReadPlan<EnvironmentThreadShell>,
+    plan: ThreadPriorityReadPlan<EnvironmentThreadShell>,
     operable: (thread: EnvironmentThreadShell) => boolean,
   ) =>
     withFoldedUnseen(plan, {
@@ -83,7 +83,7 @@ export function useSidebarPriorityRead(input: {
   };
   const clearPlan = (operable: (thread: EnvironmentThreadShell) => boolean) =>
     withFolded(
-      selectSidebarPriorityClear({
+      selectPriorityClear({
         threads: priorityThreads,
         localLastVisitedAtByKey,
         wokeAtByKey: input.wokeAtByThreadKey,
@@ -95,9 +95,9 @@ export function useSidebarPriorityRead(input: {
   const isOperable = (thread: EnvironmentThreadShell) =>
     operableEnvironments.has(thread.environmentId);
 
-  const run = (plan: SidebarPriorityReadPlan<EnvironmentThreadShell>) => {
+  const run = (plan: ThreadPriorityReadPlan<EnvironmentThreadShell>) => {
     const visitedAt = new Date().toISOString();
-    void markSidebarPriorityRead({
+    void markPriorityRead({
       plan,
       release: input.releasePriorityThreads,
       restore: input.restorePriorityThread,
@@ -133,5 +133,5 @@ export function useSidebarPriorityRead(input: {
   };
 }
 
-const hasWork = (plan: SidebarPriorityReadPlan<EnvironmentThreadShell>) =>
+const hasWork = (plan: ThreadPriorityReadPlan<EnvironmentThreadShell>) =>
   plan.markRead.length > 0 || plan.releaseKeys.length > 0;

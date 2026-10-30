@@ -341,8 +341,8 @@ only pauses watching. Unsettle the thread before starting a new watch. Watching 
 again does not repeat check or conflict news its last watch already reported; unlinking the pull
 request clears that. Subagents cannot watch pull requests; the thread that delegated to them does.
 
-An explicitly watched thread does not auto-settle. On web and desktop, it appears in **Priority** at
-the top of **Activity**; on mobile, it stays in **Working** when that section is enabled. **Mark all
+An explicitly watched thread does not auto-settle. It appears in **Priority**, at the top of
+**Activity** on web and desktop and at the top of the thread list on mobile. **Mark all
 as read** acknowledges unread completions without stopping a watch. Agents stop watching when they
 hand the work back to you.
 
