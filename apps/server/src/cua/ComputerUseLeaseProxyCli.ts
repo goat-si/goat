@@ -490,6 +490,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     onScreenLocked: () =>
       Effect.promise(() =>
         report(url, authorization, { controlId, screenLocked: true }, proxyChannelToken),
+      ).pipe(
+        Effect.tap((accepted) =>
+          accepted
+            ? Effect.void
+            : Effect.logWarning(
+                "Could not report the screen lock to GOAT; the local driver remains paused.",
+              ),
+        ),
       ),
     onPersonStop: () =>
       Effect.promise(() =>
