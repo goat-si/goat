@@ -2,6 +2,7 @@ import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environmen
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { EnvironmentId } from "@goat/contracts";
 import { effectiveSnoozed } from "@goat/client-runtime/state/thread-settled";
+import { threadLastPromptAt } from "@goat/client-runtime/state/thread-sort";
 import {
   foldsUnderLauncher,
   type LaunchChildState,
@@ -21,6 +22,8 @@ export type LaunchFoldThread = Pick<
   | "id"
   | "lineage"
   | "createdAt"
+  | "latestUserMessageAt"
+  | "latestUserAuthoredMessageAt"
   | "pinnedAt"
   | "settledOverride"
   | "snoozedUntil"
@@ -190,13 +193,13 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
     if (child === undefined) continue;
     childrenByParentKey.set(parentKey, [...(childrenByParentKey.get(parentKey) ?? []), child]);
   }
-  // People first, then running work, then finished; newest launch first within each.
+  // People first, then running work, then finished; last prompted or launched first within each.
   const rank = (thread: T) => STATE_RANK[stateByKey.get(keyOf(thread)) ?? "finished"];
   for (const siblings of childrenByParentKey.values()) {
     siblings.sort(
       (left, right) =>
         rank(left) - rank(right) ||
-        right.createdAt.localeCompare(left.createdAt) ||
+        threadLastPromptAt(right) - threadLastPromptAt(left) ||
         keyOf(left).localeCompare(keyOf(right)),
     );
   }

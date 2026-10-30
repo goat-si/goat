@@ -18,6 +18,26 @@ export function toSortableTimestamp(iso: string | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+export type ThreadLastPromptInput = Pick<
+  EnvironmentThreadShell,
+  "createdAt" | "latestUserMessageAt" | "latestUserAuthoredMessageAt"
+>;
+
+/**
+ * When the user last sent the thread a prompt, else when it was created. Wakes and agent
+ * messages also move latestUserMessageAt, so it stands in only for servers without the authored time.
+ */
+export function threadLastPromptAt(thread: ThreadLastPromptInput): number {
+  const prompted =
+    thread.latestUserAuthoredMessageAt === undefined
+      ? thread.latestUserMessageAt
+      : thread.latestUserAuthoredMessageAt;
+  return Math.max(
+    toSortableTimestamp(thread.createdAt) ?? 0,
+    toSortableTimestamp(prompted ?? undefined) ?? 0,
+  );
+}
+
 export type SettledThreadTimestampInput = Pick<
   EnvironmentThreadShell,
   "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"

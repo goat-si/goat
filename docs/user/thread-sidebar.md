@@ -140,6 +140,8 @@ return from snooze. A delegated task needing approval or an answer brings its pa
 and the parent row shows **Approval** or **Input**.
 Pinned and settled threads can appear in Priority; when they no longer need attention, they
 return to their previous section.
+Within each group (requests, work in progress, unread), the thread you last sent a message to
+comes first, so an older thread you just prompted moves above newer ones.
 
 A thread you read stays in Priority while you keep Activity open, so rows do not move while you
 work through them. Switch away from Activity and back to move read threads out. Settling a thread

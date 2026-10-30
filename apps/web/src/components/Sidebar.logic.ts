@@ -23,7 +23,11 @@ import {
   type SidebarThreadSortOrder,
 } from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
-import { planPinnedReorder } from "@goat/client-runtime/state/thread-sort";
+import {
+  planPinnedReorder,
+  threadLastPromptAt,
+  type ThreadLastPromptInput,
+} from "@goat/client-runtime/state/thread-sort";
 import { isInSidebarProjectScope, type SidebarProjectScopeInput } from "./sidebar/projectScope";
 import {
   effectiveSnoozed,
@@ -1223,18 +1227,19 @@ export function getPublishedSidebarPriorityCount(): number | null {
 }
 
 /**
- * Cache ranks before sorting. Within a rank, newer threads come first by
- * creation time: updatedAt moves on every streamed event of a running thread,
- * so ordering by it would swap working rows while they stream.
+ * Cache ranks before sorting. Within a rank, the thread the user prompted last comes first:
+ * updatedAt moves on every streamed event of a running thread, so ordering by it would swap
+ * working rows while they stream.
  */
 export function sortPriorityThreadsForSidebar<
-  T extends Pick<SidebarThreadSummary, "environmentId" | "id" | "createdAt">,
+  T extends Pick<SidebarThreadSummary, "environmentId" | "id"> & ThreadLastPromptInput,
 >(threads: readonly T[], ranks: ReadonlyMap<string, number>): T[] {
   const key = (thread: T) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const promptedAt = new Map(threads.map((thread) => [thread, threadLastPromptAt(thread)]));
   return threads.toSorted(
     (left, right) =>
       (ranks.get(key(left)) ?? 2) - (ranks.get(key(right)) ?? 2) ||
-      firstValidTimestampMs(right.createdAt) - firstValidTimestampMs(left.createdAt) ||
+      promptedAt.get(right)! - promptedAt.get(left)! ||
       key(left).localeCompare(key(right)),
   );
 }

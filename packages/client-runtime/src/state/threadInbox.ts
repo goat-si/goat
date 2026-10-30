@@ -1,6 +1,10 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
-import { toSortableTimestamp } from "./threadSort.ts";
+import {
+  threadLastPromptAt,
+  toSortableTimestamp,
+  type ThreadLastPromptInput,
+} from "./threadSort.ts";
 import { effectiveSnoozed } from "./threadSettled.ts";
 
 type WorkingThreadInput = Pick<
@@ -75,26 +79,14 @@ export function sortInboxThreadsByReturn<T extends InboxThreadInput>(
   return sortNewestFirst(threads, timestamps);
 }
 
-type WorkingSortInput = Pick<
-  EnvironmentThreadShell,
-  "id" | "environmentId" | "createdAt" | "latestRun" | "latestUserAuthoredMessageAt"
->;
+type WorkingSortInput = Pick<EnvironmentThreadShell, "id" | "environmentId"> &
+  ThreadLastPromptInput;
 
 export function sortWorkingThreadsBySend<T extends WorkingSortInput>(threads: readonly T[]): T[] {
-  const timestamps = new Map(
-    threads.map((thread) => [
-      thread,
-      Math.max(
-        toSortableTimestamp(thread.createdAt) ?? 0,
-        toSortableTimestamp(
-          (thread.latestUserAuthoredMessageAt === undefined
-            ? thread.latestRun?.requestedAt
-            : thread.latestUserAuthoredMessageAt) ?? undefined,
-        ) ?? 0,
-      ),
-    ]),
+  return sortNewestFirst(
+    threads,
+    new Map(threads.map((thread) => [thread, threadLastPromptAt(thread)])),
   );
-  return sortNewestFirst(threads, timestamps);
 }
 
 function sortNewestFirst<T extends Pick<EnvironmentThreadShell, "id" | "environmentId">>(
