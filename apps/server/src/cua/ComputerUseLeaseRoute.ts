@@ -213,7 +213,9 @@ export const reportLayer = HttpRouter.add(
       if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
       const result = yield* (
         "browserClaimsSupported" in value
-          ? grants.value.reportDriverCapability(value.browserClaimsSupported)
+          ? value.browserClaimsSupported
+            ? Effect.void
+            : grants.value.reportDriverCapability(false)
           : grants.value.end(
               threadId,
               value.browserClaimEnded.claimId,

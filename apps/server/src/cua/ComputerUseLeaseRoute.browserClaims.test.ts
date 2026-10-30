@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ComputerUsePauseReason,
   EnvironmentId,
+  ExecutionEnvironmentDescriptor,
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
@@ -18,6 +19,7 @@ import * as NetAddress from "effect/net/NetAddress";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
@@ -30,8 +32,11 @@ import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
+import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
 
+const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
 const expiresAt = DateTime.makeUnsafe(10 * 60_000);
@@ -294,6 +299,64 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect("thread capability reports cannot raise support and can lower server support", () =>
+    Effect.gen(function* () {
+      const grantContext = yield* Layer.build(
+        Grants.layer.pipe(
+          Layer.provide(
+            Layer.merge(
+              Layer.mock(ServerEnvironment.ServerEnvironment)({
+                getDescriptor: Effect.succeed(
+                  decodeDescriptor({
+                    environmentId: EnvironmentId.make("environment:test"),
+                    label: "Test",
+                    platform: { os: "linux", arch: "x64" },
+                    serverVersion: "test",
+                    capabilities: { repositoryIdentity: true },
+                  }),
+                ),
+              }),
+              Layer.succeed(BrowserClaimManifest, { publish: () => Effect.void }),
+            ),
+          ),
+        ),
+      );
+      const grants = Context.get(grantContext, BrowserOriginGrants);
+      const f = yield* threadFixture({ grants });
+      const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.reportLayer);
+      const report = (supported: boolean) =>
+        handler.pipe(
+          Effect.provideService(
+            HttpServerRequest.HttpServerRequest,
+            HttpServerRequest.fromWeb(
+              new Request("http://goat.test/api/computer-use/lease", {
+                method: "POST",
+                headers: { authorization: f.credential.config.authorizationHeader },
+                body: JSON.stringify({ browserClaimsSupported: supported }),
+              }),
+            ),
+          ),
+          Effect.provideContext(f.context),
+        );
+      const input = {
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      };
+      assert.equal((yield* report(true)).status, 204);
+      const spoofed = yield* grants.request(input);
+      assert.equal(spoofed.status, "refused");
+      if (spoofed.status === "refused") assert.equal(spoofed.code, "unavailable");
+      yield* grants.reportDriverCapability(true);
+      assert.equal((yield* grants.request(input)).status, "pending");
+      assert.equal((yield* report(false)).status, 204);
+      const lowered = yield* grants.request(input);
+      assert.equal(lowered.status, "refused");
+      if (lowered.status === "refused") assert.equal(lowered.code, "unavailable");
+    }).pipe(Effect.scoped),
+  );
   it.effect("does not advertise a claim revoked while its change subscription is starting", () =>
     Effect.gen(function* () {
       const grants = yield* makeBrowserOriginGrants({
