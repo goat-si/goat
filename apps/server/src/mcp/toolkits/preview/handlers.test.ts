@@ -104,20 +104,33 @@ it.effect(
     return Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
       const noteCall = (name: string, args: Record<string, string>) =>
-        server.callTool({ name, arguments: args }).pipe(
-          Effect.provideService(McpSchema.McpServerClient, mcpClient),
-          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-        );
+        server
+          .callTool({ name, arguments: args })
+          .pipe(
+            Effect.provideService(McpSchema.McpServerClient, mcpClient),
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          );
+      const unread = yield* noteCall("goat_browser_site_note_read", {
+        origin: "https://github.com",
+      });
+      expect(unread.isError).toBe(true);
       const untouched = yield* noteCall("goat_browser_site_note_write", {
-        origin: "https://example.com", text: "procedure",
+        origin: "https://example.com",
+        text: "procedure",
       });
       expect(untouched.isError).toBe(true);
       const first = yield* open("preview-1");
       expect(first.isError, JSON.stringify(first)).not.toBe(true);
       const touched = yield* noteCall("goat_browser_site_note_write", {
-        origin: "https://example.com", text: "procedure",
+        origin: "https://example.com",
+        text: "procedure",
       });
       expect(touched.isError, JSON.stringify(touched)).not.toBe(true);
+      const read = yield* noteCall("goat_browser_site_note_read", {
+        origin: "https://example.com",
+      });
+      expect(read.isError, JSON.stringify(read)).not.toBe(true);
+      expect(JSON.stringify(read)).toContain("procedure");
       expect(yield* open("preview-1")).toEqual(first);
       expect(opened).toHaveLength(1);
       expect(opened[0]).not.toHaveProperty("clientRequestId");
