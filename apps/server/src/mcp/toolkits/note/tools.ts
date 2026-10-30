@@ -6,6 +6,8 @@ import {
   NotesWriteInput,
   NotesUpdateInput,
   NotesMoveInput,
+  NotesDeleteInput,
+  NotesDeleteResult,
   NoteDocument,
   OrchestratorMcpFailure,
 } from "@goat/contracts";
@@ -54,4 +56,10 @@ const move = Tool.make(agentSurfaceRegistry["note.move"].name, {
   success: NoteDocument,
   description: agentSurfaceRegistry["note.move"].description,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["note.move"]));
-export const NoteToolkit = Toolkit.make(list, read, write, update, move);
+const remove = Tool.make(agentSurfaceRegistry["note.delete"].name, {
+  ...shared,
+  parameters: NotesDeleteInput,
+  success: NotesDeleteResult,
+  description: agentSurfaceRegistry["note.delete"].description,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["note.delete"]));
+export const NoteToolkit = Toolkit.make(list, read, write, update, move, remove);

@@ -58,12 +58,20 @@ import {
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
   threadHasUnseenCompletion,
+  canMarkThreadUnread,
   resolveThreadListV2Status,
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   type ThreadListV2SnoozePresetSettings,
   type ThreadListV2Status,
 } from "./threadListV2";
+import {
+  CARD_MENU_ACTIONS,
+  LEGACY_MENU_ACTIONS,
+  MARK_UNREAD_MENU_ACTION,
+  SLIM_MENU_ACTIONS,
+  SNOOZED_MENU_ACTIONS,
+} from "./thread-list-v2-menu-actions";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
@@ -139,26 +147,6 @@ function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
   if (!Number.isFinite(startedAtMs)) return null;
   return ` ${formatWorkingDurationLabel(nowMs - startedAtMs)}`;
 }
-
-const CARD_MENU_ACTIONS: MenuAction[] = [
-  { id: "settle", title: "Settle", image: "checkmark" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
-
-const SLIM_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
-
-const SNOOZED_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsnooze", title: "Wake thread", image: "clock" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
-
-const LEGACY_MENU_ACTIONS: MenuAction[] = [
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
 
 function ThreadListV2Section(props: {
   readonly label: string;
@@ -576,6 +564,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
+  readonly onMarkThreadUnread: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
@@ -613,6 +602,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onDeleteThread,
     onRenameThread,
     onRegenerateThreadTitle,
+    onMarkThreadUnread,
     onNewThreadOnBranch,
     onSettleThread,
     onSnoozeThread,
@@ -655,6 +645,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
 
   const status = resolveThreadListV2Status(thread);
   const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
+  const markableUnread = canMarkThreadUnread(thread);
   const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;
   const statusLabel =
@@ -814,8 +805,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         supported: props.titleRegenerationSupported,
         isRegenerating: thread.titleRegeneration != null,
       }),
+      ...(markableUnread ? [MARK_UNREAD_MENU_ACTION] : []),
     ],
-    [props.titleRegenerationSupported, thread.titleRegeneration],
+    [markableUnread, props.titleRegenerationSupported, thread.titleRegeneration],
   );
   const snoozableCardMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -893,6 +885,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+      if (nativeEvent.event === "mark-unread") onMarkThreadUnread(thread);
       if (nativeEvent.event === "copy-thread") void copyThreadShell(thread);
       if (nativeEvent.event === "copy-thread-id") {
         copyTextWithHaptic(thread.id, { target: "thread-id" });
@@ -919,6 +912,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     },
     [
       onNewThreadOnBranch,
+      onMarkThreadUnread,
       thread,
       handleArchive,
       handleDelete,

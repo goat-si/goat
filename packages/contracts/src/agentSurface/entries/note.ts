@@ -7,4 +7,5 @@ export const noteEntries = {
   "note.write": entry(noteSurfaceEntries.write),
   "note.update": entry(noteSurfaceEntries.update),
   "note.move": entry(noteSurfaceEntries.move),
+  "note.delete": entry(noteSurfaceEntries.delete),
 } as const;

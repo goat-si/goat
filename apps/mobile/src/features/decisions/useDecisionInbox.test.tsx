@@ -1136,6 +1136,7 @@ function homeProps(onOpenDecisions: () => void): ComponentProps<typeof HomeScree
     onMoveThread: success,
     onRenameThread: noop,
     onRegenerateThreadTitle: success,
+    onMarkThreadUnread: noop,
     onSelectPendingTask: noop,
     onDeletePendingTask: noop,
     onNewThreadOnBranch: noop,

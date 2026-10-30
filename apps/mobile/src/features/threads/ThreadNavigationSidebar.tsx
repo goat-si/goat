@@ -157,6 +157,7 @@ function ThreadNavigationSidebarPane(
     moveThread,
     renameThread,
     regenerateThreadTitle,
+    markThreadUnread,
   } = useThreadListActions();
   const pendingTasks = usePendingNewTasks();
   const activeNewTask = useActiveNewTask();
@@ -600,6 +601,7 @@ function ThreadNavigationSidebarPane(
             onArchiveThread={archiveThread}
             onRenameThread={renameThread}
             onRegenerateThreadTitle={regenerateThreadTitle}
+            onMarkThreadUnread={markThreadUnread}
             titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
             settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
             onSettleThread={settleThread}

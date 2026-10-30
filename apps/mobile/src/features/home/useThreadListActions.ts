@@ -242,6 +242,7 @@ export function useThreadListActions(): {
   ) => Promise<boolean>;
   readonly renameThread: (thread: EnvironmentThreadShell) => void;
   readonly regenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly markThreadUnread: (thread: EnvironmentThreadShell) => void;
 } {
   const executeAction = useThreadActionExecutor();
   const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
@@ -252,6 +253,9 @@ export function useThreadListActions(): {
     reportFailure: false,
   });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
+  const markUnreadMutation = useAtomCommand(threadEnvironment.markUnread, {
     reportFailure: false,
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
@@ -570,6 +574,23 @@ export function useThreadListActions(): {
     titleRegenerationInFlightThreadKeys.current.delete(key);
     return succeeded;
   };
+  const markThreadUnread = (thread: EnvironmentThreadShell) => {
+    if (!checkThreadOperationPermission(thread, "Could not mark thread unread")) return;
+    selectionHaptic();
+    void markUnreadMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id },
+    }).then((result) => {
+      if (result._tag === "Success") return;
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        "Could not mark thread unread",
+        error instanceof Error && error.message.trim().length > 0
+          ? error.message
+          : "The thread could not be marked unread.",
+      );
+    });
+  };
   const renameThread = (thread: EnvironmentThreadShell) => {
     const commit = (title: string) => {
       const resolution = resolveThreadTitleRename({ title, originalTitle: thread.title });
@@ -783,6 +804,7 @@ export function useThreadListActions(): {
     moveThread,
     renameThread,
     regenerateThreadTitle,
+    markThreadUnread,
   };
 }
 

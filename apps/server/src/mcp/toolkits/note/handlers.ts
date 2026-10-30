@@ -5,14 +5,19 @@ import * as Notes from "../../../notes/NotesService.ts";
 import * as Access from "../../McpToolAccess.ts";
 import { NoteToolkit } from "./tools.ts";
 
-const failure = (error: NoteError | NoteConflictError) =>
+const failure = (
+  error: NoteError | NoteConflictError,
+  conflict = "Note conflict: read the note again with goat_note_read, apply your edit to the current body, and retry with its revision.",
+) =>
   new OrchestratorMcpFailure({
     code: error._tag === "NoteConflictError" ? "invalid_request" : "orchestration_error",
-    message:
-      error._tag === "NoteConflictError"
-        ? "Note conflict: read the note again with goat_note_read, apply your edit to the current body, and retry with its revision."
-        : error.message,
+    message: error._tag === "NoteConflictError" ? conflict : error.message,
   });
+const deleteFailure = (error: NoteError | NoteConflictError) =>
+  failure(
+    error,
+    "Note conflict: the note changed and was kept. Read it again with goat_note_read and decide whether it should still be deleted before retrying with its new revision.",
+  );
 export const layer = Access.toLayer(NoteToolkit, {
   goat_note_list: Access.reads((input) =>
     Effect.gen(function* () {
@@ -42,5 +47,14 @@ export const layer = Access.toLayer(NoteToolkit, {
     Effect.gen(function* () {
       return yield* (yield* Notes.NotesService).move(input, "agent").pipe(Effect.mapError(failure));
     }),
+  ),
+  goat_note_delete: Access.destructive(
+    Access.writes((input) =>
+      Effect.gen(function* () {
+        return yield* (yield* Notes.NotesService)
+          .delete(input)
+          .pipe(Effect.mapError(deleteFailure));
+      }),
+    ),
   ),
 });

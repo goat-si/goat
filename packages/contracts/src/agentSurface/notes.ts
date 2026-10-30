@@ -1,5 +1,5 @@
 import type { AgentSurfaceEntry, CapabilityDeclaration } from "./registry.ts";
-import { NOTE_REVISION } from "./idempotencyReasons.ts";
+import { NOTE_DELETE_REVISION, NOTE_REVISION } from "./idempotencyReasons.ts";
 
 /** Note tool metadata, kept beside the registry so its file does not keep growing. */
 export const noteSurfaceEntries = {
@@ -29,7 +29,7 @@ export const noteSurfaceEntries = {
     description:
       "Read a note's markdown body, status, linked threads and revision by path. The body excludes GOAT-managed frontmatter. Use the revision when writing or moving the note.",
     guide:
-      "Pass the returned revision as baseRevision to goat_note_write or goat_note_move. GOAT manages frontmatter separately from the returned markdown body.",
+      "Pass the returned revision as baseRevision to goat_note_write, goat_note_move or goat_note_delete. GOAT manages frontmatter separately from the returned markdown body.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -99,6 +99,27 @@ export const noteSurfaceEntries = {
     dryRun: "unsupported",
     humanSteps: [],
     idempotencyReason: NOTE_REVISION,
+    annotations: { idempotentHint: false, openWorldHint: false },
+  },
+  delete: {
+    resource: "note",
+    verb: "delete",
+    name: "goat_note_delete",
+    toolkit: "note",
+    summary: "Delete a note.",
+    description:
+      "Delete a note's file from the notes folder, only while it still has the revision you read. Threads started from the note keep running.",
+    guide:
+      "Set baseRevision to the revision returned by goat_note_read. On a revision conflict the note is kept: read it again and decide whether it should still be deleted. If the outcome is uncertain, read the note before retrying. The notes folder is a git repository, so versions it already committed can be restored with git; a change made in the last few seconds may not be committed yet.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason:
+      "Revision-checked notebook shared by agents and people; it reaches no environment, thread or host.",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: NOTE_DELETE_REVISION,
     annotations: { idempotentHint: false, openWorldHint: false },
   },
 } as const satisfies Record<string, AgentSurfaceEntry & CapabilityDeclaration>;

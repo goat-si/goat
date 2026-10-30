@@ -19,6 +19,7 @@ import { applyNoteCheckboxEvent, type NoteCheckboxEvent } from "./note-markdown"
 import { NoteLinkedThread } from "./NoteLinkedThread";
 import { noteSyncLabel, noteSyncState } from "./notes-model";
 import { notesRpc } from "./rpc/notes";
+import { noteConflictCurrent } from "./rpc/delivery";
 import {
   flushNotes,
   notesCommandOptions,
@@ -50,6 +51,7 @@ function NoteContent(props: NoteParams) {
   );
   const { canEdit: canWrite, canStart, connected } = useNoteDraftAccess(environmentId);
   const read = useAtomCommand(notesRpc.read, notesCommandOptions);
+  const remove = useAtomCommand(notesRpc.delete, notesCommandOptions);
   const [note, setNote] = useState<NoteDocument | null>(row?.current ?? null);
   const [body, setBody] = useState(row?.body ?? "");
   // An acknowledgement can remove the outbox row while this editor still owns newer text.
@@ -58,6 +60,9 @@ function NoteContent(props: NoteParams) {
   const [editing, setEditing] = useState(Boolean(props.create));
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const deletingRef = useRef(false);
+  const busy = saving || deleting;
   const [checkboxRender, setCheckboxRender] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [restored, setRestored] = useState(false);
@@ -71,6 +76,8 @@ function NoteContent(props: NoteParams) {
   const localBody = useRef(body);
   const localStatus = useRef(status);
   const pendingSaves = useRef(0);
+  // Bumped when a delete starts or adopts the hub's version, so older reads cannot overwrite it.
+  const readEpoch = useRef(0);
   const latest = Option.getOrNull(AsyncResult.value(feed))?.notes.find(
     (entry) => entry.path === props.path,
   );
@@ -114,9 +121,10 @@ function NoteContent(props: NoteParams) {
     if (!restored || !connected || row || editing || saving || dirty || (props.create && !latest))
       return;
     let active = true;
+    const epoch = readEpoch.current;
     void read({ environmentId: readRequest.environmentId, input: readRequest.input }).then(
       (result) => {
-        if (!active) return;
+        if (!active || epoch !== readEpoch.current) return;
         if (AsyncResult.isSuccess(result)) {
           setHasSnapshot(true);
           setNote(result.value);
@@ -147,7 +155,7 @@ function NoteContent(props: NoteParams) {
   }, [row, editing, dirty, saving]);
 
   const save = async (nextBody: string, nextStatus: NoteStatus) => {
-    if (!canWrite) return;
+    if (!canWrite || deletingRef.current) return;
     setSaving(true);
     pendingSaves.current++;
     setBody(nextBody);
@@ -174,6 +182,48 @@ function NoteContent(props: NoteParams) {
     pendingSaves.current--;
     if (pendingSaves.current === 0) setSaving(false);
   };
+  const adopt = (document: NoteDocument) => {
+    readEpoch.current++;
+    setNote(document);
+    setBody(document.body);
+    localBody.current = document.body;
+    setStatus(document.status);
+    localStatus.current = document.status;
+    editBase.current = document.revision;
+  };
+  const deleteNote = async (target: NoteDocument) => {
+    if (deletingRef.current) return;
+    // A draft can be saved or restored while the confirmation is open.
+    const draft = notesOutbox
+      .getSnapshot()
+      .some((entry) => entry.environmentId === environmentId && entry.path === props.path);
+    if (draft) {
+      setError("This phone has edits for this note. Sync or discard them before deleting.");
+      return;
+    }
+    deletingRef.current = true;
+    readEpoch.current++;
+    setDeleting(true);
+    const result = await remove({
+      environmentId,
+      input: { path: target.path, baseRevision: target.revision },
+    });
+    deletingRef.current = false;
+    setDeleting(false);
+    if (AsyncResult.isSuccess(result)) {
+      navigation.goBack();
+      return;
+    }
+    const failure = AsyncResult.isFailure(result) ? Cause.squash(result.cause) : null;
+    const current = noteConflictCurrent(failure);
+    if (current) {
+      adopt(current);
+      setError(
+        "This note changed on the hub. Review it, then delete it again if you still want to.",
+      );
+    } else setError(notesError(failure));
+  };
+  const canDelete = canStart && restored && note !== null && !row && !editing && !dirty && !busy;
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
   return (
     <View className="flex-1 bg-sheet">
@@ -222,7 +272,7 @@ function NoteContent(props: NoteParams) {
           <Button
             label="Refresh / sync"
             tone="secondary"
-            disabled={saving || dirty}
+            disabled={busy || dirty}
             onPress={() => {
               setReload((value) => value + 1);
               void flushNotes(environmentId).catch((error: unknown) => setError(notesError(error)));
@@ -232,7 +282,7 @@ function NoteContent(props: NoteParams) {
             <Button
               label="Discard saved edits"
               tone="secondary"
-              disabled={saving || Boolean(row.inFlight)}
+              disabled={busy || Boolean(row.inFlight)}
               onPress={() => {
                 Alert.alert(
                   "Discard saved edits?",
@@ -287,7 +337,7 @@ function NoteContent(props: NoteParams) {
                   key={value}
                   label={value}
                   tone={status === value ? "primary" : "secondary"}
-                  disabled={!canWrite || saving || row?.state === "conflict"}
+                  disabled={!canWrite || busy || row?.state === "conflict"}
                   selected={status === value}
                   onPress={() => {
                     if (editing) {
@@ -328,7 +378,7 @@ function NoteContent(props: NoteParams) {
                 <NoteMarkdown
                   key={checkboxRender}
                   body={body}
-                  disabled={!canWrite || saving || row?.state === "conflict"}
+                  disabled={!canWrite || busy || row?.state === "conflict"}
                   onCheckbox={(event) => {
                     const next = applyNoteCheckboxEvent(localBody.current, event);
                     if (next === null) {
@@ -342,7 +392,7 @@ function NoteContent(props: NoteParams) {
                   fullWidth
                   label="Edit markdown"
                   tone="secondary"
-                  disabled={!canWrite || saving || row?.state === "conflict"}
+                  disabled={!canWrite || busy || row?.state === "conflict"}
                   onPress={() => {
                     editBase.current = row?.baseRevision ?? note?.revision ?? null;
                     setEditing(true);
@@ -354,10 +404,32 @@ function NoteContent(props: NoteParams) {
               fullWidth
               tone="primary"
               label="Start work from this note"
-              disabled={!canStart || !note || Boolean(row) || editing || saving || dirty}
+              disabled={!canStart || !note || Boolean(row) || editing || busy || dirty}
               onPress={() =>
                 navigation.navigate("NoteStartWork", { environmentId, path: props.path })
               }
+            />
+            <Button
+              fullWidth
+              tone="danger"
+              label={deleting ? "Deleting…" : "Delete note"}
+              disabled={!canDelete}
+              onPress={() => {
+                if (!note) return;
+                const target = note;
+                Alert.alert(
+                  "Delete note?",
+                  `“${target.title}” will be removed from Notes on the hub.`,
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete",
+                      style: "destructive",
+                      onPress: () => void deleteNote(target),
+                    },
+                  ],
+                );
+              }}
             />
             {(note?.threads ?? row?.current?.threads ?? []).map((link) => (
               <NoteLinkedThread

@@ -22,3 +22,7 @@ export const MEMORY_OPERATION_ID =
 /** Notes check the revision the caller read. */
 export const NOTE_REVISION =
   "Revision-checked: once the first call lands, a repeat with the same baseRevision is refused as a conflict, so it cannot apply twice.";
+
+/** A deleted path has no revision left to conflict with, so a repeat reads as not found instead. */
+export const NOTE_DELETE_REVISION =
+  "Revision-checked: a repeat after the first call lands fails because the note is gone, but if identical text is written to the path again its revision matches and a repeat deletes it. After an uncertain outcome, read the note and decide again.";

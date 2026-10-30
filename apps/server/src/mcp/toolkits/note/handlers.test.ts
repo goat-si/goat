@@ -105,7 +105,51 @@ it.effect(
     ),
 );
 
-it.effect("read-only MCP callers can read notes and cannot write or move them", () =>
+it.effect(
+  "MCP note delete refuses a stale revision and removes the note at its read revision",
+  () =>
+    Effect.gen(function* () {
+      const notes = yield* Notes.NotesService;
+      const original = yield* notes.write(
+        { path: "task.md", body: "first", baseRevision: null },
+        "user",
+      );
+      const current = yield* notes.write(
+        { path: original.path, body: "second", baseRevision: original.revision },
+        "user",
+      );
+      const toolkit = yield* NoteToolkit.pipe(
+        Effect.provide(Access.HandlersLayer.layer(Handlers.layer)),
+      );
+      const stale = yield* toolkit
+        .handle("goat_note_delete", { path: original.path, baseRevision: original.revision })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      const refused = stale.at(-1)!.result;
+      assert.isTrue("code" in refused);
+      if ("code" in refused) {
+        assert.strictEqual(refused.code, "invalid_request");
+        assert.include(refused.message, "was kept");
+        assert.include(refused.message, "decide whether it should still be deleted");
+      }
+      assert.strictEqual((yield* notes.read({ path: original.path })).body, "second");
+      const deleted = yield* toolkit
+        .handle("goat_note_delete", { path: original.path, baseRevision: current.revision })
+        .pipe(Stream.unwrap, Stream.runCollect);
+      assert.deepStrictEqual(deleted.at(-1)!.result, { path: original.path });
+      const gone = yield* notes.read({ path: original.path }).pipe(Effect.flip);
+      assert.strictEqual(gone._tag, "NoteError");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          notesLayer(),
+          liveThreadsLayer,
+          Layer.succeed(Invocation.McpInvocationContext, testScope),
+        ),
+      ),
+    ),
+);
+
+it.effect("read-only MCP callers can read notes and cannot write, move or delete them", () =>
   Effect.gen(function* () {
     const notes = yield* Notes.NotesService;
     const original = yield* notes.write(
@@ -136,7 +180,10 @@ it.effect("read-only MCP callers can read notes and cannot write or move them", 
     const update = yield* toolkit
       .handle("goat_note_update", { path: original.path, pinned: true })
       .pipe(Stream.unwrap, Stream.runCollect);
-    for (const result of [write, move, update]) {
+    const remove = yield* toolkit
+      .handle("goat_note_delete", { path: original.path, baseRevision: original.revision })
+      .pipe(Stream.unwrap, Stream.runCollect);
+    for (const result of [write, move, update, remove]) {
       const failure = result.at(-1)!.result;
       assert.isTrue("code" in failure);
       if ("code" in failure) assert.strictEqual(failure.code, "capability_denied");
