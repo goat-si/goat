@@ -29,6 +29,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import type { ComputerUseAnswer } from "../handoffs/computerUseContinuations.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import { namedAppMessages } from "./ComputerUseNamedApps.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import {
   computerUseOrigin,
@@ -254,8 +255,17 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     ...(wanted === undefined ? {} : { apps: wanted }),
   };
   if (wanted !== undefined && !foreground) {
+    const namedMessages =
+      origin._tag === "interactive"
+        ? namedAppMessages(
+            wanted,
+            yield* cua.value.appCatalog,
+            (yield* threads.getThreadRecords(input.threadId, ["messages"])).messages,
+          )
+        : [];
     const auto = yield* handoffs.autoComputerUse({
       ...createInput,
+      namedMessages,
       reason: grantText({
         title: view.projection.thread.title.trim() || "A thread",
         turn: run.ordinal,
@@ -269,8 +279,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     if (Option.isSome(auto))
       return {
         kind: "available",
-        message:
-          "Allowed by a standing choice. A time-limited admission is recorded in this thread.",
+        message: "Allowed automatically. A time-limited admission is recorded in this thread.",
       } satisfies ComputerUseRequestResult;
   }
   if (

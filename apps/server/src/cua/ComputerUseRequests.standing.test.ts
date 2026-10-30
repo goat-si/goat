@@ -16,6 +16,35 @@ import {
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
 
+it.effect("a person's named app receives a session admission after a prior approval", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("named-app-message"),
+        threadId,
+        messageId: MessageId.make("message:named-app"),
+        text: "Use com.example.Editor please",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Other"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        }),
+      );
+    }),
+  ),
+);
+
 it.effect("session approval renews an expired lease without a pending approval", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request, handoffs }) =>

@@ -34,6 +34,7 @@ export type CreateInput = {
   readonly sshProgress?: SshProgressBinding;
   readonly apps?: ReadonlyArray<string>;
   readonly computerUseForeground?: Handoff["computerUseForeground"];
+  readonly namedMessages?: ReadonlyArray<{ readonly app: string; readonly messageId: string }>;
 };
 
 const unavailable = (cause: unknown) => new HandoffError({ reason: "unavailable", cause });
@@ -105,6 +106,14 @@ export const makeComputerUseStanding = (deps: {
     result: Handoff,
     endsApproved: boolean,
   ) {
+    if (
+      result.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+      result.state === "completed" &&
+      result.actor.type === "client"
+    )
+      yield* sql`INSERT OR IGNORE INTO computer_use_person_approval (id) VALUES (1)`.pipe(
+        Effect.mapError(unavailable),
+      );
     if (result.state === "completed" && input.computerUseScope && result.apps) {
       if (input.computerUseScope === "session") {
         for (const app of result.apps)
@@ -137,7 +146,33 @@ export const makeComputerUseStanding = (deps: {
           apps.some(isExcludedCuaApplication)
         )
           return Option.none();
-        if (!(yield* allowed(input.requestedBy.threadId, apps, list))) return Option.none();
+        const standing = yield* allowed(input.requestedBy.threadId, apps, list);
+        const named: Array<{ readonly app: string; readonly messageId: string }> = [];
+        if (!standing && input.namedMessages !== undefined) {
+          const approved = yield* sql`SELECT id FROM computer_use_person_approval LIMIT 1`.pipe(
+            Effect.mapError(unavailable),
+          );
+          if (approved.length > 0) {
+            for (const app of apps) {
+              const already = yield* allowed(input.requestedBy.threadId, [app], list);
+              if (already) continue;
+              const used = yield* sql<{
+                message_id: string;
+              }>`SELECT message_id FROM computer_use_named_messages
+                WHERE thread_id = ${input.requestedBy.threadId} AND app_key = ${cuaAppKey(app)}`.pipe(
+                Effect.mapError(unavailable),
+              );
+              const candidate = input.namedMessages.find(
+                (entry) =>
+                  cuaAppKey(entry.app) === cuaAppKey(app) &&
+                  !used.some((row) => row.message_id === entry.messageId),
+              );
+              if (candidate === undefined) return Option.none();
+              named.push(candidate);
+            }
+          }
+        }
+        if (!standing && named.length === 0) return Option.none();
         if (
           Option.isSome(leases) &&
           Option.isSome(
@@ -148,9 +183,20 @@ export const makeComputerUseStanding = (deps: {
         )
           return Option.none();
         const granted = yield* deps.create(
-          { ...input, reason: `${input.reason} Allowed by a standing choice.` },
+          {
+            ...input,
+            reason: `${input.reason} ${named.length > 0 ? "Allowed because the person named the app." : "Allowed by a standing choice."}`,
+          },
           true,
         );
+        for (const entry of named) {
+          yield* sql`INSERT OR IGNORE INTO computer_use_session_approvals (thread_id, app_key) VALUES (${input.requestedBy.threadId}, ${cuaAppKey(entry.app)})`.pipe(
+            Effect.mapError(unavailable),
+          );
+          yield* sql`INSERT OR IGNORE INTO computer_use_named_messages (thread_id, app_key, message_id) VALUES (${input.requestedBy.threadId}, ${cuaAppKey(entry.app)}, ${entry.messageId})`.pipe(
+            Effect.mapError(unavailable),
+          );
+        }
         if (Option.isSome(leases)) yield* leases.value.changed;
         return Option.some(granted);
       }),
