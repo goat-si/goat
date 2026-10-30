@@ -9,7 +9,7 @@ import * as Effect from "effect/Effect";
 
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
-import { acceptsInput } from "./ComputerUseLeaseProxyBatch.ts";
+import { acceptsInput, makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import { type JsonRpcId, refusal } from "./ComputerUseLeaseResponses.ts";
 
 export const POINT_BASIS_UNSUPPORTED =
@@ -36,7 +36,7 @@ const basisTools = (name: unknown, args: unknown): ReadonlyArray<string> => {
   });
 };
 
-export const makeProxyPointBasis = (
+const makeProxyPointBasis = (
   toolsOf: (child: Running) => Effect.Effect<unknown>,
   current: () => Running | undefined,
 ) =>
@@ -57,3 +57,24 @@ export const makeProxyPointBasis = (
       ? undefined
       : refusal(id, message.method, "outside_manifest", POINT_BASIS_UNSUPPORTED);
   });
+
+/** The batch scope, then the point-basis check: the proxy's admission of a call's arguments. */
+export const makeProxyCallScope = (
+  handshake: Parameters<typeof makeProxyBatchScope>[0],
+  current: () => Running | undefined,
+) => {
+  const batches = makeProxyBatchScope(handshake, current);
+  const pointBasis = makeProxyPointBasis(batches.toolsOf, current);
+  const scope = Effect.fn("ComputerUseLeaseProxy.scopeCall")(function* (
+    id: JsonRpcId,
+    line: string,
+    message: Envelope,
+    notSent: () => string,
+  ) {
+    const scoped = yield* batches.scope(id, line, message, notSent);
+    if ("refused" in scoped) return scoped;
+    const refused = yield* pointBasis(id, scoped.message, notSent);
+    return refused === undefined ? scoped : { refused };
+  });
+  return { ...batches, scope };
+};
