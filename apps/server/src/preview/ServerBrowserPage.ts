@@ -1008,8 +1008,10 @@ export const evaluate = async (
   { page, cdp }: { readonly page: Page; readonly cdp: CDPSession },
   input: PreviewAutomationEvaluateInput,
   timeoutMs: number,
+  gate?: DispatchGate,
 ) => {
   const before = frameUrls(page);
+  await gate?.();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {

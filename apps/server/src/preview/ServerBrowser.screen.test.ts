@@ -12,6 +12,7 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -55,6 +56,24 @@ const privacy = vi.hoisted(() => ({ setters: [] as Array<(on: boolean) => void> 
 const calls = vi.hoisted(() => ({
   received: undefined as ((timeoutMs: number) => void) | undefined,
 }));
+const guardHook = vi.hoisted(() => ({ wait: undefined as (() => Promise<void>) | undefined }));
+
+vi.mock("./ServerBrowserSecretFill.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./ServerBrowserSecretFill.ts")>();
+  const Effect = await import("effect/Effect");
+  return {
+    ...actual,
+    make: actual.make.pipe(
+      Effect.map((fill) => ({
+        ...fill,
+        guard: async (...args: Parameters<typeof fill.guard>) => {
+          await fill.guard(...args);
+          if (args[1].operation === "evaluate") await guardHook.wait?.();
+        },
+      })),
+    ),
+  };
+});
 
 vi.mock("./CaptureLock.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./CaptureLock.ts")>();
@@ -245,6 +264,48 @@ const ready = Effect.gen(function* () {
   const tabId = PreviewTabId.make(opened.tabId!);
   return { broker, tabId };
 });
+
+it.effect("does not evaluate after a blocked navigation during the secret guard", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const fork = Effect.runForkWith(yield* Effect.context<never>());
+      guardHook.wait = () =>
+        new Promise<void>((resolve) => {
+          fork(Deferred.succeed(entered, undefined));
+          fork(Deferred.await(release).pipe(Effect.andThen(Effect.sync(resolve))));
+        });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          guardHook.wait = undefined;
+        }),
+      );
+      const context = contexts.at(-1)!;
+      const session = context.sessions[0]!;
+      const fiber = yield* broker
+        .invoke({ scope, tabId, operation: "evaluate", input: { expression: "danger()" } })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() => context.page.goto("https://example.com/"));
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(fiber);
+      expect(
+        session.send.mock.calls.some(
+          ([method, input]) =>
+            method === "Runtime.evaluate" &&
+            (input as { expression?: string }).expression === "danger()",
+        ),
+      ).toBe(false);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
 
 it.effect("refuses a blocked navigation before sending it to the page", () =>
   Effect.scoped(

@@ -2005,6 +2005,7 @@ const make = Effect.gen(function* () {
           tab,
           input as PreviewAutomationEvaluateInput,
           request.timeoutMs,
+          actionGate(),
         );
       case "waitFor":
         return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(
