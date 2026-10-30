@@ -14,7 +14,10 @@ export function PdfPage(props: {
   matches: readonly PdfMatch[];
   selected: PdfMatch | undefined;
   navigate: (page: number) => void;
-  openLink: (url: string) => Promise<void>;
+  openLink: (
+    url: string,
+    options?: { readonly event?: { metaKey: boolean; ctrlKey: boolean; button?: number } },
+  ) => Promise<void>;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const layer = useRef<{ text: TextLayer; starts: number[] } | null>(null);
@@ -132,7 +135,7 @@ export function PdfPage(props: {
             if (event.button !== 1 || !link.url) return;
             event.preventDefault();
             void props
-              .openLink(link.url)
+              .openLink(link.url, { event: { metaKey: false, ctrlKey: false, button: 1 } })
               .catch((cause: unknown) =>
                 setError(cause instanceof Error ? cause.message : "Could not open link."),
               );

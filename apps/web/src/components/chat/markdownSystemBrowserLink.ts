@@ -15,7 +15,8 @@ export function openMarkdownLinkExternally(
   environmentId: EnvironmentId | null,
   target: string,
 ): Promise<void> {
-  if (environmentId !== null) return openEnvironmentUrlExternally(environmentId, target);
+  if (environmentId !== null)
+    return openEnvironmentUrlExternally(environmentId, absoluteLinkUrl(target));
   return readLocalApi()?.shell.openExternal(target) ?? Promise.resolve();
 }
 
@@ -39,7 +40,7 @@ export function markdownLinkNeedsEnvironmentRoute(
 }
 
 export function openMarkdownLinkInSystemBrowser(environmentId: EnvironmentId | null, href: string) {
-  void openMarkdownLinkExternally(environmentId, absoluteLinkUrl(href)).catch((cause: unknown) =>
+  void openMarkdownLinkExternally(environmentId, href).catch((cause: unknown) =>
     reportMarkdownExternalOpenFailure(href, cause),
   );
 }
