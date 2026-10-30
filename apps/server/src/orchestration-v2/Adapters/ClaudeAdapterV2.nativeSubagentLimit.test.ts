@@ -229,11 +229,14 @@ it.effect(
         // Claude Code before 2.1.217 ignores the cap, so that process keeps Agent off instead.
         yield* runTurn(5, 2, "2.1.200");
         expect(flagSettings).toEqual([{ permissions: { deny: ["Agent", "Task"] } }]);
+        // Once seen, the old CLI's next process opens with Agent off.
+        yield* runTurn(6, 2, "2.1.200");
         expect(opened).toEqual([
           { disallowedTools: undefined, flagCap: "3", processCap: "3" },
           { disallowedTools: ["Agent", "Task"], flagCap: undefined, processCap: undefined },
           { disallowedTools: undefined, flagCap: undefined, processCap: undefined },
           { disallowedTools: undefined, flagCap: "2", processCap: "2" },
+          { disallowedTools: ["Agent", "Task"], flagCap: undefined, processCap: undefined },
         ]);
       }),
     ).pipe(

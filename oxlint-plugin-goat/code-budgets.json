@@ -784,7 +784,7 @@
   "packages/provider-opencode/src/server/OpenCodeRuntime.ts": { "lines": 1128, "nonNull": 3 },
   "packages/provider-opencode/src/server/OpenCodeServerLedger.ts": { "nonNull": 3 },
   "packages/provider-opencode/src/server/adapter.test.ts": { "lines": 2742 },
-  "packages/provider-opencode/src/server/adapter.ts": { "lines": 3777, "nonNull": 7 },
+  "packages/provider-opencode/src/server/adapter.ts": { "lines": 3784, "nonNull": 7 },
   "packages/provider-opencode/src/server/memoryIsolation.ts": { "nonNull": 2 },
   "packages/provider-opencode/src/server/status.test.ts": { "lines": 1021 },
   "packages/provider-opencode/src/server/usage.ts": { "nonNull": 3 },

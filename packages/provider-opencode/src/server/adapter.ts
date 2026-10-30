@@ -2811,10 +2811,17 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               subagentsOff,
             );
             const sessionID = child.nativeSessionId;
-            yield* sdkCall("session.update", { sessionID, permission }, () =>
+            const update = sdkCall("session.update", { sessionID, permission }, () =>
               client.session.update({ sessionID, permission }),
-            ).pipe(subagentsOff ? Effect.asVoid : Effect.ignore({ log: true }));
-            Object.assign(child, { permission, subagentsDenied: subagentsOff });
+            ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  Object.assign(child, { permission, subagentsDenied: subagentsOff }),
+                ),
+              ),
+            );
+            // A failed relaxation keeps the child denied; the next turn tries again.
+            yield* subagentsOff ? update : update.pipe(Effect.ignore({ log: true }));
           }
         });
 
@@ -2865,7 +2872,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const currentMcp =
             memoryInput === undefined ? undefined : yield* mcpSessions.read(memoryInput.threadId);
           const subagentsOff = (yield* mcpSessions.read(turn.threadId))?.nativeSubagentLimit === 0;
-          if (memoryInput !== undefined) yield* syncSubagentRules(state, subagentsOff);
+          yield* syncSubagentRules(state, subagentsOff);
           if (
             command !== undefined &&
             subagentsOff &&

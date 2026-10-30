@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId, EnvironmentId } from "@goat/contracts";
+import { EnvironmentId, MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Fiber from "effect/Fiber";
@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -36,6 +37,7 @@ const limitHarness = Effect.fn("limitHarness")(function* (
   const root = `${suffix}-root`;
   const payloads: Array<{ messageID: string }> = [];
   const updates: Array<Update> = [];
+  const updated = yield* Queue.unbounded<Update>();
   const config = {
     environmentId: EnvironmentId.make("fixture"),
     threadId: ThreadId.make(`thread-opencode-${suffix}`),
@@ -63,6 +65,7 @@ const limitHarness = Effect.fn("limitHarness")(function* (
         if (input.sessionID !== root && options.childUpdateFails?.() === true)
           throw new Error("child update refused");
         updates.push(input);
+        Queue.offerUnsafe(updated, input);
         return { data: { id: input.sessionID, time: { created: 1, updated: 1 } } };
       },
       promptAsync: async (input: { messageID: string }) => {
@@ -71,6 +74,7 @@ const limitHarness = Effect.fn("limitHarness")(function* (
       },
       abort: async () => ({ data: true }),
       children: async () => ({ data: [] }),
+      messages: async () => ({ data: [] }),
     },
   });
   const status = (sessionID: string, type: "busy" | "idle") => ({
@@ -78,7 +82,10 @@ const limitHarness = Effect.fn("limitHarness")(function* (
     properties: { sessionID, status: { type } },
   });
   /** One turn under `limit`; `during` runs while the root is busy. */
-  const turn = (limit: number | undefined, during: Effect.Effect<void> = Effect.void) =>
+  const turn = (
+    limit: number | undefined,
+    during: Effect.Effect<void, never, Scope.Scope> = Effect.void,
+  ) =>
     Effect.gen(function* () {
       yield* sessions.set(limit === undefined ? config : { ...config, nativeSubagentLimit: limit });
       yield* harness.startTurn("work");
@@ -99,7 +106,7 @@ const limitHarness = Effect.fn("limitHarness")(function* (
       yield* push(status(root, "idle"));
       yield* Fiber.join(terminal);
     });
-  return { harness, push, root, status, turn, updates };
+  return { harness, payloads, push, root, sessions, config, status, turn, updated, updates };
 });
 
 describe("OpenCode native subagent limit", () => {
@@ -205,18 +212,76 @@ describe("OpenCode native subagent limit", () => {
         failing = childFails;
         const second = yield* Effect.exit(turn(0));
         assert.equal(Exit.isFailure(second), childFails);
-        if (!childFails)
-          assert.deepEqual(
-            updates.slice(-2).map((update) => [update.sessionID, update.permission]),
-            [
-              [root, [...openCodePermissionRules(harness.policy), DENY]],
-              [child, [...childRules.permission, DENY]],
-            ],
-          );
+        if (childFails) return;
+        assert.deepEqual(
+          updates.slice(-2).map((update) => [update.sessionID, update.permission]),
+          [
+            [root, [...openCodePermissionRules(harness.policy), DENY]],
+            [child, [...childRules.permission, DENY]],
+          ],
+        );
+        // Lifting the limit is best effort for a child, and one that failed is tried again.
+        failing = true;
+        yield* turn(undefined);
+        assert.equal(updates.at(-1)?.sessionID, root);
+        failing = false;
+        yield* turn(undefined);
+        assert.deepEqual(
+          [updates.at(-1)?.sessionID, updates.at(-1)?.permission],
+          [child, childRules.permission],
+        );
       }).pipe(
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
         Effect.scoped,
       ),
+  );
+
+  it.effect("denies subagents before a steering message once the limit is zero", () =>
+    Effect.gen(function* () {
+      const { harness, payloads, push, sessions, config, root, turn, updated } =
+        yield* limitHarness("steer-limit", (permission) => ({ permission }));
+      yield* turn(
+        undefined,
+        Effect.gen(function* () {
+          const snapshot = yield* harness.runtime.readThreadSnapshot({
+            providerThread: harness.providerThread,
+          });
+          yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+          const steer = harness.runtime
+            .steerTurn({
+              threadId: harness.threadId,
+              runId: harness.runId,
+              providerThread: harness.providerThread,
+              providerTurnId: snapshot.providerTurns.at(-1)!.id,
+              message: {
+                messageId: MessageId.make("message-opencode-steer-limit"),
+                text: "more",
+                attachments: [],
+                createdBy: "user",
+                creationSource: "web",
+              },
+            })
+            .pipe(Effect.exit);
+          assert.isTrue(Exit.isSuccess(yield* steer));
+          assert.deepEqual(yield* Queue.take(updated), {
+            sessionID: root,
+            permission: [...openCodePermissionRules(harness.policy), DENY],
+            metadata: { goatSubagentDeny: true },
+          });
+          // The steer's own receipt lets the turn settle.
+          yield* push({
+            type: "message.updated",
+            properties: {
+              sessionID: root,
+              info: { id: payloads.at(-1)!.messageID, role: "user", time: { created: 1 } },
+            },
+          });
+        }).pipe(Effect.orDie),
+      );
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
   );
 
   it.effect("refuses a native command that would run as a subtask while the limit is zero", () =>

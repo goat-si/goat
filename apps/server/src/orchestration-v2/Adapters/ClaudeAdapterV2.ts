@@ -4414,6 +4414,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         );
         const successfulSteer = Symbol();
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
+        // The CLI's version from its last init, so a capped process on a CLI without the cap
+        // opens with Agent off instead of racing the first prompt.
+        let observedClaudeVersion: string | undefined;
         if (adapterOptions.mcpCredentialRotations)
           yield* adapterOptions.mcpCredentialRotations.pipe(
             Stream.runForEach((rotation) =>
@@ -9728,6 +9731,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const subagentPolicy = claudeNativeSubagentPolicy(
             mcpSession?.nativeSubagentLimit,
             isGoatBotSessionThreadId(turnInput.threadId),
+            observedClaudeVersion,
           );
           const queryPolicyKey =
             subagentPolicy.key +
@@ -9977,20 +9981,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.openedPermissionMode =
                       message.permissionMode ?? context.openedPermissionMode;
                     context.receivedInit = true;
+                    observedClaudeVersion = message.claude_code_version ?? "unknown";
                     if (
                       subagentPolicy.key.startsWith("cap:") &&
-                      claudeIgnoresSubagentCap(message.claude_code_version)
+                      claudeIgnoresSubagentCap(observedClaudeVersion)
                     )
+                      // A process that cannot take the deny ends rather than run uncapped.
                       return Effect.logWarning(
                         "This Claude Code cannot cap native subagents; they stay off for this process.",
-                        { version: message.claude_code_version },
+                        { version: observedClaudeVersion },
                       ).pipe(
                         Effect.andThen(
                           querySession.applyFlagSettings({
                             permissions: { deny: ["Agent", "Task"] },
                           }),
                         ),
-                        Effect.ignore({ log: true }),
+                        Effect.catch((cause) =>
+                          Effect.logError("Could not turn off Claude's native subagents.", {
+                            cause,
+                          }).pipe(Effect.andThen(querySession.close.pipe(Effect.ignore))),
+                        ),
                         Effect.andThen(handleSdkMessage({ query: querySession, message })),
                       );
                   }
