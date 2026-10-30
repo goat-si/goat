@@ -160,3 +160,29 @@ it.live("fails closed when an execution world appears during the dispatch", () =
     }
   }),
 );
+
+it.live("rejects protected autocomplete fields and missing event evidence", () =>
+  Effect.promise(async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await (await browser.newContext()).newPage();
+      await page.setContent(
+        '<input id="otp" autocomplete="one-time-code"><input id="card" autocomplete="cc-number"><input id="current" autocomplete="current-password"><input id="new" autocomplete="new-password"><input id="normal">',
+      );
+      for (const selector of ["#otp", "#card", "#current", "#new"]) {
+        await page.locator(selector).focus();
+        const evidence = await startBrowserInputEvidence(page);
+        await page.keyboard.insertText("private");
+        expect(await evidence.finish()).toBe(false);
+      }
+      await page.locator("#normal").focus();
+      const noEvents = await startBrowserInputEvidence(page);
+      expect(await noEvents.finish()).toBe(false);
+      await page.close();
+      const unavailable = await startBrowserInputEvidence(page);
+      expect(await unavailable.finish()).toBe(false);
+    } finally {
+      await browser.close();
+    }
+  }),
+);
