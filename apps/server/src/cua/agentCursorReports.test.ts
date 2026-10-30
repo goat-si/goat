@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
@@ -18,6 +19,40 @@ const pngOf = (width: number, height: number) => {
 };
 
 describe("agent cursor reports", () => {
+  it.effect("a show does not wait for the helper's ack, and a capture's hide does", () =>
+    Effect.gen(function* () {
+      const posted: Array<string> = [];
+      const waited: Array<string> = [];
+      const gate = yield* Deferred.make<void>();
+      const sink = Object.assign(
+        (command: { readonly op: string }) =>
+          Effect.sync(() => void waited.push(command.op)).pipe(
+            Effect.andThen(Deferred.await(gate)),
+          ),
+        {
+          post: (command: { readonly op: string }) =>
+            Effect.sync(() => void posted.push(command.op)),
+        },
+      );
+      const drawer = yield* makeOverlayDrawer(undefined, () => sink as never, undefined);
+      yield* drawer.draw({
+        type: "call",
+        id: "1",
+        name: "click",
+        args: { pid: 4, window_id: 9, element_token: "s1:1" },
+      });
+      assert.deepEqual(posted, ["show"]);
+      assert.deepEqual(waited, []);
+      const capture = yield* drawer
+        .draw({ type: "call", id: "2", name: "get_window_state", args: { pid: 4, window_id: 9 } })
+        .pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 millis");
+      assert.deepEqual(waited, ["hide"]);
+      assert.isUndefined(capture.pollUnsafe());
+      yield* Deferred.succeed(gate, undefined);
+      yield* Fiber.join(capture);
+    }),
+  );
   it.effect("a late phase of an older owner does not take the preview from the current one", () =>
     Effect.gen(function* () {
       const reports: AgentCursorReport[] = [];

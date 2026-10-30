@@ -9,7 +9,7 @@ import {
   AgentCursorOwner,
   ComputerUseOverlayPoint,
 } from "./computerUseOverlay.ts";
-import { DEFAULT_SCREEN_RUN_LIMITS } from "./screenCode.ts";
+import { DEFAULT_SCREEN_RUN_LIMITS, proxyHopFields } from "./screenCode.ts";
 
 // Screen primitives on the computer use lease stream. A leaf: cua.ts re-exports it and joins the
 // request, cancel and cursor updates into its lease update unions.
@@ -111,6 +111,8 @@ export const ComputerUsePrimitiveReply = strictPrimitive(
         ),
       }),
     ),
+    /** The proxy's own timing of this call; see ScreenHopTimes. */
+    hops: Schema.optionalKey(Schema.Struct(proxyHopFields)),
   }),
 );
 export type ComputerUsePrimitiveReply = typeof ComputerUsePrimitiveReply.Type;

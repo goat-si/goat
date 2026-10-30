@@ -29,7 +29,11 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
 import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
 import { typeManifestRefusal } from "./ComputerUseManifestRefusal.ts";
-import { makeProxyRelease, reserveProxyCall } from "./ComputerUseLeaseProxyAdmission.ts";
+import {
+  makeProxyRelease,
+  makeProxyReleaseLater,
+  reserveProxyCall,
+} from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -90,11 +94,12 @@ import {
   PRIMITIVE_ID,
   dispatchedPrimitives,
   forwardPrimitiveRequests,
+  beginHops,
+  outstandingCall,
   type OutstandingCall,
   type ReplySink,
   type LeaseProxyOptions,
 } from "./ComputerUseLeaseProxyOptions.ts";
-import { windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 
 export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <EU, ED>(
@@ -245,6 +250,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
 
   // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = makeProxyRelease(options);
+  const releaseLater = makeProxyReleaseLater(options, scope);
 
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
@@ -273,6 +279,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
+        if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
           finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
@@ -330,7 +337,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           const heldReply = () =>
             Transport.heldByTransport(options.transportHeld, request.method, request.tool);
           if (gone() || paused !== undefined || heldReply()) return;
-          yield* release(request, true, driverRefused(request.tool, message, request.args));
+          yield* releaseLater(request, true, driverRefused(request.tool, message, request.args));
           const latest = outstanding.get(key);
           if (gone() || paused !== undefined || idle || latest === undefined || heldReply()) return;
           outstanding.delete(key);
@@ -650,6 +657,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
+    yield* beginHops(primitive);
     const keyCall = resolveKeyCall(incoming);
     let line = "line" in keyCall ? keyCall.line : incoming;
     const decoded = decodeProviderIngress(line);
@@ -942,19 +950,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Effect.sync(() => {
         if (!isRequest) return;
         if (primitive !== undefined) dispatchedPrimitives.add(primitive);
-        outstanding.set(JSON.stringify(id), {
-          id,
-          method: message!.method!,
-          ...(typeof message?.params?.name === "string" ? { tool: message.params.name } : {}),
-          args: message?.params?.arguments,
-          ...windowArgument(message?.params?.arguments),
-          unfiltered: Object.keys(message?.params?.arguments ?? {}).every((k) => k === "session"),
-          connectionId: current.connectionId,
-          sentAt,
-          sink,
-          ...(reservationId === undefined ? {} : { reservationId }),
-          ...(primitive === undefined ? {} : { primitiveRequestId: primitive.requestId }),
-        });
+        const sent = outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive);
+        outstanding.set(JSON.stringify(id), sent);
       });
     const outcome = yield* sendUnlessShared(
       isRequest &&

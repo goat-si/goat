@@ -92,7 +92,22 @@ export function overlayChannel(
       ),
       Effect.asVoid,
     );
+  /**
+   * Writes a command and returns without waiting for its acknowledgement. A show needs none: the
+   * helper applies commands in order, so a later hide still lands after it, and a capture checks
+   * its own hide. The call's answer no longer waits for the cursor to reach the screen.
+   */
+  const post = (command: ComputerUseOverlayCommand) =>
+    Effect.sync(() => {
+      if (socket.destroyed || !socket.writable) return;
+      if (command.op === "show") {
+        mayBeVisible = true;
+        lastHideOutcome = "unavailable";
+      }
+      socket.write(encodeLine({ seq: ++seq, command }) + "\n");
+    });
   return Object.assign(send, {
+    post,
     captureHideConfirmed: () => !mayBeVisible || lastHideOutcome === "applied",
     lastHideOutcome: () => lastHideOutcome,
   });

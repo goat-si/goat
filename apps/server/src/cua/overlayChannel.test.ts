@@ -42,6 +42,28 @@ describe("overlayChannel", () => {
     }),
   );
 
+  it.effect("a posted show returns at once, and a later hide still waits for its own ack", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(false);
+      const send = overlayChannel(helper.socket);
+      yield* send.post({ op: "show", pid: 4, windowId: 9, phase: "acting" });
+      assert.deepEqual(
+        helper.lines.map((line) => line.seq),
+        [1],
+      );
+      assert.isFalse(send.captureHideConfirmed());
+      const fiber = yield* send(hide).pipe(Effect.forkChild);
+      yield* TestClock.adjust(OVERLAY_ACK_TIMEOUT_MS - 1);
+      assert.isUndefined(fiber.pollUnsafe());
+      yield* TestClock.adjust(1);
+      yield* Fiber.join(fiber);
+      assert.deepEqual(
+        helper.lines.map((line) => line.seq),
+        [1, 2],
+      );
+    }),
+  );
+
   it.effect("goes on after the timeout when the helper never answers", () =>
     Effect.gen(function* () {
       const helper = helperEnd(false);
