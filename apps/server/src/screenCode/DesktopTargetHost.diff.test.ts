@@ -1,5 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeURL from "node:url";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { ScreenRunService } from "./ScreenRunService.ts";
+import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import { call, context, fixture, goat2WindowState } from "./DesktopTargetHost.testkit.ts";
 
@@ -107,3 +113,92 @@ it.effect("a diff after a filtered observation reads the whole window", () =>
     expect(next).toMatchObject({ mode: "full", resetReason: "full read: scope changed" });
   }),
 );
+
+const rowState = (snapshot: string, lifted: boolean) => ({
+  pid: 42,
+  window_id: 7,
+  snapshot_id: snapshot,
+  elements_complete: false,
+  tree_markdown: lifted
+    ? '- [0] AXWindow "Document"\n  - [1] AXRow\n    - AXStaticText = "Target row"\n  - [2] AXButton "Target row extra"'
+    : '- [0] AXWindow "Document"\n  - [1] AXRow "Before"\n  - [2] AXButton "Target row extra"',
+  elements: [
+    { element_index: 0, element_token: `${snapshot}:0`, role: "AXWindow", label: "Document" },
+    {
+      element_index: 1,
+      element_token: `${snapshot}:1`,
+      role: "AXRow",
+      ...(lifted ? {} : { label: "Before" }),
+      parent_index: 0,
+    },
+    {
+      element_index: 2,
+      element_token: `${snapshot}:2`,
+      role: "AXButton",
+      label: "Target row extra",
+      parent_index: 0,
+    },
+  ],
+});
+
+for (const liftedAtFirst of [true, false]) {
+  it.live(
+    liftedAtFirst
+      ? "a text-named baseline forces a full read before resolving its name"
+      : "an unlabeled row in a diff forces a full read before resolving its name",
+    () => {
+      let reads = 0;
+      const { host, sent } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          reads++;
+          const snapshot = `s${reads}`;
+          if (args.since !== undefined) {
+            const { tree_markdown: _markdown, ...state } = rowState(snapshot, true);
+            return { ...state, since_status: "diff", tree_diff: "~ [1] AXRow" };
+          }
+          return rowState(snapshot, liftedAtFirst || reads > 1);
+        },
+      });
+      return Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const result = yield* service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+          const first = await app.observe(); const second = await app.observe();
+          await app.click('Target row'); return {first: first.mode, mode: second.mode, reason: second.resetReason};`,
+        });
+        expect(result.value).toEqual({
+          first: "full",
+          mode: "full",
+          reason: "full read: rows named by their text",
+        });
+        const calls = sent.filter((entry) => entry.tool === "get_window_state");
+        expect(calls).toHaveLength(liftedAtFirst ? 2 : 3);
+        expect(calls[0]?.args).not.toHaveProperty("since");
+        if (liftedAtFirst) expect(calls[1]?.args).not.toHaveProperty("since");
+        else {
+          expect(calls[1]?.args).toMatchObject({ since: "s1" });
+          expect(calls[2]?.args).not.toHaveProperty("since");
+        }
+        expect(sent.find((entry) => entry.tool === "click")?.args).toMatchObject({
+          element_token: liftedAtFirst ? "s2:1" : "s3:1",
+        });
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher: createScreenDispatchRouter({ app: host }),
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    },
+  );
+}
