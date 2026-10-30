@@ -319,6 +319,65 @@ it.live(
   },
 );
 
+it.live("a grouped Go to Folder shortcut reads windows around the press", () => {
+  const { host, sent } = fixture();
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} const clicks = [app.press('cmd+shift+g'), app.click('Apply')]; ${SETTLED}`,
+    );
+    expect(result.value).toEqual(["confirmed", "confirmed"]);
+    const calls = sent.map((entry) => entry.tool).slice(3);
+    expect(calls.slice(0, 3)).toEqual(["list_windows", "press_key", "list_windows"]);
+    expect(calls.at(-1)).toBe("click");
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.live("drag, menu and text selection run as ordered group members", () => {
+  const groups: string[][] = [];
+  const { host, sent } = fixture({
+    list_windows: {
+      windows: [
+        {
+          pid: 42,
+          window_id: 7,
+          title: "Document",
+          bounds: { x: 10, y: 20, width: 100, height: 100 },
+        },
+      ],
+    },
+    get_window_state: {
+      pid: 42,
+      window_id: 7,
+      snapshot_id: "s0000000a",
+      elements_complete: true,
+      tree_markdown: '- [1] AXTextField "Name" = "hello world"',
+      elements: [
+        {
+          role: "AXTextField",
+          element_index: 1,
+          label: "Name",
+          value: "hello world",
+          element_token: "s0000000a:1",
+        },
+      ],
+    },
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} const clicks = [app.drag({window:[10,10]}, {window:[20,20]}), app.menu(['Edit', 'Select All']), app.selectText('Name', 'world')]; ${SETTLED}`,
+    );
+    expect(result.value).toEqual(["confirmed", "confirmed", "confirmed"]);
+    expect(groups).toEqual([["drag", "invoke_menu", "select_text"]]);
+    expect(
+      sent
+        .filter((entry) => ["drag", "invoke_menu", "select_text"].includes(entry.tool))
+        .map((entry) => entry.tool),
+    ).toEqual(["drag", "invoke_menu", "select_text"]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host, groups)));
+});
+
 it.live("concurrent app press, scroll and click are admitted as one ordered group", () => {
   const groups: string[][] = [];
   const { host, sent } = fixture({
