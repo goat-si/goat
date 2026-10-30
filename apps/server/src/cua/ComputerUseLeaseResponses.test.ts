@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import { READ_CUT_OFF, MAY_HAVE_ACTED } from "./ComputerUseLeaseMessages.ts";
-import { cutOff, offScreenAnswer } from "./ComputerUseLeaseResponses.ts";
+import { cutOff, offScreenAnswer, refusal } from "./ComputerUseLeaseResponses.ts";
 
 const parsed = (line: string) => JSON.parse(line);
 const cause = { _tag: "end", reason: "stopped" } as const;
@@ -34,4 +34,17 @@ describe("cut-off and off-screen answers for menu_bar_extras", () => {
     assert.equal(click.structuredContent.effect, "unverifiable");
     assert.isTrue(click.structuredContent.safety.possibleCommit);
   });
+});
+
+it("person stop is terminal and preserves uncertainty for an interrupted write", () => {
+  const notSent = parsed(
+    refusal(1, "tools/call", "stopped", "Do not continue this turn.", undefined, undefined, {
+      tool: "click",
+    }),
+  ).result;
+  assert.equal(notSent.structuredContent.code, "stopped_by_person");
+  assert.equal(notSent.structuredContent.safety.retryClass, "never");
+  const interrupted = parsed(cutOff(2, "click", cause)).result;
+  assert.equal(interrupted.structuredContent.code, "stopped_by_person");
+  assert.isTrue(interrupted.structuredContent.safety.possibleCommit);
 });
