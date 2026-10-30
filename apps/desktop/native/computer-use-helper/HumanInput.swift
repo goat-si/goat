@@ -13,8 +13,7 @@ enum PointerTap {
   /// The eventSourceUserData tag ("GOATCUA1") the GOAT driver sets on pointer CGEvents it posts.
   static let driverEventUserData: Int64 = 0x474F_4154_4355_4131
 
-  /// The event types the tap receives. Keyboard events are never among them (D7: the helper does
-  /// not use Input Monitoring); keyboard input is polled.
+  /// Pointer event types the tap reports as activity.
   static let types: [CGEventType] = [
     .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
     .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
@@ -63,8 +62,8 @@ struct PolledKind {
 /// calls ran and keep only the rest (apps/server/src/cua/agentInputLog.ts).
 ///
 /// Pointer events come one by one from a listen-only event tap, which needs no grant. Keyboard
-/// events are polled every PolledKind.interval, as the newest key's age, since a keyboard tap
-/// would need Input Monitoring, which the helper does not use (D7). If no tap can be made, the
+/// events are polled every PolledKind.interval. With Input Monitoring, Esc is also read by the
+/// tap. If no tap can be made, the
 /// pointer is polled the same way. Nothing listens once the connection ends.
 final class InputActivity {
   private static let keyboard: [CGEventType] = [.keyDown, .flagsChanged]
@@ -125,9 +124,7 @@ final class InputActivity {
         tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
         eventsOfInterest: mask,
         callback: { _, type, event, info in
-          // Only the event's type and its driver tag leave this callback: its location, buttons
-          // and every other field are never read, so nothing about where or what was clicked is
-          // kept or sent.
+          // Read only the driver tag and, on keyDown, the key code used to detect Esc.
           if let info {
             let userData = event.getIntegerValueField(.eventSourceUserData)
             let keyCode = type == .keyDown ? event.getIntegerValueField(.keyboardEventKeycode) : -1
@@ -156,7 +153,7 @@ final class InputActivity {
     return true
   }
 
-  /// On the tap's thread, as each event arrives, with its type and driver tag only.
+  /// On the tap's thread, as each event arrives.
   private func received(_ type: CGEventType, userData: Int64 = 0, keyCode: Int64 = -1) {
     // The system turns off a tap it judges slow or during secure input; listening goes on.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
