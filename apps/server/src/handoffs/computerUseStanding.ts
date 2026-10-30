@@ -54,12 +54,12 @@ export const makeComputerUseStanding = (deps: {
   const allowed = Effect.fn("Handoffs.computerUseStandingAllowed")(function* (
     threadId: ThreadId,
     apps: ReadonlyArray<string>,
+    list: ReadonlyArray<string>,
   ) {
     const saved = yield* sql<{
       app_key: string;
     }>`SELECT app_key FROM computer_use_session_approvals WHERE thread_id = ${threadId}`;
     const session = new Set(saved.map((row) => row.app_key));
-    const list = Option.isSome(settings) ? (yield* settings.value.getSettings).cuaAllowedApps : [];
     const always = new Set(list.map(cuaAppKey));
     return apps.every(
       (app) =>
@@ -67,6 +67,14 @@ export const makeComputerUseStanding = (deps: {
         (session.has(cuaAppKey(app)) || always.has(cuaAppKey(app))),
     );
   }, Effect.mapError(unavailable));
+  const withAllowedSettings = <A>(
+    use: (list: ReadonlyArray<string>) => Effect.Effect<A, HandoffError>,
+  ) =>
+    Option.isSome(settings)
+      ? settings.value
+          .withSettingsSnapshot((snapshot) => use(snapshot.cuaAllowedApps))
+          .pipe(Effect.mapError(unavailable))
+      : use([]);
   const validate = Effect.fn("Handoffs.validateComputerUseScope")((
     input: HandoffRespondInput,
     record: Handoff,
@@ -114,33 +122,35 @@ export const makeComputerUseStanding = (deps: {
     if (endsApproved) yield* clear(input.threadId);
   });
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
-    const attempt = Effect.gen(function* () {
-      const apps = input.apps;
-      if (
-        input.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
-        apps === undefined ||
-        apps.length === 0 ||
-        input.computerUseForeground !== undefined ||
-        apps.some(isExcludedCuaApplication)
-      )
-        return Option.none();
-      if (!(yield* allowed(input.requestedBy.threadId, apps))) return Option.none();
-      if (
-        Option.isSome(leases) &&
-        Option.isSome(
-          yield* leases.value
-            .holder(input.requestedBy.threadId, apps)
-            .pipe(Effect.mapError(unavailable)),
+    const attempt = withAllowedSettings((list) =>
+      Effect.gen(function* () {
+        const apps = input.apps;
+        if (
+          input.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
+          apps === undefined ||
+          apps.length === 0 ||
+          input.computerUseForeground !== undefined ||
+          apps.some(isExcludedCuaApplication)
         )
-      )
-        return Option.none();
-      const granted = yield* deps.create(
-        { ...input, reason: `${input.reason} Allowed by a standing choice.` },
-        true,
-      );
-      if (Option.isSome(leases)) yield* leases.value.changed;
-      return Option.some(granted);
-    }).pipe(lock.withPermits(1));
+          return Option.none();
+        if (!(yield* allowed(input.requestedBy.threadId, apps, list))) return Option.none();
+        if (
+          Option.isSome(leases) &&
+          Option.isSome(
+            yield* leases.value
+              .holder(input.requestedBy.threadId, apps)
+              .pipe(Effect.mapError(unavailable)),
+          )
+        )
+          return Option.none();
+        const granted = yield* deps.create(
+          { ...input, reason: `${input.reason} Allowed by a standing choice.` },
+          true,
+        );
+        if (Option.isSome(leases)) yield* leases.value.changed;
+        return Option.some(granted);
+      }),
+    ).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(attempt) : attempt;
   });
   const stop = Effect.fn("Handoffs.stopComputerUseSessions")((threadId?: ThreadId) => {
@@ -158,22 +168,24 @@ export const makeComputerUseStanding = (deps: {
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
   const revalidate = Effect.fn("Handoffs.revalidateComputerUse")((threadId?: ThreadId) => {
-    const effect = Effect.gen(function* () {
-      if (Option.isNone(leases)) return;
-      const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
-      for (const grant of grants) {
-        if (threadId !== undefined && grant.threadId !== threadId) continue;
-        const handoff = yield* deps.read(grant.threadId, grant.handoffId);
-        if (
-          (handoff.computerUseScope !== "always" && handoff.computerUseScope !== "standing") ||
-          handoff.apps === undefined
-        )
-          continue;
-        if (yield* allowed(grant.threadId, handoff.apps)) continue;
-        yield* leases.value.release([grant.handoffId]);
-        yield* deps.revoke(handoff);
-      }
-    }).pipe(lock.withPermits(1));
+    const effect = withAllowedSettings((list) =>
+      Effect.gen(function* () {
+        if (Option.isNone(leases)) return;
+        const grants = yield* leases.value.grants.pipe(Effect.mapError(unavailable));
+        for (const grant of grants) {
+          if (threadId !== undefined && grant.threadId !== threadId) continue;
+          const handoff = yield* deps.read(grant.threadId, grant.handoffId);
+          if (
+            (handoff.computerUseScope !== "always" && handoff.computerUseScope !== "standing") ||
+            handoff.apps === undefined
+          )
+            continue;
+          if (yield* allowed(grant.threadId, handoff.apps, list)) continue;
+          yield* leases.value.release([grant.handoffId]);
+          yield* deps.revoke(handoff);
+        }
+      }),
+    ).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
   return { validate, record, clear, auto, stop, revalidate };
