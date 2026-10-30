@@ -7,8 +7,8 @@ const change = (
   length: number,
   generation = 0,
 ) => ({ type: "change", generation, seq, changes, length, checkbox: false }) as const;
-const doc = (seq: number, text: string, generation = 0) =>
-  ({ type: "doc", generation, seq, doc: text }) as const;
+const doc = (seq: number, text: string, checkboxSeqs: number[] = [], generation = 0) =>
+  ({ type: "doc", generation, seq, doc: text, checkboxSeqs }) as const;
 const requestDoc = { send: { type: "requestDoc" } };
 
 describe("note editor bridge keeps React Native's copy equal to the page", () => {
@@ -63,5 +63,26 @@ describe("note editor bridge keeps React Native's copy equal to the page", () =>
     expect(bridge.sync("hub")).toEqual({ type: "setDoc", generation: 1, doc: "hub" });
     expect(bridge.receive(change(2, [[2, 2, "c"]], 3))).toEqual({});
     expect(bridge.receive(change(1, [[3, 3, "!"]], 4, 1)).value?.text).toBe("hub!");
+  });
+  it("saves a recovered checkbox tap as a checkbox tap, and anything mixed as an edit", () => {
+    const tap = new NoteEditorBridge("- [ ] a\n- [ ] b");
+    // seq 1 (a checkbox tap) is lost; seq 2 (another tap) arrives and triggers a resync.
+    expect(tap.receive({ ...change(2, [[11, 12, "x"]], 15), checkbox: true })).toEqual(requestDoc);
+    expect(tap.receive(doc(2, "- [x] a\n- [x] b", [1, 2]))).toEqual({
+      value: { text: "- [x] a\n- [x] b", checkbox: true },
+    });
+    const typed = new NoteEditorBridge("- [ ] a");
+    expect(typed.receive(change(2, [[7, 7, "!"]], 8))).toEqual(requestDoc);
+    expect(typed.receive(doc(2, "- [x] a!", [1])).value).toEqual({
+      text: "- [x] a!",
+      checkbox: false,
+    });
+  });
+
+  it("reports nothing when a snapshot matches the copy it already had", () => {
+    const bridge = new NoteEditorBridge("same");
+    bridge.receive(change(2, [[0, 0, "x"]], 5));
+    expect(bridge.receive(doc(2, "same"))).toEqual({});
+    expect(bridge.pending).toBe(false);
   });
 });

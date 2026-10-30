@@ -69,6 +69,8 @@ export type NoteEditorOutbound =
       readonly generation: number;
       readonly seq: number;
       readonly doc: string;
+      /** Recent sequence numbers in this generation that were checkbox taps. */
+      readonly checkboxSeqs: ReadonlyArray<number>;
     }
   | { readonly type: "focus"; readonly focused: boolean }
   | { readonly type: "source"; readonly source: boolean }
@@ -110,9 +112,13 @@ export function parseNoteEditorMessage(data: string): NoteEditorOutbound | null 
         : null;
     }
     case "doc": {
-      const { generation, seq, doc } = message;
-      return isCount(generation) && isCount(seq) && typeof doc === "string"
-        ? { type, generation, seq, doc }
+      const { generation, seq, doc, checkboxSeqs } = message;
+      return isCount(generation) &&
+        isCount(seq) &&
+        typeof doc === "string" &&
+        Array.isArray(checkboxSeqs) &&
+        checkboxSeqs.every(isCount)
+        ? { type, generation, seq, doc, checkboxSeqs }
         : null;
     }
     case "focus":

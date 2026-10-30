@@ -139,7 +139,17 @@ function NoteContent(props: NoteParams) {
     };
   }, [environmentId, props.path]);
   useEffect(() => {
-    if (!restored || !connected || row || editing || saving || dirty || (props.create && !latest))
+    // A re-syncing editor may hold text newer than body; a hub read must not replace it.
+    if (
+      !restored ||
+      !connected ||
+      row ||
+      editing ||
+      saving ||
+      dirty ||
+      editorHolding ||
+      (props.create && !latest)
+    )
       return;
     let active = true;
     const epoch = readEpoch.current;
@@ -162,7 +172,19 @@ function NoteContent(props: NoteParams) {
     return () => {
       active = false;
     };
-  }, [readRequest, props.create, latest, row, editing, saving, dirty, read, restored, connected]);
+  }, [
+    readRequest,
+    props.create,
+    latest,
+    row,
+    editing,
+    saving,
+    dirty,
+    read,
+    restored,
+    connected,
+    editorHolding,
+  ]);
   useEffect(() => {
     const before = previousRow.current;
     previousRow.current = row;
@@ -260,7 +282,8 @@ function NoteContent(props: NoteParams) {
       );
     } else setError(notesError(failure));
   };
-  const canDelete = canStart && restored && note !== null && !row && !editing && !dirty && !busy;
+  const canDelete =
+    canStart && restored && note !== null && !row && !editing && !dirty && !busy && !editorHolding;
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
   const beginEdit = (target: "live" | "source") => {
     if (editing) return;
@@ -391,7 +414,7 @@ function NoteContent(props: NoteParams) {
               key={value}
               label={value}
               tone={status === value ? "primary" : "secondary"}
-              disabled={!canWrite || busy || row?.state === "conflict"}
+              disabled={!canWrite || busy || editorHolding || row?.state === "conflict"}
               selected={status === value}
               onPress={() => {
                 if (editing) {
@@ -412,7 +435,7 @@ function NoteContent(props: NoteParams) {
         fullWidth
         tone="primary"
         label="Start work from this note"
-        disabled={!canStart || !note || Boolean(row) || editing || busy || dirty}
+        disabled={!canStart || !note || Boolean(row) || editing || busy || dirty || editorHolding}
         onPress={() => navigation.navigate("NoteStartWork", { environmentId, path: props.path })}
       />
       <Button

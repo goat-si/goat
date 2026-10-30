@@ -61,7 +61,8 @@ export class NoteEditorBridge {
 
   receive(message: EditorReport): NoteEditorReceipt {
     if (message.generation !== this.generation) return {};
-    if (message.type === "doc") return this.snapshot(message.doc, message.seq);
+    if (message.type === "doc")
+      return this.snapshot(message.doc, message.seq, message.checkboxSeqs);
     if (this.awaitingDoc) {
       this.buffered.push(message);
       return this.buffered.length % RESEND_AFTER === 0 ? { send: requestDoc } : {};
@@ -71,20 +72,30 @@ export class NoteEditorBridge {
     return this.accept(next, message.checkbox);
   }
 
-  private snapshot(doc: string, seq: number): NoteEditorReceipt {
+  private snapshot(
+    doc: string,
+    seq: number,
+    checkboxSeqs: ReadonlyArray<number>,
+  ): NoteEditorReceipt {
     if (!this.awaitingDoc) return {};
     this.awaitingDoc = false;
+    const before = this.known;
+    // The edits this copy missed are checkbox taps only when the page says each one was.
+    const taps = new Set(checkboxSeqs);
+    let checkbox = seq > this.seq && seq - this.seq <= 256;
+    for (let missed = this.seq + 1; checkbox && missed <= seq; missed++)
+      checkbox = taps.has(missed);
     this.known = doc;
     this.seq = seq;
-    let checkbox = false;
     const newer = this.buffered.filter((change) => change.seq > seq).sort((a, b) => a.seq - b.seq);
     this.buffered = [];
     for (const change of newer) {
       const next = this.apply(change);
       if (next === null) return { ...this.accept(this.known, false), ...this.resync() };
       this.known = next;
-      checkbox ||= change.checkbox;
+      checkbox &&= change.checkbox;
     }
+    if (this.known === before) return {};
     return this.accept(this.known, checkbox);
   }
 

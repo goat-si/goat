@@ -591,6 +591,24 @@ describe("live note editor", () => {
     expect(button("Save on phone").disabled).toBe(false);
   });
 
+  it("holds status, delete, start work and hub reads while an unfocused editor re-syncs", async () => {
+    await live("- [ ] task\n");
+    act(() => button("Editor resyncing").click());
+    expect(button("idea").disabled).toBe(true);
+    expect(button("Delete note").disabled).toBe(true);
+    expect(button("Start work from this note").disabled).toBe(true);
+    await act(async () => {
+      mocks.connected = true;
+      mocks.rows = [];
+      render();
+    });
+    expect(mocks.read).not.toHaveBeenCalled();
+    act(() => button("Editor resynced").click());
+    await act(async () => render());
+    expect(mocks.read).toHaveBeenCalled();
+    expect(button("idea").disabled).toBe(false);
+  });
+
   it("ends editing for a saved new note on blur, so the hub read resumes", async () => {
     mocks.live = true;
     mocks.rows = [];

@@ -96,6 +96,8 @@ function boot(init: NoteEditorInit) {
   if (!parent) return;
   let generation = init.generation;
   let seq = 0;
+  // Lets React Native recognize a checkbox tap that only reached it through a snapshot.
+  const checkboxSeqs: number[] = [];
   let source = false;
   // Replacing text or reconfiguring mid-composition can drop the syllable being composed.
   let deferredDoc: Extract<NoteEditorInbound, { type: "setDoc" }> | null = null;
@@ -133,6 +135,10 @@ function boot(init: NoteEditorInit) {
               length: noteTextLength(tr.state.doc, lineBreak),
               checkbox: tr.annotation(checkboxChange) === true,
             });
+            if (tr.annotation(checkboxChange) === true) {
+              checkboxSeqs.push(seq);
+              if (checkboxSeqs.length > 256) checkboxSeqs.shift();
+            }
           }
           if (update.focusChanged) post({ type: "focus", focused: update.view.hasFocus });
           if (!update.view.composing && (deferredDoc || deferredConfig))
@@ -165,6 +171,7 @@ function boot(init: NoteEditorInit) {
       deferredDoc = null;
       generation = message.generation;
       seq = 0;
+      checkboxSeqs.length = 0;
       const spec = replaceNoteText(view.state, message.doc);
       if (spec) view.dispatch(spec);
     }
@@ -194,7 +201,7 @@ function boot(init: NoteEditorInit) {
         if (!view.composing) applyDeferred();
         return;
       case "requestDoc":
-        post({ type: "doc", generation, seq, doc: noteText(view.state) });
+        post({ type: "doc", generation, seq, doc: noteText(view.state), checkboxSeqs });
         return;
       case "command":
         switch (message.command) {
