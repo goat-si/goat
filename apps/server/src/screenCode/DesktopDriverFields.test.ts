@@ -308,6 +308,67 @@ it.live("an input deduplicates a disabled read sentence repeated as a structured
   }),
 );
 
+it.live.each([
+  {
+    effect: "unverifiable",
+    fields: { warning: "menu item read disabled before the press; effect unverified" },
+    summary: "Its effect is unverified. The item read disabled before the press.",
+    expected: "menu item read disabled before the press; effect unverified",
+  },
+  {
+    effect: "suspected_noop",
+    fields: { warning: "menu item read disabled; keys sent; likely no-op" },
+    summary: "Keys were sent. The item read disabled after validation.",
+    expected: "menu item read disabled; keys sent; likely no-op",
+  },
+  {
+    effect: "unverifiable",
+    fields: { warning: `a; ${"b".repeat(220)}` },
+    summary: "Its effect is unverified. The item read disabled before the press.",
+    expected: `a; ${"b".repeat(197)}`,
+  },
+  {
+    effect: "unverifiable",
+    fields: { note: "a structured note" },
+    summary: "Its effect is unverified. The item read disabled before the press.",
+    expected: "a structured note",
+  },
+])("input prefers structured notices over disabled prose: $effect $expected", (entry) =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      get_window_state: state,
+      press_key: new DriverSuccess({ effect: entry.effect, ...entry.fields }, entry.summary),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return await app.press('cmd+z');",
+    );
+    expect(result.value).toEqual({ ok: true, verdict: entry.effect, warnings: [entry.expected] });
+  }),
+);
+
+it.live.each([
+  { focus: undefined, expected: "focus restoration abandoned: user_input" },
+  { focus: { status: "restored", prior_pid: null }, expected: "focus restored to the prior app" },
+])(
+  "focus restoration prefers structured data and falls back to text: $expected",
+  ({ focus, expected }) =>
+    Effect.gen(function* () {
+      const { host } = fixture({
+        get_window_state: state,
+        press_key: new DriverSuccess(
+          { effect: "unverifiable", ...(focus === undefined ? {} : { focus_restoration: focus }) },
+          'focus_restoration: {"status":"abandoned","reason":"user_input","prior_pid":null}',
+        ),
+      });
+      const result = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return await app.press('cmd+z');",
+      );
+      expect(result.value).toEqual({ ok: true, verdict: "unverifiable", warnings: [expected] });
+    }),
+);
+
 it.live("an input deduplicates identical structured notes and warnings", () =>
   Effect.gen(function* () {
     const { host } = fixture({
