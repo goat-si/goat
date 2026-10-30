@@ -1,4 +1,10 @@
-import type { ServerConfig, ServerConfigStreamEvent, ServerProvider } from "@goat/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerConfig,
+  type ServerConfigStreamEvent,
+  type ServerProvider,
+} from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import { applyProviderStatusChanges } from "@goat/shared/providerStatusChanges";
 import * as Effect from "effect/Effect";
@@ -6,20 +12,19 @@ import * as Stream from "effect/Stream";
 
 import { withProviderStatusChanges } from "./serverConfigUpdates.ts";
 
-const provider = (instanceId: string, checkedAt: string) =>
-  ({
-    instanceId,
-    driver: "codex",
-    enabled: true,
-    installed: true,
-    version: "1.0.0",
-    status: "ready",
-    auth: { status: "authenticated" },
-    checkedAt,
-    models: [],
-    slashCommands: [],
-    skills: [{ name: "skill", path: "/skills/" + instanceId, enabled: true }],
-  }) as ServerProvider;
+const provider = (instanceId: string, checkedAt: string): ServerProvider => ({
+  instanceId: ProviderInstanceId.make(instanceId),
+  driver: ProviderDriverKind.make("codex"),
+  enabled: true,
+  installed: true,
+  version: "1.0.0",
+  status: "ready",
+  auth: { status: "authenticated" },
+  checkedAt,
+  models: [],
+  slashCommands: [],
+  skills: [{ name: "skill", path: "/skills/" + instanceId, enabled: true }],
+});
 
 const snapshot = (providers: ReadonlyArray<ServerProvider>): ServerConfigStreamEvent => ({
   version: 1,
@@ -63,7 +68,10 @@ it.effect(
       if (change?.type !== "providerStatusChanges" || next?.type !== "providerStatusChanges") {
         return yield* Effect.die("Expected provider status changes");
       }
-      assert.deepEqual(change.payload.instanceIds, ["codex", "claude"]);
+      assert.deepEqual(
+        change.payload.instanceIds,
+        refreshed.map((entry) => entry.instanceId),
+      );
       assert.deepEqual(
         change.payload.providers.map((entry) => entry.instanceId),
         ["codex"],
