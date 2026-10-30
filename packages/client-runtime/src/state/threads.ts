@@ -5,7 +5,6 @@ import {
   type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadStreamItem,
-  type OrchestrationV2TurnItem,
   type ThreadId as ThreadIdType,
 } from "@goat/contracts";
 import { boundedSnapshotProjection } from "@goat/shared/orchestrationV2BoundedSnapshot";
@@ -48,6 +47,13 @@ import {
   type ThreadHistoryMeta,
 } from "./threadHistoryMerge.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import {
+  historyMetaFromCachedSnapshot,
+  settleTurnItems,
+  shouldPersistThread,
+  snapshotToPersist,
+} from "./threadStateSnapshots.ts";
+import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
@@ -73,78 +79,6 @@ function formatHistoryError(error: unknown): string {
     return error.message;
   }
   return "Could not load earlier activity.";
-}
-
-function historyMetaFromCachedSnapshot(
-  snapshot: OrchestrationV2ThreadDetailSnapshot,
-): ThreadHistoryMeta {
-  const historyCursor = snapshot.historyCursor ?? null;
-  const hasMoreHistory = snapshot.hasMoreHistory ?? false;
-  return {
-    historyCursor,
-    hasMoreHistory,
-    loading: false,
-    error: null,
-    expanded: false,
-    latestLocalTurnOrdinal: snapshot.latestLocalTurnOrdinal ?? null,
-  };
-}
-
-function snapshotToPersist(
-  snapshotSequence: number,
-  projection: OrchestrationV2ThreadProjection,
-  history: ThreadHistoryMeta,
-  acceptsBoundedSnapshots: boolean,
-): OrchestrationV2ThreadDetailSnapshot {
-  // A complete bounded snapshot still proves paging support. Retain that evidence
-  // so a thread that grows while closed can resume with a bounded fallback.
-  if (acceptsBoundedSnapshots || history.hasMoreHistory || history.historyCursor !== null) {
-    return {
-      snapshotSequence,
-      projection,
-      historyCursor: history.historyCursor,
-      hasMoreHistory: history.hasMoreHistory,
-      latestLocalTurnOrdinal: history.latestLocalTurnOrdinal,
-    };
-  }
-  return { snapshotSequence, projection };
-}
-
-function shouldPersistThread(
-  thread: OrchestrationV2ThreadProjection,
-  history: ThreadHistoryMeta,
-): boolean {
-  // After the user loads older pages the in-memory timeline can grow large.
-  // Keep those expanded projections out of the monolithic cache.
-  if (history.expanded) {
-    return false;
-  }
-  return !thread.runs.some(
-    (run) => run.status === "preparing" || run.status === "starting" || run.status === "running",
-  );
-}
-
-// Only still-active local copies take the server's item: events applied meanwhile win,
-// and inherited rows belong to another thread.
-function settleTurnItems(
-  threadId: ThreadIdType,
-  projection: OrchestrationV2ThreadProjection,
-  settled: ReadonlyMap<string, OrchestrationV2TurnItem>,
-): OrchestrationV2ThreadProjection {
-  let changed = false;
-  const settle = (item: OrchestrationV2TurnItem, id: string) => {
-    const server = settled.get(id);
-    if (server === undefined || !isOrchestrationV2WorkActive(item.status)) return item;
-    changed = true;
-    return server;
-  };
-  const turnItems = projection.turnItems.map((item) => settle(item, item.id));
-  const visibleTurnItems = projection.visibleTurnItems.map((row) => {
-    if (row.sourceThreadId !== threadId) return row;
-    const item = settle(row.item, row.sourceItemId);
-    return item === row.item ? row : { ...row, item };
-  });
-  return changed ? { ...projection, turnItems, visibleTurnItems } : projection;
 }
 
 interface ThreadResumeSnapshot {
@@ -205,6 +139,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   );
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
+  StreamDiagnostics.noteThreadStreamOpened(environmentId, threadId);
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => StreamDiagnostics.noteThreadStreamClosed(environmentId, threadId)),
+  );
   const retained = resumeCache?.snapshot;
   const owner = {};
   if (resumeCache) resumeCache.owner = owner;
@@ -355,6 +293,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* runCachePersistence(persistence, persist).pipe(Effect.forkScoped);
 
+  const noteStatus = SubscriptionRef.get(state).pipe(
+    Effect.map((current) =>
+      StreamDiagnostics.noteThreadStreamStatus(
+        environmentId,
+        threadId,
+        current.status,
+        Option.isSome(current.error),
+      ),
+    ),
+  );
   const setConnecting = SubscriptionRef.update(state, (current) =>
     current.status === "deleted" || Option.isSome(current.error)
       ? current
@@ -390,6 +338,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           error: Option.some(message),
         })),
       ),
+      Effect.andThen(noteStatus),
     );
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
@@ -452,6 +401,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       error: Option.none(),
       history: EMPTY_THREAD_HISTORY_META,
     });
+    yield* noteStatus;
     yield* remember;
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
     yield* cache.removeThread(environmentId, threadId).pipe(
@@ -472,11 +422,26 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     OrchestrationV2ThreadStreamItem,
     { kind: "event" | "unknown-event" }
   >;
+  const noteEvents = (fresh: ReadonlyArray<EventItem>, unknown: number, sequence: number) =>
+    SubscriptionRef.get(state).pipe(
+      Effect.map((latest) =>
+        StreamDiagnostics.noteThreadStreamEvents(environmentId, threadId, {
+          known: fresh.length,
+          unknown,
+          sequence,
+          eventType: fresh.at(-1)?.event.type ?? null,
+          reply: StreamDiagnostics.replyProgress(fresh, Option.getOrNull(latest.data)),
+          status: latest.status,
+          hasError: Option.isSome(latest.error),
+        }),
+      ),
+    );
   const applyEventsLocked = Effect.fn("EnvironmentThreadState.applyEventsLocked")(function* (
     items: ReadonlyArray<SequencedItem>,
   ) {
     const appliedSequence = yield* SubscriptionRef.get(lastSequence);
     let sequence = appliedSequence;
+    let unknown = 0;
     const fresh: EventItem[] = [];
     for (const item of items) {
       if (item.sequence <= sequence) continue;
@@ -485,6 +450,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         fresh.push(item);
         continue;
       }
+      unknown += 1;
       yield* Effect.logDebug("Skipped a thread event type this client does not know.").pipe(
         Effect.annotateLogs({
           environmentId,
@@ -496,7 +462,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     }
     if (sequence === appliedSequence) return;
     yield* SubscriptionRef.set(lastSequence, sequence);
-    if (fresh.length === 0) return;
+    if (fresh.length === 0) return yield* noteEvents(fresh, unknown, sequence);
 
     const waiting = yield* Ref.get(awaitingCompletion);
     // Apply against the latest projection/history in one update so a concurrent
@@ -574,6 +540,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         return [result, current];
       },
     );
+    yield* noteEvents(fresh, unknown, sequence);
 
     if (result._tag === "delete") {
       yield* setDeleted();
@@ -602,17 +569,20 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ? { ...current, status: "live" as const, error: Option.none() }
           : current,
       );
+      StreamDiagnostics.noteThreadStreamSynchronized(environmentId, threadId);
+      yield* noteStatus;
       return;
     }
 
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshotSequence);
+      const projection = boundedSnapshotProjection(item);
       const hasProgressiveHistory =
         item.historyCursor !== undefined ||
         item.hasMoreHistory !== undefined ||
         item.latestLocalTurnOrdinal !== undefined;
       yield* setThread(
-        boundedSnapshotProjection(item),
+        projection,
         hasProgressiveHistory
           ? {
               history: {
@@ -626,6 +596,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             }
           : { resetHistory: true },
       );
+      StreamDiagnostics.noteThreadStreamSnapshot(environmentId, threadId, {
+        sequence: item.snapshotSequence,
+        source: "socket",
+        reply: StreamDiagnostics.snapshotReply(projection),
+      });
+      yield* noteStatus;
       return;
     }
 
@@ -896,14 +872,14 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
-      switch (connectionProjectionPhase(connectionState)) {
-        case "synchronizing":
-          return setConnecting;
-        case "disconnected":
-          return setDisconnected;
-        case "ready":
-          return setReady;
-      }
+      const phase = connectionProjectionPhase(connectionState);
+      const update =
+        phase === "synchronizing"
+          ? setConnecting
+          : phase === "disconnected"
+            ? setDisconnected
+            : setReady;
+      return Effect.andThen(update, noteStatus);
     }),
     Effect.forkScoped,
   );
@@ -925,6 +901,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ? current
         : { ...current, status: "synchronizing" as const, error: Option.none() },
     );
+    yield* noteStatus;
   });
 
   yield* markSynchronizing;
@@ -988,6 +965,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                         }
                       : EMPTY_THREAD_HISTORY_META;
                   yield* setThread(httpResult.snapshot.projection, { history });
+                  StreamDiagnostics.noteThreadStreamSnapshot(environmentId, threadId, {
+                    sequence: httpResult.snapshot.snapshotSequence,
+                    source: "http",
+                    reply: StreamDiagnostics.snapshotReply(httpResult.snapshot.projection),
+                  });
                   yield* remember;
                 }),
               );
@@ -1007,6 +989,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         const sequence = yield* SubscriptionRef.get(lastSequence);
         const canResume = Option.isSome(current.data);
         const acceptBoundedSnapshot = yield* Ref.get(acceptsBoundedSocketSnapshots);
+        StreamDiagnostics.noteThreadStreamSubscribed(environmentId, threadId, {
+          afterSequence: canResume ? sequence : null,
+          completionMarker: supportsCompletionMarker,
+        });
         if (!supportsCompletionMarker && canResume) {
           yield* SubscriptionRef.update(state, (value) => ({
             ...value,

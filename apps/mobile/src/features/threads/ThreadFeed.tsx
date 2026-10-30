@@ -159,6 +159,7 @@ import {
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { ThreadFeedPlaceholder } from "./ThreadFeedPlaceholder";
+import { ThreadFeedReplyProbe } from "./ThreadFeedReplyProbe";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
@@ -3103,6 +3104,14 @@ export const ThreadFeed = memo(function ThreadFeed({
         workspaceRoot={props.workspaceRoot}
       >
         <ThreadMediaVisibility>
+          {info.item.type === "message" && info.item.message.role === "assistant" ? (
+            <ThreadFeedReplyProbe
+              environmentId={String(props.environmentId)}
+              threadId={String(props.threadId)}
+              messageId={String(info.item.message.id)}
+              length={info.item.message.text.length}
+            />
+          ) : null}
           {renderFeedEntry(info, {
             environmentId: props.environmentId,
             dispatchingMessageId: props.dispatchingMessageId,

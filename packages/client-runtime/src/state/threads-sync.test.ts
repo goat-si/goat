@@ -2,9 +2,7 @@ import {
   EnvironmentId,
   EventId,
   MessageId,
-  NodeId,
   ORCHESTRATION_V2_WS_METHODS,
-  RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ThreadDetailSnapshot,
@@ -45,7 +43,20 @@ import {
   decodeOrDiscardOrchestrationCache,
 } from "../platform/orchestrationCache.ts";
 import * as RpcSession from "../rpc/session.ts";
-import { v2Now, v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
+import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
+import {
+  PENDING_QUESTION,
+  assistantMessage,
+  assistantReply,
+  awaitThreadState,
+  deleted,
+  projectionWithReply,
+  questionResolved,
+  snapshot,
+  synchronized,
+  testSession,
+  titleUpdated,
+} from "./threadsSyncFixtures.ts";
 import { onThreadRequestsResolved, type ThreadRequestsResolved } from "./threadRequests.ts";
 import { EMPTY_THREAD_HISTORY_META } from "./threadHistoryMerge.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
@@ -56,6 +67,7 @@ import {
   type ThreadSnapshotLoadResult,
 } from "./threads.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -79,36 +91,6 @@ const BASE_PROJECTION: OrchestrationV2ThreadProjection = {
 };
 
 type TestThreadInput = OrchestrationV2ThreadStreamItem | Error;
-
-function testSession(
-  client: WsRpcProtocolClient,
-  config?: { readonly completionMarker?: boolean },
-): RpcSession.RpcSession {
-  return {
-    client,
-    initialConfig: Effect.succeed(
-      config?.completionMarker === true
-        ? ({ threadResumeCompletionMarker: true } as never)
-        : ({} as never),
-    ),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
-    ready: Effect.void,
-    probe: Effect.void,
-    inboundFrames: Effect.succeed(0),
-    closed: Effect.never,
-  };
-}
-
-function awaitThreadState(
-  observed: Queue.Queue<EnvironmentThreadState>,
-  predicate: (state: EnvironmentThreadState) => boolean,
-) {
-  return Queue.take(observed).pipe(
-    Effect.repeat({
-      until: predicate,
-    }),
-  );
-}
 
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationV2ThreadProjection;
@@ -299,71 +281,6 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     ),
   };
 });
-
-const snapshot = (
-  projection: OrchestrationV2ThreadProjection,
-  snapshotSequence = 1,
-): Extract<OrchestrationV2ThreadStreamItem, { readonly kind: "snapshot" }> => ({
-  kind: "snapshot",
-  snapshotSequence,
-  projection,
-});
-
-const synchronized = (): OrchestrationV2ThreadStreamItem => ({ kind: "synchronized" });
-
-const PENDING_QUESTION = {
-  id: RuntimeRequestId.make("question"),
-  nodeId: NodeId.make("question-node"),
-  providerTurnId: null,
-  nativeRequestRef: null,
-  kind: "user_input" as const,
-  status: "pending" as const,
-  responseCapability: { type: "message" as const },
-  createdAt: v2Now,
-  resolvedAt: null,
-};
-
-const questionResolved = (sequence: number): OrchestrationV2ThreadStreamItem => ({
-  kind: "event",
-  sequence,
-  event: {
-    id: EventId.make("event-request"),
-    type: "runtime-request.updated",
-    threadId: THREAD_ID,
-    occurredAt: v2Now,
-    payload: { ...PENDING_QUESTION, status: "resolved", resolvedAt: v2Now },
-  },
-});
-
-const titleUpdated = (title: string, sequence = 2): OrchestrationV2ThreadStreamItem => {
-  const occurredAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
-  return {
-    kind: "event",
-    sequence,
-    event: {
-      id: EventId.make("event-title"),
-      type: "thread.metadata-updated",
-      threadId: THREAD_ID,
-      occurredAt,
-      payload: { ...v2Projection.thread, title, updatedAt: occurredAt },
-    },
-  };
-};
-
-const deleted = (sequence = 3): OrchestrationV2ThreadStreamItem => {
-  const occurredAt = DateTime.makeUnsafe("2026-06-20T02:00:00.000Z");
-  return {
-    kind: "event",
-    sequence,
-    event: {
-      id: EventId.make("event-deleted"),
-      type: "thread.deleted",
-      threadId: THREAD_ID,
-      occurredAt,
-      payload: { ...v2Projection.thread, updatedAt: occurredAt, deletedAt: occurredAt },
-    },
-  };
-};
 
 describe("EnvironmentThreads", () => {
   it.effect("discards an oversized version-4 cache and requests a fresh bounded snapshot", () =>
@@ -694,6 +611,72 @@ describe("EnvironmentThreads", () => {
 
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("records a foreground resubscribe and the events it replays for diagnostics", () =>
+    Effect.gen(function* () {
+      StreamDiagnostics.resetThreadStreamDiagnosticsForTest();
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION });
+      yield* Queue.offer(harness.inputs, titleUpdated("Before", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.getOrNull(value.data)?.thread.title === "Before",
+      );
+
+      yield* Queue.offer(harness.wakeups, "application-active");
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(
+        Stream.filter((count) => count === 2),
+        Stream.runHead,
+      );
+      yield* Queue.offerAll(harness.inputs, [
+        { kind: "unknown-event", sequence: CACHED_SNAPSHOT_SEQUENCE + 2, eventType: "future" },
+        assistantMessage("Hello", CACHED_SNAPSHOT_SEQUENCE + 3),
+        assistantReply("", CACHED_SNAPSHOT_SEQUENCE + 4, true),
+        titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 5),
+      ]);
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.getOrNull(value.data)?.thread.title === "After",
+      );
+
+      expect(StreamDiagnostics.readThreadStreamDiagnostics()[0]).toMatchObject({
+        threadId: String(THREAD_ID),
+        subscriptions: 2,
+        // A resumed subscription without a completion marker cannot tell replay from live.
+        lastStart: "events, replay or live unclear",
+        unclearEvents: 5,
+        unknownEvents: 1,
+        lastSequence: CACHED_SNAPSHOT_SEQUENCE + 5,
+        reply: { messageId: "message-reply", receivedLength: 5, appliedLength: 5 },
+      });
+    }),
+  );
+
+  it.effect("records the reply an HTTP or socket snapshot carried for diagnostics", () =>
+    Effect.gen(function* () {
+      StreamDiagnostics.resetThreadStreamDiagnosticsForTest();
+      const reply = (text: string) => projectionWithReply(BASE_PROJECTION, text);
+      const harness = yield* makeHarness({
+        httpSnapshot: {
+          _tag: "present",
+          snapshot: { snapshotSequence: 3, projection: reply("Hi") },
+        },
+      });
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.data));
+      const latest = () => StreamDiagnostics.readThreadStreamDiagnostics()[0];
+      expect(latest()).toMatchObject({
+        lastStart: "http snapshot",
+        reply: { receivedVia: "http snapshot", receivedLength: 2 },
+      });
+
+      yield* Queue.offer(harness.inputs, snapshot(reply("Hi there"), 4));
+      yield* awaitThreadState(harness.observed, () => latest()?.lastSequence === 4);
+      expect(latest()?.reply).toMatchObject({
+        receivedVia: "socket snapshot",
+        receivedLength: 8,
+        appliedLength: 8,
+      });
     }),
   );
 
