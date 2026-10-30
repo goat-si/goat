@@ -70,6 +70,12 @@ struct HumanInputTests {
         && PointerTap.report(.mouseMoved, userData: 0, at: 0.25) == 0.25
         && PointerTap.report(.leftMouseDown, userData: 42, at: 0.30) == 0.30)
 
+    check("physical Esc stops an active session", EscapeTap.shouldStop(type: .keyDown, keyCode: 53, userData: 0, active: true))
+    check("driver Esc does not stop", !EscapeTap.shouldStop(type: .keyDown, keyCode: 53, userData: PointerTap.driverEventUserData, active: true))
+    check("other keys do not stop", !EscapeTap.shouldStop(type: .keyDown, keyCode: 0, userData: 0, active: true))
+    check("Esc without an active session does not stop", !EscapeTap.shouldStop(type: .keyDown, keyCode: 53, userData: 0, active: false))
+    check("Esc key up does not stop", !EscapeTap.shouldStop(type: .keyUp, keyCode: 53, userData: 0, active: true))
+
     exit(failures == 0 ? 0 : 1)
   }
 }
