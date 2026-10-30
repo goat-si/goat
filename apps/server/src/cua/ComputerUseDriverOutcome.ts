@@ -171,8 +171,9 @@ function classifiedSafety(
   const failed =
     error !== undefined || result.isError === true || envelope.status === "unknown_outcome";
   const refusalCode = isRecord(structured.refusal) ? structured.refusal.code : structured.code;
+  const screenLocked = driverScreenLocked(message);
   if (
-    driverScreenLocked(message) ||
+    screenLocked ||
     (refusalCode === "user_interacting" &&
       (structured.effect === undefined || structured.effect === "refused") &&
       (failed || structured.effect === "refused" || structured.status === "refused"))
@@ -181,7 +182,7 @@ function classifiedSafety(
       effect,
       status: "refused",
       dispatched: false,
-      refusalCategory: driverScreenLocked(message) ? "terminal" : "reobserve",
+      refusalCategory: screenLocked ? "terminal" : "reobserve",
     });
   if (effect === "read" && !failed) return classifyActionOutcome({ effect, status: "completed" });
   const code = structured.code;
