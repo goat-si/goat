@@ -1,6 +1,6 @@
 import noteEditorAsset from "@goat/mobile-note-editor/note-editor.html";
 import { Asset } from "expo-asset";
-import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useEffect, useEffectEvent, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { Platform, View, useWindowDimensions } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { AppActivityIndicator } from "../../../components/ui/AppActivityIndicator";
@@ -76,21 +76,19 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
   const [attempt, setAttempt] = useState(0);
   const page = useRef<NoteLiveEditorHandle>(null);
   useImperativeHandle(ref, () => ({ command: (command) => page.current?.command(command) }), []);
+  const unavailable = useEffectEvent(() =>
+    props.onUnavailable("The live editor could not load, so this note opens as markdown source."),
+  );
   // oxlint-disable-next-line goat/react-effect-budget -- loads the editor asset only when a note opens
   useEffect(() => {
     let active = true;
     loadEditorUri().then(
       (next) => active && setUri(next),
-      () =>
-        active &&
-        props.onUnavailable(
-          "The live editor could not load, so this note opens as markdown source.",
-        ),
+      () => active && unavailable(),
     );
     return () => {
       active = false;
     };
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- load once per mount
   }, []);
   return (
     <View className="flex-1" style={{ backgroundColor: props.config.theme.background }}>

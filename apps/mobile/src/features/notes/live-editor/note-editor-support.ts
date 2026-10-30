@@ -31,8 +31,7 @@ export function applyNoteEditorChanges(
 ): string | null {
   let next = body;
   let previousFrom = Number.POSITIVE_INFINITY;
-  for (let index = changes.length - 1; index >= 0; index--) {
-    const [from, to, insert] = changes[index]!;
+  for (const [from, to, insert] of [...changes].reverse()) {
     if (!(from >= 0 && from <= to && to <= previousFrom && to <= body.length)) return null;
     next = next.slice(0, from) + insert + next.slice(to);
     previousFrom = from;

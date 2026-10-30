@@ -24,18 +24,23 @@ export async function generateNoteEditor() {
     },
   });
   const bundles = Array.isArray(result) ? result : [result];
-  const chunk = bundles
-    .flatMap((bundle) => ("output" in bundle ? bundle.output : []))
-    .find((output) => output.type === "chunk");
+  const outputs = bundles.flatMap((bundle) => ("output" in bundle ? bundle.output : []));
+  const chunk = outputs.find((output) => output.type === "chunk");
+  const css = outputs
+    .flatMap((output) =>
+      output.type === "asset" && output.fileName.endsWith(".css") ? [output.source] : [],
+    )
+    .map((source) => (typeof source === "string" ? source : Buffer.from(source).toString("utf8")))
+    .join("");
   if (!chunk) throw new Error("The note editor build did not emit a script.");
-  const css = await NodeFSP.readFile(NodePath.join(editorRoot, "note-editor.css"), "utf8");
+  if (!css) throw new Error("The note editor build did not emit its styles.");
   const html = [
     "<!doctype html>",
     '<html><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">',
     // Note text is never script; images are the only network access.
     "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src https: http: data:\">",
-    "<style>" + css.replace(/\s*\n\s*/g, "") + "</style>",
+    "<style>" + css + "</style>",
     '</head><body><div id="editor"></div>',
     "<script>" + chunk.code.replace(/<\/script/gi, "<\\/script") + "</script>",
     "</body></html>",

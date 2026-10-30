@@ -129,7 +129,7 @@ export const cycleHeading = lineCommand(
     lines.map((line) => {
       const match = /^(#{1,6})(?:[ \t]+|$)/.exec(line.text);
       if (!match) return { from: line.from, insert: "# " };
-      const level = match[1]!.length;
+      const level = match[1]?.length ?? 0;
       return level >= 3
         ? { from: line.from, to: line.from + match[0].length }
         : { from: line.from, to: line.from + level, insert: "#".repeat(level + 1) };
@@ -139,20 +139,24 @@ export const cycleHeading = lineCommand(
 
 const bulletPattern = /^([ \t]*)([-*+])([ \t]+)(\[[ xX]\](?:[ \t]+|$))?/;
 const listPattern = /^([ \t]*)([-*+]|(\d{1,9})([.)]))([ \t]+)(\[[ xX]\](?:[ \t]+|$))?/;
+const indentOf = (text: string) => /^[ \t]*/.exec(text)?.[0].length ?? 0;
 
 export const toggleBulletList = lineCommand((lines) => {
   const bullets = lines.map((line) => bulletPattern.exec(line.text));
   if (bullets.every(Boolean))
-    return lines.map((line, index) => {
-      const match = bullets[index]!;
-      return { from: line.from + match[1]!.length, to: line.from + match[0].length };
+    return lines.flatMap((line, index) => {
+      const match = bullets[index];
+      return match
+        ? [{ from: line.from + indentOf(line.text), to: line.from + match[0].length }]
+        : [];
     });
   return lines.flatMap((line, index) => {
     if (bullets[index]) return [];
     const ordered = listPattern.exec(line.text);
-    const indent = /^[ \t]*/.exec(line.text)![0].length;
-    return ordered?.[3]
-      ? [{ from: line.from + indent, to: line.from + indent + ordered[2]!.length, insert: "-" }]
+    const marker = ordered?.[3] ? ordered[2] : undefined;
+    const indent = indentOf(line.text);
+    return marker
+      ? [{ from: line.from + indent, to: line.from + indent + marker.length, insert: "-" }]
       : [{ from: line.from + indent, insert: "- " }];
   });
 }, "input.format");
@@ -160,17 +164,17 @@ export const toggleBulletList = lineCommand((lines) => {
 export const toggleTaskList = lineCommand((lines) => {
   const items = lines.map((line) => listPattern.exec(line.text));
   if (items.every((item) => item?.[6]))
-    return lines.map((line, index) => {
-      const item = items[index]!;
-      const start = line.from + item[0].length - item[6]!.length;
-      return { from: start, to: line.from + item[0].length };
+    return lines.flatMap((line, index) => {
+      const item = items[index];
+      const task = item?.[6];
+      if (!item || !task) return [];
+      return [{ from: line.from + item[0].length - task.length, to: line.from + item[0].length }];
     });
   return lines.flatMap((line, index) => {
     const item = items[index];
     if (item?.[6]) return [];
     if (item) return [{ from: line.from + item[0].length, insert: "[ ] " }];
-    const indent = /^[ \t]*/.exec(line.text)![0].length;
-    return [{ from: line.from + indent, insert: "- [ ] " }];
+    return [{ from: line.from + indentOf(line.text), insert: "- [ ] " }];
   });
 }, "input.format");
 

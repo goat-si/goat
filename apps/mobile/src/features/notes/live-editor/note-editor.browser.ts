@@ -2,6 +2,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, placeholder } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import "./note-editor.css";
 import type {
   NoteEditorConfig,
   NoteEditorInbound,
@@ -91,6 +92,8 @@ const access = (config: NoteEditorConfig) => [
 ];
 
 function boot(init: NoteEditorInit) {
+  const parent = document.getElementById("editor");
+  if (!parent) return;
   let generation = init.generation;
   let source = false;
   const { lineBreak } = init;
@@ -98,7 +101,7 @@ function boot(init: NoteEditorInit) {
   const previewCompartment = new Compartment();
   applyTheme(init.config);
   const view = new EditorView({
-    parent: document.getElementById("editor")!,
+    parent,
     state: EditorState.create({
       doc: init.doc,
       extensions: [
