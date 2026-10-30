@@ -1,6 +1,6 @@
+// @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
-// @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
