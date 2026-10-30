@@ -12,6 +12,12 @@ import type { CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
 import type { EmbeddedDriverConnection } from "@trycua/cua-driver/embedded";
 import * as Schema from "effect/Schema";
 
+import {
+  type HelperServiceClaim,
+  type HelperServiceManager,
+  makeHelperServiceManager,
+} from "./ComputerUseHelperService.ts";
+
 /**
  * Line-delimited JSON spoken with "GOAT Computer Use.app" over its stdio
  * (apps/desktop/native/computer-use-helper/main.swift). The helper's first line is hello or a
@@ -584,103 +590,136 @@ export interface HelperHostOptions {
    * sets it: the relay keeps screenshots of covered windows from showing what covers them (#1329).
    */
   readonly mcpThroughHelper?: boolean;
+  /**
+   * The channel's shared helper service (direct mode). Hosts of one channel claim the same
+   * service; without one, this host gets a manager of its own.
+   */
+  readonly service?: HelperServiceManager;
 }
+
+/** A channel's helper service manager, opening each service through its launcher. */
+export const makeHelperService = (
+  bundleId: string,
+  spawn: (executable: string) => HelperProcess,
+): HelperServiceManager =>
+  makeHelperServiceManager({
+    open: (executable) => openHelperSession(spawn(executable), bundleId),
+  });
 
 export function makeHelperHost(options: HelperHostOptions) {
   let session: HelperSession | undefined;
+  let claim: HelperServiceClaim | undefined;
+  let starting: Promise<EmbeddedDriverConnection> | undefined;
   let releaseSocket: (() => Promise<void>) | undefined;
   let connection: EmbeddedDriverConnection | undefined;
   let generation = 0;
+  const service = options.direct
+    ? (options.service ?? makeHelperService(options.bundle.bundleId, options.spawn))
+    : undefined;
 
   const release = async () => {
     const current = session;
+    const held = claim;
     session = undefined;
+    claim = undefined;
     connection = undefined;
-    if (current) {
-      if (!options.direct) await current.stop().catch(() => undefined);
+    if (held) await held.release();
+    else if (current) {
+      await current.stop().catch(() => undefined);
       await current.close();
     }
     await releaseSocket?.();
     releaseSocket = undefined;
   };
 
+  const begin = async (): Promise<EmbeddedDriverConnection> => {
+    if (service) {
+      const held = await service.claim(options.bundle.executable, "desktop", { observe: true });
+      claim = held;
+      session = held.service.session;
+      connection = {
+        socketPath: "",
+        pid: claim.service.pid,
+        generation: String(claim.service.generation),
+        driverVersion: options.driverVersion,
+        contractVersion: "",
+        mcpProtocolVersion: "",
+        mcp: {
+          command: options.bundle.executable,
+          args: ["--mcp", "--capability-manifest", options.capabilityManifestPath],
+          environment: [...options.environment],
+        },
+      };
+      return connection;
+    }
+    const opened = await openHelperSession(
+      options.spawn(options.bundle.executable),
+      options.bundle.bundleId,
+    );
+    session = opened;
+    try {
+      if (!options.socket)
+        throw new ComputerUseHelperError("missing_pipe", "The Windows helper needs a named pipe.");
+      const socket = await options.socket();
+      releaseSocket = socket.release;
+      const started = await opened.start({
+        socketPath: socket.path,
+        capabilityManifestPath: options.capabilityManifestPath,
+        environment: options.environment,
+        noOverlay: false,
+      });
+      const metadata = await options.readMetadata(started.socketPath);
+      const mismatch = daemonMismatch(metadata, {
+        pid: started.driverPid,
+        bundleId: options.bundle.bundleId,
+        driverVersion: options.driverVersion,
+      });
+      if (mismatch) throw new ComputerUseHelperError("incompatible_daemon", mismatch);
+      connection = {
+        socketPath: started.socketPath,
+        pid: started.driverPid,
+        generation: String(++generation),
+        driverVersion: metadata.driverVersion,
+        contractVersion: metadata.contractVersion,
+        mcpProtocolVersion: metadata.mcpProtocolVersion,
+        // The same proxy invocation the SDK host hands out: arguments carry the whole route.
+        mcp: {
+          command: options.mcpThroughHelper ? options.bundle.executable : options.bundle.driverPath,
+          args: [
+            "mcp",
+            "--embedded",
+            "--socket",
+            started.socketPath,
+            "--host-bundle-id",
+            options.bundle.bundleId,
+          ],
+          environment: [],
+        },
+      };
+      return connection;
+    } catch (error) {
+      await release();
+      throw error;
+    }
+  };
+
   return {
     servicePid: () => session?.pid,
     /** The running generation's helper session, for its watch; undefined between generations. */
     session: () => session,
-    start: async (): Promise<EmbeddedDriverConnection> => {
-      if (connection) return connection;
-      session = await openHelperSession(
-        options.spawn(options.bundle.executable),
-        options.bundle.bundleId,
-      );
-      if (options.direct) {
-        connection = {
-          socketPath: "",
-          pid: session.pid,
-          generation: String(++generation),
-          driverVersion: options.driverVersion,
-          contractVersion: "",
-          mcpProtocolVersion: "",
-          mcp: {
-            command: options.bundle.executable,
-            args: ["--mcp", "--capability-manifest", options.capabilityManifestPath],
-            environment: [...options.environment],
-          },
-        };
-        return connection;
-      }
-      try {
-        if (!options.socket)
-          throw new ComputerUseHelperError(
-            "missing_pipe",
-            "The Windows helper needs a named pipe.",
-          );
-        const socket = await options.socket();
-        releaseSocket = socket.release;
-        const started = await session.start({
-          socketPath: socket.path,
-          capabilityManifestPath: options.capabilityManifestPath,
-          environment: options.environment,
-          noOverlay: false,
-        });
-        const metadata = await options.readMetadata(started.socketPath);
-        const mismatch = daemonMismatch(metadata, {
-          pid: started.driverPid,
-          bundleId: options.bundle.bundleId,
-          driverVersion: options.driverVersion,
-        });
-        if (mismatch) throw new ComputerUseHelperError("incompatible_daemon", mismatch);
-        connection = {
-          socketPath: started.socketPath,
-          pid: started.driverPid,
-          generation: String(++generation),
-          driverVersion: metadata.driverVersion,
-          contractVersion: metadata.contractVersion,
-          mcpProtocolVersion: metadata.mcpProtocolVersion,
-          // The same proxy invocation the SDK host hands out: arguments carry the whole route.
-          mcp: {
-            command: options.mcpThroughHelper
-              ? options.bundle.executable
-              : options.bundle.driverPath,
-            args: [
-              "mcp",
-              "--embedded",
-              "--socket",
-              started.socketPath,
-              "--host-bundle-id",
-              options.bundle.bundleId,
-            ],
-            environment: [],
-          },
-        };
-        return connection;
-      } catch (error) {
-        await release();
-        throw error;
-      }
+    start: (): Promise<EmbeddedDriverConnection> => {
+      if (connection) return Promise.resolve(connection);
+      // Racing starts share one launch.
+      starting ??= begin().finally(() => {
+        starting = undefined;
+      });
+      return starting;
     },
-    stop: release,
+    // A stop during a start ends what that start opens, so no claim outlives its host.
+    stop: async () => {
+      await starting?.catch(() => undefined);
+      await release();
+    },
     waitForExit: async (_generation: string, opts?: { readonly signal?: AbortSignal }) => {
       const ended = session?.ended ?? Promise.resolve();
       await new Promise<void>((resolve, reject) => {

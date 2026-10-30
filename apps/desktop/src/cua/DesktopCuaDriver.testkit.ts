@@ -26,6 +26,7 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import { DesktopTelemetryPublisher } from "../telemetry/DesktopTelemetryPublisher.ts";
 import type { HelperEvent } from "./ComputerUseHelper.ts";
+import { makeHelperServiceManager } from "./ComputerUseHelperService.ts";
 import { makeAppCatalog } from "./appCatalog.ts";
 import { make, type DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
 import type { AgentRouteOutcome } from "./agentRouteProbe.ts";
@@ -248,6 +249,11 @@ export const fixture = Effect.fn(function* (
       if (outcome === "crashed") return { kind: "failed", reason: "exited (code 134)" };
       return { kind: "failed", reason: outcome.error };
     },
+    // The fake helper host below never claims a real service.
+    helperService: () =>
+      makeHelperServiceManager({
+        open: () => Promise.reject(new Error("The fake helper host opens no service.")),
+      }),
     agentRoute: async (mcp) => {
       agentRouteProbes.push(mcp.command);
       return options.agentRoute ?? { kind: "answered" };

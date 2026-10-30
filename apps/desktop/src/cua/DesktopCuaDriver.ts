@@ -37,7 +37,8 @@ import {
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
-import { ComputerUseHelperError, helperBundle } from "./ComputerUseHelper.ts";
+import { ComputerUseHelperError, helperBundle, type HelperBundle } from "./ComputerUseHelper.ts";
+import type { HelperServiceManager } from "./ComputerUseHelperService.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -128,6 +129,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const mutex = yield* Semaphore.make(1);
   const crashes = yield* Queue.unbounded<OwnedHost>();
   let owned: OwnedHost | undefined;
+  /** This environment's helper service per channel; generations of the host claim it in turn. */
+  const helperServices = new Map<string, HelperServiceManager>();
+  const helperServiceOf = (bundle: HelperBundle) => {
+    let service = helperServices.get(bundle.bundleId);
+    if (service === undefined) {
+      service = native.helperService(bundle);
+      helperServices.set(bundle.bundleId, service);
+    }
+    return service;
+  };
   let currentRequest: DesktopCuaDriverRequest | undefined;
   let closed = false;
   // The server learns the helper's readiness from these reports; only a helper build sends them.
@@ -400,6 +411,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         // macOS always uses a direct helper MCP pair; readiness owns its own stdio peer.
         direct: environment.platform === "darwin",
         verify: scope === "verify" && environment.platform === "darwin",
+        ...(environment.platform === "darwin" && scope !== "verify"
+          ? { service: helperServiceOf(engine.bundle) }
+          : {}),
       });
     } else {
       const sdk = yield* Effect.tryPromise(() => native.loadEmbedded());
