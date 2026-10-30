@@ -853,10 +853,10 @@ export const type = async (
         "The target is not an enabled text field, so no text was typed.",
       );
     }
+    await readiness.onHistoryFocus?.();
     remaining(deadline);
     gate();
-    // One input after the gate: a key press is held off by the input fence; inserted text is a
-    // single call with nothing to wait for.
+    // A key press uses the input fence; inserted text is one call.
     if (input.text === "") {
       if (input.clear) await page.keyboard.press("Delete");
       return;

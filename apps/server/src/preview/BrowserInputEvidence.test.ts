@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect } from "vite-plus/test";
 import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
+import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 it.live("accepts trusted normal-field input and refuses password and focus-redirection input", () =>
   Effect.promise(async () => {
@@ -85,6 +86,31 @@ it.live(
         const shadow = await startBrowserInputEvidence(page, cdp);
         await page.keyboard.insertText("secret");
         expect(await shadow.finish()).toBe(false);
+      } finally {
+        await browser.close();
+      }
+    }),
+);
+
+it.live(
+  "observes the actual type dispatch even when focus returns after a password receives input",
+  () =>
+    Effect.promise(async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const page = await (await browser.newContext()).newPage();
+        const cdp = await page.context().newCDPSession(page);
+        await page.setContent(
+          '<input id="normal"><input id="password" type="password"><script>normal.addEventListener("beforeinput", () => password.focus()); password.addEventListener("input", () => normal.focus());</script>',
+        );
+        let finish = async () => true;
+        await ServerBrowserPage.type(page, { selector: "#normal", text: "hello" }, undefined, {
+          onHistoryFocus: async () => {
+            finish = (await startBrowserInputEvidence(page, cdp)).finish;
+          },
+        });
+        expect(await page.locator("#password").inputValue()).toBe("hello");
+        expect(await finish()).toBe(false);
       } finally {
         await browser.close();
       }
