@@ -57,7 +57,7 @@ export const hubProxyRefusal = (body: unknown): ConnectionBlockedError => {
     return new ConnectionBlockedError({
       reason: "permission",
       detail:
-        "Enable GOAT Connect device access in the hub’s Settings → Hub, then sign out of GOAT Connect and sign back in. Paired clients can pair again with goat pair --hub-proxy.",
+        "This pairing has no hub access. Pair again from the hub's Settings → Connections → Show phone QR with Also open hub devices on. With GOAT Connect, enable device access in the hub's Settings → Hub, then sign out and back in.",
     });
   return new ConnectionBlockedError({
     reason: "permission",

@@ -37,6 +37,7 @@ import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { HubChildSetup } from "./HubChildSetup";
+import { HubAccessNotice } from "./HubAccessNotice";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 
 export function SettingsHubNodesRouteScreen() {
@@ -209,6 +210,7 @@ function HubDevicesList({
     });
   return (
     <View className="gap-4">
+      <HubAccessNotice environmentId={environmentId} label={label} />
       <Text className="text-sm text-foreground-muted">
         Add devices from the hub's Settings on desktop or web.
       </Text>

@@ -409,7 +409,7 @@ describe("hubProxyRefusal", () => {
     );
     expect(
       hubProxyRefusal({ code: "insufficient_scope", requiredScope: "hub:proxy" }).detail,
-    ).toContain("goat pair --hub-proxy");
+    ).toContain("Also open hub devices");
     expect(hubProxyRefusal(null).detail).toBe(
       "The hub session does not permit access to this node.",
     );
