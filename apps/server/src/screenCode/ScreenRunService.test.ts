@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   PreviewTabId,
   SCREEN_TARGET_CONTRACT_VERSION,
@@ -21,6 +22,8 @@ import { ScreenCursorPublisher } from "../cua/ScreenCursorPublisher.ts";
 import type { AgentCursorEvent } from "@goat/contracts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { fixture } from "./DesktopTargetHost.testkit.ts";
+import * as SiteNotes from "../preview/SiteNotes.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
 
 const invocation = {
   environmentId: "env" as EnvironmentId,
@@ -34,6 +37,34 @@ const invocation = {
     providerInstanceId: "p" as ProviderInstanceId,
   },
 };
+
+it.live("a tab binding receives a saved note once across cells", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    yield* Effect.gen(function* () {
+      const notes = yield* SiteNotes.SiteNotes;
+      yield* notes.write({ origin: "https://example.test", text: "saved procedure", author: "person" });
+      const targetRef = { id: "target", kind: "tab" as const, environmentId: "env", runId: "r", turnId: "t", generation: 0 };
+      const dispatcher = {
+        availability: () => Effect.succeed([{ kind: "tab" as const, available: true }]),
+        dispatch: () => Effect.succeed({ value: { targetRef, tab: { tabId: "tab", title: "Page", url: "https://example.test/" } }, category: "confirmed" as const }),
+      };
+      yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const request = { runId: "r", turnId: "t", threadId: "thread", environmentId: "env", invocation: { ...invocation, capabilities: new Set(["preview" as const]), reauthorize: () => Effect.void } };
+        const first = yield* service.runCell({ ...request, source: "return (await screen.tab({tabId: 'tab'})).note;" });
+        expect(first.value).toContain("saved procedure");
+        const second = yield* service.runCell({ ...request, source: "return (await screen.tab({tabId: 'tab'})).note ?? null;" });
+        expect(second.value).toBeNull();
+        yield* service.finishTurn({ ...request, reason: "test" });
+      }).pipe(Effect.provide(ScreenRunService.layerWithRuntime({
+        dispatcher,
+        invocation: { command: process.execPath, entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)) },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer))));
+    }).pipe(Effect.provide(SiteNotes.layer));
+  }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
 
 it.live(
   "a live cell host call publishes thinking for its bound target and hidden at finishTurn",
@@ -759,7 +790,7 @@ it.live(
         expect(result.value).toMatchObject({
           pageText: '- button "Add Element" [0]\n- link "Home" [1]',
           clicks: ["unverifiable", "unverifiable", "unverifiable", "unverifiable"],
-          tabNote: true,
+          tabNote: false,
           // An app point needs a current screenshot; nothing goes to the driver without one.
           pointRefusal: { code: "invalid_argument", nothingSent: true },
           dragged: "unverifiable",

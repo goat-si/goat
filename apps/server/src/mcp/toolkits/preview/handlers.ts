@@ -1,10 +1,12 @@
 import { classifyBrowserActionOutcome } from "../../../preview/actionOutcomeSafety.ts";
 import { failureHint, previewHints } from "./hints.ts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  OrchestratorMcpFailure,
   PREVIEW_RECORDING_STOP_TIMEOUT_MS,
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
@@ -40,7 +42,12 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import { browserGuideFor } from "../../../preview/BrowserGuide.ts";
+import * as SiteNotes from "../../../preview/SiteNotes.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
+
+const requireSiteNotes = Effect.serviceOption(SiteNotes.SiteNotes).pipe(
+  Effect.flatMap((notes) => Option.isSome(notes) ? Effect.succeed(notes.value) : Effect.fail(new OrchestratorMcpFailure({ code: "orchestration_error", message: "Site notes are unavailable." }))),
+);
 
 /** Whether a preview the agent
  * said nothing about surfaces is the user's `browserAutoShowFloatingPreview`
@@ -164,10 +171,12 @@ const browserGuide = Effect.fn("PreviewToolkit.browserGuide")(function* (
   const invocation = yield* McpInvocationContext.McpInvocationContext;
   if (invocation.thread === undefined) return {};
   const config = yield* Effect.serviceOption(ServerConfig.ServerConfig);
+  const notes = yield* requireSiteNotes;
   const guide = browserGuideFor(
     config._tag === "Some" ? config.value.stateDir : undefined,
     invocation.thread.threadId,
     "url" in result && typeof result.url === "string" ? result.url : undefined,
+    notes.deliverOnce,
   );
   return guide === undefined ? {} : { guide };
 });
@@ -269,6 +278,26 @@ export const claimPreviewRecording = Effect.fn("PreviewToolkit.claimRecording")(
 });
 
 const handlers = {
+  browser_site_note_read: McpToolAccess.readsAsCaller((input) =>
+    Effect.gen(function* () {
+      yield* McpInvocationContext.requireThreadMcpCapability("preview");
+      const notes = yield* requireSiteNotes;
+      return { note: notes.noteFor(input.origin) ?? null };
+    }),
+  ),
+  browser_site_note_write: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
+      const notes = yield* requireSiteNotes;
+      yield* notes.writeAgent(scope.thread.threadId, input).pipe(
+        Effect.mapError((error) => new OrchestratorMcpFailure({
+          code: error._tag === "SiteNoteError" ? "invalid_request" : "orchestration_error",
+          message: error._tag === "SiteNoteError" ? `Site note rejected: ${error.reason}.` : "Site note storage failed.",
+        })),
+      );
+      return { ok: true as const };
+    }),
+  ),
   preview_dialog: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) => invokeTargeted<PreviewAutomationStatus>("dialog", input)),
   ),

@@ -200,6 +200,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "memory-sites",
+    title: "Site notes",
+    to: "/settings/memory",
+    requiresMemory: true,
+    searchTerms: ["browser", "sites", "notes", "origins"],
+  },
+  {
     id: "storage-worktree-keep-when",
     targetId: "storage-worktrees",
     title: "Keep worktrees with local changes",

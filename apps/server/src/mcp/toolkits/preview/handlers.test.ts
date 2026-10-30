@@ -23,6 +23,7 @@ import {
 } from "../../../attachmentStore.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as Sqlite from "../../../persistence/Sqlite.ts";
+import * as SiteNotes from "../../../preview/SiteNotes.ts";
 import * as McpHttpServer from "../../McpHttpServer.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { layerPermissionProfilesOff, liveThreadsLayer } from "../../McpToolAccess.testkit.ts";
@@ -101,8 +102,22 @@ it.effect(
       }),
     );
     return Effect.gen(function* () {
+      const server = yield* McpServer.McpServer;
+      const noteCall = (name: string, args: Record<string, string>) =>
+        server.callTool({ name, arguments: args }).pipe(
+          Effect.provideService(McpSchema.McpServerClient, mcpClient),
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        );
+      const untouched = yield* noteCall("goat_browser_site_note_write", {
+        origin: "https://example.com", text: "procedure",
+      });
+      expect(untouched.isError).toBe(true);
       const first = yield* open("preview-1");
       expect(first.isError, JSON.stringify(first)).not.toBe(true);
+      const touched = yield* noteCall("goat_browser_site_note_write", {
+        origin: "https://example.com", text: "procedure",
+      });
+      expect(touched.isError, JSON.stringify(touched)).not.toBe(true);
       expect(yield* open("preview-1")).toEqual(first);
       expect(opened).toHaveLength(1);
       expect(opened[0]).not.toHaveProperty("clientRequestId");
@@ -122,6 +137,7 @@ it.effect(
         ).pipe(
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provide(dependencies),
+          Layer.provide(SiteNotes.layer),
           Layer.provideMerge(Sqlite.layerMemory),
         ),
       ),
@@ -314,6 +330,7 @@ it.effect("preview results and failures expose safety and a next step after MCP 
       McpHttpServer.toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard).pipe(
         Layer.provideMerge(McpServer.McpServer.layer),
         Layer.provide(dependencies),
+        Layer.provide(SiteNotes.layer),
         Layer.provideMerge(Sqlite.layerMemory),
       ),
     ),
@@ -481,6 +498,8 @@ it.effect(
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provideMerge(liveThreadsLayer),
           Layer.provideMerge(PreviewAutomationBroker.layer),
+          Layer.provide(SiteNotes.layer),
+          Layer.provideMerge(Sqlite.layerMemory),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-read-mcp-" })),
           Layer.provideMerge(NodeServices.layer),
         ),

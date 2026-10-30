@@ -472,6 +472,10 @@ export function createMemoryEnvironmentAtoms<R, E>(
       ledger.dispose();
     },
     exposureAtom,
+    siteNotesList: command(WS_METHODS.siteNotesList),
+    siteNotesWrite: command(WS_METHODS.siteNotesWrite),
+    siteNotesDelete: command(WS_METHODS.siteNotesDelete),
+    siteNotesRestoreSeed: command(WS_METHODS.siteNotesRestoreSeed),
     list: bodyQuery(WS_METHODS.memoryList),
     search: bodyQuery(WS_METHODS.memorySearch),
     read: bodyQuery(WS_METHODS.memoryRead),

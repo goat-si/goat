@@ -2,6 +2,7 @@ import { MemoryHubDiagnosticsSettings } from "./MemoryHubDiagnosticsSettings";
 import { MemoryImportSettings } from "./MemoryImportSettings";
 import { MemoryAgentAccessSettings } from "./MemoryAgentAccessSettings";
 import { MemoryGenerationSettings } from "./MemoryGenerationSettings";
+import { MemorySitesSettings } from "./MemorySitesSettings";
 import { MemoryReportRetrySettings } from "./MemoryReportRetrySettings";
 import { XIcon } from "../solar";
 import { MemoryAdministration } from "./MemorySharingSettings";
@@ -196,6 +197,8 @@ function MemoryDestination({
             description="Reconnect this environment to continue."
           />
         </SettingsSection>
+      ) : target.section === "sites" ? (
+        <MemorySitesSettings key={`${identity.key}:${canRead}`} environmentId={environmentId} canRead={canRead} />
       ) : (
         <MemoryDestinationContent
           key={`${identity.key}:${canRead}`}
@@ -218,6 +221,7 @@ function MemoryDestinationContent({
   environmentId: EnvironmentId;
   canRead: boolean;
 }) {
+  const navigate = useNavigate();
   const canAdmin = useAtomValue(memoryEnvironment.hubSettingsGet.permissionAtom(environmentId));
   const canSync = useAtomValue(memoryEnvironment.syncStatus.permissionAtom(environmentId));
   const getSync = useAtomCommand(memoryEnvironment.syncStatus, { reportFailure: false });
@@ -279,6 +283,11 @@ function MemoryDestinationContent({
 
   return (
     <>
+      <SettingsSection title="Sites">
+        <SettingsRow id="memory-sites" title="Site notes" description="View and manage browser notes by site." control={
+          <Button variant="outline" size="sm" onClick={() => void navigate({ to: "/settings/memory", search: validateMemorySettingsSearch({ environmentId, section: "sites" }) })}>Open Sites</Button>
+        } />
+      </SettingsSection>
       <MemoryGenerationSettings environmentId={environmentId} />
       <MemoryAgentAccessSettings environmentId={environmentId} />
       {sync ? <MemoryStatusRows sync={sync} /> : null}

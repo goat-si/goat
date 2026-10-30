@@ -4,8 +4,13 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 
 import { EnvironmentAuthorizationError } from "./auth.ts";
 import * as Memory from "./memory.ts";
+import * as SiteNotes from "./siteNotes.ts";
 
 export const MEMORY_WS_METHODS = {
+  siteNotesList: "siteNotes.list",
+  siteNotesWrite: "siteNotes.write",
+  siteNotesDelete: "siteNotes.delete",
+  siteNotesRestoreSeed: "siteNotes.restoreSeed",
   memoryProjectBindingGet: "memory.projectBinding.get",
   memoryProjectBindingUpdate: "memory.projectBinding.update",
   memoryChanges: "memory.changes",
@@ -29,6 +34,19 @@ export const MEMORY_WS_METHODS = {
 } as const;
 
 const MemoryRpcErrors = Schema.Union([Memory.MemoryRpcError, EnvironmentAuthorizationError]);
+const siteNoteSuccess = Schema.Struct({ ok: Schema.Literal(true) });
+export const WsSiteNotesListRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesList, {
+  payload: Schema.Struct({}), success: Schema.Array(SiteNotes.SiteNoteListEntry), error: MemoryRpcErrors,
+});
+export const WsSiteNotesWriteRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesWrite, {
+  payload: SiteNotes.SiteNoteWriteInput, success: siteNoteSuccess, error: MemoryRpcErrors,
+});
+export const WsSiteNotesDeleteRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesDelete, {
+  payload: SiteNotes.SiteNoteOriginInput, success: siteNoteSuccess, error: MemoryRpcErrors,
+});
+export const WsSiteNotesRestoreSeedRpc = Rpc.make(MEMORY_WS_METHODS.siteNotesRestoreSeed, {
+  payload: SiteNotes.SiteNoteOriginInput, success: siteNoteSuccess, error: MemoryRpcErrors,
+});
 const MemoryImportRpcErrors = Schema.Union([
   Memory.MemoryRpcError,
   Memory.MemoryImportRpcError,
@@ -154,6 +172,10 @@ export const WsMemoryImportProviderRpc = Rpc.make(MEMORY_WS_METHODS.memoryImport
   error: MemoryImportRpcErrors,
 });
 export const MemoryCoreRpcs = RpcGroup.make(
+  WsSiteNotesListRpc,
+  WsSiteNotesWriteRpc,
+  WsSiteNotesDeleteRpc,
+  WsSiteNotesRestoreSeedRpc,
   WsMemoryProjectBindingGetRpc,
   WsMemoryProjectBindingUpdateRpc,
   WsMemoryChangesRpc,

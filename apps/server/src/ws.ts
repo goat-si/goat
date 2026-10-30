@@ -7,6 +7,7 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
   HubProxyRpcError,
+  MemoryRpcError,
   OrchestrationDispatchCommandError,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
@@ -21,6 +22,8 @@ import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
+import * as SiteNotes from "./preview/SiteNotes.ts";
+
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
@@ -625,6 +628,13 @@ function toAuthAccessStreamEvent(
 }
 
 const isClientSurface = Schema.is(ClientSurface);
+const isSiteNoteError = Schema.is(SiteNotes.SiteNoteError);
+const siteNoteRpcError = (error: unknown) =>
+  isSiteNoteError(error)
+    ? new MemoryRpcError({
+        code: error.reason === "secret" ? "secret_detected" : error.reason === "too_large" ? "payload_too_large" : "unsupported_operation",
+      })
+    : memoryError(error);
 const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
 const isClientDeviceType = Schema.is(ClientDeviceType);
 const isClientOs = Schema.is(ClientOs);
@@ -1387,6 +1397,7 @@ export const layerWsRpc = (
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const memory = yield* MemoryService.MemoryService;
+      const siteNotes = yield* SiteNotes.SiteNotes;
       const memorySync = yield* MemorySyncService.MemorySyncService;
       const ownerPolicy = yield* ServerSettings.MemoryOwnerSourceReadPolicyAdministration;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1442,6 +1453,20 @@ export const layerWsRpc = (
       const ownerSettings = memorySettings.pipe(Effect.mapError(memoryError));
       const hubNodesHandlers = yield* makeHubNodesHandlers;
       const memoryHandlers = WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).of({
+        [WS_METHODS.siteNotesList]: () =>
+          memoryRead.pipe(Effect.map(() => siteNotes.list()), Effect.mapError(memoryError)),
+        [WS_METHODS.siteNotesWrite]: (input) =>
+          siteNotes.write({ ...input, author: "person" }, memoryWrite).pipe(
+            Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError),
+          ),
+        [WS_METHODS.siteNotesDelete]: (input) =>
+          siteNotes.delete(input.origin, memoryWrite).pipe(
+            Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError),
+          ),
+        [WS_METHODS.siteNotesRestoreSeed]: (input) =>
+          siteNotes.restoreSeed(input.origin, memoryWrite).pipe(
+            Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError),
+          ),
         [WS_METHODS.memoryProjectBindingGet]: (input) =>
           memory.getProjectBinding(input, memoryWrite).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryProjectBindingUpdate]: (input) =>

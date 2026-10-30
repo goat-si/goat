@@ -35,6 +35,7 @@ import { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
+import * as SiteNotes from "../preview/SiteNotes.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
@@ -189,6 +190,7 @@ interface ScreenRuntimeOptions {
 
 const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntimeOptions = {}) {
   const invocation = options.invocation ?? (yield* resolveSelfInvocation());
+  const siteNotes = Option.getOrUndefined(yield* Effect.serviceOption(SiteNotes.SiteNotes));
   const orchestrator =
     options.orchestrator ??
     Option.getOrUndefined(yield* Effect.serviceOption(Orchestrator.OrchestratorV2));
@@ -260,6 +262,17 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         : { dispatchBatch: dispatcher.dispatchBatch }),
       dispatch: (call, context) =>
         dispatcher.dispatch(call, context).pipe(
+          Effect.map((result) => {
+            if (!siteNotes || (call.method !== "select_tab" && call.method !== "open_tab"))
+              return result;
+            const value = record(result.value);
+            const tab = record(value?.tab);
+            if (!value || typeof tab?.url !== "string") return result;
+            return {
+              ...result,
+              value: { ...value, siteNote: siteNotes.deliverOnce(context.threadId, tab.url) ?? null },
+            };
+          }),
           Effect.tap((result) =>
             Effect.sync(() => {
               if (

@@ -2,7 +2,9 @@ import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import { MemoryAccessError } from "../memory/MemoryService.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
+import { browserGuideFor } from "./BrowserGuide.ts";
 import * as SiteNotes from "./SiteNotes.ts";
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => {
@@ -18,6 +20,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
         assert.strictEqual(notes.noteFor(origin)?.text, "My note");
         yield* notes.delete(origin);
         assert.isUndefined(notes.noteFor(origin));
+        assert.isTrue(notes.list().find((entry) => entry.origin === origin)?.hidden);
         yield* notes.restoreSeed(origin);
         assert.deepStrictEqual(notes.noteFor(origin), seed);
       }).pipe(Effect.provide(SiteNotes.layer));
@@ -79,6 +82,45 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
         const notes = yield* SiteNotes.SiteNotes;
         const delivered = notes.deliverOnce("thread", "https://long.example");
         assert.strictEqual(delivered?.split("\n")[1], "한".repeat(341));
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
+  it.effect("shares once-per-origin delivery between the browser guide and screen bindings", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        const first = browserGuideFor(undefined, "guide-first", "https://github.com", notes.deliverOnce);
+        assert.include(first ?? "", "Site notes for https://github.com");
+        assert.isUndefined(notes.deliverOnce("guide-first", "https://github.com"));
+        assert.isDefined(notes.deliverOnce("screen-first", "https://github.com"));
+        assert.isUndefined(browserGuideFor(undefined, "screen-first", "https://github.com", notes.deliverOnce));
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
+  it.effect("refuses agent writes until that thread has touched the origin", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        const input = { origin: "https://touched.example", text: "procedure" };
+        assert.strictEqual((yield* Effect.result(notes.writeAgent("one", input)))._tag, "Failure");
+        notes.deliverOnce("one", "https://touched.example/page");
+        assert.strictEqual((yield* Effect.result(notes.writeAgent("two", input)))._tag, "Failure");
+        yield* notes.writeAgent("one", input);
+        assert.strictEqual(notes.noteFor(input.origin)?.author, "agent");
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
+  it.effect("refuses a revoked person permission before changing stored notes", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        const permit = Effect.fail(new MemoryAccessError({ code: "unavailable" }));
+        const result = yield* Effect.result(notes.write({ origin: "https://denied.example", text: "note", author: "person" }, permit));
+        assert.strictEqual(result._tag, "Failure");
+        assert.isUndefined(notes.noteFor("https://denied.example"));
       }).pipe(Effect.provide(SiteNotes.layer));
     }),
   );

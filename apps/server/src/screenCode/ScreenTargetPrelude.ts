@@ -571,7 +571,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   });
   return Object.freeze(surface);
 };
-const __tab = (bound) => __target(bound, __note('site', String((bound.tab && bound.tab.url) ?? '')), bound.tab ? bound.tab.owner : undefined);
+const __tab = (bound) => __target(bound, bound.siteNote ?? undefined, bound.tab ? bound.tab.owner : undefined);
 const __appTarget = (bound, key, launched, windowId) =>
   __target(bound, __note('app', String(key ?? '')), undefined, { launched, windowId });
 // list_windows with a pid answers every layer; menu bar items and slivers are not windows to bind.
