@@ -140,6 +140,16 @@ it.effect("does not let an agent change allowed computer use apps", () =>
   }),
 );
 
+it.effect("does not let an agent change the managed app deny list", () =>
+  Effect.gen(function* () {
+    const { result, settings } = yield* call(threadScope, "goat_environment_settings_update", {
+      patch: { cuaDeniedApps: ["com.example.Blocked"] },
+    });
+    expect(result).toMatchObject({ code: "capability_denied" });
+    expect(settings.cuaDeniedApps).toEqual([]);
+  }),
+);
+
 it.effect("holds an outside client to its live settings:write grant through the commit", () =>
   Effect.gen(function* () {
     const ungranted = yield* call(
