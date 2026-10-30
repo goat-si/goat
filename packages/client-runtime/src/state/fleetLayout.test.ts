@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  COMPACT_GRAPH_LIMITS,
+  compactGraphHeight,
   MAX_GRAPH_AGENTS,
   MAX_GRAPH_MACHINES,
   layoutFleet,
   type LayoutMachineInput,
-} from "./fleetLayout";
+} from "./fleetLayout.ts";
 
 const idle = { running: 0, attention: 0, reported: 0 };
 
@@ -75,5 +77,47 @@ describe("layoutFleet", () => {
     const agents = layout.machines[0]!.agents;
     expect(agents).toHaveLength(MAX_GRAPH_AGENTS);
     expect(agents.at(-1)!.aggregate).toEqual({ count: 4, running: 4, attention: 0, reported: 0 });
+  });
+
+  it("keeps phone and tablet nodes on screen and apart at every fleet size, folding past the cap", () => {
+    const limits = COMPACT_GRAPH_LIMITS;
+    const machineRadius = 16;
+    const agentRadius = 11;
+    for (const width of [320, 375, 430, 744, 1024]) {
+      const height = compactGraphHeight(width);
+      for (let count = 1; count <= 15; count++) {
+        const layout = layoutFleet(
+          Array.from({ length: count }, (_, index) => machine("m" + index, idle, 8)),
+          width,
+          height,
+          limits,
+        );
+        expect(layout.machines.length).toBe(Math.min(count, limits.machines));
+        const agents = layout.machines.flatMap((node) => node.agents);
+        for (const node of layout.machines) {
+          expect(node.agents.length).toBeLessThanOrEqual(limits.agents);
+        }
+        for (const node of [...layout.machines, ...agents]) {
+          expect(node.x - agentRadius).toBeGreaterThanOrEqual(0);
+          expect(node.x + agentRadius).toBeLessThanOrEqual(width);
+          expect(node.y - agentRadius).toBeGreaterThanOrEqual(0);
+          expect(node.y + agentRadius).toBeLessThanOrEqual(height);
+        }
+        const apart = (
+          nodes: ReadonlyArray<{ readonly x: number; readonly y: number }>,
+          others: ReadonlyArray<{ readonly x: number; readonly y: number }>,
+          gap: number,
+        ) => {
+          for (const a of nodes) {
+            for (const b of others) {
+              if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(gap);
+            }
+          }
+        };
+        apart(layout.machines, layout.machines, 2 * machineRadius);
+        apart(agents, agents, 2 * agentRadius);
+        apart(agents, layout.machines, machineRadius + agentRadius);
+      }
+    }
   });
 });

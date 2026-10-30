@@ -8,6 +8,13 @@
 
 export const MAX_GRAPH_MACHINES = 12;
 export const MAX_GRAPH_AGENTS = 6;
+/** Phones and tablets: at these caps no two nodes touch at any width from 320 up. */
+export const COMPACT_GRAPH_LIMITS = { machines: 6, agents: 3 } as const;
+
+/** The compact graph's height for a width: taller on tablets, never too short for the orbit gap. */
+export function compactGraphHeight(width: number): number {
+  return width >= 600 ? 420 : Math.min(380, Math.max(300, Math.round(width * 0.9)));
+}
 /**
  * Vertical room between the orbits: a machine's radius and two label lines plus an
  * agent's radius and attention ring, so a node directly above or below never collides.
@@ -119,6 +126,11 @@ export function layoutFleet(
   machines: ReadonlyArray<LayoutMachineInput>,
   width: number,
   height: number,
+  /** Fewer nodes for small screens; what does not fit folds into "+N" nodes. */
+  limits: { readonly machines: number; readonly agents: number } = {
+    machines: MAX_GRAPH_MACHINES,
+    agents: MAX_GRAPH_AGENTS,
+  },
 ): FleetLayout {
   const center = { x: width / 2, y: height / 2 };
   const narrow = width < 640;
@@ -129,7 +141,7 @@ export function layoutFleet(
     rx: width * (narrow ? 0.17 : 0.25),
     ry: Math.min(height * 0.22, outer.ry - ORBIT_GAP),
   };
-  const { shown, folded } = fold(machines, MAX_GRAPH_MACHINES);
+  const { shown, folded } = fold(machines, limits.machines);
   const nodes: ReadonlyArray<LayoutMachineInput | null> = folded ? [...shown, null] : shown;
   const angles = machineAngles(nodes.length, narrow);
 
@@ -138,14 +150,14 @@ export function layoutFleet(
     inner,
     outer,
     machines: nodes.map((machine, index): FleetLayoutMachine => {
-      const angle = angles[index]!;
+      const angle = angles[index] ?? 0;
       const x = round(center.x + inner.rx * Math.cos(angle));
       const y = round(center.y + inner.ry * Math.sin(angle));
       const edge = orbitEdge(center, { x, y });
       if (machine === null) {
         return { id: null, x, y, angle, edge, aggregate: folded, agents: [] };
       }
-      const agentFold = fold(machine.agents, MAX_GRAPH_AGENTS);
+      const agentFold = fold(machine.agents, limits.agents);
       const agentNodes = agentFold.folded
         ? [
             ...agentFold.shown.map((agent) => ({ key: agent.key, aggregate: null })),
