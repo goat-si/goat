@@ -131,6 +131,14 @@ returns to the remembered selection.
 
 Leaving reasoning level or service tier unset uses the provider's own configuration.
 
+## Model and reasoning on mobile
+
+Tap the model button in the composer to open the reasoning popover. It shows the current reasoning
+level, the model it applies to, and a slider over the levels that model offers; a model without
+reasoning levels says so instead. Runtime and the model's other options sit below the slider. Tap
+the model name to open the model picker, with favorites, search, provider filters, hidden models,
+and pull to refresh. Picking a model applies it right away.
+
 ## Quote an assistant response
 
 On web and desktop, select text within one assistant response and choose

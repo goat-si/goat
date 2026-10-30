@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { type ProviderOptionDescriptor } from "@goat/contracts";
-import { findReasoningDescriptor, resolveEffortStepIndex } from "./TraitsPicker";
+import {
+  effortStepFraction,
+  findReasoningDescriptor,
+  resolveEffortStepIndex,
+} from "./modelTraits.ts";
 
 function selectDescriptor(
   id: string,
@@ -87,5 +91,10 @@ describe("effort slider", () => {
         null,
       ),
     ).toBe(0);
+  });
+
+  it("spreads dots and thumb stops edge to edge", () => {
+    expect([0, 1, 2, 3].map((index) => effortStepFraction(index, 4))).toEqual([0, 1 / 3, 2 / 3, 1]);
+    expect(effortStepFraction(0, 1)).toBe(0);
   });
 });

@@ -1,3 +1,5 @@
+import { useWindowDimensions } from "react-native";
+
 import { SymbolView } from "../../components/ui/AppSymbol";
 import {
   ModelRowContent,
@@ -19,10 +21,12 @@ function SelectedCheckmark(props: { readonly selected: boolean }) {
 }
 
 export function ModelRow(props: ModelRowProps) {
+  // Large text wraps model names instead of cutting them to a few letters.
+  const { fontScale } = useWindowDimensions();
   return (
     <ModelRowContent
       {...props}
-      labelNumberOfLines={1}
+      labelNumberOfLines={fontScale > 1.2 ? 0 : 1}
       trailingSelection={<SelectedCheckmark selected={props.selected} />}
     />
   );

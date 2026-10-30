@@ -1,3 +1,5 @@
+import { useWindowDimensions } from "react-native";
+
 import { RadioIndicator } from "../../components/ui/RadioIndicator";
 import {
   ModelRowContent,
@@ -7,10 +9,12 @@ import {
 } from "./ThreadSettingsRows.shared";
 
 export function ModelRow(props: ModelRowProps) {
+  // Large text wraps model names instead of cutting them to a few letters.
+  const { fontScale } = useWindowDimensions();
   return (
     <ModelRowContent
       {...props}
-      labelNumberOfLines={2}
+      labelNumberOfLines={fontScale > 1.2 ? 0 : 2}
       minimumHeight={56}
       selectedClassName={props.selected ? "bg-secondary" : undefined}
       leadingSelection={<RadioIndicator selected={props.selected} />}

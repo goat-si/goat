@@ -175,3 +175,35 @@ export function buildTraitsTriggerDisplay(input: {
   }
   return { label: labels.join(" · ") };
 }
+
+type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
+
+/** The reasoning select the effort slider drives, or null when the model has none. */
+export function findReasoningDescriptor(
+  selectDescriptors: ReadonlyArray<SelectDescriptor>,
+): SelectDescriptor | null {
+  return (
+    selectDescriptors.find(
+      (descriptor) =>
+        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id) && descriptor.options.length > 1,
+    ) ?? null
+  );
+}
+
+/** The slider step for a selected value, falling back to the provider default, then the first. */
+export function resolveEffortStepIndex(
+  descriptor: SelectDescriptor,
+  selectedValue: string | null,
+): number {
+  const selected = descriptor.options.findIndex((option) => option.id === selectedValue);
+  if (selected >= 0) return selected;
+  return Math.max(
+    0,
+    descriptor.options.findIndex((option) => option.isDefault),
+  );
+}
+
+/** Where a step sits along the edge-aligned track, from 0 (first) to 1 (last); dots and thumb share it. */
+export function effortStepFraction(index: number, stepCount: number): number {
+  return stepCount > 1 ? index / (stepCount - 1) : 0;
+}

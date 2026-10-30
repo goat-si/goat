@@ -13,6 +13,7 @@ const reactTests = [
   "src/components/VideoPreviewModal.ios.test.tsx",
   "src/widgets/useSubscriptionUsage.test.tsx",
   "src/features/threads/use-visible-second-clock.test.tsx",
+  "src/features/threads/thread-settings-session.test.tsx",
   "src/features/threads/useThreadListV2.test.tsx",
   "src/features/threads/use-thread-list-v2-launch-groups.test.tsx",
   "src/components/MediaVideoPlayer.test.tsx",

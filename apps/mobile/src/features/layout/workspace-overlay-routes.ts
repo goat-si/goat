@@ -17,6 +17,7 @@ const LISTED_OVERLAY_ROUTES: ReadonlySet<string> = new Set([
   "NewTaskFile",
   "NewTaskAttachment",
   "NewTaskThreadSettings",
+  "NewTaskModelPicker",
   "AddProject",
   "AddProjectRepository",
   "AddProjectDestination",
@@ -35,6 +36,7 @@ const LISTED_OVERLAY_ROUTES: ReadonlySet<string> = new Set([
   "ThreadDevicePreview",
   "ThreadBrowserPreview",
   "ThreadSettingsSheet",
+  "ThreadModelPicker",
 ]);
 
 // Every route whose `presentation` is a sheet or modal, read from the root stack's config once.
