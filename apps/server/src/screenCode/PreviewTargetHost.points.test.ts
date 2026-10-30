@@ -211,7 +211,7 @@ it.effect(
       const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
         listBoundTabs: () => Effect.succeed([tab]),
         invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
-          if (request.operation !== "status" && request.operation !== "snapshot")
+          if (!["status", "snapshot", "claim"].includes(request.operation))
             inputs.push([request.operation, request.input]);
           if (request.operation === "drag" || request.operation === "scroll")
             budgets.push(request.timeoutMs);
