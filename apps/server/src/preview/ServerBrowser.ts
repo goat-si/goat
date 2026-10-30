@@ -1848,7 +1848,7 @@ const make = Effect.gen(function* () {
     const actionGate = () =>
       Object.assign(
         blockedTabs.gate(tab, request.runId, ServerBrowserScreen.screenActionGate(tab, request)),
-        { deadline: deadlineMs },
+        { deadline: deadlineMs, signal },
       );
     switch (request.operation) {
       case "back":

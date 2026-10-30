@@ -203,6 +203,7 @@ export interface DispatchGate {
   readonly check?: () => void | Promise<void>;
   /** When the caller stops waiting, on the performance.now() clock; no input goes out after it. */
   readonly deadline?: number;
+  readonly signal?: AbortSignal | undefined;
 }
 const open: DispatchGate = () => {};
 
@@ -748,7 +749,8 @@ export const type = async (
   const present = locator !== null || (await target.count()) > 0;
   const handle = present ? await pinTarget(target, deadline) : null;
   try {
-    if (handle) await waitUntilWritable(handle, deadline, readiness);
+    if (handle) await waitUntilWritable(handle, deadline, readiness, gate);
+    if (handle) await gate();
     const focused =
       handle !== null &&
       (await handle.evaluate((element, clear) => {
@@ -788,29 +790,32 @@ export const type = async (
         const active = root.activeElement;
         const owned = active != null && (active === element || element.contains(active));
         // Selected here, the old text is replaced by the one input sent after the gate.
-        if (owned && clear) {
-          if (textControl) (element as unknown as { select(): void }).select();
-          else
-            (
-              globalThis as unknown as {
-                getSelection(): { selectAllChildren(node: unknown): void } | null;
-              }
-            )
-              .getSelection()
-              ?.selectAllChildren(element);
-        }
-        return owned;
+        return owned ? (textControl ? "text" : "editable") : false;
       }, input.clear === true));
     if (focused === "range" && handle) {
       remaining(deadline);
       await gate();
       return await setRange(handle, input.text);
     }
-    if (focused !== true) {
+    if (focused !== "text" && focused !== "editable") {
       throw new ServerBrowserOperationError(
         "PreviewAutomationTargetNotEditableError",
         "The target is not an enabled text field, so no text was typed.",
       );
+    }
+    if (input.clear && handle) {
+      await gate();
+      await handle.evaluate((element, textControl) => {
+        if (textControl) (element as unknown as { select(): void }).select();
+        else
+          (
+            globalThis as unknown as {
+              getSelection(): { selectAllChildren(node: unknown): void } | null;
+            }
+          )
+            .getSelection()
+            ?.selectAllChildren(element);
+      }, focused === "text");
     }
     remaining(deadline);
     await gate();
