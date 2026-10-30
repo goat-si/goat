@@ -159,8 +159,9 @@ designated requirement, never a pid or path alone. The driver would remain the h
 - A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
   desktop, and its display. Any change of epoch invalidates every element ref issued under it.
 - App observations start with a full tree. Later reads request a driver diff against the latest
-  snapshot and retain the new snapshot's element tokens and frames internally. Diff text names the
-  latest full observation for unchanged numbers and retains reindexed lines. A driver fallback
+  snapshot and retain the new snapshot's element tokens and frames internally. Numbers from the latest full observation remain valid until a diff adds, removes or renumbers
+  rows. After that, apply each diff and use the latest observation's numbers, or read the full list
+  with `observe({diff:false})`. A driver fallback
   returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
   computed by GOAT's observation tracker. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
