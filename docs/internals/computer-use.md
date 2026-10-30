@@ -55,7 +55,7 @@ provider (Codex, Claude, ...)
   tokens; the agent instead checks a batch with one `since: "latest"` read of its own.
   `unverifiable` is a success for flow control: the input was sent and no proof of its effect was
   found, so nothing waits on it, retries it or reads around it. The one rule it carries is
-  never to resend. The first post-input app diff records window change or no-change evidence on the receipts without changing their driver verdict; the input may have affected another surface. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
+  never to resend. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
   per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
   member, or one that opens a Go to Folder sheet, reads the process's window list around the
   input, and the acted element only when a unique label with text or selection names it (a 60 ms
@@ -67,6 +67,10 @@ provider (Codex, Claude, ...)
   baseline comes from its bind, or from one read for the first input on a process, and its end
   read compares against it. The next screenshot or tree read after an input waits only for what
   is left of the 60 ms settle time.
+- The first app diff of the same window after inputs in a cell is attached to those inputs as
+  `change_seen` or `no_change_seen` evidence (`ScreenObservedEffect.ts`). It never changes the
+  driver's verdict and never stops later inputs the way a driver `suspected_noop` does: one
+  window's diff cannot rule out an effect on another window, a sheet or the clipboard.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
