@@ -111,6 +111,20 @@ const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply =
   error,
 });
 /** Results that did not do what was asked; a write that answers one fails its call. */
+const APP_INPUTS: ReadonlySet<ScreenHostCall["method"]> = new Set([
+  "click",
+  "right_click",
+  "hover",
+  "drag",
+  "scroll",
+  "type_text",
+  "press_key",
+  "set_value",
+  "bring_to_front",
+  "select",
+  "select_text",
+  "invoke_menu",
+]);
 const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
@@ -795,7 +809,7 @@ export class ScreenHostBridge {
           }
         }
       } else if (
-        !isScreenRead(call.method) &&
+        APP_INPUTS.has(call.method) &&
         admittedIndex !== undefined &&
         result.success.observedWindow !== undefined &&
         result.success.safety.possibleCommit
