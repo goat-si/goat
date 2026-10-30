@@ -70,9 +70,8 @@ under GOAT home. Pass <code>--yes</code> from a script.</p>
 <h2 id="local-network-access">Local network access</h2>
 <p>The service listens on your local network and Tailscale addresses, so the
 desktop and mobile apps on the same network connect directly instead of through
-GOAT Connect. The hosted web app at app.t3.codes stays on GOAT Connect, because
-browsers block plain HTTP from an HTTPS page. The service does not answer on
-public addresses, and every device still needs to pair or sign in. To keep the service reachable from this machine only, set
+GOAT Connect. The service does not answer on public addresses, and every device
+still needs to pair or sign in. To keep the service reachable from this machine only, set
 <code>GOAT_HOST=127.0.0.1</code> in <code>service.env</code> (below). Any <code>GOAT_HOST</code> value
 replaces this default.</p>
 <h2 id="configure-the-service-environment">Configure the service environment</h2>

@@ -165,18 +165,19 @@ project crumb.</p>
 <p>The Project category, shown while a project is selected, holds the project’s name, icon, actions,
 checkouts and removal. Actions belong to a project: editing them creates the project’s own list
 on each selected environment, and reset returns to the environment’s shared list.</p>
-<p>Settings a repository can also declare in <code>t3.json</code>, such as the workspace for new threads,
-resolve in one order: a project override, then the environment setting, then <code>t3.json</code>, then the
+<p>Settings a repository can also declare in <code>goat.json</code> (or an older <code>t3.json</code> in a branch without
+one), such as the workspace for new threads, resolve in one order: a project override, then the
+environment setting, then <code>goat.json</code>, then the
 built-in default. Leave a setting on <strong>Inherit</strong> to let the next tier decide.
 Browser access changes apply when an agent session next starts.</p>
 <p>New worktrees initialize git submodules recursively. If that step is slow because the repository
 declares many nested submodules, set <strong>Submodules</strong> in <strong>Settings → General</strong> (with the project
 selected to override it there) to <strong>Top level only</strong> to stop at the ones the repository declares
 itself, or <strong>Skip</strong> to leave them for a setup script. It resolves in the same order as the
-workspace default: a <code>"worktreeSubmodules"</code> value in the <code>t3.json</code> of the branch being checked out
+workspace default: a <code>"worktreeSubmodules"</code> value in the <code>goat.json</code> of the branch being checked out
 applies when the project and environment are both on <strong>Inherit</strong>.</p>
 <p>A repository with large folders that agents only read, such as vendored reference code, can keep
-them out of new worktrees with <code>"worktreeSparseExclude": [".repos/"]</code> in <code>t3.json</code>. GOAT checks
+them out of new worktrees with <code>"worktreeSparseExclude": [".repos/"]</code> in <code>goat.json</code>. GOAT checks
 the worktree out with Git sparse checkout, so those folders are never written, which matters most
 on Windows. Run <code>git sparse-checkout disable</code> in a worktree to bring them back there.</p>
 <h2 id="check-an-agents-work-when-its-run-completes">Check an agent’s work when its run completes</h2>

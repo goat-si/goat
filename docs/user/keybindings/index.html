@@ -7,15 +7,18 @@ also lists the command IDs and defaults available in your version.</p>
 <code>mod+Enter</code> for multiline prompts, or always requires <code>mod+Enter</code>. <code>Shift+Enter</code>
 inserts a new line. This applies to the web and desktop composer at desktop widths.</p>
 <p><strong>Follow-up behavior</strong> chooses Queue or Steer while the agent runs. Use
-<code>mod+Enter</code> to do the opposite for one message, even when the send shortcut
-requires a modifier. <code>mod+Alt+Enter</code> sends, keeps that thread running in the
+<code>mod+Enter</code> to do the opposite for one message. When the send shortcut requires
+<code>mod+Enter</code> for that message, <code>mod+Enter</code> sends with your follow-up behavior and
+<code>mod+Shift+Enter</code> does the opposite. <code>mod+Alt+Enter</code> sends, keeps that thread running in the
 background, and opens a fresh new-thread composer. In a new thread, <code>mod+Enter</code>
 does the same. Change these shortcuts in <strong>Settings → Keybindings</strong> under
 <strong>Composer: Opposite Queue or Steer Action</strong>, <strong>Composer: Start in Background</strong>,
 or <strong>Composer: Send and Start New Thread</strong>. These bindings take priority over the
 send shortcut. Click the send button to use the configured follow-up behavior.</p>
 <p>When an active turn has queued messages, <code>mod+Shift+Enter</code> sends the first as a
-steer. Change it under <strong>Queue: Send First Queued Message as Steer</strong> in Keybindings.</p>
+steer. While the composer uses <code>mod+Shift+Enter</code> for the opposite action, first click
+elsewhere in the thread, outside the composer and any terminal. Change it under
+<strong>Queue: Send First Queued Message</strong> in Keybindings.</p>
 <p>Use <code>mod+shift+m</code> to choose a model and <code>mod+shift+h</code> to choose a host.
 To step a new thread to the next machine instead of opening the menu, bind
 <strong>Composer: Cycle Host</strong> in Keybindings. It has no default shortcut.
@@ -160,9 +163,11 @@ to show only actions.</p>
 also sends. To make Return insert a new line instead, change the Return key
 behavior in Settings → Keyboard.</p>
 <h2 id="edit-the-configuration-file">Edit the configuration file</h2>
-<p>Keybindings live on the environment’s machine, in
-<code>~/.t3/userdata/keybindings.json</code> by default. You can edit this file directly.
-It is a JSON array of rules:</p>
+<p>Keybindings live on the environment’s machine, in <code>keybindings.json</code> in its
+<code>userdata</code> folder: <code>~/.goat/userdata/keybindings.json</code> for <code>goat serve</code> and SSH
+hosts, and <code>~/.goat/desktop/userdata/keybindings.json</code> for the desktop app
+(<a href="/goat/docs/user/install/#goat-and-goat-nightly-side-by-side">GOAT (Nightly) uses its own folder</a>).
+You can edit this file directly. It is a JSON array of rules:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">[</span></span>
 <span class="line"><span style="color:#E1E4E8">  { </span><span style="color:#79B8FF">"key"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"mod+g"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"command"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"terminal.toggle"</span><span style="color:#E1E4E8"> },</span></span>
 <span class="line"><span style="color:#E1E4E8">  { </span><span style="color:#79B8FF">"key"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"mod+shift+g"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"command"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"terminal.new"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"when"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"terminalFocus"</span><span style="color:#E1E4E8"> }</span></span>
@@ -181,9 +186,10 @@ expression restricts when it runs.</p>
 <code>cmd</code> / <code>meta</code>, <code>ctrl</code> / <code>control</code>, <code>alt</code> / <code>option</code>, and <code>shift</code>.</p>
 <h2 id="when-conditions">When conditions</h2>
 <p>Available context keys are <code>terminalFocus</code>, <code>terminalOpen</code>, <code>previewFocus</code>,
-<code>previewOpen</code>, <code>modelPickerOpen</code>, <code>usagePageOpen</code>, <code>composerFocus</code>, <code>composerDraft</code>,
-<code>turnRunning</code>, <code>editableFocus</code>, <code>fileViewFocus</code>, <code>fileTreeFocus</code>, <code>isWeb</code>, and
-<code>isDesktop</code>.
+<code>previewOpen</code>, <code>rightPanelOpen</code>, <code>modelPickerOpen</code>, <code>usagePageOpen</code>, <code>notesPageOpen</code>,
+<code>composerFocus</code>, <code>draftThreadRoute</code>, <code>turnRunning</code>, <code>editableFocus</code>, <code>fileViewFocus</code>,
+<code>fileTreeFocus</code>, <code>isWeb</code>, and <code>isDesktop</code>.
+<code>draftThreadRoute</code> is true in a new thread before you send its first message.
 <code>editableFocus</code> is true while a text field, the composer, or another editor has
 the keyboard. <code>fileViewFocus</code> is true while the Files panel or an open file has
 the keyboard, and <code>fileTreeFocus</code> while the Files panel has it. <code>isWeb</code> is true in a browser tab. <code>isDesktop</code> is true in the

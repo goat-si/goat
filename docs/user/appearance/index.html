@@ -68,8 +68,10 @@ reapply it, even if the name is unchanged.</p>
 <p><code>goat theme clear</code> removes the default without changing anyone’s current theme. <code>goat theme show</code> lists
 the default and published themes.</p>
 <h3 id="publish-a-theme">Publish a theme</h3>
-<p>Save a theme exported from GOAT into <code>~/.t3/userdata/themes/</code> on the server, or the <code>themes</code>
-directory under your custom state directory. The filename supplies the theme ID: <code>nightfall.json</code>
+<p>Save a theme exported from GOAT into the server’s <code>userdata/themes/</code> folder:
+<code>~/.goat/userdata/themes/</code> for <code>goat serve</code>, <code>~/.goat/desktop/userdata/themes/</code> for the desktop
+app, or <code>&lt;path&gt;/userdata/themes/</code> for a server started with <code>--base-dir &lt;path&gt;</code>. The filename
+supplies the theme ID: <code>nightfall.json</code>
 can be selected with <code>goat theme set nightfall</code>. Keep the filename stable when updating its colors.
 Do not use <code>system</code>, <code>light</code>, <code>dark</code>, or a built-in theme’s ID.</p>
 <p>For an integration that generates a palette, this shorter format also works:</p>
