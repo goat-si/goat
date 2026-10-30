@@ -865,3 +865,37 @@ it.live.each([
     ),
   );
 });
+
+it.live("a full read after input does not attach observation evidence", () => {
+  const { host } = fixture({
+    click: { effect: "unverifiable" },
+    get_window_state: (args: Record<string, unknown>) => goat2WindowState(args),
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await app.observe(); await app.click(1); const first = await app.observe({diff:false}); return first;`,
+    });
+    expect(result.value).toMatchObject({ mode: "full" });
+    expect(result.value).not.toHaveProperty("effect");
+    expect(
+      result.journal.find((entry) => entry.receipt.method === "click")?.receipt.observedEffect,
+    ).toBeUndefined();
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});

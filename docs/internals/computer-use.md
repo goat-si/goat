@@ -55,7 +55,7 @@ provider (Codex, Claude, ...)
   tokens; the agent instead checks a batch with one `since: "latest"` read of its own.
   `unverifiable` is a success for flow control: the input was sent and no proof of its effect was
   found, so nothing waits on it, retries it or reads around it. The one rule it carries is
-  never to resend. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
+  never to resend. The first post-input app diff records window change or no-change evidence on the receipts without changing their driver verdict; the input may have affected another surface. The screen-code host (`DesktopEvidence.ts`) therefore makes one driver call
   per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
   member, or one that opens a Go to Folder sheet, reads the process's window list around the
   input, and the acted element only when a unique label with text or selection names it (a 60 ms

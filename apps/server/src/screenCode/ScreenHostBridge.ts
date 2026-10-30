@@ -766,12 +766,12 @@ export class ScreenHostBridge {
           const matched = pending.filter((item) => item.window === result.success.observedWindow);
           const rows = observation.indexedText
             .split("\n")
-            .filter((line) => /^[+~\-]\s/.test(line))
+            .filter((line) => /^[+~-]\s/.test(line))
             .slice(0, 16)
             .map((line) => line.slice(0, 200));
           const noChange = /^no change\b/i.test(observation.indexedText);
           if (matched.length && (rows.length || noChange)) {
-            const first = state.journal[matched[0]!.index]?.receipt;
+            const first = matched[0] && state.journal[matched[0].index]?.receipt;
             const label =
               matched.length === 1
                 ? `after ${first?.method ?? "input"}`
