@@ -173,7 +173,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const value = reply.v;
     const isObj = value !== null && typeof value === 'object' && !Array.isArray(value);
     const observed = [...(isObj && Array.isArray(value._observed) ? value._observed : []), ...(reply.e ?? [])];
-    const opened = observed.filter((line) => /^observed:window_opened:\d+$/.test(line)).map((line) => line.split(':')[2]);
+    const opened = [...new Set(observed.filter((line) => /^observed:window_opened:\d+$/.test(line)).map((line) => line.split(':')[2]))];
     const closed = observed.includes('observed:window_closed') && currentWindowId !== undefined ? [String(currentWindowId)] : [];
     const note = [opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
     const debug = __debug || arg.verify === true || verify;
