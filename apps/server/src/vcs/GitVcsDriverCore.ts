@@ -42,6 +42,7 @@ import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { resolveProjectFileBackedSetting } from "@goat/shared/projectSettings";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as ServerConfig from "../config.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { removeLinkedWorktree } from "./worktreeRemoval.ts";
@@ -1290,6 +1291,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const key = `${gitCommonDir}\0${remoteName}`;
     const failure = statusRemoteRefreshFailures.get(key);
     if (failure && (yield* Clock.currentTimeMillis) < failure.retryAt) return;
+    // Nobody asked for this fetch, so a process refused SSH must not dial an SSH remote for it.
+    const env =
+      (yield* sshHostsRefusal) === undefined
+        ? STATUS_UPSTREAM_REFRESH_ENV
+        : { ...STATUS_UPSTREAM_REFRESH_ENV, GIT_SSH_COMMAND: "false" };
     const fiber = yield* Effect.uninterruptible(
       Effect.gen(function* () {
         const pending = statusFetches.get(key);
@@ -1298,7 +1304,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // healthy writer. A separate safety limit prevents a hung transport from
         // occupying its worker slot indefinitely.
         const started = yield* executeGit("GitVcsDriver.fetchRemoteForStatus", fetchCwd, args, {
-          env: STATUS_UPSTREAM_REFRESH_ENV,
+          env,
           fallbackErrorDetail: "Background Git fetch exited with a non-zero status.",
           timeoutMs: Duration.toMillis(STATUS_UPSTREAM_FETCH_TIMEOUT),
           forceKillAfterMs: 1_000,

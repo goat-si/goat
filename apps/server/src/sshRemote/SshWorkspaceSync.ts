@@ -16,7 +16,7 @@ import {
   type SshWorkspaceStage,
   type SshWorkspaceCode,
 } from "@goat/contracts";
-import { SSH_KEEPALIVE_ARGS } from "@goat/ssh/command";
+import { resolveSshCommand, SSH_KEEPALIVE_ARGS } from "@goat/ssh/command";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -110,12 +110,12 @@ const make = Effect.gen(function* () {
   // SCP-style URL keeps SSH-config alias semantics; Git supplies this host argument to ssh.
   const remoteHost = (target: DesktopSshEnvironmentTarget) =>
     target.username === null ? target.alias : `${target.username}@${target.alias}`;
-  const sshEnvironment = (target: DesktopSshEnvironmentTarget) => ({
+  const sshEnvironment = (target: DesktopSshEnvironmentTarget, ssh: string) => ({
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
     GIT_SSH_VARIANT: "ssh",
     GIT_SSH_COMMAND: [
-      "ssh",
+      ssh,
       "-o",
       "BatchMode=yes",
       "-o",
@@ -164,15 +164,19 @@ const make = Effect.gen(function* () {
     target: DesktopSshEnvironmentTarget,
     operationId?: string,
   ) =>
-    git
-      .execute({
-        operation: `SshWorkspaceSync.${stage}`,
-        cwd,
-        args,
-        env: sshEnvironment(target),
-        timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
-        maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
-      })
+    resolveSshCommand
+      .pipe(
+        Effect.flatMap((ssh) =>
+          git.execute({
+            operation: `SshWorkspaceSync.${stage}`,
+            cwd,
+            args,
+            env: sshEnvironment(target, ssh),
+            timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
+            maxOutputBytes: MAX_GIT_OUTPUT_BYTES,
+          }),
+        ),
+      )
       .pipe(
         Effect.mapError(
           () =>

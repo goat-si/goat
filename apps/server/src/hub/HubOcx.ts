@@ -8,6 +8,7 @@ import {
   type RuntimeMode,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { resolveSshCommand } from "@goat/ssh/command";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- operation ids are random identifiers.
 import * as NodeCrypto from "node:crypto";
 import * as Context from "effect/Context";
@@ -561,7 +562,7 @@ const make = Effect.gen(function* () {
     directAlias: Effect.fn("HubOcx.directAlias")(
       function* (alias) {
         if (!SAFE_ALIAS.test(alias)) return false;
-        const output = yield* run("ssh", ["-G", alias], 10_000);
+        const output = yield* run(yield* resolveSshCommand, ["-G", alias], 10_000);
         if (output.code !== 0 || output.timedOut) return false;
         const settings = new Map(
           output.stdout.split(/\r?\n/u).map((line) => {
