@@ -20,14 +20,14 @@ it.live("app targets refuse tab methods without sending input", () => {
       invocation: context.invocation,
       source: `const app = await screen.app({bundle_id:'org.example.Editor',window_id:7});
         const result = [];
-        for (const f of [() => app.logs(), () => app.evaluate('1'), () => app.dialog('dismiss'), () => app.upload('#f', [])]) {
+        for (const f of [() => app.logs(), () => app.evaluate('1'), () => app.dialog('dismiss'), () => app.upload('#f', []), () => app.fillSecret('#pw', 'ref')]) {
           try { await f(); } catch (e) { result.push([e.code, e.nothingSent]); }
         }
         return result;`,
     });
     expect(result).toMatchObject({
       status: "completed",
-      value: Array.from({ length: 4 }, () => ["unsupported", true]),
+      value: Array.from({ length: 5 }, () => ["unsupported", true]),
     });
     expect(sent.map((entry) => entry.tool)).toEqual(["list_apps", "list_windows"]);
   }).pipe(

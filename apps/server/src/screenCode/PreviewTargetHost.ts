@@ -24,7 +24,13 @@ import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
-import { answerDialog, evaluateTab, readTabLogs, uploadTab } from "./PreviewTabExtras.ts";
+import {
+  answerDialog,
+  evaluateTab,
+  fillTabSecret,
+  readTabLogs,
+  uploadTab,
+} from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
@@ -518,6 +524,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         tab_evaluate: "evaluate",
         tab_dialog: "dialog",
         tab_upload: "upload",
+        tab_fill_secret: "fillSecret",
         click: "click",
         right_click: "click",
         hover: "hover",
@@ -555,6 +562,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ),
         );
       }
+      if (call.method === "tab_fill_secret")
+        return yield* fillTabSecret(arg, (input) => invoke(bound, context, "fillSecret", input));
       if (call.method === "tab_dialog")
         return yield* answerDialog(arg, (input) => invoke(bound, context, "dialog", input));
       if (call.method === "tab_evaluate")

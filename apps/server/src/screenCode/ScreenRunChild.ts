@@ -78,6 +78,7 @@ const methods = [
   "tab_evaluate",
   "tab_dialog",
   "tab_upload",
+  "tab_fill_secret",
 ] as const;
 
 type ChildResult = Pick<

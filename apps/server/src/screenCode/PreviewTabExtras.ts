@@ -1,5 +1,6 @@
 import {
   PreviewAutomationEvaluateInput,
+  PreviewAutomationFillSecretInput,
   PreviewAutomationLogsInput,
   PreviewAutomationUploadInput,
   type ScreenRunError,
@@ -80,4 +81,23 @@ export const uploadTab = Effect.fn("PreviewTargetHost.upload")(function* (
     });
   const value = yield* invoke(input);
   return { value: value ?? {}, category: "unverifiable" as const, evidence: ["Upload dispatched"] };
+});
+
+const isSecret = Schema.is(PreviewAutomationFillSecretInput);
+export const fillTabSecret = Effect.fn("PreviewTargetHost.fillSecret")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = {
+    secretRef: arg.secretRef,
+    ...(arg.selector === undefined ? {} : { selector: arg.selector }),
+  };
+  if (!isSecret(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a secret reference and optional CSS selector.",
+    });
+  const value = yield* invoke(input);
+  return { value, category: "unverifiable" as const, evidence: ["Secret fill completed"] };
 });

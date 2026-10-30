@@ -796,3 +796,4 @@ thread at a time drives a machine's real GUI, assigned by the epic's lead.
 - `tab.evaluate(expression)` uses the browser evaluation guard.
 - `tab.dialog(action, promptText?)` answers a pending browser dialog.
 - `tab.upload(target, files)` supplies absolute file paths to a file input.
+- `tab.fillSecret(target, secretRef)` focuses an observed element or uses a CSS selector with origin-bound secret fill.
