@@ -112,7 +112,10 @@ it.live.each(["batch", "refused"] as const)(
       if (scenario === "batch") {
         expect(clicks).toHaveLength(2);
         expect(clicks.map((entry) => entry.receipt.observedEffect)).toEqual(
-          Array(2).fill({ state: "change_seen", rows: ['~ AXStaticText = "8"'] }),
+          Array.from({ length: 2 }, () => ({
+            state: "change_seen",
+            rows: ['~ AXStaticText = "8"'],
+          })),
         );
         expect(result.value).toMatchObject({
           effect: 'after 2 inputs: changed (~ AXStaticText = "8")',
