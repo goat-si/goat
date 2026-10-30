@@ -362,11 +362,16 @@ const classifyResponseError = (
       const detail = error.detail;
       const object = typeof detail === "object" && detail !== null ? detail : undefined;
       const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
+      const sent =
+        object && "beforeInput" in object && object.beforeInput === false
+          ? { dispatched: true }
+          : {};
       return new PreviewAutomationControlInterruptedError({
         ...context,
         ...remoteDiagnostics,
         ...(Option.isSome(reason) ? { reason: reason.value } : {}),
         ...notSent,
+        ...sent,
       });
     }
     case "PreviewAutomationInvalidSelectorError": {

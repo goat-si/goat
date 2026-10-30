@@ -41,7 +41,7 @@ it.effect("a late observation cannot fence a later turn with the same run id", (
         threadId,
         tabId: "tab",
         closing: false,
-        page: { url: () => "https://safe.example/" },
+        page: { frames: () => [{ url: () => "https://safe.example/" }] },
       };
       const end = yield* activity.begin(threadId, "run");
       const captured = fence.capture(threadId)!;
@@ -96,7 +96,7 @@ it.effect("a blocked visit cuts an input already dispatching", () =>
         tabId: "tab",
         closing: false,
         control,
-        page: { url: () => "https://safe.example/" },
+        page: { frames: () => [{ url: () => "https://safe.example/" }] },
       };
       yield* Effect.promise(() => fence.observe(tab, "https://example.com/")!);
       expect(cuts).toBe(1);

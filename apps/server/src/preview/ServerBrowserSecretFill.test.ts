@@ -12,7 +12,7 @@ import { expect } from "vite-plus/test";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
-import { SessionControl } from "./SessionControl.ts";
+import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 const threadId = ThreadId.make("secret-fill-unit");
 const otherThread = ThreadId.make("secret-fill-unit-other");
@@ -671,5 +671,24 @@ it.live("drops an image a tab sharing sign-ins took while a password was filled"
     await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     const answer = fill.mask(picture)({ ok: true, result: { screenshot: { data: "image" } } });
     expect(answer.ok).toBe(false);
+  });
+});
+
+it.effect("refuses a blocked password destination before consuming or filling", () => {
+  const { tab, field } = makeTab();
+  return withFill(async (fill, state) => {
+    const result = await fill
+      .fill(tab, fillRequest, later(), record, async (destination?: string) => {
+        if (destination === "https://login.test")
+          throw new BrowserControlInterrupted("blocked", "blocked_url");
+      })
+      .then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatchObject({ reason: "blocked_url" });
+    expect(state.consumed).toBe(0);
+    expect(field.value).toBe("");
   });
 });

@@ -100,6 +100,28 @@ it.effect("a blocked open returns the refusal without claiming an effect", () =>
   }),
 );
 
+it.effect("a blocked redirect after open reports that navigation started", () =>
+  Effect.gen(function* () {
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([]),
+      invoke: () =>
+        Effect.fail(
+          new PreviewAutomationControlInterruptedError({
+            ...actionErrorContext,
+            operation: "open",
+            reason: "blocked_url",
+            dispatched: true,
+          }),
+        ),
+    };
+    const host = yield* makePreviewTargetHost(broker);
+    const result = yield* host
+      .dispatch(call("open_tab", 1, { url: "https://safe.test/" }), context)
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({ code: "blocked_url", effectStarted: true });
+  }),
+);
+
 it.effect(
   "an open whose page refused the connection closes the tab it left and fails as a connection failure",
   () =>

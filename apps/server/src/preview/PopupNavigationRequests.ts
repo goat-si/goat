@@ -12,9 +12,14 @@ export class PopupNavigationRequests {
   private readonly pages = new WeakMap<Page, Visit[]>();
   private readonly tracked = new WeakSet<Page>();
   private readonly currentRuns: (context: BrowserContext) => ReadonlyMap<string, BlockedTabRun>;
+  private readonly onUntracked: (context: BrowserContext, visit: Visit) => void;
 
-  constructor(currentRuns: (context: BrowserContext) => ReadonlyMap<string, BlockedTabRun>) {
+  constructor(
+    currentRuns: (context: BrowserContext) => ReadonlyMap<string, BlockedTabRun>,
+    onUntracked: (context: BrowserContext, visit: Visit) => void,
+  ) {
     this.currentRuns = currentRuns;
+    this.onUntracked = onUntracked;
   }
 
   watch(context: BrowserContext) {
@@ -27,11 +32,15 @@ export class PopupNavigationRequests {
         const page = request.frame().page();
         if (!this.tracked.has(page)) {
           const visits = this.pages.get(page) ?? [];
-          visits.push({ url: request.url(), runs: this.currentRuns(context) });
+          const visit = { url: request.url(), runs: this.currentRuns(context) };
+          visits.push(visit);
+          this.onUntracked(context, visit);
           this.pages.set(page, visits);
         }
       } catch {
-        pending.set(request, { url: request.url(), runs: this.currentRuns(context) });
+        const visit = { url: request.url(), runs: this.currentRuns(context) };
+        pending.set(request, visit);
+        this.onUntracked(context, visit);
       }
     });
     context.on("requestfailed", (request) => {

@@ -121,7 +121,7 @@ import {
   type RequestedSession,
 } from "./sessionMode.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
-import { makeBlockedTabFence, type BlockedTabRun } from "./blockedTabFence.ts";
+import { checkOpenBlocked, makeBlockedTabFence, type BlockedTabRun } from "./blockedTabFence.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
@@ -387,15 +387,25 @@ const make = Effect.gen(function* () {
       readonly visits: ReadonlyArray<{ readonly url: string; readonly run: BlockedTabRun }>;
     }
   >();
-  const popupNavigation = new PopupNavigationRequests((context) => {
-    const runs = new Map<string, BlockedTabRun>();
-    for (const tab of tabs.values()) {
-      if (tab.page.context() !== context) continue;
-      const run = blockedTabs.capture(tab.threadId);
-      if (run) runs.set(tab.threadId, run);
-    }
-    return runs;
-  });
+  const popupNavigation = new PopupNavigationRequests(
+    (context) => {
+      const runs = new Map<string, BlockedTabRun>();
+      for (const tab of tabs.values()) {
+        if (tab.page.context() !== context) continue;
+        const run = blockedTabs.capture(tab.threadId);
+        if (run) runs.set(tab.threadId, run);
+      }
+      return runs;
+    },
+    (context, visit) => {
+      // Before Chromium exposes a popup's frame, fence active tabs in its context; the opener is not yet identifiable.
+      for (const tab of tabs.values()) {
+        if (tab.page.context() !== context) continue;
+        const run = visit.runs.get(tab.threadId);
+        if (run) blockedTabs.observe(tab, visit.url, run);
+      }
+    },
+  );
   const closedPopups = new AgentTabState.ClosedPopups();
   const closedSessions = new Set<string>();
   let hostConnectionId: string | null = null;
@@ -1063,16 +1073,16 @@ const make = Effect.gen(function* () {
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
     const targetId = await AgentTabState.targetIdOf(popup).catch(() => undefined);
     const agentId = opener.popups.owner(targetId, opener, Date.now());
-    if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
-      await popup.close().catch(constVoid);
-      return;
-    }
-    const url = popup.url();
     const visits = popupNavigation.take(popup).flatMap((visit) => {
       const run = visit.runs.get(opener.threadId);
       return run ? [{ url: visit.url, run }] : [];
     });
     for (const visit of visits) blockedTabs.observe(opener, visit.url, visit.run);
+    if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
+      await popup.close().catch(constVoid);
+      return;
+    }
+    const url = popup.url();
 
     const controller = [...opener.viewers].find(
       (viewer) => viewer.id === opener.control.controller,
@@ -1661,14 +1671,23 @@ const make = Effect.gen(function* () {
         return tab.control.agent(
           request.agentSessionId,
           async () => {
-            await blockedTabs.assertTab(tab, request.runId, url);
+            let navigationSent = !existing && url !== undefined && tab.initialNavigation !== null;
+            if (navigationSent) tab.control.dispatchGate()();
+            await checkOpenBlocked(
+              () => blockedTabs.assertTab(tab, request.runId, url),
+              navigationSent,
+            );
             if (tab.dialog)
               throw new BrowserControlInterrupted(
                 'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
                 "dialogPending",
               );
             if (existing) {
-              if (url) await navigate(tab, url, "load", navigationTimeout);
+              if (url) {
+                tab.control.dispatchGate()();
+                navigationSent = true;
+                await navigate(tab, url, "load", navigationTimeout);
+              }
             } else {
               await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
                 throw unloadedOpen(tab.tabId, cause);
@@ -1689,6 +1708,10 @@ const make = Effect.gen(function* () {
                 .waitForLoadState("load", { timeout: navigationTimeout })
                 .catch(constVoid);
             }
+            await checkOpenBlocked(
+              () => blockedTabs.assertTab(tab, request.runId, url),
+              navigationSent,
+            );
             return statusWithTitle(tab, request.agentSessionId);
           },
           deadlineMs,
@@ -1746,8 +1769,8 @@ const make = Effect.gen(function* () {
         "agentMismatch",
       );
     if (request.operation === "fillSecret")
-      return secretFill.fill(tab, request, deadlineMs, recordAction, () =>
-        blockedTabs.assertTab(tab, request.runId),
+      return secretFill.fill(tab, request, deadlineMs, recordAction, (destination) =>
+        blockedTabs.assertTab(tab, request.runId, destination),
       );
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {

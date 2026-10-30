@@ -19,14 +19,10 @@ export const previewTargetFailure = (
   error: PreviewAutomationError,
   operation: PreviewAutomationOperation,
 ): ScreenRunError => {
-  if (
-    error._tag === "PreviewAutomationControlInterruptedError" &&
-    error.reason === "blocked_url" &&
-    error.dispatched !== true
-  ) {
+  if (error._tag === "PreviewAutomationControlInterruptedError" && error.reason === "blocked_url") {
     return {
       code: "blocked_url",
-      effectStarted: false,
+      effectStarted: error.dispatched === true,
       nextStep: "A person can change the blocked host setting.",
     };
   }

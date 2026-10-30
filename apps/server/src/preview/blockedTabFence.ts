@@ -11,7 +11,7 @@ interface Tab {
   readonly threadId: string;
   readonly tabId: string;
   readonly closing: boolean;
-  readonly page: { readonly url: () => string };
+  readonly page: { readonly frames: () => ReadonlyArray<{ readonly url: () => string }> };
   readonly control?: { readonly cutBlockedUrl: () => void };
 }
 interface Identity {
@@ -22,6 +22,16 @@ export interface BlockedTabRun {
   readonly runId: string;
   readonly token: object;
 }
+
+export const checkOpenBlocked = async (check: () => Promise<void>, sent: boolean) => {
+  try {
+    await check();
+  } catch (cause) {
+    if (sent && cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
+      throw new BrowserControlInterrupted(cause.message, cause.reason, false);
+    throw cause;
+  }
+};
 
 export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* () {
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -98,7 +108,9 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
       if (check !== pending.get(key)) continue;
       if (runId && entry?.threadId === tab.threadId && entry.runId === runId) throw blocked();
       if (
-        isBlockedBrowserUrl(tab.page.url(), current.blockedBrowserHosts) ||
+        tab.page
+          .frames()
+          .some((frame) => isBlockedBrowserUrl(frame.url(), current.blockedBrowserHosts)) ||
         (url !== undefined && isBlockedBrowserUrl(url, current.blockedBrowserHosts))
       ) {
         if (

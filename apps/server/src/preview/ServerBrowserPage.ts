@@ -80,7 +80,11 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
+      cause.reason === "blocked_url"
+        ? { reason: cause.reason, beforeInput: cause.beforeInput }
+        : cause.beforeInput
+          ? { reason: cause.reason, beforeInput: true }
+          : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;
   const message = cause instanceof Error ? cause.message : String(cause);

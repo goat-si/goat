@@ -11,6 +11,8 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
@@ -29,10 +31,15 @@ import * as ServerBrowser from "./ServerBrowser.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
+let shareNextContext = false;
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
   ServerBrowserContexts: class {
     async contextFor() {
+      if (shareNextContext) {
+        shareNextContext = false;
+        return contexts.at(-1)!;
+      }
       browser ??= await chromium.launch({ headless: true });
       const context = await browser.newContext();
       contexts.push(context);
@@ -89,8 +96,40 @@ const layer = ServerBrowser.layer.pipe(
   ),
 );
 
+it.effect("an unattributed blocked popup fences all active tabs in its context", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      shareNextContext = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          shareNextContext = false;
+        }),
+      );
+      const opened = yield* f.broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const other = PreviewTabId.make(opened.tabId!);
+      const opening = yield* Effect.promise(() =>
+        f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(f.slowStarted);
+      const first = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
+      const second = yield* f.call(other, "press", { key: "Enter" }).pipe(Effect.result);
+      f.slowRelease.resolve();
+      yield* Fiber.join(opening);
+      blocked(first);
+      blocked(second);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 const fixture = Effect.gen(function* () {
   const hits: string[] = [];
+  const slowStarted = yield* Deferred.make<void>();
+  const slowRelease = Promise.withResolvers<void>();
   const server = yield* Effect.acquireRelease(
     Effect.promise(
       () =>
@@ -100,6 +139,14 @@ const fixture = Effect.gen(function* () {
             const blocked = `http://localhost:${port}`;
             const allowed = `http://127.0.0.1:${port}`;
             hits.push(`${req.headers.host}${req.url}`);
+            if (req.url === "/slow") {
+              Deferred.doneUnsafe(slowStarted, Effect.void);
+              void slowRelease.promise.then(() => {
+                res.writeHead(200, { "content-type": "text/html" });
+                res.end("slow");
+              });
+              return;
+            }
             if (req.url === "/redirect") {
               res.writeHead(302, { location: `${blocked}/hop` });
               res.end();
@@ -112,7 +159,7 @@ const fixture = Effect.gen(function* () {
             }
             res.writeHead(200, { "content-type": "text/html" });
             res.end(
-              `<a id="link" href="${blocked}/blocked">go</a><button id="popup" onclick="window.open('${blocked}/blocked')">popup</button><button id="popupRedirect" onclick="window.open('${allowed}/redirect')">redirect popup</button><form action="${blocked}/blocked"><button id="form">submit</button></form><button id="script" onclick="location.href='${blocked}/blocked'">script</button><button id="popupBlank" onclick="const p=window.open('about:blank');p.location.href='${blocked}/blocked'">blank popup</button><button id="next">next</button>`,
+              `<a id="link" href="${blocked}/blocked">go</a><button id="popup" onclick="window.open('${blocked}/blocked')">popup</button><button id="slowPopup" onclick="window.open('${blocked}/slow')">slow popup</button><button id="popupRedirect" onclick="window.open('${allowed}/redirect')">redirect popup</button><form action="${blocked}/blocked"><button id="form">submit</button></form><button id="script" onclick="location.href='${blocked}/blocked'">script</button><button id="popupBlank" onclick="const p=window.open('about:blank');p.location.href='${blocked}/blocked'">blank popup</button><button id="next">next</button>`,
             );
           });
           server.listen(0, () => resolve(server));
@@ -126,6 +173,7 @@ const fixture = Effect.gen(function* () {
           ),
       ),
   );
+  yield* Effect.addFinalizer(() => Effect.sync(() => slowRelease.resolve()));
   const port = (server.address() as { port: number }).port;
   const allowed = `http://127.0.0.1:${port}`;
   const blocked = `http://localhost:${port}`;
@@ -149,7 +197,20 @@ const fixture = Effect.gen(function* () {
     operation: Broker.PreviewAutomationInvokeInput["operation"],
     input: unknown,
   ) => broker.invoke({ scope, tabId: id, operation, input });
-  return { service, broker, page, tabId, allowed, blocked, hits, end, call };
+  return {
+    service,
+    broker,
+    page,
+    tabId,
+    allowed,
+    blocked,
+    hits,
+    end,
+    call,
+    settings,
+    slowStarted,
+    slowRelease,
+  };
 });
 const blocked = (result: { readonly _tag: string; readonly failure?: unknown }) => {
   expect(result._tag).toBe("Failure");
@@ -325,6 +386,128 @@ it.effect("a blocked iframe navigation fences its containing tab", () =>
         ),
       );
       yield* Effect.promise(() => loaded);
+      blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("an iframe blocked after loading refuses input before it reaches the frame", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* f.settings.updateSettings({ blockedBrowserHosts: [] });
+      yield* Effect.promise(() =>
+        f.page.evaluate(
+          `(() => { const frame = document.createElement("iframe"); frame.id = "child"; frame.src = ${JSON.stringify(`${f.blocked}/blocked`)}; document.body.append(frame); })()`,
+        ),
+      );
+      const frame = f.page.frameLocator("#child");
+      yield* Effect.promise(() => frame.locator("#next").waitFor());
+      const child = f.page.frames().find((item) => item.url() === `${f.blocked}/blocked`)!;
+      yield* Effect.promise(() =>
+        child.evaluate(
+          "document.querySelector('#next').addEventListener('click', () => document.querySelector('#next').setAttribute('data-clicked','yes'))",
+        ),
+      );
+      yield* f.settings.updateSettings({ blockedBrowserHosts: ["localhost"] });
+      const result = yield* f
+        .call(f.tabId, "click", { locator: "#child >> internal:control=enter-frame >> #next" })
+        .pipe(Effect.result);
+      blocked(result);
+      expect(
+        yield* Effect.promise(() => frame.locator("#next").getAttribute("data-clicked")),
+      ).toBeNull();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("an allowed iframe remains usable when no frame is blocked", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.promise(() =>
+        f.page.evaluate(
+          `(() => { const frame = document.createElement("iframe"); frame.id = "child"; frame.src = ${JSON.stringify(`${f.allowed}/safe`)}; document.body.append(frame); })()`,
+        ),
+      );
+      yield* Effect.promise(() => f.page.frameLocator("#child").locator("#next").waitFor());
+      expect(
+        (yield* f
+          .call(f.tabId, "click", { locator: "#child >> internal:control=enter-frame >> #next" })
+          .pipe(Effect.result))._tag,
+      ).toBe("Success");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("opening a URL that redirects through a blocked host reports dispatched", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const result = yield* f.broker
+        .invoke({
+          scope,
+          operation: "open",
+          input: { url: `${f.allowed}/redirect`, reuseExistingTab: false, show: false },
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: true });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("opening an initially blocked URL is refused before dispatch", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const result = yield* f.broker
+        .invoke({
+          scope,
+          operation: "open",
+          input: { url: `${f.blocked}/blocked`, reuseExistingTab: false, show: false },
+        })
+        .pipe(Effect.result);
+      blocked(result);
+      expect(f.hits.some((hit) => hit.startsWith("localhost:") && hit.endsWith("/blocked"))).toBe(
+        false,
+      );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a slow blocked popup fences active context tabs before the response arrives", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const opening = yield* Effect.promise(() =>
+        f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(f.slowStarted);
+      const result = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
+      f.slowRelease.resolve();
+      yield* Fiber.join(opening);
+      blocked(result);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a blocked popup at the tab limit still fences its opener", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      for (let i = 1; i < 8; i++) {
+        yield* f.broker.invoke({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false },
+        });
+      }
+      const popupReady = f.page.waitForEvent("popup");
+      yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
+      const popup = yield* Effect.promise(() => popupReady);
+      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
     }),
   ).pipe(Effect.provide(layer)),
