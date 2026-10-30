@@ -171,7 +171,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           pending.delete(claimId);
           yield* publish(union());
           return { agentResult: { status: "attached" as const, claim } };
-        }).pipe(Effect.catch((error) => rollback.pipe(Effect.andThen(Effect.fail(error)))));
+        }).pipe(Effect.catch(() => rollback.pipe(Effect.as({ agentResult: decline }))));
         return result;
       }),
     ),

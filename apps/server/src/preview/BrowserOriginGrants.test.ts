@@ -263,3 +263,44 @@ it.effect("exposes each thread's claims and fences claimed browser pids until re
     assert.deepEqual(yield* service.claimedPids(), []);
   }),
 );
+
+it.effect("refuses a claim when manifest confirmation fails and restores the previous union", () =>
+  Effect.gen(function* () {
+    const published: Array<ReadonlyArray<{ readonly pid: number; readonly windowId: number }>> = [];
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (union) =>
+        Effect.gen(function* () {
+          published.push(union.existingProfiles);
+          if (union.existingProfiles.some((entry) => entry.windowId === 8))
+            return yield* Effect.fail(new Error("manifest confirmation mismatch"));
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const input = {
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    };
+    const first = yield* service.request(input);
+    if (first.status !== "pending") return assert.fail("expected pending request");
+    const accepted = yield* service.answer(first.claimId, true);
+    assert.equal(accepted.agentResult.status, "attached");
+    const second = yield* service.request({ ...input, windowId: 8 });
+    if (second.status !== "pending") return assert.fail("expected pending request");
+    const answer = yield* service.answer(second.claimId, true);
+    assert.equal(answer.agentResult.status, "refused");
+    assert.deepEqual(published.at(-1), [{ pid: 42, windowId: 7 }]);
+    assert.lengthOf(yield* service.claimsFor(threadId), 1);
+  }),
+);
