@@ -57,6 +57,7 @@ import {
 import {
   CellWindowTracker,
   type CellWindowsOutcome,
+  listingProvesAbsent,
   matchBindWindow,
   parseWindowList,
   type SheetTrigger,
@@ -343,42 +344,160 @@ export const createDesktopTargetHost = (deps: {
       const name = string(args.name);
       const appId = bundleId ?? name;
       const requestedWindow = integer(args.window_id) ?? integer(args.windowId);
-      if (!appId || !requestedWindow) return yield* Effect.fail(fail("invalid_argument"));
+      if (!requestedWindow)
+        return yield* Effect.fail(
+          fail(
+            "invalid_argument",
+            "Pass window_id from screen.discover(), with or without a name.",
+          ),
+        );
       const appsReply = yield* request("list_apps", {}, call, context);
       const listed = object(driverValue(appsReply))?.apps;
-      const matches = array(listed)
-        .map(object)
-        .filter((app) => app !== undefined)
-        .filter((app) => (bundleId ? app.bundle_id === bundleId : app.name === name));
-      const pids = new Set(matches.map((app) => integer(app.pid)));
-      pids.delete(undefined);
-      if (Array.isArray(listed) && pids.size === 0)
-        return yield* Effect.fail(fail("target_missing"));
-      const [onlyPid] = pids.size === 1 ? pids : [];
-      // Linux lists every process and launcher, which can pass the lease proxy's reply cap; the
-      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows. It
-      // also finds the window among several processes of one app.
-      const windowsReply = yield* request(
-        "list_windows",
-        onlyPid ? { pid: onlyPid } : { app: appId },
-        call,
-        context,
-        appsReply.connectionGeneration,
+      const pids = new Set(
+        array(listed)
+          .map(object)
+          .filter((app) => app !== undefined)
+          .filter(
+            (app) =>
+              appId !== undefined && (bundleId ? app.bundle_id === bundleId : app.name === name),
+          )
+          .map((app) => integer(app.pid)),
       );
-      if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
-        return yield* Effect.fail(fail("stale_reference"));
-      const matched = matchBindWindow(
-        listed,
-        object(driverValue(windowsReply))?.windows,
+      pids.delete(undefined);
+      // A name list_apps does not know may still be the app_name discover lists for the window.
+      if (bundleId && Array.isArray(listed) && pids.size === 0)
+        return yield* Effect.fail(fail("target_missing"));
+      const listWindows = Effect.fn("DesktopTargetHost.bindListWindows")(function* (
+        windowArgs: Record<string, unknown>,
+      ) {
+        const reply = yield* request(
+          "list_windows",
+          windowArgs,
+          call,
+          context,
+          appsReply.connectionGeneration,
+        );
+        if (reply.connectionGeneration !== appsReply.connectionGeneration)
+          return yield* Effect.fail(fail("stale_reference"));
+        return { reply, windows: object(driverValue(reply))?.windows };
+      });
+      // One process: its own list, every layer (macOS lists only layer 0 without a pid); window
+      // ids are unique on a host. Otherwise every window, so the found window shows its owner. A
+      // cut app list narrows by the bundle filter, a name substring match on every platform, so
+      // matchBindWindow then checks the window's own app_name.
+      const [onlyPid] = Array.isArray(listed) && pids.size === 1 ? [...pids] : [];
+      const filter =
+        onlyPid !== undefined
+          ? { pid: onlyPid }
+          : bundleId && !Array.isArray(listed)
+            ? { app: bundleId }
+            : undefined;
+      let { reply: windowsReply, windows: listedWindows } = yield* listWindows(filter ?? {});
+      let listedPid = onlyPid;
+      let bundleFiltered = isMac && filter !== undefined && "app" in filter;
+      // A filtered list that may have left the window out keeps that doubt past the re-list.
+      let absenceUnproven = false;
+      // Not among the filtered windows: whose window it is, if anyone's, decides the answer.
+      if (
+        filter !== undefined &&
+        Array.isArray(listedWindows) &&
+        !listedWindows.some((window) => object(window)?.window_id === requestedWindow)
+      ) {
+        absenceUnproven = !listingProvesAbsent(driverValue(windowsReply), requestedWindow);
+        ({ reply: windowsReply, windows: listedWindows } = yield* listWindows({}));
+        listedPid = undefined;
+        bundleFiltered = false;
+      }
+      // Every window passed the reply cap while the app runs as several processes: each one's
+      // own list holds all of its windows, so they are read until one shows the window.
+      if (!Array.isArray(listedWindows) && filter === undefined && pids.size > 1)
+        for (const each of pids) {
+          if (each === undefined) continue;
+          const part = yield* listWindows({ pid: each });
+          if (!Array.isArray(part.windows)) break;
+          if (part.windows.some((window) => object(window)?.window_id === requestedWindow)) {
+            ({ reply: windowsReply, windows: listedWindows } = part);
+            listedPid = each;
+            break;
+          }
+        }
+      // A list cut at the reply cap cannot show the window, its owner, or a duplicate of its id.
+      if (!Array.isArray(listedWindows))
+        return yield* Effect.fail(
+          fail(
+            "downstream_failure",
+            "The window list came back incomplete, so window " +
+              requestedWindow +
+              " could not be checked and nothing was bound. Try again.",
+          ),
+        );
+      const unproven = fail(
+        "downstream_failure",
+        "The driver's window list says it may be incomplete, so window " +
+          requestedWindow +
+          " could not be checked and nothing was bound. Try again.",
+      );
+      const matched = matchBindWindow({
+        listedApps: listed,
+        listedWindows,
         bundleId,
         name,
         requestedWindow,
-        matches,
-        pids,
-      );
+        bundleFiltered,
+      });
+      if (
+        matched.error?.detail === "window_gone" &&
+        (absenceUnproven || !listingProvesAbsent(driverValue(windowsReply), requestedWindow))
+      )
+        return yield* Effect.fail(unproven);
+      // macOS lists windows above layer 0 (panels, popovers) only for their pid.
+      if (matched.error?.detail === "window_gone" && isMac && filter === undefined)
+        return yield* Effect.fail({
+          ...matched.error,
+          nextStep:
+            "Window " +
+            requestedWindow +
+            " is not in the window list: it is closed, or a panel macOS lists only with its app. Pass the bundle_id or name of the app that owns it with window_id.",
+        });
       if (matched.error || !matched.pid || !matched.window)
         return yield* Effect.fail(matched.error ?? fail("target_missing"));
       const { pid, app, window: foundWin } = matched;
+      // The baseline later window checks compare with: the bound process's own complete list.
+      const own = listedPid === pid ? undefined : yield* listWindows({ pid });
+      const baseline = own === undefined ? listedWindows : own.windows;
+      if (!Array.isArray(baseline))
+        return yield* Effect.fail(
+          fail(
+            "downstream_failure",
+            "The window list of pid " +
+              pid +
+              " came back incomplete, so nothing was bound. Try again.",
+          ),
+        );
+      // The process's own list is read last, so it decides: the window must still be in it, once.
+      const again = baseline.filter((window) => object(window)?.window_id === requestedWindow);
+      if (
+        again.length === 0 &&
+        !listingProvesAbsent(driverValue(own?.reply ?? windowsReply), requestedWindow)
+      )
+        return yield* Effect.fail(unproven);
+      if (again.length !== 1 || object(again[0])?.pid !== pid)
+        return yield* Effect.fail(
+          again.length > 1
+            ? fail(
+                "target_ambiguous",
+                "The driver lists window " +
+                  requestedWindow +
+                  " more than once; call screen.discover() and bind again.",
+              )
+            : {
+                ...fail(
+                  "target_missing",
+                  "That window is closed; pick one from screen.discover().",
+                ),
+                detail: "window_gone",
+              },
+        );
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
@@ -389,8 +508,13 @@ export const createDesktopTargetHost = (deps: {
           windowId: requestedWindow,
           bundleId: string(app?.bundle_id),
           name: string(app?.name) ?? string(foundWin.app_name),
-          appId: string(app?.bundle_id) ?? string(app?.name) ?? appId,
-          iconBundleId: bundleId,
+          appId:
+            string(app?.bundle_id) ??
+            string(app?.name) ??
+            appId ??
+            string(foundWin.app_name) ??
+            String(pid),
+          iconBundleId: bundleId ?? string(app?.bundle_id),
           bounds: foundWin.bounds,
           connectionGeneration: windowsReply.connectionGeneration,
           controlId: current.controlId,
@@ -399,10 +523,14 @@ export const createDesktopTargetHost = (deps: {
       );
       const created = targets.get(ref.id);
       if (created) {
-        created.boundWindows = parseWindowList(driverValue(windowsReply), pid);
+        created.boundWindows = parseWindowList({ windows: baseline }, pid);
         created.boundInCellId = context.cellId;
       }
-      return { value: ref, category: "unverifiable" };
+      return {
+        value: ref,
+        category: "confirmed",
+        evidence: [`Window ${requestedWindow} of pid ${pid} is in the driver's window list`],
+      };
     },
   );
   const bindWindow = makeBindWindow({

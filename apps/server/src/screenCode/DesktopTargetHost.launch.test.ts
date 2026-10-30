@@ -205,7 +205,7 @@ it.effect("App.launch() relaunches by the queried bundle id after a cut app list
   Effect.gen(function* () {
     const { host, sent } = fixture({
       list_apps: { message: "Driver reply exceeded the primitive channel limit." },
-      list_windows: { windows: [{ ...document, app_name: "Editor" }] },
+      list_windows: { windows: [{ ...document, app_name: "org.example.Editor" }] },
     });
     const bound = yield* host.bindApp(
       bindCall({ bundle_id: "org.example.Editor", window_id: 7 }),
@@ -333,7 +333,8 @@ it.live("a launch the cell cannot wait out stops the cell's later input", () => 
   const { host, sent } = fixture({
     list_apps: { apps: [installed, other] },
     list_windows: (args: { pid?: number }) => ({
-      windows: args.pid === 50 ? [{ pid: 50, window_id: 11, layer: 0 }] : [],
+      windows:
+        args.pid === undefined || args.pid === 50 ? [{ pid: 50, window_id: 11, layer: 0 }] : [],
     }),
     launch_app: launched([]),
   });

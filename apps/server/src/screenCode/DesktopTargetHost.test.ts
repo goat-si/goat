@@ -124,11 +124,19 @@ it.effect("ambiguous app/window binding refuses input", () =>
 // that reply passes the lease proxy's 64 KiB cap and arrives as this placeholder.
 it.effect("a window binds when the driver's app list exceeds the primitive channel limit", () =>
   Effect.gen(function* () {
-    const { host, sent } = fixture({
-      list_apps: { message: "Driver reply exceeded the primitive channel limit." },
-      list_windows: (args: { app?: string }) =>
-        args.app === "org.example.Editor" ? windows : { windows: [] },
-    });
+    // The window's WM_CLASS names its desktop id, which is what proves it is that app.
+    const own = { windows: [{ ...windows.windows[0], app_name: "org.example.Editor" }] };
+    const { host, sent } = fixture(
+      {
+        list_apps: { message: "Driver reply exceeded the primitive channel limit." },
+        list_windows: (args: { app?: string; pid?: number }) =>
+          args.app === "org.example.Editor" || args.pid === 42 ? own : { windows: [] },
+      },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
     const bound = yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
       context,
@@ -136,6 +144,7 @@ it.effect("a window binds when the driver's app list exceeds the primitive chann
     expect(sent.map((entry) => [entry.tool, entry.args])).toEqual([
       ["list_apps", {}],
       ["list_windows", { app: "org.example.Editor" }],
+      ["list_windows", { pid: 42 }],
     ]);
     const observed = yield* host.observe(
       call("get_window_state", {}, bound.value as ScreenTargetRef),
@@ -151,16 +160,15 @@ it.effect("two processes of one app bind the window the agent named", () =>
     const second = { ...apps.apps[0], pid: 43 };
     const { host, sent } = fixture({
       list_apps: { apps: [apps.apps[0], second] },
-      list_windows: (args: { app?: string }) =>
-        args.app === "org.example.Editor"
-          ? { windows: [windows.windows[0], { pid: 43, window_id: 8, title: "Other" }] }
-          : { windows: [] },
+      list_windows: { windows: [windows.windows[0], { pid: 43, window_id: 8, title: "Other" }] },
       get_window_state: { ...state, pid: 43, window_id: 8 },
     });
     const bound = yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 8 }),
       context,
     );
+    // Both processes are listed, so the window is found by its id among every window.
+    expect(sent.find((entry) => entry.tool === "list_windows")?.args).toEqual({});
     yield* host.observe(call("get_window_state", {}, bound.value as ScreenTargetRef), context);
     expect(sent.at(-1)?.args).toMatchObject({ pid: 43, window_id: 8 });
   }),

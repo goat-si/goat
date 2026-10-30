@@ -453,43 +453,137 @@ export class CellWindowTracker {
   }
 }
 
-export const matchBindWindow = (
-  listedApps: unknown,
-  listedWindows: unknown,
-  bundleId: string | undefined,
-  name: string | undefined,
-  requestedWindow: number,
-  matches: ReadonlyArray<Record<string, unknown>>,
-  pids: ReadonlySet<number | undefined>,
-): {
+/**
+ * The window a bind names by its id, and the app row it belongs to. A bundle id or name only has
+ * to agree with that window: its process is a row list_apps lists under it, or (on Linux, where
+ * a script's window carries its WM_CLASS while its row is the interpreter's process) the window's
+ * own app_name, as screen.discover() shows it. Without either, the window id alone names it.
+ */
+/**
+ * Whether a window missing from a list_windows reply is absent: not when the driver says its
+ * enumeration may be incomplete, nor when its id snapshot still holds the window.
+ */
+export const listingProvesAbsent = (value: unknown, windowId: number) => {
+  const reply = object(value);
+  if (reply?.enumeration_complete === false) return false;
+  const ids = reply?.authoritative_window_ids;
+  return !(Array.isArray(ids) && ids.includes(windowId));
+};
+
+export const matchBindWindow = (input: {
+  readonly listedApps: unknown;
+  readonly listedWindows: unknown;
+  readonly bundleId: string | undefined;
+  readonly name: string | undefined;
+  readonly requestedWindow: number;
+  /**
+   * The windows came from macOS's `app` filter, which passes an exact bundle id or a name
+   * containing the filter: a window whose name does not contain it matched by bundle id.
+   */
+  readonly bundleFiltered?: boolean;
+}): {
   readonly pid?: number;
   readonly app?: Record<string, unknown> | undefined;
   readonly window?: Record<string, unknown>;
   readonly error?: ScreenRunError;
 } => {
+  const { listedApps, listedWindows, bundleId, name, requestedWindow, bundleFiltered } = input;
   if (!Array.isArray(listedWindows)) return { error: fail("downstream_failure") };
-  const named = listedWindows
+  const rows = Array.isArray(listedApps)
+    ? listedApps.map(object).filter((app): app is Record<string, unknown> => app !== undefined)
+    : undefined;
+  const asked = (app: Record<string, unknown>) =>
+    bundleId !== undefined ? app.bundle_id === bundleId : app.name === name;
+  const askedPids = new Set(rows?.filter(asked).map((app) => natural(app.pid)));
+  const found = listedWindows
     .map(object)
     .filter((window): window is Record<string, unknown> => window !== undefined)
-    .filter(
-      (window) =>
-        window.window_id === requestedWindow &&
-        (Array.isArray(listedApps)
-          ? pids.has(natural(window.pid))
-          : bundleId !== undefined || window.app_name === undefined || window.app_name === name),
-    );
-  const first = named[0];
-  const pid = first ? natural(first.pid) : undefined;
-  if (!Array.isArray(listedApps) && (!pid || pid <= 0)) return { error: fail("target_missing") };
-  if (named.length === 0)
+    .filter((window) => window.window_id === requestedWindow);
+  if (found.length === 0)
     return {
       error: {
         ...fail("target_missing", "That window is closed; pick one from screen.discover()."),
         detail: "window_gone",
       },
     };
-  if (named.length !== 1 || !pid || pid <= 0 || !first) return { error: fail("target_ambiguous") };
-  return { pid, app: matches.find((candidate) => candidate.pid === pid), window: first };
+  const describe = (window: Record<string, unknown>) =>
+    (typeof window.app_name === "string" && window.app_name.length > 0
+      ? window.app_name + " "
+      : "") +
+    "(pid " +
+    String(window.pid ?? "unknown") +
+    ")";
+  // Window ids are unique on a display; one listed twice cannot be told apart, whatever the name.
+  if (found.length > 1)
+    return {
+      error: fail(
+        "target_ambiguous",
+        "The driver lists window " +
+          requestedWindow +
+          " " +
+          found.length +
+          " times (" +
+          found.map(describe).join(", ") +
+          "); call screen.discover() and bind again.",
+      ),
+    };
+  const [first] = found;
+  if (!first) return { error: fail("target_missing") };
+  const pid = natural(first.pid);
+  const lower = (value: unknown) => (typeof value === "string" ? value.toLowerCase() : undefined);
+  const holds = (app: Record<string, unknown>) =>
+    Array.isArray(app.windows) &&
+    app.windows.some((window) => object(window)?.window_id === requestedWindow);
+  const ofPid = rows?.filter((app) => pid !== undefined && natural(app.pid) === pid) ?? [];
+  // One process can show several apps' windows (soffice.bin's Calc and Writer); list_apps puts
+  // each window in its own app's row, so a window another app's row holds is not this app's.
+  const owner = ofPid.some((app) => asked(app) && holds(app))
+    ? undefined
+    : ofPid.find((app) => !asked(app) && holds(app));
+  const agrees =
+    (bundleId === undefined && name === undefined) ||
+    (rows !== undefined
+      ? (pid !== undefined && pid > 0 && askedPids.has(pid) && owner === undefined) ||
+        (bundleId === undefined && first.app_name === name)
+      : // A cut app list: the driver's filter matched a substring of a name, so only the
+        // window's own bundle id or app_name proves which app it is.
+        bundleId !== undefined
+        ? first.bundle_id === bundleId ||
+          lower(first.app_name) === bundleId.toLowerCase() ||
+          (bundleFiltered === true &&
+            !(lower(first.app_name) ?? "").includes(bundleId.toLowerCase()))
+        : first.app_name === name);
+  if (!agrees)
+    return {
+      error: fail(
+        "target_missing",
+        "Window " +
+          requestedWindow +
+          " belongs to " +
+          describe(first) +
+          ", not " +
+          (bundleId ?? name) +
+          (rows === undefined
+            ? " as far as the window itself says; the app list came back incomplete"
+            : "") +
+          ". Pass window_id alone, or with the name screen.discover() lists for it.",
+      ),
+    };
+  if (!pid)
+    return {
+      error: fail(
+        "target_missing",
+        "Window " + requestedWindow + " has no process the driver can name, so it cannot be bound.",
+      ),
+    };
+  const app =
+    ofPid.find(
+      (each) => (bundleId !== undefined || name !== undefined) && asked(each) && holds(each),
+    ) ??
+    ofPid.find((each) => (bundleId !== undefined || name !== undefined) && asked(each)) ??
+    ofPid.find(holds) ??
+    ofPid[0];
+  return { pid, app, window: first };
 };
 
 export const checkWindowReplyState = (
@@ -576,8 +670,13 @@ export const withHolders = Effect.fn("DesktopWindows.withHolders")(function* (
   const key = call.method === "list_apps" ? "apps" : "windows";
   const listed = object(value);
   const rows = listed?.[key];
-  const answer = (next: unknown) => ({ value: next, category: "unverifiable" as const });
-  if (!listed || !Array.isArray(rows)) return answer(value);
+  if (!listed || !Array.isArray(rows)) return { value, category: "unverifiable" as const };
+  // The driver answered with its list: a completed read, whether or not holders are known.
+  const answer = (next: unknown) => ({
+    value: next,
+    category: "confirmed" as const,
+    evidence: [`The driver listed ${rows.length} ${key}`],
+  });
   const unknown = { ...listed, holdersUnknown: true };
   const holders = leases.appHolders
     ? yield* leases.appHolders(context.invocation.thread.threadId)
