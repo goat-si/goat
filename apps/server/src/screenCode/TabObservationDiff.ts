@@ -2,7 +2,7 @@ import type { ScreenObservationDraft } from "./ScreenObservations.ts";
 
 type Element = ScreenObservationDraft["elements"][number];
 
-const nativeRef = (token: string) => token.replace(/^aria-ref=t3-[^-]+-[^-]+-((?:f\d+)?e\d+)$/, "aria-ref=$1");
+const nativeRef = (token: string) => token.replace(/^aria-ref=t3-.+-((?:f\d+)?e\d+)$/, "aria-ref=$1");
 
 export const hasFrameRefs = (draft: ScreenObservationDraft) =>
   draft.elements.some((element) => /^aria-ref=f\d+e\d+$/.test(nativeRef(element.driverToken)));
