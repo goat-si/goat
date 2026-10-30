@@ -71,7 +71,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     expect(sent.at(-1)?.args).toMatchObject({ since: "s1", tree_format: "both" });
     expect(diff).toMatchObject({
       mode: "diff",
-      indexedText: `~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged; latest full observation is ${full.observationId}`,
+      indexedText: `~ [1] AXButton "Apply"\nreindexed: [2] -> [3]\nother numbers unchanged since ${full.observationId}; observe({diff:false}) lists every current number`,
     });
     yield* host.invoke(call("click", { elementRef: refAt(diff, 1) }, ref), context);
     expect(sent.at(-1)).toMatchObject({ tool: "click", args: { element_token: "s2:1" } });
@@ -79,7 +79,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
     const unchanged = yield* observe({ mode: "diff", baseObservationId: diff.observationId });
     expect(unchanged).toMatchObject({
       mode: "diff",
-      indexedText: `no change; numbers unchanged; latest full observation is ${full.observationId}`,
+      indexedText: `no change since ${diff.observationId}; numbers as in that observation`,
     });
     status = "unknown_snapshot";
     const before = reads;
@@ -440,7 +440,7 @@ it.live.each([
     expect(value.first.mode).toBe("full");
     expect(value.second).toMatchObject({
       mode: "diff",
-      text: `${scenario.diff}\nother numbers unchanged; latest full observation is ${value.first.observationId}`,
+      text: `${scenario.diff}\n${scenario.label === "unchanged" ? `other numbers unchanged; latest full observation is ${value.first.observationId}` : `other numbers unchanged since ${value.first.observationId}; observe({diff:false}) lists every current number`}`,
     });
     expect(value.second.text).not.toContain("element_tokens");
     expect(value.stale).toEqual(
@@ -465,3 +465,52 @@ it.live.each([
     ),
   );
 });
+
+it.effect(
+  "incomplete reindexing triggers one full read and preserves focus on later no-change",
+  () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const { host, sent } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          const full = { ...goat2WindowState(args), snapshot_id: `s${++reads}` };
+          if (args.since === undefined) return full;
+          const { tree_markdown: _tree, ...diff } = full;
+          return reads === 2
+            ? {
+                ...diff,
+                since_status: "diff",
+                tree_diff:
+                  "+ [1] AXButton\nreindexed: more shifted ranges not listed; pass full_output",
+              }
+            : {
+                ...diff,
+                since_status: "no_change",
+                tree_diff: `no change since ${args.since}; focused element is [1]. Rows and indices are as before; use snapshot_id in element_tokens`,
+              };
+        },
+      });
+      const ref = (yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      )).value as ScreenTargetRef;
+      const observe = (args: Record<string, string>) =>
+        host
+          .observe(call("get_accessibility_tree", args, ref), context)
+          .pipe(Effect.map((result) => result.value as Observed & { resetReason?: string }));
+      const first = yield* observe({});
+      const fallback = yield* observe({ mode: "diff", baseObservationId: first.observationId });
+      expect(reads).toBe(3);
+      expect(sent.filter((entry) => entry.tool === "get_window_state")[2]?.args).not.toHaveProperty(
+        "since",
+      );
+      expect(fallback).toMatchObject({
+        mode: "full",
+        resetReason: "full read: too many rows moved",
+      });
+      const unchanged = yield* observe({ mode: "diff", baseObservationId: fallback.observationId });
+      expect(unchanged.indexedText).toBe(
+        `no change; numbers unchanged; latest full observation is ${fallback.observationId}; focused element is [1]`,
+      );
+    }),
+);
