@@ -209,6 +209,7 @@ import {
   claudeIgnoresSubagentCap,
   claudeNativeSubagentPolicy,
 } from "./ClaudeNativeSubagentPolicy.ts";
+import { readClaudeCliVersion } from "../../provider/ClaudeProvider.ts";
 import { launchedWithComputerUseSkill, pendingComputerUseNotice } from "./ClaudeComputerUse.ts";
 import {
   mcpToolPresentation,
@@ -4139,6 +4140,8 @@ export interface ClaudeAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** The Claude CLI's version; read from the configured binary when absent. */
+  readonly claudeCliVersion?: Effect.Effect<string | undefined>;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -4160,6 +4163,19 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   const derivedCache = yield* MemoryDerivedCache.MemoryDerivedCache;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  // Read once, before the first capped process opens; the SDK's bundled CLI (no binary path)
+  // is new enough to cap subagents.
+  const claudeSubagentCapSupported = yield* Effect.cached(
+    (
+      adapterOptions.claudeCliVersion ??
+      (adapterOptions.settings.binaryPath.trim() === ""
+        ? Effect.succeed("bundled")
+        : readClaudeCliVersion(adapterOptions.settings, adapterOptions.environment).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(Path.Path, adapterOptions.path),
+          ))
+    ).pipe(Effect.map((version) => version === "bundled" || !claudeIgnoresSubagentCap(version))),
+  );
   const memoryRegistry = Option.getOrUndefined(
     yield* Effect.serviceOption(McpSessionRegistry.McpSessionRegistry),
   );
@@ -4414,9 +4430,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         );
         const successfulSteer = Symbol();
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
-        // The CLI's version from its last init, so a capped process on a CLI without the cap
-        // opens with Agent off instead of racing the first prompt.
-        let observedClaudeVersion: string | undefined;
         if (adapterOptions.mcpCredentialRotations)
           yield* adapterOptions.mcpCredentialRotations.pipe(
             Stream.runForEach((rotation) =>
@@ -9728,10 +9741,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               ? {}
               : { allowedTools: queryPolicy.allowedTools }),
           });
+          const limit = mcpSession?.nativeSubagentLimit;
           const subagentPolicy = claudeNativeSubagentPolicy(
-            mcpSession?.nativeSubagentLimit,
+            limit,
             isGoatBotSessionThreadId(turnInput.threadId),
-            observedClaudeVersion,
+            limit === undefined || limit === 0 || (yield* claudeSubagentCapSupported),
           );
           const queryPolicyKey =
             subagentPolicy.key +
@@ -9981,28 +9995,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     context.openedPermissionMode =
                       message.permissionMode ?? context.openedPermissionMode;
                     context.receivedInit = true;
-                    observedClaudeVersion = message.claude_code_version ?? "unknown";
-                    if (
-                      subagentPolicy.key.startsWith("cap:") &&
-                      claudeIgnoresSubagentCap(observedClaudeVersion)
-                    )
-                      // A process that cannot take the deny ends rather than run uncapped.
-                      return Effect.logWarning(
-                        "This Claude Code cannot cap native subagents; they stay off for this process.",
-                        { version: observedClaudeVersion },
-                      ).pipe(
-                        Effect.andThen(
-                          querySession.applyFlagSettings({
-                            permissions: { deny: ["Agent", "Task"] },
-                          }),
-                        ),
-                        Effect.catch((cause) =>
-                          Effect.logError("Could not turn off Claude's native subagents.", {
-                            cause,
-                          }).pipe(Effect.andThen(querySession.close.pipe(Effect.ignore))),
-                        ),
-                        Effect.andThen(handleSdkMessage({ query: querySession, message })),
-                      );
                   }
                   if (
                     message.type === "system" &&

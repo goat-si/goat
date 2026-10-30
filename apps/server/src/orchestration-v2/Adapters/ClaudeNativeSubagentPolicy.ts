@@ -4,7 +4,7 @@ import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 const CLAUDE_MAX_CONCURRENT_SUBAGENTS = "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS";
 const CLAUDE_SUBAGENT_CAP_VERSION = "2.1.217";
 
-/** An older or unreadable Claude Code ignores the cap, so a capped process denies Agent instead. */
+/** An older or unreadable Claude Code ignores the cap, so a capped process opens without Agent. */
 export const claudeIgnoresSubagentCap = (version: string | undefined) =>
   version === undefined ||
   parseSemver(version) === null ||
@@ -12,16 +12,15 @@ export const claudeIgnoresSubagentCap = (version: string | undefined) =>
 
 /**
  * How a Claude process holds native subagents to the thread's goatclaw limit. Claude Code counts
- * running subagents itself; zero, or a cap on a CLI seen to ignore it, removes the Agent tool,
+ * running subagents itself; zero, or a cap on a CLI that ignores it, removes the Agent tool,
  * which also covers internal launches. Fixed at open, so `key` joins the query policy key.
  */
 export function claudeNativeSubagentPolicy(
   limit: number | undefined,
   goatBotSession: boolean,
-  observedVersion: string | undefined,
+  capSupported: boolean,
 ) {
-  const capIgnored = observedVersion !== undefined && claudeIgnoresSubagentCap(observedVersion);
-  if (goatBotSession || limit === 0 || (limit !== undefined && capIgnored))
+  if (goatBotSession || limit === 0 || (limit !== undefined && !capSupported))
     return { key: "off", disallowedTools: ["Agent", "Task"], environment: {} } as const;
   if (limit === undefined) return { key: "", environment: {} } as const;
   return {

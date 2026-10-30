@@ -424,6 +424,21 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+/** The configured Claude CLI's version, or undefined when it cannot be read. */
+export const readClaudeCliVersion = Effect.fn("readClaudeCliVersion")(function* (
+  claudeSettings: ClaudeSettings,
+  environment: NodeJS.ProcessEnv,
+) {
+  const probe = yield* runClaudeCommand(claudeSettings, ["--version"], environment).pipe(
+    Effect.timeoutOption(CLAUDE_VERSION_CHECK_TIMEOUT_MS),
+    Effect.result,
+  );
+  if (Result.isFailure(probe) || Option.isNone(probe.success)) return undefined;
+  const output = probe.success.value;
+  if (output.code !== 0) return undefined;
+  return parseGenericCliVersion(output.stdout + "\n" + output.stderr) ?? undefined;
+});
+
 export const probeClaudeWorkspaceSnapshot = Effect.fn("probeClaudeWorkspaceSnapshot")(function* (
   claudeSettings: ClaudeSettings,
   machineSnapshot: ServerProvider,
