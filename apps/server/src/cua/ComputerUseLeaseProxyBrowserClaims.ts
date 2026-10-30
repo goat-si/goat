@@ -1,6 +1,13 @@
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+export const manifestApplied = (state: unknown, expectedSha256: string): boolean =>
+  /^[a-f0-9]{64}$/u.test(expectedSha256) &&
+  isRecord(state) &&
+  state.capability_manifest_file_sha256 === expectedSha256 &&
+  (state.capability_manifest_reload_error === undefined ||
+    state.capability_manifest_reload_error === null);
+
 export const supportsBrowserClaims = (result: unknown): boolean => {
   if (!isRecord(result) || !Array.isArray(result.tools)) return false;
   const tool = result.tools.find(

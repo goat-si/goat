@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  manifestApplied,
   refusesClaimedBrowserDesktopCall,
   supportsBrowserClaims,
 } from "./ComputerUseLeaseProxyBrowserClaims.ts";
@@ -32,6 +33,19 @@ describe("browser claim capability", () => {
       }),
     ).toBe(true);
   });
+});
+
+it("requires the applied manifest hash and no reload error", () => {
+  const hash = "a".repeat(64);
+  expect(manifestApplied({ capability_manifest_file_sha256: hash }, hash)).toBe(true);
+  expect(manifestApplied({ capability_manifest_file_sha256: "b".repeat(64) }, hash)).toBe(false);
+  expect(
+    manifestApplied(
+      { capability_manifest_file_sha256: hash, capability_manifest_reload_error: "invalid" },
+      hash,
+    ),
+  ).toBe(false);
+  expect(manifestApplied({}, hash)).toBe(false);
 });
 
 it("refuses desktop calls to a host-wide claimed browser pid", () => {
