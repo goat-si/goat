@@ -23,12 +23,14 @@ local unlink. Local projects and independent connections stay on your machines.<
 <p>A hub is the one GOAT server your phone pairs with, ideally a machine that stays
 on. The phone and the hub must be on the same tailnet, so install Tailscale on
 both and sign in to the same account.</p>
-<p>On the hub’s desktop app, open <strong>Settings → Connections</strong>. The <strong>Connect your
-phone</strong> card at the top has the <strong>Tailscale HTTPS</strong> switch and <strong>Show phone
-QR</strong>. Turn on Tailscale HTTPS first: without it, the QR dialog explains how to
-turn it on, and only offers a tailnet or local network address after you choose
-one. On a hub without the desktop app, run <code>goat serve --tailscale-serve</code>, then
-<code>goat pair --tailscale</code> to print a QR code.</p>
+<p>On the hub’s desktop app, open <strong>Settings → Connections</strong> and choose <strong>Show
+phone QR</strong> in the <strong>Connect your phone</strong> card. If other devices cannot reach the
+computer yet, the dialog offers <strong>Turn on Network access</strong>; once Tailscale is
+running but Tailscale HTTPS is off, it offers <strong>Turn on Tailscale HTTPS</strong>. Each
+asks you to confirm because GOAT restarts to apply it, then GOAT reopens the QR
+dialog. Without Tailscale HTTPS the dialog offers a tailnet or local network
+address only after you choose one. On a hub without the desktop app, run
+<code>goat serve --tailscale-serve</code>, then <code>goat pair --tailscale</code> to print a QR code.</p>
 <p>On the phone, open GOAT and tap <strong>Scan QR code</strong>, allow camera access the first
 time, and point the camera at the hub’s QR code. The app connects as soon as it
 reads the code and opens the hub’s sessions. To type an address and pairing code
@@ -54,9 +56,11 @@ after the new one connects. To keep several servers on the phone, use
 <strong>Settings → Environments → Advanced → Add another server</strong>.</p>
 <h2 id="pair-over-a-lan-or-private-network">Pair over a LAN or private network</h2>
 <p>Use direct pairing when the other device can reach the host’s network address.</p>
-<p>On a desktop host, open <strong>Settings → Connections</strong>, enable <strong>Network access</strong>,
-then create a pairing link using an address the other device can reach. Changing
-network access restarts the desktop app. You can turn it off in the same place.</p>
+<p>On a desktop host, open <strong>Settings → Connections → Authorized clients</strong> and
+choose <strong>Create link</strong>. If other devices cannot reach the computer yet, the dialog offers to
+turn on Network access or Tailscale HTTPS; GOAT restarts and reopens the dialog. Create the link with an address the
+other device can reach. Turn network access off with the <strong>Network access</strong>
+switch in the same place, which also restarts the desktop app.</p>
 <p>For a command-line host, replace <code>&lt;private-ip&gt;</code> with the host’s LAN or tailnet
 address:</p>
 <pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">goat</span><span style="color:#9ECBFF"> serve</span><span style="color:#79B8FF"> --host</span><span style="color:#F97583"> &lt;</span><span style="color:#9ECBFF">private-i</span><span style="color:#E1E4E8">p</span><span style="color:#F97583">&gt;</span></span></code></pre>
