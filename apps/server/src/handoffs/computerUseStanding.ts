@@ -68,13 +68,13 @@ export const makeComputerUseStanding = (deps: {
     );
   }, Effect.mapError(unavailable));
   const withAllowedSettings = <A>(
-    use: (list: ReadonlyArray<string>) => Effect.Effect<A, HandoffError>,
+    use: (list: ReadonlyArray<string>, enabled: boolean) => Effect.Effect<A, HandoffError>,
   ) =>
     Option.isSome(settings)
       ? settings.value
-          .withSettingsSnapshot((snapshot) => use(snapshot.cuaAllowedApps))
+          .withSettingsSnapshot((snapshot) => use(snapshot.cuaAllowedApps, snapshot.enableCua))
           .pipe(Effect.mapError(unavailable))
-      : use([]);
+      : use([], false);
   const validate = Effect.fn("Handoffs.validateComputerUseScope")((
     input: HandoffRespondInput,
     record: Handoff,
@@ -122,8 +122,9 @@ export const makeComputerUseStanding = (deps: {
     if (endsApproved) yield* clear(input.threadId);
   });
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
-    const attempt = withAllowedSettings((list) =>
+    const attempt = withAllowedSettings((list, enabled) =>
       Effect.gen(function* () {
+        if (!enabled) return yield* new HandoffError({ reason: "unavailable" });
         const apps = input.apps;
         if (
           input.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||

@@ -437,3 +437,36 @@ it.effect("removing an allowed app ends its admission before the settings update
     ),
   ),
 );
+
+it.effect("a queued app request cannot grant after computer use is switched off", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ cuaAllowedApps: ["com.example.Editor"] });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const off = yield* handoffs
+          .withComputerUseToggle(
+            false,
+            Effect.gen(function* () {
+              yield* settings.updateSettings({ enableCua: false });
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const pending = yield* request({ apps: ["com.example.Editor"] }).pipe(
+          Effect.result,
+          Effect.forkChild,
+        );
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(off);
+        assert.equal((yield* Fiber.join(pending))._tag, "Failure");
+        const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+        assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
+      }),
+    ),
+  ),
+);

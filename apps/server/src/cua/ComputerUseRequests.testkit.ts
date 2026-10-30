@@ -178,7 +178,7 @@ export const withRequests = <A, E, R>(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        ServerSettings.layerTest(),
+        ServerSettings.layerTest({ enableCua: true }),
         leasesDetecting(signals, setCuaWatch),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
