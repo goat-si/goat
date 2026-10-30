@@ -12,25 +12,37 @@ import * as Schema from "effect/Schema";
 const decodeAdmission = Schema.decodeUnknownOption(Schema.fromJsonString(ComputerUseCallAdmission));
 const encodeReservation = Schema.encodeSync(Schema.fromJsonString(ComputerUseCallReservation));
 
-const RESERVATION_TIMEOUT_MS = 2_000;
+/** A loaded host's server can stall for several seconds; an admission waits that out. */
+export const ADMISSION_TIMEOUT_MS = 10_000;
+/** Release and close are best effort and run under the proxy's lifecycle lock. */
+const RELEASE_TIMEOUT_MS = 2_000;
+
+const UNAUTHORIZED: ComputerUseCallAdmission = { status: "refused", detail: "unauthorized" };
+/** GOAT did not answer in time or could not judge the call: nothing ran, and it may be retried. */
+const UNANSWERED: ComputerUseCallAdmission = { status: "refused", detail: "reconnecting" };
 
 /** One POST of a reservation body to the lease route's calls endpoint. */
 export type ReservationPost = (body: string, signal: AbortSignal) => Promise<Response>;
 
+/** Only the server's own 401 says the agent session is no longer accepted. */
 export const postReservation = Effect.fn("ComputerUseLeaseProxy.postReservation")(function* (
   post: ReservationPost,
   call: ComputerUseCallReservation,
 ) {
-  const unauthorized: ComputerUseCallAdmission = { status: "refused", detail: "unauthorized" };
   return yield* Effect.tryPromise(async (signal) => {
     const response = await post(encodeReservation(call), signal);
-    return response.ok ? decodeAdmission(await response.text()) : undefined;
+    if (response.status === 401) return UNAUTHORIZED;
+    if (!response.ok) return UNANSWERED;
+    const decision = decodeAdmission(await response.text());
+    return decision._tag === "Some" ? decision.value : UNANSWERED;
   }).pipe(
-    Effect.map((decision) => (decision?._tag === "Some" ? decision.value : unauthorized)),
     Effect.timeoutOrElse({
-      duration: RESERVATION_TIMEOUT_MS,
-      orElse: () => Effect.succeed(unauthorized),
+      duration:
+        call.action === "reserve" || call.action === "validate"
+          ? ADMISSION_TIMEOUT_MS
+          : RELEASE_TIMEOUT_MS,
+      orElse: () => Effect.succeed(UNANSWERED),
     }),
-    Effect.orElseSucceed(() => unauthorized),
+    Effect.orElseSucceed(() => UNANSWERED),
   );
 });

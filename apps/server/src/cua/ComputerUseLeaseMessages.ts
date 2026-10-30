@@ -43,6 +43,10 @@ export const SCREEN_SHARED =
 const POINTER_LOCKED =
   "This computer keeps the person's pointer still, so a call that moves it (foreground pointer delivery or a desktop move_cursor) did not run. Use the element_token, the keyboard, or a background click (the virtual cursor). If the app ignores background clicks, tell the person instead of retrying.";
 
+/** The server did not answer an admission in time (a loaded host stalls) or could not judge it. */
+export const ADMISSION_UNANSWERED =
+  "GOAT did not answer in time whether this call may run, often because this computer is under heavy load, so the call did not run and nothing was sent. Try it again in a few seconds, and observe first if the screen may have changed.";
+
 export const reservationRefusal = (
   detail: string,
   holder: string | undefined,
@@ -52,11 +56,15 @@ export const reservationRefusal = (
     ? POINTER_LOCKED
     : detail === "screen_shared"
       ? SCREEN_SHARED
-      : detail === "app_busy"
-        ? `Thread ${holder ?? "another thread"} is using ${app ?? "an app this call could reach"}. This call did not run. Work in another app, or wait and observe again before retrying.`
-        : holder === undefined
-          ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-          : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+      : detail === "reconnecting"
+        ? ADMISSION_UNANSWERED
+        : detail === "unauthorized"
+          ? LEASE_END_MESSAGES.unauthorized
+          : detail === "app_busy"
+            ? `Thread ${holder ?? "another thread"} is using ${app ?? "an app this call could reach"}. This call did not run. Work in another app, or wait and observe again before retrying.`
+            : holder === undefined
+              ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+              : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
