@@ -116,6 +116,15 @@ export class DriverError {
     this.text = text;
   }
 }
+/** A successful driver result with structured data and its text content. */
+export class DriverSuccess {
+  readonly structuredContent: Record<string, unknown>;
+  readonly text: string;
+  constructor(structuredContent: Record<string, unknown>, text: string) {
+    this.structuredContent = structuredContent;
+    this.text = text;
+  }
+}
 /** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
 export class NotStarted extends DriverError {}
 /** A call cut off after it reached the driver: the proxy answers unknown_outcome. */
@@ -195,7 +204,12 @@ export const fixture = (
                         ? {}
                         : { content: [{ type: "text", text: value.text }] }),
                     }
-                  : { structuredContent: value },
+                  : value instanceof DriverSuccess
+                    ? {
+                        structuredContent: value.structuredContent,
+                        content: [{ type: "text", text: value.text }],
+                      }
+                    : { structuredContent: value },
               ...(request.tool === "get_window_state" &&
               typeof (value as { image?: unknown }).image === "object"
                 ? { image: (value as { image: unknown }).image }

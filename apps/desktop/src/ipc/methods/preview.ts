@@ -33,6 +33,7 @@ import * as NodeURL from "node:url";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as BrowserImport from "../../preview/BrowserImport/BrowserImport.ts";
+import * as BrowserSession from "../../preview/BrowserSession.ts";
 import * as DesktopBrowserHost from "../../preview/DesktopBrowserHost.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import { normalizeCaptureFailure } from "../../preview/captureErrors.ts";
@@ -331,6 +332,33 @@ export const listBrowserImportSources = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.listBrowserImportSources")(function* () {
     const browserImport = yield* BrowserImport.BrowserImport;
     return yield* browserImport.listSources;
+  }),
+});
+
+export const listBrowserProfileOrigins = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_IMPORT_ORIGINS_CHANNEL,
+  payload: DesktopPreviewClearDataInputSchema,
+  result: Schema.Array(Schema.String),
+  handler: Effect.fn("desktop.ipc.preview.listBrowserProfileOrigins")(function* ({
+    environmentId,
+    profileId,
+  }) {
+    const browserSession = yield* BrowserSession.BrowserSession;
+    const { scope, persistent, namespace } = resolvePartitionScope(environmentId, profileId);
+    const session = yield* browserSession.getSession(scope, persistent, namespace);
+    const cookies = yield* Effect.tryPromise(() => session.cookies.get({}));
+    return [
+      ...new Set(
+        cookies.flatMap((cookie) => {
+          if (!cookie.domain) return [];
+          try {
+            return [new URL(`https://${cookie.domain.replace(/^\./, "")}`).origin];
+          } catch {
+            return [];
+          }
+        }),
+      ),
+    ].sort();
   }),
 });
 

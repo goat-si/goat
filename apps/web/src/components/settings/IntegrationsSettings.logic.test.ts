@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { EnvironmentId } from "@goat/contracts";
 
-import { clearBrowserProfileData, importFailureReason } from "./IntegrationsSettings";
+import { importFailureReason } from "./browserProfileImport";
+import { clearBrowserProfileData } from "./IntegrationsSettings";
 
 const environmentId = "environment-a" as EnvironmentId;
 const secondEnvironmentId = "environment-b" as EnvironmentId;

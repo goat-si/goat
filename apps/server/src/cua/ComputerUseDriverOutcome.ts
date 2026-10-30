@@ -153,6 +153,18 @@ function classifiedSafety(
     return classifyActionOutcome({ effect, status: "refused", dispatched: false });
   const failed =
     error !== undefined || result.isError === true || envelope.status === "unknown_outcome";
+  const refusalCode = isRecord(structured.refusal) ? structured.refusal.code : structured.code;
+  if (
+    (refusalCode === "screen_locked" || refusalCode === "user_interacting") &&
+    (structured.effect === undefined || structured.effect === "refused") &&
+    (failed || structured.effect === "refused" || structured.status === "refused")
+  )
+    return classifyActionOutcome({
+      effect,
+      status: "refused",
+      dispatched: false,
+      refusalCategory: refusalCode === "screen_locked" ? "terminal" : "reobserve",
+    });
   if (effect === "read" && !failed) return classifyActionOutcome({ effect, status: "completed" });
   const code = structured.code;
   if (structured.effect === "unknown" || POSSIBLE_COMMIT_DRIVER_CODES.has(code))

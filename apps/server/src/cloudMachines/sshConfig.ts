@@ -1,5 +1,6 @@
 import { CloudMachineError, isCloudMachineAlias } from "@goat/contracts";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import { resolveSshCommand } from "@goat/ssh/command";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -349,7 +350,10 @@ export const makeManagedSshWriter = (options: {
           yield* writePrivate(knownHostsFile, knownHosts).pipe(Effect.mapError(failed));
           yield* writePrivate(confPath(alias), conf).pipe(Effect.mapError(failed));
           if (options.directory === "goat-hosts") yield* installInclude;
-          const output = yield* run("ssh", ["-G", alias]);
+          const output = yield* run(yield* resolveSshCommand.pipe(Effect.mapError(failed)), [
+            "-G",
+            alias,
+          ]);
           if (
             !effectiveSettingsMatch(output, {
               alias,

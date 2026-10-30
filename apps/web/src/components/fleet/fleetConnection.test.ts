@@ -1,3 +1,4 @@
+import type { FleetConnectionInput } from "@goat/client-runtime/state/fleet-connection";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -5,7 +6,6 @@ import {
   fleetConnectionVisual,
   presentFleetConnection,
   presentFleetMachineConnection,
-  type FleetConnectionInput,
   type FleetConnectionState,
 } from "./fleetConnection";
 

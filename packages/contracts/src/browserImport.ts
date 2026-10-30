@@ -2,21 +2,8 @@ import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 
-const BROWSER_IMPORT_SOURCE_IDS = [
-  "chrome",
-  "edge",
-  "brave",
-  "vivaldi",
-  "opera",
-  "arc",
-  "helium",
-  "firefox",
-  "zen",
-  "safari",
-] as const;
-
-export const BrowserImportSourceId = Schema.Literals(BROWSER_IMPORT_SOURCE_IDS);
-export type BrowserImportSourceId = typeof BrowserImportSourceId.Type;
+import { BrowserImportSourceId } from "./browserImportSourceId.ts";
+export { BrowserImportSourceId } from "./browserImportSourceId.ts";
 
 export const BrowserImportUnavailableReason = Schema.Literals([
   "notInstalled",
@@ -25,6 +12,7 @@ export const BrowserImportUnavailableReason = Schema.Literals([
   "needsFullDiskAccess",
   "browserRunning",
   "unsupportedPlatform",
+  "appBoundEncryption",
 ]);
 export type BrowserImportUnavailableReason = typeof BrowserImportUnavailableReason.Type;
 
@@ -52,13 +40,26 @@ export const BrowserImportSource = Schema.Struct({
   name: TrimmedNonEmptyString,
   profiles: Schema.Array(BrowserImportSourceProfile),
   unavailable: Schema.optional(BrowserImportUnavailableReason),
+  refreshUnavailable: Schema.optional(BrowserImportUnavailableReason),
 });
 export type BrowserImportSource = typeof BrowserImportSource.Type;
+
+export const BrowserImportOrigin = Schema.String.check(
+  Schema.makeFilter((value) => {
+    try {
+      const url = new URL(value);
+      return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
+    } catch {
+      return false;
+    }
+  }),
+);
 
 export const BrowserImportInput = Schema.Struct({
   sourceId: BrowserImportSourceId,
   sourceProfileDirectory: TrimmedNonEmptyString,
   targetProfileId: BrowserProfileId,
+  origins: Schema.optional(Schema.Array(BrowserImportOrigin)),
 });
 export type BrowserImportInput = typeof BrowserImportInput.Type;
 
@@ -67,12 +68,19 @@ export const DesktopPreviewImportCookiesInputSchema = Schema.Struct({
   sourceId: BrowserImportSourceId,
   sourceProfileDirectory: TrimmedNonEmptyString,
   targetProfileId: BrowserProfileId,
+  origins: Schema.optional(Schema.Array(BrowserImportOrigin)),
 });
 
 export const BrowserImportResult = Schema.Struct({
   imported: Schema.Int,
   skipped: Schema.Int,
   skippedDomains: Schema.Array(Schema.String),
+  origins: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ origin: BrowserImportOrigin, imported: Schema.Int, skipped: Schema.Int }),
+    ),
+  ),
+  sharedDomains: Schema.optional(Schema.Array(Schema.String)),
 });
 export type BrowserImportResult = typeof BrowserImportResult.Type;
 
@@ -85,6 +93,8 @@ const BROWSER_IMPORT_UNAVAILABLE_COPY: Readonly<Record<BrowserImportUnavailableR
     "Give GOAT Full Disk Access in System Settings → Privacy & Security, then retry.",
   browserRunning: "Quit the browser first so its cookie database can be read.",
   unsupportedPlatform: "Importing from this browser isn't possible on this platform.",
+  appBoundEncryption:
+    "Chrome on Windows protects these cookies (app-bound encryption), so GOAT cannot read them. Sign in inside GOAT's browser instead.",
 };
 
 export const BROWSER_IMPORT_FAILURE_COPY: Readonly<Record<BrowserImportFailureReason, string>> = {

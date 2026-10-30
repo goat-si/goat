@@ -84,7 +84,7 @@ it.live.each([
     const result = yield* cell(
       host,
       `const app = await screen.app(${query}); const seen = await app.observe(); ` +
-        "return {windowId: app.windowId, launched: app.launched, read: seen.elements.length > 0};",
+        "return {windowId: app.windowId, launched: app.launched, read: seen.text.includes('Apply')};",
     );
     expect(result.value).toEqual({ windowId: 4194307, launched: false, read: true });
     expect(sent.find((entry) => entry.tool === "get_window_state")?.args).toMatchObject({

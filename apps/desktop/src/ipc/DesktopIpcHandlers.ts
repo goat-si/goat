@@ -203,6 +203,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
       Effect.Services<ReturnType<(typeof PreviewIpc.methods)[number]["handler"]>>
     >(previewMethod);
   }
+  yield* ipc.handle(PreviewIpc.listBrowserProfileOrigins);
   yield* ipc.handle(PreviewIpc.listBrowserImportSources);
   yield* ipc.handle(PreviewIpc.importBrowserCookies);
 });
