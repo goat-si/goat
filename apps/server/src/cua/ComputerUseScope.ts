@@ -123,6 +123,7 @@ export function scopeVerdict(input: {
   readonly bundleIds: boolean;
 }): ScopeVerdict {
   const approved = input.apps;
+  if (typeof input.name === "string" && UNSCOPED_TOOLS.has(input.name)) return { _tag: "allow" };
   const args = record(input.args);
   const pid = targetPid(args);
   const target = pid === undefined ? undefined : input.appOf(pid);
@@ -150,7 +151,6 @@ export function scopeVerdict(input: {
     return { _tag: "resolve", pid };
   if (approved === undefined) return { _tag: "allow" };
   const name = typeof input.name === "string" ? input.name : "";
-  if (UNSCOPED_TOOLS.has(name)) return { _tag: "allow" };
   if (OPAQUE_TOOLS.has(name)) {
     // The driver refuses each call the batch makes outside its scope, so approved apps suffice.
     const scope = batchAppScope(name, input.args);

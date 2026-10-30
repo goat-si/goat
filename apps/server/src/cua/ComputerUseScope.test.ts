@@ -14,6 +14,18 @@ const verdict = (listed: Map<number, ListedApp>) =>
   });
 
 describe("learnApps", () => {
+  it("allows app discovery with a pid filter without resolving the target", () => {
+    assert.deepEqual(
+      scopeVerdict({
+        name: "list_windows",
+        args: { pid: 42 },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      }),
+      { _tag: "allow" },
+    );
+  });
   it("refuses protected apps even under an unrestricted control", () => {
     for (const id of [
       "com.apple.systempreferences",
