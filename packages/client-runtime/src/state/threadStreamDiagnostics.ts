@@ -40,13 +40,16 @@ export interface ThreadStreamTransition {
  */
 export interface ThreadStreamReply {
   readonly messageId: string;
-  readonly receivedVia: "event" | "http snapshot" | "socket snapshot";
+  /** Where and when the body behind receivedLength arrived; a deduplicated update moves neither. */
+  readonly receivedVia: ReplySource | null;
   readonly receivedLength: number | null;
-  /** When that body length arrived; a later deduplicated update does not move it. */
   readonly receivedAt: number | null;
   readonly appliedLength: number | null;
+  readonly updatedVia: ReplySource;
   readonly updatedAt: number;
 }
+
+type ReplySource = "event" | "http snapshot" | "socket snapshot";
 
 /** The last time a feed row committed a reply, kept apart from which reply is selected. */
 export interface ThreadFeedReplyRow {
@@ -77,7 +80,8 @@ export interface ThreadStreamDiagnostic {
   readonly lastEventAt: number | null;
   readonly lastEventType: string | null;
   readonly reply: ThreadStreamReply | null;
-  readonly replyRow: ThreadFeedReplyRow | null;
+  /** "dropped" when the row was committed but its observation was later evicted. */
+  readonly replyRow: ThreadFeedReplyRow | "dropped" | null;
   readonly transitions: ReadonlyArray<ThreadStreamTransition>;
 }
 
@@ -86,6 +90,7 @@ type MutableDiagnostic = {
 } & {
   transitions: ThreadStreamTransition[];
   rows: Map<string, ThreadFeedReplyRow>;
+  evictedRows: Set<string>;
   awaitingFirstItem: boolean;
   phase: EventPhase;
   pendingStart: ThreadStreamStart | null;
@@ -128,6 +133,7 @@ function freshRecord(environmentId: string, threadId: string): MutableDiagnostic
     replyRow: null,
     transitions: [],
     rows: new Map(),
+    evictedRows: new Set(),
     awaitingFirstItem: false,
     phase: "live",
     pendingStart: null,
@@ -283,20 +289,23 @@ export function noteThreadStreamStatus(
   notify();
 }
 
-function setReply(
-  record: MutableDiagnostic,
-  reply: ReceivedReply,
-  via: ThreadStreamReply["receivedVia"],
-): void {
+function setReply(record: MutableDiagnostic, reply: ReceivedReply, via: ReplySource): void {
   const previous = record.reply?.messageId === reply.messageId ? record.reply : null;
   const now = clock();
+  // A deduplicated body arrives empty and refers to text received earlier.
+  const body =
+    reply.receivedLength === null
+      ? {
+          receivedVia: previous?.receivedVia ?? null,
+          receivedLength: previous?.receivedLength ?? null,
+          receivedAt: previous?.receivedAt ?? null,
+        }
+      : { receivedVia: via, receivedLength: reply.receivedLength, receivedAt: now };
   record.reply = {
     messageId: reply.messageId,
-    receivedVia: via,
-    // A deduplicated body arrives empty and refers to text received earlier.
-    receivedLength: reply.receivedLength ?? previous?.receivedLength ?? null,
-    receivedAt: reply.receivedLength === null ? (previous?.receivedAt ?? null) : now,
+    ...body,
     appliedLength: reply.appliedLength,
+    updatedVia: via,
     updatedAt: now,
   };
 }
@@ -322,11 +331,18 @@ export function noteThreadFeedReplyRow(
     )
       return;
     record.rows.delete(messageId);
+    record.evictedRows.delete(messageId);
     record.rows.set(messageId, { ...row, committedAt: clock(), unmountedAt: null });
-    while (record.rows.size > MAX_ROWS) {
-      const oldest = record.rows.keys().next().value;
-      if (oldest === undefined) break;
-      record.rows.delete(oldest);
+    // The selected reply's row is never dropped; others are, oldest first, and remembered as dropped.
+    for (const id of record.rows.keys()) {
+      if (record.rows.size <= MAX_ROWS) break;
+      if (id === record.reply?.messageId) continue;
+      record.rows.delete(id);
+      record.evictedRows.add(id);
+      if (record.evictedRows.size > MAX_ROWS * 2) {
+        const oldest = record.evictedRows.values().next().value;
+        if (oldest !== undefined) record.evictedRows.delete(oldest);
+      }
     }
   }
   notify();
@@ -396,11 +412,16 @@ export function snapshotReply(projection: OrchestrationV2ThreadProjection): Rece
 
 export function readThreadStreamDiagnostics(): ReadonlyArray<ThreadStreamDiagnostic> {
   return [...records.values()]
-    .map(({ awaitingFirstItem: _a, phase: _r, pendingStart: _p, rows, ...record }) => ({
-      ...record,
-      replyRow: record.reply === null ? null : (rows.get(record.reply.messageId) ?? null),
-      transitions: [...record.transitions],
-    }))
+    .map(({ awaitingFirstItem: _a, phase: _r, pendingStart: _p, rows, evictedRows, ...record }) => {
+      const id = record.reply?.messageId;
+      const diagnostic: ThreadStreamDiagnostic = {
+        ...record,
+        replyRow:
+          id === undefined ? null : (rows.get(id) ?? (evictedRows.has(id) ? "dropped" : null)),
+        transitions: [...record.transitions],
+      };
+      return diagnostic;
+    })
     .reverse();
 }
 
@@ -420,14 +441,20 @@ function formatTime(at: number | null): string {
   return at === null ? "never" : `${DateTime.formatIso(DateTime.makeUnsafe(at)).slice(11, 19)} UTC`;
 }
 
-function formatReply(reply: ThreadStreamReply | null, row: ThreadFeedReplyRow | null): string {
+function formatReply(
+  reply: ThreadStreamReply | null,
+  row: ThreadFeedReplyRow | "dropped" | null,
+): string {
   if (reply === null) return "  latest reply: none received while open";
   const rowText =
     row === null
       ? "row not committed while open"
-      : `row committed ${row.length} at ${formatTime(row.committedAt)}, ${row.visible ? "on screen" : "offscreen"}${row.unmountedAt === null ? "" : `, unmounted at ${formatTime(row.unmountedAt)}`}`;
+      : row === "dropped"
+        ? "row committed earlier, observation no longer kept"
+        : `row committed ${row.length} at ${formatTime(row.committedAt)}, ${row.visible ? "on screen" : "offscreen"}${row.unmountedAt === null ? "" : `, unmounted at ${formatTime(row.unmountedAt)}`}`;
   return [
-    `  latest reply ${reply.messageId} via ${reply.receivedVia}: received ${reply.receivedLength ?? "unknown"} chars at ${formatTime(reply.receivedAt)}`,
+    `  latest reply ${reply.messageId}: received ${reply.receivedLength ?? "unknown"} chars via ${reply.receivedVia ?? "unknown"} at ${formatTime(reply.receivedAt)}`,
+    `last updated via ${reply.updatedVia} at ${formatTime(reply.updatedAt)}`,
     `in state ${reply.appliedLength ?? "missing from the newest rows"}`,
     rowText,
   ].join(", ");

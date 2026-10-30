@@ -97,21 +97,40 @@ describe("thread stream diagnostics", () => {
       noteThreadStreamEvents("env", "thread", events(1, { reply: [10, 10] }));
       noteThreadFeedReplyRow("env", "thread", "message-1", { length: 10, visible });
       noteThreadStreamEvents("env", "thread", events(2, { reply: [40, applied] }));
-      expect(report()).toContain("latest reply message-1 via event: received 40 chars");
+      expect(report()).toContain("latest reply message-1: received 40 chars via event");
       expect(report()).toContain(expected);
     },
   );
 
-  it("keeps the length and receipt time of a body a deduplicated update refers to", () => {
+  it("keeps the source, length and time of a body a deduplicated update refers to", () => {
     const { thread, advance } = setup();
-    noteThreadStreamEvents("env", "thread", events(1, { reply: [12, 12] }));
+    const reply = { messageId: "message-1", receivedLength: 12, appliedLength: 12 };
+    noteThreadStreamSnapshot("env", "thread", { sequence: 1, source: "http", reply });
     advance(5_000);
     noteThreadStreamEvents("env", "thread", events(2, { reply: [null, 12] }));
     expect(thread()?.reply).toMatchObject({
+      receivedVia: "http snapshot",
       receivedLength: 12,
       receivedAt: 1_000,
+      updatedVia: "event",
       updatedAt: 6_000,
     });
+  });
+
+  it("never drops the selected reply's row, and says when another row's was dropped", () => {
+    const { report } = setup();
+    noteThreadStreamEvents("env", "thread", events(1, { reply: [5, 5] }));
+    noteThreadFeedReplyRow("env", "thread", "message-1", { length: 5, visible: true });
+    noteThreadFeedReplyRow("env", "thread", "early", { length: 2, visible: false });
+    for (let index = 0; index < 12; index += 1)
+      noteThreadFeedReplyRow("env", "thread", `other-${index}`, { length: 1, visible: false });
+    expect(report()).toContain("row committed 5");
+
+    noteThreadStreamEvents("env", "thread", {
+      ...events(2),
+      reply: { messageId: "early", receivedLength: 2, appliedLength: 2 },
+    });
+    expect(report()).toContain("row committed earlier, observation no longer kept");
   });
 
   it("reports a row committed before its reply was selected", () => {
