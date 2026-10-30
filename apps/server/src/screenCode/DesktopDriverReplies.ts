@@ -155,7 +155,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   return undefined;
 };
 
-export const focusRestorationWarning = (value: unknown): string | undefined => {
+const focusRestorationWarning = (value: unknown): string | undefined => {
   const fields = object(value);
   const focus = object(fields?.focus_restoration);
   const pid =
