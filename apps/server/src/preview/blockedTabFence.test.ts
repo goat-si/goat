@@ -181,3 +181,34 @@ it.effect("a newly blocked current frame cuts an already dispatched input", () =
     ),
   ),
 );
+
+it.effect("a synchronous frame check sees newly blocked hosts and fences the turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const fence = yield* makeBlockedTabFence();
+      const threadId = ThreadId.make("synchronous-fence");
+      const end = yield* activity.begin(threadId, "run");
+      const tab = {
+        threadId,
+        tabId: "tab",
+        closing: false,
+        page: { frames: () => [{ url: () => "https://blocked.test/" }] },
+      };
+      expect(fence.blockedFrame(tab, "run")).toBe(false);
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
+      expect(fence.blockedFrame(tab, "run")).toBe(true);
+      expect(fence.isFenced(tab, "run")).toBe(true);
+      yield* end;
+      expect(fence.isFenced(tab, "run")).toBe(false);
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(PreviewAgentActivity.layer, ServerSettings.layerTest()).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-sync-fence-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
