@@ -25,6 +25,59 @@ const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
   makeHarness({ autoAppListing: true, ...options });
 
 describe("ComputerUseLeaseProxy", () => {
+  it.effect("reuses a listed identity until the target disappears or the turn changes", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ autoAppListing: false });
+      yield* h.push({ ...active(), identityEpoch: 0 });
+      yield* h.applied;
+      const resolve = Effect.fn(function* () {
+        const lookup = yield* h.nextToDriver;
+        assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: lookup.id,
+            result: {
+              structuredContent: {
+                apps: [{ pid: 4, bundle_id: "com.example.Editor", name: "Editor" }],
+              },
+            },
+          }),
+        );
+      });
+      yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
+      yield* resolve();
+      assert.equal((yield* h.nextToDriver).id, 1);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { structuredContent: { pid: 4, app_name: "Editor" } },
+        }),
+      );
+      yield* h.nextToProvider;
+      yield* h.send(call(2, "click", { pid: 4, window_id: 9 }));
+      assert.equal((yield* h.nextToDriver).id, 2);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { isError: true, structuredContent: { code: "process_not_found" } },
+        }),
+      );
+      yield* h.nextToProvider;
+      yield* h.send(call(3, "click", { pid: 4, window_id: 9 }));
+      yield* resolve();
+      assert.equal((yield* h.nextToDriver).id, 3);
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { content: [] } }));
+      yield* h.nextToProvider;
+      yield* h.push({ ...active(), identityEpoch: 1 });
+      yield* h.applied;
+      yield* h.send(call(4, "click", { pid: 4, window_id: 9 }));
+      yield* resolve();
+      assert.equal((yield* h.nextToDriver).id, 4);
+    }),
+  );
   it.effect("rejects JSON-RPC arrays and non-objects locally without forwarding any member", () =>
     Effect.gen(function* () {
       const h = yield* harness();
