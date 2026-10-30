@@ -189,13 +189,14 @@ function ComputerUseControls({
       />
       <SettingsRow title="Allowed apps" description="Apps always allowed on this environment.">
         {host.allowedApps.length === 0 ? (
-          <p>No apps always allowed.</p>
+          <p className="text-sm text-muted-foreground">No apps always allowed.</p>
         ) : (
           host.allowedApps.map((app) => (
             <div key={app} className="flex items-center justify-between gap-3">
-              <span>{app}</span>
+              <span className="text-sm">{app}</span>
               <Button
                 variant="outline"
+                size="sm"
                 disabled={!host.canConfigure || removing}
                 onClick={() => {
                   setRemoving(true);
@@ -210,7 +211,11 @@ function ComputerUseControls({
             </div>
           ))
         )}
-        {removeError ? <p role="alert">{removeError}</p> : null}
+        {removeError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {removeError}
+          </p>
+        ) : null}
       </SettingsRow>
     </>
   );
