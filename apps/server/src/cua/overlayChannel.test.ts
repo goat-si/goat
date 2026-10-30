@@ -84,6 +84,16 @@ describe("overlayChannel", () => {
     }),
   );
 
+  it.effect("posts the screen lock notice without changing capture visibility", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const send = overlayChannel(helper.socket);
+      yield* send.post({ op: "status", message: "screen locked" });
+      assert.deepEqual(helper.lines[0]?.command, { op: "status", message: "screen locked" });
+      assert.isTrue(send.captureHideConfirmed());
+    }),
+  );
+
   it.effect("goes on after the timeout when the helper never answers", () =>
     Effect.gen(function* () {
       const helper = helperEnd(false);
