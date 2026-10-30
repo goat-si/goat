@@ -969,3 +969,46 @@ it.effect("a channel-owned caller is refused and its child-work reservation retu
     assert.lengthOf(yield* childRuns(fixture.childThreadId), 1);
   }).pipe(Effect.provide(layerTest)),
 );
+
+it.effect.each(["an interrupted call", "two concurrent calls"] as const)(
+  "%s with one clientRequestId leave one round holding one lane",
+  (name) =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture;
+      const sql = yield* SqlClient.SqlClient;
+      const lanes = () => sql<{ pending: number }>`SELECT pending FROM goatclaw_lane_reservations`;
+      const race: ServiceOptions["race"] = {
+        current: name === "an interrupted call" ? Effect.interrupt : undefined,
+      };
+      yield* withService(
+        fixture,
+        (service) =>
+          Effect.gen(function* () {
+            if (name === "an interrupted call") {
+              const exit = yield* Effect.exit(service.delegateTask(scope, continueInput(fixture)));
+              assert.isTrue(exit._tag === "Failure");
+              assert.lengthOf(yield* lanes(), 0);
+              yield* service.delegateTask(scope, continueInput(fixture));
+            } else {
+              const [left, right] = yield* Effect.all(
+                [
+                  service.delegateTask(scope, continueInput(fixture)),
+                  service.delegateTask(scope, continueInput(fixture)),
+                ],
+                { concurrency: 2 },
+              );
+              assert.equal(left.taskId, right.taskId);
+            }
+            assert.deepEqual(
+              (yield* lanes()).map((lane) => lane.pending),
+              [0],
+            );
+          }),
+        { goatclaw: true, race },
+      );
+      assert.lengthOf(
+        (yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents,
+        2,
+      );
+    }).pipe(Effect.provide(layerTestWithSql)),
+);

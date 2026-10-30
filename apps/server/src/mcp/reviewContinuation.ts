@@ -17,6 +17,7 @@ import type { OrchestrationV2SessionCapabilities } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Semaphore from "effect/Semaphore";
 
 import type * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import type * as ChannelChildWork from "../channels/ChannelChildWork.ts";
@@ -91,6 +92,22 @@ const errorText = (error: unknown) =>
 
 export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
   const { threadManagement, permissions } = deps;
+  const locks = new Map<string, { readonly lock: Semaphore.Semaphore; users: number }>();
+  const serialize = <A, E, R>(key: string, effect: Effect.Effect<A, E, R>) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const entry = locks.get(key) ?? { lock: Semaphore.makeUnsafe(1), users: 0 };
+        entry.users++;
+        locks.set(key, entry);
+        return entry;
+      }),
+      (entry) => entry.lock.withPermits(1)(effect),
+      (entry) =>
+        Effect.sync(() => {
+          entry.users--;
+          if (entry.users === 0) locks.delete(key);
+        }),
+    );
 
   const loadChild = (threadId: OrchestrationV2Subagent["childThreadId"] & {}) =>
     threadManagement
@@ -133,180 +150,194 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
       operation: "delegate-task-continue",
     });
     const taskId = derive.delegatedTaskNode({ commandId });
-    const existing = parent.subagents.find((task) => task.id === taskId);
-    if (existing !== undefined) {
-      if (existing.continuedFrom !== input.continueFrom)
-        return yield* failure(
-          "invalid_request",
-          "This clientRequestId already started a different review round; use a new one.",
+    // Calls that share a clientRequestId share one lane claim; serializing them keeps one call
+    // from releasing a claim another is about to commit.
+    yield* serialize(
+      commandId,
+      Effect.gen(function* () {
+        const existing = parent.subagents.find((task) => task.id === taskId);
+        if (existing !== undefined) {
+          if (existing.continuedFrom !== input.continueFrom)
+            return yield* failure(
+              "invalid_request",
+              "This clientRequestId already started a different review round; use a new one.",
+            );
+          // A retry after a lost response settles the lane the first call claimed.
+          if (existing.childThreadId !== null)
+            yield* permissions.complete(commandId, existing.childThreadId);
+          return;
+        }
+        const earlier = parent.subagents.find(
+          (task) =>
+            task.id === input.continueFrom &&
+            task.origin === "app_owned" &&
+            task.threadId === parent.thread.id,
         );
-      // A retry after a lost response settles the lane the first call claimed.
-      if (existing.childThreadId !== null)
-        yield* permissions.complete(commandId, existing.childThreadId);
-      return yield* deps.finishTaskWait(scope, taskId, key, input);
-    }
-    const earlier = parent.subagents.find(
-      (task) =>
-        task.id === input.continueFrom &&
-        task.origin === "app_owned" &&
-        task.threadId === parent.thread.id,
-    );
-    if (earlier === undefined)
-      return yield* failure(
-        "task_not_found",
-        "Task " + input.continueFrom + " is not a delegated task of this thread.",
-      );
-    const childThreadId = earlier.childThreadId;
-    if (childThreadId === null || earlier.remote !== undefined)
-      return yield* failure(
-        "invalid_request",
-        "That review ran on another machine; continuing it is not supported. Start a fresh review round.",
-      );
-    const replay = yield* threadManagement.hasReceipt(commandId);
-    const earlierSelection = earlier.modelSelection ?? {
-      instanceId: earlier.providerInstanceId,
-      model: earlier.model ?? "",
-    };
-    let modelSelection = earlierSelection;
-    if (!replay) {
-      if (earlier.role !== "review")
-        return yield* failure("invalid_request", "continueFrom must name a role='review' task.");
-      if (!TERMINAL.has(earlier.status))
-        return yield* failure(
-          "invalid_request",
-          "That review round has not finished; wait for it before continuing.",
-        );
-      if (earlier.promotedAt !== undefined)
-        return yield* failure(
-          "invalid_request",
-          "That reviewer's thread was promoted and no longer belongs to this thread.",
-        );
-      const child = yield* loadChild(childThreadId);
-      if (child.thread.archivedAt !== null || child.thread.deletedAt !== null)
-        return yield* failure("invalid_request", "That reviewer's thread is archived or deleted.");
-      const refusal = reviewContinuationRefusal({
-        child: { ...child, activeProviderThreadId: child.thread.activeProviderThreadId },
-        earlier,
-        isOriginal:
-          child.thread.forkedFrom?.type === "node" && child.thread.forkedFrom.nodeId === earlier.id,
-      });
-      if (refusal !== undefined) return yield* failure("invalid_request", refusal);
-      const resolved = yield* deps.resolveTarget(
-        { thread: { ...parent.thread, modelSelection: earlierSelection } },
-        input.target,
-      );
-      if (
-        resolved.modelSelection.instanceId !== earlierSelection.instanceId ||
-        resolved.modelSelection.model !== earlierSelection.model
-      )
-        return yield* failure(
-          "invalid_request",
-          "continueFrom keeps the reviewer's provider and model (" +
-            earlierSelection.instanceId +
-            "/" +
-            earlierSelection.model +
-            "). Omit target, or start a fresh review round for another model.",
-        );
-      modelSelection = resolved.modelSelection;
-      const sessions = yield* deps.sessionCapabilities(modelSelection.instanceId);
-      if (sessions.executionLocation === "cloud" || sessions.followUp?.supported === false)
-        return yield* failure(
-          "invalid_request",
-          "Provider " +
-            modelSelection.instanceId +
-            " cannot continue a review in the same conversation; start a fresh review round.",
-        );
-      yield* deps.resolveRuntimeMode(parent.thread.runtimeMode, child.thread.runtimeMode);
-      yield* deps.resolveInteractionMode(
-        parent.thread.interactionMode,
-        child.thread.interactionMode,
-      );
-      yield* permissions.require(scope, "threads.launch", {
-        runtimeMode: parent.thread.runtimeMode,
-      });
-      const effective = yield* permissions.resolve(scope, parent.thread.runtimeMode);
-      if (effective.enabled) {
-        yield* deps.resolveRuntimeMode(effective.runtimeMode, child.thread.runtimeMode);
-        yield* permissions.assertTarget(
-          scope,
+        if (earlier === undefined)
+          return yield* failure(
+            "task_not_found",
+            "Task " + input.continueFrom + " is not a delegated task of this thread.",
+          );
+        const childThreadId = earlier.childThreadId;
+        if (childThreadId === null || earlier.remote !== undefined)
+          return yield* failure(
+            "invalid_request",
+            "That review ran on another machine; continuing it is not supported. Start a fresh review round.",
+          );
+        const replay = yield* threadManagement.hasReceipt(commandId);
+        const earlierSelection = earlier.modelSelection ?? {
+          instanceId: earlier.providerInstanceId,
+          model: earlier.model ?? "",
+        };
+        let modelSelection = earlierSelection;
+        if (!replay) {
+          if (earlier.role !== "review")
+            return yield* failure(
+              "invalid_request",
+              "continueFrom must name a role='review' task.",
+            );
+          if (!TERMINAL.has(earlier.status))
+            return yield* failure(
+              "invalid_request",
+              "That review round has not finished; wait for it before continuing.",
+            );
+          if (earlier.promotedAt !== undefined)
+            return yield* failure(
+              "invalid_request",
+              "That reviewer's thread was promoted and no longer belongs to this thread.",
+            );
+          const child = yield* loadChild(childThreadId);
+          if (child.thread.archivedAt !== null || child.thread.deletedAt !== null)
+            return yield* failure(
+              "invalid_request",
+              "That reviewer's thread is archived or deleted.",
+            );
+          const refusal = reviewContinuationRefusal({
+            child: { ...child, activeProviderThreadId: child.thread.activeProviderThreadId },
+            earlier,
+            isOriginal:
+              child.thread.forkedFrom?.type === "node" &&
+              child.thread.forkedFrom.nodeId === earlier.id,
+          });
+          if (refusal !== undefined) return yield* failure("invalid_request", refusal);
+          const resolved = yield* deps.resolveTarget(
+            { thread: { ...parent.thread, modelSelection: earlierSelection } },
+            input.target,
+          );
+          if (
+            resolved.modelSelection.instanceId !== earlierSelection.instanceId ||
+            resolved.modelSelection.model !== earlierSelection.model
+          )
+            return yield* failure(
+              "invalid_request",
+              "continueFrom keeps the reviewer's provider and model (" +
+                earlierSelection.instanceId +
+                "/" +
+                earlierSelection.model +
+                "). Omit target, or start a fresh review round for another model.",
+            );
+          modelSelection = resolved.modelSelection;
+          const sessions = yield* deps.sessionCapabilities(modelSelection.instanceId);
+          if (sessions.executionLocation === "cloud" || sessions.followUp?.supported === false)
+            return yield* failure(
+              "invalid_request",
+              "Provider " +
+                modelSelection.instanceId +
+                " cannot continue a review in the same conversation; start a fresh review round.",
+            );
+          yield* deps.resolveRuntimeMode(parent.thread.runtimeMode, child.thread.runtimeMode);
+          yield* deps.resolveInteractionMode(
+            parent.thread.interactionMode,
+            child.thread.interactionMode,
+          );
+          yield* permissions.require(scope, "threads.launch", {
+            runtimeMode: parent.thread.runtimeMode,
+          });
+          const effective = yield* permissions.resolve(scope, parent.thread.runtimeMode);
+          if (effective.enabled) {
+            yield* deps.resolveRuntimeMode(effective.runtimeMode, child.thread.runtimeMode);
+            yield* permissions.assertTarget(
+              scope,
+              childThreadId,
+              parent.thread.runtimeMode,
+              child.thread.runtimeMode,
+            );
+          }
+          // Channel-owned callers count child work through their own ledger, which has no
+          // continuation record; they start fresh rounds instead.
+          const admission = yield* admitDelegate(call.channelChildWork, {
+            callerThreadId: scope.thread.threadId,
+            callerRunId: scope.thread.runId,
+            prompt: input.task,
+            clientRequestId: input.clientRequestId,
+            target: input.target,
+            role: input.role,
+          });
+          if (admission !== undefined) {
+            if (admission._tag !== "existing")
+              yield* releaseReservation(call.channelChildWork, admission);
+            return yield* failure(
+              "invalid_request",
+              "continueFrom is not available to channel-owned threads; start a fresh review round.",
+            );
+          }
+        }
+        const admitted = yield* permissions.claim(scope, {
+          id: commandId,
           childThreadId,
-          parent.thread.runtimeMode,
-          child.thread.runtimeMode,
-        );
-      }
-      // Channel-owned callers count child work through their own ledger, which has no
-      // continuation record; they start fresh rounds instead.
-      const admission = yield* admitDelegate(call.channelChildWork, {
-        callerThreadId: scope.thread.threadId,
-        callerRunId: scope.thread.runId,
-        prompt: input.task,
-        clientRequestId: input.clientRequestId,
-        target: input.target,
-        role: input.role,
-      });
-      if (admission !== undefined) {
-        if (admission._tag !== "existing")
-          yield* releaseReservation(call.channelChildWork, admission);
-        return yield* failure(
-          "invalid_request",
-          "continueFrom is not available to channel-owned threads; start a fresh review round.",
-        );
-      }
-    }
-    const admitted = yield* permissions.claim(scope, {
-      id: commandId,
-      childThreadId,
-      runtimeMode: parent.thread.runtimeMode,
-    });
-    yield* threadManagement
-      .dispatch({
-        type: "delegated_task.review-continue",
-        commandId,
-        threadId: parent.thread.id,
-        parentRunId: parentRun.id,
-        parentNodeId: parentRun.rootNodeId,
-        continueFrom: input.continueFrom,
-        childThreadId,
-        task: input.task,
-        ...(input.title === undefined ? {} : { title: input.title }),
-        modelSelection,
-        completionWake: input.mode === "wait" ? "settled_only" : "always",
-        memoryGrantCeiling: call.memoryGrantCeiling ?? "none",
-        createdBy: "agent",
-        creationSource: "mcp",
-      })
-      .pipe(
-        // An accepted receipt means the round exists and keeps its claim; otherwise it returns.
-        Effect.onError(() =>
-          !admitted.enabled
-            ? Effect.void
-            : Option.match(call.commandReceipts, {
-                onNone: () => Effect.void,
-                onSome: (receipts) =>
-                  receipts.getByCommandId(commandId).pipe(
-                    Effect.flatMap((receipt) =>
-                      Option.isSome(receipt) && receipt.value.status === "accepted"
-                        ? Effect.void
-                        : permissions.release(commandId),
+          runtimeMode: parent.thread.runtimeMode,
+        });
+        yield* threadManagement
+          .dispatch({
+            type: "delegated_task.review-continue",
+            commandId,
+            threadId: parent.thread.id,
+            parentRunId: parentRun.id,
+            parentNodeId: parentRun.rootNodeId,
+            continueFrom: input.continueFrom,
+            childThreadId,
+            task: input.task,
+            ...(input.title === undefined ? {} : { title: input.title }),
+            modelSelection,
+            completionWake: input.mode === "wait" ? "settled_only" : "always",
+            memoryGrantCeiling: call.memoryGrantCeiling ?? "none",
+            createdBy: "agent",
+            creationSource: "mcp",
+          })
+          .pipe(
+            // An accepted receipt means the round exists and keeps its claim; otherwise it returns.
+            Effect.onError(() =>
+              !admitted.enabled
+                ? Effect.void
+                : Option.match(call.commandReceipts, {
+                    onNone: () => Effect.void,
+                    onSome: (receipts) =>
+                      receipts.getByCommandId(commandId).pipe(
+                        Effect.flatMap((receipt) =>
+                          Option.isSome(receipt) && receipt.value.status === "accepted"
+                            ? Effect.void
+                            : permissions.release(commandId),
+                        ),
+                        Effect.ignore,
+                      ),
+                  }),
+            ),
+            Effect.mapError((error) =>
+              error._tag === "OrchestratorDispatchError" ||
+              error._tag === "OrchestratorCommandPreviouslyRejectedError" ||
+              error._tag === "OrchestratorThreadAboveModeLimitError"
+                ? failure("invalid_request", "Unable to continue the review: " + errorText(error))
+                : error._tag === "ThreadManagementProviderInstanceDisabledError"
+                  ? deps.threadManagementFailure(error)
+                  : failure(
+                      "orchestration_error",
+                      "Unable to continue the review: " + errorText(error),
                     ),
-                    Effect.ignore,
-                  ),
-              }),
-        ),
-        Effect.mapError((error) =>
-          error._tag === "OrchestratorDispatchError" ||
-          error._tag === "OrchestratorCommandPreviouslyRejectedError" ||
-          error._tag === "OrchestratorThreadAboveModeLimitError"
-            ? failure("invalid_request", "Unable to continue the review: " + errorText(error))
-            : error._tag === "ThreadManagementProviderInstanceDisabledError"
-              ? deps.threadManagementFailure(error)
-              : failure(
-                  "orchestration_error",
-                  "Unable to continue the review: " + errorText(error),
-                ),
-        ),
-      );
-    if (admitted.enabled) yield* permissions.complete(commandId, childThreadId);
+            ),
+          );
+        if (admitted.enabled) yield* permissions.complete(commandId, childThreadId);
+      }),
+    );
     return yield* deps.finishTaskWait(scope, taskId, key, input);
   });
 
