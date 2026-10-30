@@ -58,12 +58,12 @@ it.live("a tab binding receives a saved note once across cells", () =>
       };
       const dispatcher = {
         availability: () => Effect.succeed([{ kind: "tab" as const, available: true }]),
-        dispatch: () =>
+        dispatch: (call: { method: string }) =>
           Effect.succeed({
-            value: {
-              targetRef,
-              tab: { tabId: "tab", title: "Page", url: "https://example.test/" },
-            },
+            value:
+              call.method === "select_tab"
+                ? { targetRef, tab: { tabId: "tab", title: "Page", url: "https://example.test/" } }
+                : { url: "https://example.test/page", text: "page" },
             category: "confirmed" as const,
           }),
       };
@@ -82,7 +82,8 @@ it.live("a tab binding receives a saved note once across cells", () =>
         };
         const first = yield* service.runCell({
           ...request,
-          source: "return (await screen.tab({tabId: 'tab'})).note;",
+          source:
+            "const tab = await screen.tab({tabId: 'tab'}); await tab.read(); return tab.note;",
         });
         expect(first.value).toContain("saved procedure");
         const second = yield* service.runCell({
