@@ -248,6 +248,7 @@ export type ScreenReadPhases = typeof ScreenReadPhases.Type;
 
 export const ScreenObservation = Schema.Struct({
   observationId: id,
+  effect: Schema.optionalKey(text(256)),
   snapshot: Schema.optionalKey(id),
   targetRef: ScreenTargetRef,
   targetGeneration: natural,

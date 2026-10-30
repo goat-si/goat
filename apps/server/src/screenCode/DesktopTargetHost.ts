@@ -804,11 +804,16 @@ export const createDesktopTargetHost = (deps: {
     Effect.suspend(() => {
       const before = call.targetRef && targets.get(call.targetRef.id);
       const window = before && `${before.pid}:${before.windowId}`;
+      const baseline = before?.observationId;
       return operation.pipe(
         Effect.map((result) => {
           const after = call.targetRef && targets.get(call.targetRef.id);
           return window !== undefined && after && window === `${after.pid}:${after.windowId}`
-            ? { ...result, observedWindow: window }
+            ? {
+                ...result,
+                observedWindow: window,
+                ...(baseline === undefined ? {} : { observedBaseline: baseline }),
+              }
             : result;
         }),
       );

@@ -18,7 +18,7 @@ const APP_INPUTS: ReadonlySet<ScreenHostCall["method"]> = new Set([
 export function applyObservedEffect(
   state: {
     journal: ScreenJournalEntry[];
-    pendingObserved: Map<string, Array<{ index: number; window: string }>>;
+    pendingObserved: Map<string, Array<{ index: number; window: string; baseline: string }>>;
   },
   call: ScreenHostCall,
   result: ScreenHostDispatchResult,
@@ -35,11 +35,17 @@ export function applyObservedEffect(
         observation &&
         "mode" in observation &&
         observation.mode === "diff" &&
+        "baseObservationId" in observation &&
+        typeof observation.baseObservationId === "string" &&
         "indexedText" in observation &&
         typeof observation.indexedText === "string" &&
         result.observedWindow !== undefined
       ) {
-        const matched = pending.filter((item) => item.window === result.observedWindow);
+        const matched = pending.filter(
+          (item) =>
+            item.window === result.observedWindow &&
+            item.baseline === observation.baseObservationId,
+        );
         const rows = observation.indexedText
           .split("\n")
           .filter((line) => /^[+~-]\s/.test(line))
@@ -67,17 +73,22 @@ export function applyObservedEffect(
                 receipt: { ...entry.receipt, observedEffect },
               };
           }
-          value = { ...observation, effect };
+          value = { ...observation, effect: effect.slice(0, 256) };
         }
       }
     } else if (
       APP_INPUTS.has(call.method) &&
       admittedIndex !== undefined &&
       result.observedWindow !== undefined &&
+      result.observedBaseline !== undefined &&
       result.safety?.possibleCommit
     ) {
       const pending = state.pendingObserved.get(target) ?? [];
-      pending.push({ index: admittedIndex, window: result.observedWindow });
+      pending.push({
+        index: admittedIndex,
+        window: result.observedWindow,
+        baseline: result.observedBaseline,
+      });
       state.pendingObserved.set(target, pending);
     }
   }
