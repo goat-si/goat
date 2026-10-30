@@ -89,11 +89,9 @@ export const OrchestratorMcpContinueFrom = NodeId.annotate({
 });
 
 /**
- * Where a review task's round ran. conversation: new (a fresh reviewer); continued (the provider
- * completed this round's brief on the earlier round's native conversation); recovered (GOAT moved
- * it to another native conversation, such as after a failed resume); rewound (the conversation
- * was rolled back); unverified (GOAT lacks the evidence to tell); not_started (finished without the
- * provider completing the brief); starting (still in progress).
+ * Where a review round ran. continued: the provider completed this round's brief in the earlier
+ * round's native conversation. Any other value for a continued round means it did not, or GOAT
+ * cannot tell; the tool description lists them.
  */
 export const OrchestratorMcpReviewRound = Schema.Struct({
   continuedFrom: Schema.NullOr(NodeId),

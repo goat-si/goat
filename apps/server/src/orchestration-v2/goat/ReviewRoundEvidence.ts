@@ -34,13 +34,13 @@ const TERMINAL_RUN_STATUSES = new Set<OrchestrationV2Run["status"]>([
   "rolled_back",
 ]);
 
-export const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
+const isTerminalRun = (run: Pick<OrchestrationV2Run, "status">) =>
   TERMINAL_RUN_STATUSES.has(run.status);
 
 export const isSlashPrompt = (text: string) => text.trimStart().startsWith("/");
 
 /** The task's runs. The original task owns the child's runs that no later task claimed. */
-export function reviewTaskRuns(
+function reviewTaskRuns(
   child: Pick<ReviewChildRecords, "runs">,
   task: Pick<OrchestrationV2Subagent, "id">,
   isOriginal: boolean,
@@ -51,7 +51,7 @@ export function reviewTaskRuns(
 }
 
 /** The run that carried the task's brief: its first run that is not a restart continuation. */
-export function briefRun(
+function briefRun(
   child: Pick<ReviewChildRecords, "runs">,
   task: Pick<OrchestrationV2Subagent, "id">,
   isOriginal: boolean,
@@ -62,7 +62,7 @@ export function briefRun(
 }
 
 /** Attempts that sent the brief: the initial one, and retries only before any steering restart. */
-export function briefAttempts(
+function briefAttempts(
   child: Pick<ReviewChildRecords, "attempts">,
   run: Pick<OrchestrationV2Run, "id">,
 ): ReadonlyArray<OrchestrationV2RunAttempt> {
@@ -75,7 +75,7 @@ export function briefAttempts(
   );
 }
 
-export const nativeIdOf = (attempt: Pick<OrchestrationV2RunAttempt, "nativeThreadId">) =>
+const nativeIdOf = (attempt: Pick<OrchestrationV2RunAttempt, "nativeThreadId">) =>
   attempt.nativeThreadId === undefined || attempt.nativeThreadId.startsWith("pending:")
     ? undefined
     : attempt.nativeThreadId;
@@ -93,7 +93,7 @@ const hasProviderTurn = (
  * The native conversation an earlier round's brief completed on, with the attempt that shows it.
  * Undefined when no brief attempt completed a provider turn on a recorded native thread.
  */
-export function reviewBaseline(
+function reviewBaseline(
   child: ReviewChildRecords,
   task: ReviewTask,
   isOriginal: boolean,

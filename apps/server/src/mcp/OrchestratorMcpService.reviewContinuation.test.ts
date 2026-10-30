@@ -21,12 +21,12 @@ import {
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
+import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -310,14 +310,13 @@ type Fixture = Effect.Success<typeof makeFixture>;
 
 const serviceLayer = ({ orchestrator, store }: Fixture) =>
   Effect.gen(function* () {
-    const receipts = yield* CommandReceiptStore.CommandReceiptStoreV2;
     const dependencies = Layer.mergeAll(
       NodeServices.layer,
       ServerSettings.layerTest(),
       Layer.mock(ThreadManagementService.ThreadManagementService)({
         dispatch: orchestrator.dispatch,
-        hasReceipt: (commandId) =>
-          receipts.getByCommandId(commandId).pipe(Effect.map(Option.isSome), Effect.orDie),
+        // Retries reach the existing task before the receipt check, so none is consulted here.
+        hasReceipt: () => Effect.succeed(false),
         getThreadRecords: (id, fields, filter) =>
           store.getThreadRecords(id, fields, filter).pipe(Effect.orDie),
         getReviewLedgerEntries: (input) => store.getReviewLedgerEntries(input).pipe(Effect.orDie),
@@ -768,5 +767,41 @@ it.effect.each([
       assert.equal(refused._tag, "OrchestratorThreadAboveModeLimitError");
     assert.lengthOf((yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents, 1);
     assert.lengthOf(yield* childRuns(fixture.childThreadId), before);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("goat_thread_send stays refused after a continued review round finishes", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    const created = yield* continued(fixture);
+    const run = (yield* childRuns(fixture.childThreadId))[1]!;
+    yield* recordProviderTurn({
+      run,
+      nativeId: "native-1",
+      turn: "completed",
+      runStatus: "completed",
+    });
+    yield* finishTask(created.taskId, "completed");
+    const threads = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(
+        ThreadManagementService.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
+          Layer.provide(
+            CommandReceiptStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+          ),
+          Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+          Layer.provide(Layer.succeed(Orchestrator.OrchestratorV2, fixture.orchestrator)),
+        ),
+      ),
+    );
+    const refused = yield* threads
+      .assertReviewTaskSendAllowed({
+        threadId: fixture.childThreadId,
+        senderThreadId: parentId,
+        createdBy: "agent",
+      })
+      .pipe(Effect.flip);
+    assert.equal(refused._tag, "ThreadManagementReviewTaskFinishedError");
+    assert.include(refused.message, "continueFrom");
   }).pipe(Effect.provide(layerTest)),
 );
