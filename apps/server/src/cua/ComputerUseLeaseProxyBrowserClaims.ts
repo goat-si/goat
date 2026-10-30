@@ -1,3 +1,4 @@
+import { authorizeClaimBind, type PendingBrowserBind } from "./ComputerUseClaimBindAuthority.ts";
 import type { ComputerUseLeaseUpdate } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type { OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
@@ -166,19 +167,49 @@ export interface SelectedClaim {
   readonly claimId: string;
   readonly claimGeneration: number;
   readonly origins: string;
+  readonly binding?: PendingBrowserBind;
 }
 
 export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => void) => {
   let pids: ReadonlyArray<number> = [];
   let claims: ReadonlyArray<ProxyBrowserClaim> = [];
+  let pending: ReadonlyArray<PendingBrowserBind> = [];
   const invalid = new Set<string>();
   const key = (claim: ProxyBrowserClaim) => JSON.stringify([claim.claimId, claim.claimGeneration]);
   const update = (value: ComputerUseLeaseUpdate) => {
     if (value.state !== "active") return;
     pids = value.claimedBrowserPids ?? [];
     claims = value.browserClaims ?? [];
+    pending = value.browserClaimBindings ?? [];
   };
-  const gate = (id: JsonRpcId, line: string, message: Envelope) => {
+  const gate = (id: JsonRpcId, line: string, message: Envelope, authority?: "claimBind") => {
+    if (authority !== undefined) {
+      const binding = authorizeClaimBind(
+        authority,
+        message.params?.name,
+        message.params?.arguments,
+        pending,
+      );
+      if (!binding)
+        return {
+          refused: refusal(
+            id,
+            message.method,
+            "outside_manifest",
+            "This browser bind has no approved pending claim.",
+          ),
+        };
+      return {
+        line,
+        message,
+        selected: {
+          claimId: binding.claimId,
+          claimGeneration: 0,
+          origins: JSON.stringify([binding.origin]),
+          binding,
+        },
+      };
+    }
     const browser = scopeBrowserCall(
       message.params?.name,
       message.params?.arguments,
@@ -225,13 +256,21 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
   };
   const allowed = (selected: SelectedClaim | undefined, message: Envelope) =>
     (selected === undefined ||
-      claims.some(
-        (claim) =>
-          !invalid.has(key(claim)) &&
-          claim.claimId === selected.claimId &&
-          claim.claimGeneration === selected.claimGeneration &&
-          JSON.stringify(claim.origins) === selected.origins,
-      )) &&
+      (selected.binding !== undefined
+        ? pending.some(
+            (binding) =>
+              binding.claimId === selected.binding?.claimId &&
+              binding.pid === selected.binding.pid &&
+              binding.windowId === selected.binding.windowId &&
+              binding.origin === selected.binding.origin,
+          )
+        : claims.some(
+            (claim) =>
+              !invalid.has(key(claim)) &&
+              claim.claimId === selected.claimId &&
+              claim.claimGeneration === selected.claimGeneration &&
+              JSON.stringify(claim.origins) === selected.origins,
+          ))) &&
     !refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids);
   const selectedClaim = (selected: SelectedClaim | undefined) =>
     selected === undefined

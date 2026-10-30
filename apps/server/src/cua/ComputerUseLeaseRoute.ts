@@ -148,6 +148,9 @@ export const leaseUpdates = (input: {
           yield* Queue.take(wake);
           continue;
         }
+        const browserClaimBindings = Option.isSome(grants)
+          ? yield* grants.value.bindingsFor(input.threadId)
+          : [];
         const browserClaims = Option.isSome(grants)
           ? yield* grants.value.claimsFor(input.threadId)
           : [];
@@ -168,6 +171,7 @@ export const leaseUpdates = (input: {
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
+                ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                 ...(browserClaims.length === 0 ? {} : { browserClaims }),
                 ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
               },

@@ -18,7 +18,7 @@ import {
 import { needsHumanFields } from "./humanStepResult.ts";
 import { ComputerUseAgentCursor, AgentCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
-import { BrowserOrigin } from "./browserClaims.ts";
+import { BrowserOrigin, PendingBrowserBind } from "./browserClaims.ts";
 import {
   AgentCursorLeaseUpdate,
   ComputerUsePrimitiveCancel,
@@ -335,7 +335,6 @@ export const cuaAgentBlockLists = (block: CuaAgentPermissionsBlock): string =>
           : "Screen & System Audio Recording",
     )
     .join(" and ");
-
 const holderName = (block: CuaAgentPermissionsBlock) =>
   block.holder === "helper" ? "GOAT Computer Use" : "GOAT";
 
@@ -581,6 +580,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     controlId: TrimmedNonEmptyString,
     expiresAt: Schema.String,
     apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+    browserClaimBindings: Schema.optionalKey(Schema.Array(PendingBrowserBind)),
     claimedBrowserPids: Schema.optionalKey(Schema.Array(Schema.Int.check(Schema.isGreaterThan(0)))),
     browserClaims: Schema.optionalKey(
       Schema.Array(

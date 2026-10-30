@@ -725,7 +725,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
-      const browser = claims.gate(id, line, message);
+      const browser = claims.gate(id, line, message, primitive?.authority);
       if (browser.refused !== undefined) return yield* sink.answer(browser.refused);
       ({ line, message, selected: selectedClaim } = browser);
       if (

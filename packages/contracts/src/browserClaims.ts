@@ -29,6 +29,14 @@ export const BrowserOriginGrant = Schema.Struct({
 });
 export type BrowserOriginGrant = typeof BrowserOriginGrant.Type;
 
+export const PendingBrowserBind = Schema.Struct({
+  claimId: TrimmedNonEmptyString,
+  pid: PositiveInt,
+  windowId: PositiveInt,
+  origin: BrowserOrigin,
+});
+export type PendingBrowserBind = typeof PendingBrowserBind.Type;
+
 export const BrowserClaimEndReason = Schema.Literals([
   "revoked",
   "stopped",

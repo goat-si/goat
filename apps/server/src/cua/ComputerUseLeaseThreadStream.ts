@@ -150,6 +150,9 @@ export const threadLeaseUpdates = (input: {
           controlId: current.controlId,
           expiresAt: DateTime.formatIso(current.expiresAt),
         };
+        const browserClaimBindings = Option.isSome(grants)
+          ? yield* grants.value.bindingsFor(input.threadId)
+          : [];
         const browserClaims = Option.isSome(grants)
           ? yield* grants.value.claimsFor(input.threadId)
           : [];
@@ -170,6 +173,7 @@ export const threadLeaseUpdates = (input: {
                     ? {}
                     : { interruptions: value.interruptions }),
                   ...(value.shared === true ? { shared: true } : {}),
+                  ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                   ...(browserClaims.length === 0 ? {} : { browserClaims }),
                   ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
                 },
