@@ -51,6 +51,7 @@ export interface ScreenHostDispatchResult {
   readonly imageMetadata?: ScreenImageMetadata;
   readonly category: ScreenEffectReceipt["category"];
   readonly observedWindow?: string;
+  readonly observedBaseline?: string;
   readonly evidence?: readonly string[];
   readonly warnings?: readonly string[];
   readonly outcome?: ScreenActionOutcome;
@@ -85,7 +86,7 @@ interface CellState {
   pending: number;
   lastCallId: number;
   journal: ScreenJournalEntry[];
-  pendingObserved: Map<string, Array<{ index: number; window: string }>>;
+  pendingObserved: Map<string, Array<{ index: number; window: string; baseline: string }>>;
   images: ScreenImage[];
   metadata: ScreenImageMetadata[];
   truncated: string[];
@@ -750,7 +751,9 @@ export class ScreenHostBridge {
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
     const evidence = result.success.evidence ?? [];
-    value = applyObservedEffect(state, call, result.success, admittedIndex, value);
+    const withEffect = applyObservedEffect(state, call, result.success, admittedIndex, value);
+    if (Buffer.byteLength(JSON.stringify(withEffect) ?? "") <= context.limits.returnBytes)
+      value = withEffect;
     settle(
       result.success.category,
       "settled",
