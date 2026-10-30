@@ -497,9 +497,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
       if (text === undefined) return call('select_text', target ?? {});
       if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Name the field by number, id, or role and name; a point holds no text.', true);
-      const given = options !== null && typeof options === 'object' ? options : {};
-      const chosen = {};
-      for (const key of ['occurrence', 'prefix', 'suffix', 'selection']) if (given[key] !== undefined) chosen[key] = given[key];
+      // A misspelled option must not fall back to selecting the whole match.
+      const chosen = __only('selectText options', options, ['occurrence', 'prefix', 'suffix', 'selection']);
       const run = () => act('selectText', 'select_text', { ...aim(target), text, ...chosen });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },

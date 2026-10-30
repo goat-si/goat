@@ -32,7 +32,6 @@ const VENDOR_ONLY_IDENTIFIERS = [
   "sky",
   "get_app_state",
   "perform_secondary_action",
-  "select_text",
   "cua_repl",
   "js_reset",
   "turn_ended",

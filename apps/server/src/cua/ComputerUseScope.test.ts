@@ -81,6 +81,25 @@ describe("learnApps", () => {
   });
 
   // A request may name an app without a bundle id by the executable it runs.
+  it("lets select_text reach only the approved app whose window it targets", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps(
+      { apps: [KAKAO, { pid: 7100, bundle_id: "com.apple.Notes", name: "Notes" }] },
+      listed,
+      true,
+    );
+    const judge = (pid: number) =>
+      scopeVerdict({
+        name: "select_text",
+        args: { pid, window_id: 57000, element_token: "s0000abcd:3", text: "hello" },
+        apps: approvedApps([KAKAO.bundle_id]),
+        appOf: (known) => listed.get(known),
+        bundleIds: true,
+      });
+    assert.equal(judge(KAKAO.pid)._tag, "allow");
+    assert.deepInclude(judge(7100), { _tag: "refuse", reason: "app_not_approved" });
+  });
+
   it.each([
     {
       host: "Windows, where the helper's list_apps gives the executable",

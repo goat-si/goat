@@ -60,7 +60,7 @@ const run = (selectText: unknown, call: string) => {
 };
 
 it.live(
-  "app.selectText sends the bound window, the element's token, the text and only the selection options",
+  "app.selectText sends the bound window, the element's token, the text and its selection options",
   () =>
     Effect.gen(function* () {
       const { result, sent } = yield* run(
@@ -69,7 +69,7 @@ it.live(
           selected_text: "world",
           selected_text_range: { location: 6, length: 5, units: "utf16" },
         },
-        "app.selectText(1, 'world', { occurrence: 0, selection: 'text', pid: 999, text: 'x', element_token: 's9:9', targetRef: null })",
+        "app.selectText(1, 'world', { occurrence: 0, selection: 'text' })",
       );
       expect(sent.map((each) => each.args)).toEqual([
         {
@@ -91,6 +91,32 @@ it.live("app.selectText with no text sends nothing", () =>
   Effect.gen(function* () {
     const { result, sent } = yield* run({ effect: "confirmed" }, "app.selectText(1, '')");
     expect(result.value).toMatchObject({ caught: { code: "invalid_argument", nothingSent: true } });
+    expect(sent).toEqual([]);
+  }),
+);
+
+it.live.each([
+  ["a misspelled option", "{ selecton: 'cursor_after' }"],
+  ["a window override", "{ pid: 999 }"],
+])("app.selectText refuses %s and sends nothing", ([, options]) =>
+  Effect.gen(function* () {
+    const { result, sent } = yield* run(
+      { effect: "confirmed" },
+      `app.selectText(1, 'world', ${options})`,
+    );
+    expect(result.value).toMatchObject({ caught: { code: "invalid_argument", nothingSent: true } });
+    expect(sent).toEqual([]);
+  }),
+);
+
+it.live("app.selectText called with one object refuses a misspelled option and sends nothing", () =>
+  Effect.gen(function* () {
+    const { result, sent } = yield* run(
+      { effect: "confirmed" },
+      "app.selectText({ elementRef: {}, text: 'world', selecton: 'cursor_after' })",
+    );
+    expect(result.value).toMatchObject({ caught: { code: "invalid_argument", nothingSent: true } });
+    expect((result.value as { caught: { message: string } }).caught.message).toContain("selecton");
     expect(sent).toEqual([]);
   }),
 );

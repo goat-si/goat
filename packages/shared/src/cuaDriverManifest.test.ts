@@ -8,6 +8,7 @@ import * as NodeChildProcess from "node:child_process";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import * as HostProcess from "./HostProcess.ts";
+import { CUA_DRIVER_VERSION } from "./cuaDriverRelease.ts";
 
 import {
   CUA_DRIVER_ALLOWED_TOOLS,
@@ -30,7 +31,109 @@ import {
 vi.mock("node:fs/promises", { spy: true });
 vi.mock("node:child_process", { spy: true });
 
+/**
+ * Every tool the pinned driver can offer, on any platform. Refresh it from the new tag when the
+ * pin moves to a version not in `verified`; goat.14 changes no tool registration.
+ */
+const PINNED_DRIVER_TOOLS = {
+  verified: ["0.38.0-goat.13", "0.38.0-goat.14"],
+  tools: [
+    // `cua-driver list-tools` of the macOS binary.
+    "bring_to_front",
+    "browser_click",
+    "browser_dialog",
+    "browser_download",
+    "browser_navigate",
+    "browser_pointer",
+    "browser_prepare",
+    "browser_select",
+    "browser_set_input_files",
+    "browser_type",
+    "check_for_update",
+    "check_permissions",
+    "click",
+    "clipboard_read",
+    "clipboard_write",
+    "double_click",
+    "drag",
+    "end_session",
+    "escalate_session",
+    "get_accessibility_tree",
+    "get_agent_cursor_state",
+    "get_browser_state",
+    "get_config",
+    "get_cursor_position",
+    "get_desktop_state",
+    "get_guide",
+    "get_recording_state",
+    "get_screen_size",
+    "get_session",
+    "get_session_state",
+    "get_window_state",
+    "health_report",
+    "hotkey",
+    "install_extension",
+    "install_ffmpeg",
+    "invoke_menu",
+    "kill_app",
+    "launch_app",
+    "list_apps",
+    "list_sessions",
+    "list_windows",
+    "menu_bar_extras",
+    "move_cursor",
+    "page",
+    "parse_visual_regions",
+    "press_key",
+    "replay_trajectory",
+    "right_click",
+    "run_script",
+    "run_steps",
+    "scroll",
+    "select_text",
+    "set_agent_cursor_enabled",
+    "set_agent_cursor_motion",
+    "set_agent_cursor_theme",
+    "set_config",
+    "set_value",
+    "set_window_frame",
+    "start_recording",
+    "start_session",
+    "stop_recording",
+    "type_text",
+    "verify_state",
+    "zoom",
+    // Linux only (platform-linux/src/tools/impl_.rs register_all).
+    "mouse_button_down",
+    "mouse_button_up",
+    "mouse_drag",
+    "parallel_mouse_drag",
+    // Windows only (platform-windows/src/tools/impl_.rs register_all).
+    "debug_window_info",
+    // Registered once the driver admits history (cua-driver/src/history_runtime.rs register_into).
+    "history_status",
+    "history_query",
+  ],
+} as const;
+
 describe("cuaDriverManifest", () => {
+  it("records the tool set of the pinned driver version", () => {
+    expect(PINNED_DRIVER_TOOLS.verified).toContain(CUA_DRIVER_VERSION);
+  });
+
+  it("allows or excludes with a reason every tool the pinned driver offers", () => {
+    const reviewed = new Set<string>([
+      ...CUA_DRIVER_ALLOWED_TOOLS,
+      ...Object.keys(CUA_DRIVER_EXCLUDED_TOOLS),
+    ]);
+    expect(PINNED_DRIVER_TOOLS.tools.filter((tool) => !reviewed.has(tool))).toEqual([]);
+  });
+
+  it("allows only tools the pinned driver offers", () => {
+    const offered = new Set<string>(PINNED_DRIVER_TOOLS.tools);
+    expect(CUA_DRIVER_ALLOWED_TOOLS.filter((tool) => !offered.has(tool))).toEqual([]);
+  });
+
   it("retains every attested identity when a best-effort listing loses the bundle id", () => {
     const apps = cuaRequestableApps(
       [{ name: " Editor.exe ", executable: " C:\\Apps\\Editor.exe " }],

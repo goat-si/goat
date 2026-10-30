@@ -146,12 +146,16 @@ macOS and its source at `cua-driver-rs-v0.37.0`.
 - **Driver ceiling.** Both hosts start the daemon in `standard` mode with
   `--capability-manifest <file> --approve-capability-manifest`, written at each start by
   `packages/shared/src/cuaDriverManifest.ts` (v3 schema).
-  - Tools: observation, input, `kill_app`, `run_steps`, `run_script`, sessions and cursor. Excluded with
+  - Tools: observation, input (with `select_text`), `kill_app`, `run_steps`, `run_script`, sessions and cursor. Excluded with
     reasons in `CUA_DRIVER_EXCLUDED_TOOLS`: installs, driver configuration, update checks,
     trajectory replay, the perception extension, deprecated capture tools, recording (writes
     files), both clipboard tools (the person's copied secrets; file loading) and every browser
     tool (they need per-origin grants a launch-time file cannot know, and logged-in profiles are
-    never granted).
+    never granted). `menu_bar_extras` stays out: its list and press share one tool the manifest
+    cannot split, and a press reaches status items other apps own under SystemUIServer, runs
+    nested in `run_script`, and leaves a menu open outside GOAT's screen reservations. Linux raw
+    mouse strokes, Windows `debug_window_info` and the driver's history tools stay out too. A
+    test holds every tool the pinned driver offers to one of the two lists.
   - `kill_app` sends SIGKILL, so every app grant carries `terminate: driver_launched`: only a
     process `launch_app` started in the same driver session, re-attested by start time and
     executable before the signal. Standard mode refuses any other process first
