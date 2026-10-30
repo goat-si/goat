@@ -102,7 +102,12 @@ const validateNamedAction = (
   ];
   const matches = levels.find((level) => level.length > 0) ?? [];
   const match = matches[0];
-  if (matches.length === 1 && match !== undefined) return { action: match };
+  if (matches.length === 1 && match !== undefined) {
+    const builtin = Object.entries(ACTION_TO_AX).find(
+      ([, ax]) => ax.toLowerCase() === match.toLowerCase(),
+    );
+    return { action: builtin?.[0] ?? match };
+  }
   const candidates = matches.length > 1 ? matches : offered;
   const list = candidates.map((action) => JSON.stringify(action)).join(", ") || "none";
   return {

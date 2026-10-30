@@ -167,7 +167,7 @@ it.live(
       expect(clicks).toHaveLength(2);
       expect(clicks[0]?.args).toMatchObject({
         element_token: "sp:2",
-        action: "AXShowMenu",
+        action: "show_menu",
       });
       expect(clicks[1]?.args).toMatchObject({
         target: { kind: "window", pid: 42, window_id: 72907 },

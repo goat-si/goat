@@ -117,7 +117,7 @@ it.live(
         sent.filter((entry) => entry.tool === "click").map((entry) => entry.args),
       ).toMatchObject([
         { action: "name:move next\ntarget:0x0\nselector:(null)" },
-        { action: "AXPress" },
+        { action: "press" },
       ]);
     });
   },
@@ -198,7 +198,7 @@ it.live(
       ]);
       expect(
         sent.filter((entry) => entry.tool === "click").map((entry) => entry.args),
-      ).toMatchObject([{ action: first }, { action: "AXPress" }]);
+      ).toMatchObject([{ action: first }, { action: "press" }]);
     });
   },
 );
@@ -212,6 +212,20 @@ it.live("a displayed lowercase custom name resolves to the full mixed-case raw a
     expect(result.value).toBe("confirmed");
     expect(sent.filter((entry) => entry.tool === "click").map((entry) => entry.args)).toMatchObject(
       [{ action: raw }],
+    );
+  });
+});
+
+it.live("an advertised AXPress requested by its raw name forwards the driver press action", () => {
+  const { host, sent } = fixture({ get_window_state: state });
+  return Effect.gen(function* () {
+    const result = yield* run(
+      "return (await app.click(1, {action:'AXPress', count:2})).verdict;",
+      host,
+    );
+    expect(result.value).toBe("confirmed");
+    expect(sent.filter((entry) => entry.tool === "click").map((entry) => entry.args)).toMatchObject(
+      [{ action: "press", count: 2 }],
     );
   });
 });
