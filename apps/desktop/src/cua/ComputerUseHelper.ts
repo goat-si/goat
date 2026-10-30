@@ -654,20 +654,21 @@ export function makeHelperHost(options: HelperHostOptions) {
 
   /**
    * Idempotent: what a run opened is taken from it before it is released. A run stopped before it
-   * started is killed outright: its helper may be busy starting and unable to answer a stop.
+   * started is killed outright, as is one whose release a stop overtakes: its helper may be busy
+   * starting and unable to answer a stop request.
    */
   const release = async (current: HelperRun) => {
     const { session, claim, releaseSocket } = current;
-    const cancelled = current.abort.signal.aborted && current.connection === undefined;
+    const signal = current.abort.signal;
+    const cancelled = signal.aborted && current.connection === undefined;
     current.session = undefined;
     current.claim = undefined;
     current.releaseSocket = undefined;
     current.connection = undefined;
     if (claim) await claim.release();
-    else if (session && cancelled) await session.close({ force: true });
     else if (session) {
-      await session.stop().catch(() => undefined);
-      await session.close();
+      if (!cancelled) await unlessAborted(session.stop(), signal).catch(() => undefined);
+      await session.close({ force: signal.aborted });
     }
     await releaseSocket?.();
   };
@@ -757,24 +758,26 @@ export function makeHelperHost(options: HelperHostOptions) {
       current.starting = begin(current).then(
         (connection) => (current.connection = connection),
         async (error: unknown) => {
-          if (run === current) run = undefined;
+          // Still the run while it is released, so a stop can overtake that release.
           await release(current);
+          if (run === current) run = undefined;
           throw error;
         },
       );
       return current.starting;
     },
     /**
-     * Cancels a start still running, so a stop never waits out its deadlines, and releases what
-     * it opened. A later start launches its own run.
+     * Cancels a start still running or failing, so a stop never waits out its deadlines, and
+     * releases what it opened. A later start launches its own run.
      */
     stop: async () => {
       const current = run;
       run = undefined;
       if (!current) return;
-      current.abort.abort(
-        new ComputerUseHelperError("aborted", "Computer use stopped while it was starting."),
-      );
+      if (!current.connection)
+        current.abort.abort(
+          new ComputerUseHelperError("aborted", "Computer use stopped while it was starting."),
+        );
       await current.starting?.catch(() => undefined);
       await release(current);
     },

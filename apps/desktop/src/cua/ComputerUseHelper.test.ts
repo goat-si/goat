@@ -412,6 +412,51 @@ describe("ComputerUseHelper daemon admission", () => {
     assert.isTrue(spawned.at(-1)?.stdinEnded());
   });
 
+  it("a stop during a failed Windows start's release kills the helper instead of waiting for its answer", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // Its driver started, but it never answers stop.
+    const helper = fakeHelper({
+      reply: ({ method, params }) =>
+        method === "start"
+          ? {
+              result: {
+                socketPath: (params as { socketPath: string }).socketPath,
+                driverPid: 700,
+                hostBundleId: BUNDLE_ID,
+              },
+            }
+          : undefined,
+      after: ({ method }) => {
+        if (method === "stop") asked.resolve();
+      },
+    });
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath: "/Helpers/GOAT Computer Use.app",
+        executable: "/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        driverPath: "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      // Something else answered on the pipe, so the start fails after the driver started.
+      readMetadata: async () => ({ ...metadata, pid: 4 }),
+    });
+    const started = host.start();
+    await asked.promise;
+    await host.stop();
+    assert.equal((await helperError(started)).code, "incompatible_daemon");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+    assert.isUndefined(host.servicePid());
+  });
+
   it("a Windows stop while the helper is busy starting its driver kills it instead of asking it to stop", async (context) => {
     vi.useFakeTimers();
     context.onTestFinished(() => {

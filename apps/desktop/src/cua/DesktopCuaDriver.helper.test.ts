@@ -490,6 +490,30 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
     ),
   );
 
+  it.effect(
+    "a Stop sent while the agent's manifest is prepared never reports that start ready",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "agentManifest",
+          });
+          yield* test.request("agent");
+          yield* test.manifestPreparing;
+          // Nothing runs for this start yet, so its Stop can only be noted.
+          yield* test.request("agent", false);
+          yield* test.stopSeen;
+          yield* test.release;
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          const { starts, stops } = test.counts();
+          assert.equal(stops, starts);
+        }),
+      ),
+  );
+
   it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
     Effect.scoped(
       Effect.gen(function* () {

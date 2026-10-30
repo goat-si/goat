@@ -132,17 +132,18 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
           service: owned.service,
           owner,
           token,
-          release: () =>
-            serialized(async () => {
-              if (!owned.claims.delete(claim)) return;
-              sessions.delete(token);
-              if (owned.observer === claim) {
-                owned.observer = undefined;
-                // What it watched and captured may still run, so no later claim inherits it.
-                if (current === owned) current = undefined;
-              }
-              await stopIfUnclaimed(owned);
-            }),
+          // Not queued behind claims: a stop never waits for another service's start. A claim
+          // decides on reuse and adds itself with no await between, so this cannot split it.
+          release: async () => {
+            if (!owned.claims.delete(claim)) return;
+            sessions.delete(token);
+            if (owned.observer === claim) {
+              owned.observer = undefined;
+              // What it watched and captured may still run, so no later claim inherits it.
+              if (current === owned) current = undefined;
+            }
+            await stopIfUnclaimed(owned);
+          },
         };
         owned.claims.add(claim);
         if (claimOptions.observe) owned.observer = claim;

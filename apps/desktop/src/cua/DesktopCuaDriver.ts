@@ -837,9 +837,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             return;
           }
         }
-        if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
-        if (!(yield* spawn(selected, "agents"))) return;
+        if (!requests.stopped(request.requestId) && !(yield* spawn(selected, "agents"))) return;
       }
+      if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
       const entry = owned!;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),

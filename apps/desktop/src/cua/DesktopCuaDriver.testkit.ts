@@ -109,7 +109,7 @@ export const fixture = Effect.fn(function* (
      * helperStart holds the first agent helper's start, checkStart the first readiness check
      * helper's, until release or that host's stop.
      */
-    hold?: "start" | "stop" | "monitor" | "helperStart" | "checkStart";
+    hold?: "start" | "stop" | "monitor" | "helperStart" | "checkStart" | "agentManifest";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -160,6 +160,9 @@ export const fixture = Effect.fn(function* (
   const starting = yield* Deferred.make<void>();
   const helperStarting = yield* Deferred.make<void>();
   let helperStartHeld = false;
+  const manifestPreparing = yield* Deferred.make<void>();
+  let manifestHeld = false;
+  const stopSeen = yield* Deferred.make<void>();
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
@@ -407,6 +410,12 @@ export const fixture = Effect.fn(function* (
     },
     imageHasContent: async () => !options.blankCapture,
     prepareManifest: async (input) => {
+      // agentManifest holds the first agent manifest until release.
+      if (options.hold === "agentManifest" && input.scope === "agents" && !manifestHeld) {
+        manifestHeld = true;
+        Deferred.doneUnsafe(manifestPreparing, Exit.void);
+        await gate.promise;
+      }
       const path = `${input.directory}/${input.scope}.yaml`;
       prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
       const apps =
@@ -538,7 +547,12 @@ export const fixture = Effect.fn(function* (
           Queue.offer(appReports, report).pipe(Effect.asVoid),
       };
     }),
-    cuaRequests: Stream.fromQueue(requests),
+    // A Stop passes here just before the driver notes it, in the same fiber.
+    cuaRequests: Stream.fromQueue(requests).pipe(
+      Stream.tap((request) =>
+        request.enabled ? Effect.void : Deferred.succeed(stopSeen, undefined),
+      ),
+    ),
     cuaWatch: Stream.fromQueue(watching),
     cuaWatchApps: Stream.fromQueue(approvals).pipe(
       Stream.flatMap(({ apps, done }) =>
@@ -639,6 +653,9 @@ export const fixture = Effect.fn(function* (
     pendingReports: Queue.size(reports),
     starting: Deferred.await(starting),
     helperStarting: Deferred.await(helperStarting),
+    manifestPreparing: Deferred.await(manifestPreparing),
+    /** The driver has seen the first Stop sent to it. */
+    stopSeen: Deferred.await(stopSeen),
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),

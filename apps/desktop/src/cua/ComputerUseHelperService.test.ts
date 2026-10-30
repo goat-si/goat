@@ -213,6 +213,20 @@ describe("computer use helper service", () => {
       }),
   );
 
+  it("a release never waits for another service still opening", async () => {
+    const gate = Promise.withResolvers<void>();
+    const services = fakeServices({ gate: gate.promise, gatedFrom: 1 });
+    const manager = makeHelperServiceManager(services);
+    const first = await manager.claim(HELPER, "desktop", { observe: true });
+    // A second observer's service is stuck before its hello.
+    const second = manager.claim(HELPER, "desktop", { observe: true });
+    await first.release();
+    assert.isTrue(services.launched[0]?.closed());
+    assert.isUndefined(manager.sessionFor(first.token));
+    gate.resolve();
+    assert.equal((await second).service.pid, 501);
+  });
+
   it("a claim cancelled while it waits its turn rejects at once and never holds the service", async () => {
     const gate = Promise.withResolvers<void>();
     const services = fakeServices({ gate: gate.promise });
