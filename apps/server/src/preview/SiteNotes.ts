@@ -10,6 +10,7 @@ import type { SqlError } from "effect/sql/SqlError";
 import { scanMemoryValue } from "../memory/MemorySecretScanner.ts";
 import type { MemoryAccessError } from "../memory/MemoryService.ts";
 import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
+import { containsJoseToken } from "../observability/LogTextRedaction.ts";
 
 type Note = {
   readonly origin: string;
@@ -113,6 +114,7 @@ const make = Effect.gen(function* () {
     if (
       scanMemoryValue(input.text).kind === "blocked" ||
       redactGoatCredentials(input.text) !== input.text ||
+      containsJoseToken(input.text) ||
       /^\s*(?:password|passwd|token|secret|api[_ -]?key)\s*[:=]\s*\S/im.test(input.text) ||
       hasCredentialValue(input.text)
     )

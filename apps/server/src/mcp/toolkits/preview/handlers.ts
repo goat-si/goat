@@ -307,7 +307,9 @@ const handlers = {
               code: error._tag === "SiteNoteError" ? "invalid_request" : "orchestration_error",
               message:
                 error._tag === "SiteNoteError"
-                  ? `Site note rejected: ${error.reason}.`
+                  ? error.reason === "secret"
+                    ? "Do not save secrets in site notes; use goat_preview_fill_secret for passwords or handoff.create for other secrets."
+                    : `Site note rejected: ${error.reason}.`
                   : "Site note storage failed.",
             }),
         ),

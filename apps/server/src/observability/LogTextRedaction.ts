@@ -264,6 +264,11 @@ function maskJoseToken(run: string): string {
   return run;
 }
 
+const JOSE_RUN = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}/g;
+
+export const containsJoseToken = (text: string): boolean =>
+  Array.from(text.matchAll(JOSE_RUN), ([run]) => maskJoseToken(run) !== run).some(Boolean);
+
 // key=value or key: value for every credential name a field is masked by.
 const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_KEY})\s*[=:]\s*`, "gi");
 // A scheme word alone on its line, "authorization=Bearer" then a line break, still leads the
@@ -383,7 +388,7 @@ const REDACTIONS: ReadonlyArray<readonly [RegExp, string | ((match: string) => s
   // A JWT or JWE: dotted base64url parts led by one that decodes to a JSON header, whatever
   // whitespace the header holds. Each part of a dotted run is tried, so a dotted prefix cannot
   // hide a token, and dotted names such as serverLogger.test.ts are left alone.
-  [/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*){2,}/g, maskJoseToken],
+  [JOSE_RUN, maskJoseToken],
   // https://user:token@host/repo.git. Userinfo runs to the authority's last @, as URL parsers read
   // it, so a password holding @ is hidden whole. Parsers end an authority only at /, ? or #, and
   // accept spaces and tabs in userinfo, so it may hold them within one line; a pathless URL

@@ -126,6 +126,14 @@ it.effect(
         text: "procedure",
       });
       expect(touched.isError, JSON.stringify(touched)).not.toBe(true);
+      const secret = yield* noteCall("goat_browser_site_note_write", {
+        origin: "https://example.com",
+        text: "password: hunter2",
+      });
+      expect(secret.isError).toBe(true);
+      expect(JSON.stringify(secret)).toContain(
+        "Do not save secrets in site notes; use goat_preview_fill_secret for passwords or handoff.create for other secrets.",
+      );
       const read = yield* noteCall("goat_browser_site_note_read", {
         origin: "https://example.com",
       });

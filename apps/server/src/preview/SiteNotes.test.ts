@@ -43,7 +43,12 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
           const result = yield* Effect.result(
             notes.write({ origin: "https://example.com", text, author: "agent" }),
           );
-          assert.strictEqual(result._tag, "Failure");
+          assert.strictEqual(
+            result._tag === "Failure" && result.failure._tag === "SiteNoteError"
+              ? result.failure.reason
+              : undefined,
+            text.startsWith("한") ? "too_large" : "secret",
+          );
         }
         yield* notes.write({
           origin: "https://example.com",
@@ -76,7 +81,12 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
         const result = yield* Effect.result(
           notes.write({ origin: "https://example.com", text, author: "person" }),
         );
-        assert.strictEqual(result._tag, "Failure");
+        assert.strictEqual(
+          result._tag === "Failure" && result.failure._tag === "SiteNoteError"
+            ? result.failure.reason
+            : undefined,
+          "secret",
+        );
       }).pipe(Effect.provide(SiteNotes.layer));
     }),
   );
@@ -87,6 +97,54 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
     "Use the secret menu in the footer",
     "The password field is on the second step",
   ])("allows ordinary prose: %s", (text) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        yield* notes.write({ origin: "https://example.com", text, author: "person" });
+        assert.strictEqual(notes.noteFor("https://example.com")?.text, text);
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
+  it.effect.each([
+    ["github token", `ghp_${"a".repeat(36)}`],
+    ["github fine-grained token", `github_pat_${"a".repeat(22)}`],
+    ["github oauth token", `gho_${"a".repeat(36)}`],
+    ["provider key", `sk-${"a".repeat(32)}`],
+    ["provider variant key", `sk-ant-api03-${"a".repeat(40)}`],
+    ["access key", `AKIA${"A1".repeat(8)}`],
+    [
+      "JWT",
+      `${Buffer.from('{"alg":"HS256","typ":"JWT"}').toString("base64url")}.eyJzdWIiOiIxMjMifQ.c2ln`,
+    ],
+    [
+      "JWE",
+      `${Buffer.from('{"alg":"dir","enc":"A256GCM"}').toString("base64url")}..aXY.Y2lwaGVydGV4dA.dGFn`,
+    ],
+    ["private key header", "-----BEGIN PRIVATE KEY-----"],
+    ["openssh private key header", "-----BEGIN OPENSSH PRIVATE KEY-----"],
+  ])("refuses secret shape: %s", ([_name, text]) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        const result = yield* Effect.result(
+          notes.write({ origin: "https://example.com", text, author: "person" }),
+        );
+        assert.strictEqual(
+          result._tag === "Failure" && result.failure._tag === "SiteNoteError"
+            ? result.failure.reason
+            : undefined,
+          "secret",
+        );
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
+  it.effect.each([
+    "see docs.example.com/v1.2.3",
+    "file serverLogger.test.ts",
+    "version 1.0.0-beta.2",
+  ])("allows dotted ordinary text: %s", (text) =>
     Effect.gen(function* () {
       yield* runMigrations();
       yield* Effect.gen(function* () {
