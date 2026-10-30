@@ -53,7 +53,8 @@ import {
   OrchestrationV2ProviderGoal,
   parseGoalCommand,
   ProviderDriverKind,
-  type ProviderSetupError,
+  ProviderSetupError,
+  type ServerProviderCompatibilityAdvisory,
 } from "@goat/contracts";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import { appendGeneratedImageMarkdown } from "./CodexGeneratedImageMarkdown.ts";
@@ -1665,7 +1666,7 @@ export type CodexAdapterV2DriverEnv =
 
 export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapterV2")(function* (
   { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
-  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime"> = {},
+  hooks: Pick<CodexAdapterV2Options, "onUsageLimits" | "resolveRuntime" | "compatibility"> = {},
 ) {
   const clientFactory = yield* CodexAppServerClientFactory;
   const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
@@ -1732,6 +1733,9 @@ export interface CodexAdapterV2Options {
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   readonly resolveRuntime?: Effect.Effect<CodexEffectiveRuntime, ProviderSetupError, Scope.Scope>;
+  readonly compatibility?: (
+    version: string,
+  ) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
   readonly crypto: Crypto.Crypto;
   readonly fileSystem: FileSystem.FileSystem;
   readonly idAllocator: IdAllocator.IdAllocatorV2["Service"];
@@ -2090,22 +2094,37 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* verifySessionRoute();
               return;
             }
-            const initializeResponse = yield* client
+
+            const userAgent = yield* client
               .request("initialize", {
                 clientInfo: buildCodexInitializeParams().clientInfo,
                 capabilities: CODEX_CLIENT_CAPABILITIES,
               })
               .pipe(
+                Effect.map((response) => response.userAgent),
                 Effect.catchTags({
                   // Interruption can leave Codex initialized before the local flag is set.
                   CodexAppServerRequestError: (error) =>
                     error.code === -32600 && error.errorMessage === "Already initialized"
-                      ? Effect.void
+                      ? Effect.succeed(null)
                       : Effect.fail(error),
                 }),
               );
-            if (initializeResponse !== undefined)
-              codexVersion = /\/([^\s]+)/.exec(initializeResponse.userAgent)?.[1];
+            if (userAgent !== null) codexVersion = /\/(\S+)/u.exec(userAgent)?.[1];
+            const version = userAgent && /\/(\S+)/u.exec(userAgent)?.[1];
+            const advisory =
+              version && adapterOptions.compatibility
+                ? yield* adapterOptions.compatibility(version)
+                : undefined;
+            if (advisory?.status === "broken") {
+              const target =
+                advisory.recommendedVersion ?? advisory.recommendedRange ?? "a newer version";
+              return yield* new ProviderSetupError({
+                instanceId: adapterOptions.instanceId,
+                operation: "runtime",
+                detail: `Codex ${version} does not work with this GOAT release. Update Codex to ${target}, then retry.`,
+              });
+            }
             yield* client.notify("initialized", undefined);
             yield* verifySessionRoute();
             yield* Ref.set(initialized, true);
@@ -2209,6 +2228,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 .join(","),
             };
           });
+        // A failed open is discarded, so the next turn spawns the updated binary.
+        if (adapterOptions.compatibility !== undefined) yield* ensureInitialized;
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,

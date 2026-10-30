@@ -1,5 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - Effect has no incremental digest.
-import { ProviderDriverKind, type ProviderInstallState } from "@goat/contracts";
+import {
+  ProviderDriverKind,
+  type ProviderInstallState,
+  type ServerProviderCompatibilityAdvisory,
+} from "@goat/contracts";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
 import { satisfiesSemverRange } from "@goat/shared/semver";
 import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
@@ -160,6 +164,9 @@ interface CodexInstallationService {
   readonly acquire: (
     options?: CodexAcquisitionOptions,
   ) => Effect.Effect<CodexExecutable, CodexInstallationError, Scope.Scope>;
+  readonly compatibility: (
+    version: string,
+  ) => Effect.Effect<ServerProviderCompatibilityAdvisory | undefined>;
   readonly start: Effect.Effect<ProviderInstallState, CodexInstallationError>;
   /** Installs GOAT's pinned release even when a supported Codex is on PATH. */
   readonly startManagedOnly: Effect.Effect<ProviderInstallState, CodexInstallationError>;
@@ -901,6 +908,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     managedDirectory,
     resolve,
     acquire,
+    compatibility,
     start,
     startManagedOnly,
     cancel,
