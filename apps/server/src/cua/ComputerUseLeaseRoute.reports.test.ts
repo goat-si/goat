@@ -1,6 +1,11 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The test posts the proxy's raw JSON body.
 import { assert, describe, it } from "@effect/vitest";
-import { COMPUTER_USE_LEASE_ROUTE, EnvironmentId, ThreadId } from "@goat/contracts";
+import {
+  COMPUTER_USE_LEASE_ROUTE,
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -55,7 +60,16 @@ describe("ComputerUseLeaseRoute reports", () => {
           Layer.mock(McpSessionRegistry.McpSessionRegistry)({
             resolve: (token: string) =>
               Effect.succeed({
-                thread: { threadId: token === "other" ? ThreadId.make("thread:other") : threadId },
+                environmentId: EnvironmentId.make("environment:test"),
+                capabilities: new Set<never>(),
+                issuedAt: 0,
+                requestNamespace: "test",
+                client: undefined,
+                thread: {
+                  threadId: token === "other" ? ThreadId.make("thread:other") : threadId,
+                  providerSessionId: "session:test",
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                },
               }),
           }),
         ),

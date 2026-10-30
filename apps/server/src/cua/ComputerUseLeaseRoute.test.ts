@@ -468,7 +468,19 @@ describe("computer use lease route", () => {
         const registry = yield* McpSessionRegistry.McpSessionRegistry.pipe(
           Effect.provide(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-              resolve: () => Effect.succeed({ thread: { threadId } }),
+              resolve: () =>
+                Effect.succeed({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  capabilities: new Set<never>(),
+                  issuedAt: 0,
+                  requestNamespace: "test",
+                  client: undefined,
+                  thread: {
+                    threadId,
+                    providerSessionId: "session:test",
+                    providerInstanceId: ProviderInstanceId.make("codex"),
+                  },
+                }),
             }),
           ),
         );
@@ -1083,7 +1095,7 @@ describe("computer use lease route", () => {
         const received: Array<ComputerUseCallReservation> = [];
         const invocation: McpThreadInvocationScope = {
           environmentId: EnvironmentId.make("environment:test"),
-          capabilities: new Set(),
+          capabilities: new Set<never>(),
           issuedAt: 0,
           requestNamespace: "test",
           client: undefined,
@@ -1159,7 +1171,7 @@ describe("computer use lease route", () => {
         const received: Array<{ threadId: ThreadId; call: ComputerUseCallReservation }> = [];
         const invocation: McpThreadInvocationScope = {
           environmentId: EnvironmentId.make("environment:test"),
-          capabilities: new Set(),
+          capabilities: new Set<never>(),
           issuedAt: 0,
           requestNamespace: "test",
           client: undefined,
