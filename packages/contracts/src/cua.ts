@@ -934,7 +934,6 @@ export const ComputerUseRequestResult = Schema.Union([
        */
       "not_granted",
       "unknown_app",
-      "app_not_allowed",
       /** The person declined, or cancelled the request before answering. */
       "declined",
       "cancelled",
@@ -946,6 +945,7 @@ export const ComputerUseRequestResult = Schema.Union([
       "interrupted",
     ]),
     holderThreadId: Schema.optionalKey(ThreadId),
+    code: Schema.optionalKey(Schema.Literal("app_not_allowed")),
     unknownApps: Schema.optionalKey(Schema.Array(Schema.String)),
     block: Schema.optionalKey(CuaAgentBlock),
     message: Schema.String,

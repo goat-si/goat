@@ -128,7 +128,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     if (excluded.length > 0)
       return {
         kind: "refused",
-        reason: "app_not_allowed",
+        reason: "unknown_app",
+        code: "app_not_allowed",
         unknownApps: excluded,
         message: `Computer use never controls ${excluded.join(", ")}: password managers and other credential stores are always left out. Do not ask for them again; ask the person to do that step themselves.`,
       } satisfies ComputerUseRequestResult;

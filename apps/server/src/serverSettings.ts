@@ -196,7 +196,6 @@ const rejectProtectedAllowedApps = (settings: ServerSettings) =>
         new ServerSettingsError({
           settingsPath: "<memory>",
           operation: "normalize",
-          code: "computer_use_app_not_allowed",
           reason: "A protected app cannot be always allowed.",
         }),
       )

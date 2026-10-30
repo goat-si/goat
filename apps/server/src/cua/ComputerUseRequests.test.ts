@@ -357,7 +357,8 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
               const result = yield* request({ apps: ["com.example.Editor", app] });
               assert.equal(result.kind, "refused");
               if (result.kind !== "refused") return assert.fail(`${app} must not ask a person`);
-              assert.equal(result.reason, "app_not_allowed");
+              assert.equal(result.reason, "unknown_app");
+              assert.equal(result.code, "app_not_allowed");
               assert.deepEqual(result.unknownApps, [app]);
               assert.include(result.message, "password");
             }

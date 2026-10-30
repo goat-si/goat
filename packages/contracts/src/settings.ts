@@ -1809,7 +1809,6 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
         "provider_instance_stale",
         "computer_use_unavailable",
         "computer_use_install_failed",
-        "computer_use_app_not_allowed",
       ]),
     ),
     providerInstanceId: Schema.optional(Schema.String),
@@ -1825,13 +1824,10 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     }
     if (this.code === "provider_instance_stale")
       return "Settings changed on another device. Review them and try again.";
-    if (
-      this.code === "computer_use_unavailable" ||
-      this.code === "computer_use_install_failed" ||
-      this.code === "computer_use_app_not_allowed"
-    ) {
+    if (this.code === "computer_use_unavailable" || this.code === "computer_use_install_failed") {
       return this.reason ?? "Computer use cannot run on this host.";
     }
+    if (this.operation === "normalize" && this.reason !== undefined) return this.reason;
     const provider =
       this.providerInstanceId === undefined ? "" : ` for provider ${this.providerInstanceId}`;
     const variable =
