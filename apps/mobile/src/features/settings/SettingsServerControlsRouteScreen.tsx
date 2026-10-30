@@ -636,6 +636,42 @@ function ServerSettingsDetail(props: {
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
+                    {!projectSelected ? (
+                      <Text className="px-4 py-2 text-sm text-foreground-muted">Allowed apps</Text>
+                    ) : null}
+                    {!projectSelected &&
+                    displayTargets.every(
+                      (target) => target.settings.cuaAllowedApps.length === 0,
+                    ) ? (
+                      <Text className="px-4 py-2 text-sm text-foreground-muted">
+                        No apps always allowed.
+                      </Text>
+                    ) : null}
+                    {!projectSelected
+                      ? displayTargets.flatMap((target) =>
+                          target.settings.cuaAllowedApps.map((app) => (
+                            <SettingsRow
+                              key={`${target.environment.environmentId}:${app}`}
+                              icon="desktopcomputer"
+                              label={`Remove ${app}`}
+                              value={target.environment.label}
+                              disabled={disabledFor("cuaAllowedApps")}
+                              onPress={() =>
+                                writeEach([
+                                  {
+                                    environmentId: target.environment.environmentId,
+                                    patch: {
+                                      cuaAllowedApps: target.settings.cuaAllowedApps.filter(
+                                        (item) => item !== app,
+                                      ),
+                                    },
+                                  },
+                                ])
+                              }
+                            />
+                          )),
+                        )
+                      : null}
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
                     {computerUseAdvanced.expanded ? (
                       <>

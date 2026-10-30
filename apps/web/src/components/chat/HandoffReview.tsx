@@ -8,6 +8,7 @@ export function HandoffReview(props: {
   allowed: boolean;
   approveLabel: string;
   onApprove: () => void;
+  alternateApproval?: { label: string; onApprove: () => void };
   onDecline?: () => void;
   onCancel?: () => void;
   cancelLabel?: string;
@@ -55,6 +56,14 @@ export function HandoffReview(props: {
         <Button disabled={props.busy || !props.allowed} onClick={props.onApprove}>
           {props.approveLabel}
         </Button>
+        {props.alternateApproval ? (
+          <Button
+            disabled={props.busy || !props.allowed}
+            onClick={props.alternateApproval.onApprove}
+          >
+            {props.alternateApproval.label}
+          </Button>
+        ) : null}
         {props.onDecline ? (
           <Button
             variant="ghost-muted"

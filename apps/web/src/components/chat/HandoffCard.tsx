@@ -97,12 +97,17 @@ function HandoffCardContent(props: HandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
   const isComputerUse = handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+  const isAppRequest =
+    isComputerUse &&
+    handoff.apps !== undefined &&
+    handoff.apps.length > 0 &&
+    handoff.computerUseForeground === undefined;
   // Computer use grants share the provider cards' host-bound review, labels and gating.
   const isProvider = isProviderHandoffPath(handoff.target.path) || isComputerUse;
   const isProviderHome = handoff.target.path === "provider.home_request";
   const isProviderSetup = handoff.target.path === PROVIDER_SETUP_HANDOFF_PATH;
   const isKeyAuth = handoff.kind === "terminal" && handoff.target.path === "ssh.host_prepare";
-  const canCancel = handoff.target.path !== "ssh.host_add" && !isKeyAuth;
+  const canCancel = handoff.target.path !== "ssh.host_add" && !isKeyAuth && !isAppRequest;
   const resolvedLabel =
     isSsh || isProvider
       ? {
@@ -187,7 +192,10 @@ function HandoffCardContent(props: HandoffCardProps) {
     [],
   );
   const pending = isHandoffPending(handoff.state);
-  const act = async (action: "opened" | "completed" | "declined" | "cancelled") => {
+  const act = async (
+    action: "opened" | "completed" | "declined" | "cancelled",
+    computerUseScope?: "session" | "always",
+  ) => {
     if (
       inFlight.current ||
       (isProvider && (!canTarget || !(action === "opened" ? canOpen : canRespond)))
@@ -210,7 +218,11 @@ function HandoffCardContent(props: HandoffCardProps) {
       } else {
         const result = await respond({
           environmentId: props.environmentId,
-          input: { ...input, action },
+          input: {
+            ...input,
+            action,
+            ...(computerUseScope === undefined ? {} : { computerUseScope }),
+          },
         });
         if (generation !== lifetime.current) return;
         if (result._tag === "Success") {
@@ -302,15 +314,25 @@ function HandoffCardContent(props: HandoffCardProps) {
                 busy={busy}
                 allowed={canRespond && (!(isSsh || isProvider) || canTarget)}
                 approveLabel={
-                  isRuntimeUpdate
-                    ? "Update now"
-                    : handoff.kind === "approval"
-                      ? "Approve"
-                      : isKeyAuth
-                        ? "I've added the key"
-                        : "I've completed this step"
+                  isAppRequest
+                    ? "Allow for this conversation"
+                    : isRuntimeUpdate
+                      ? "Update now"
+                      : handoff.kind === "approval"
+                        ? "Approve"
+                        : isKeyAuth
+                          ? "I've added the key"
+                          : "I've completed this step"
                 }
-                onApprove={() => void act("completed")}
+                onApprove={() => void act("completed", isAppRequest ? "session" : undefined)}
+                {...(isAppRequest
+                  ? {
+                      alternateApproval: {
+                        label: `Always allow ${handoff.apps?.join(", ")}`,
+                        onApprove: () => void act("completed", "always"),
+                      },
+                    }
+                  : {})}
                 {...(isRuntimeUpdate ? {} : { onDecline: () => void act("declined") })}
                 {...(canCancel ? { onCancel: () => void act("cancelled") } : {})}
                 cancelLabel={isRuntimeUpdate ? "Cancel" : "Cancel request"}
