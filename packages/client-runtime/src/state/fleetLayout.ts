@@ -8,20 +8,27 @@
 
 export const MAX_GRAPH_MACHINES = 12;
 export const MAX_GRAPH_AGENTS = 6;
-/** Phones and tablets: at these caps no two nodes touch at any width from 320 up. */
-export const COMPACT_GRAPH_LIMITS = { machines: 6, agents: 3 } as const;
-
-/** Node radii and touch margins for the compact graph; touch targets of neighbors never overlap. */
+/**
+ * Node radii, touch margins and the one-line label box below each machine in the compact graph.
+ * At the caps compactGraphLimits gives, no two of these boxes overlap.
+ */
 export const COMPACT_GRAPH_NODES = {
   machineRadius: 16,
   machineHitSlop: 2,
   agentRadius: 10,
   agentHitSlop: 2,
+  labelWidth: 72,
+  labelHeight: 22,
 } as const;
 
-/** The compact graph's height for a width: taller on tablets, never too short for the orbit gap. */
+/** The compact graph's height for a width: taller than wide on phones, so labels have room. */
 export function compactGraphHeight(width: number): number {
-  return width >= 600 ? 420 : Math.min(380, Math.max(300, Math.round(width * 0.9)));
+  return width >= 600 ? 420 : Math.min(440, Math.max(300, Math.round(width * 1.1)));
+}
+
+/** Phones and tablets: below 390 pt five machines fit with their labels, above it six. */
+export function compactGraphLimits(width: number) {
+  return { machines: width < 390 ? 5 : 6, agents: 3, compact: true } as const;
 }
 /**
  * Vertical room between the orbits: a machine's radius and two label lines plus an
@@ -134,21 +141,33 @@ export function layoutFleet(
   machines: ReadonlyArray<LayoutMachineInput>,
   width: number,
   height: number,
-  /** Fewer nodes for small screens; what does not fit folds into "+N" nodes. */
-  limits: { readonly machines: number; readonly agents: number } = {
+  /**
+   * Fewer nodes for small screens; what does not fit folds into "+N" nodes. Compact orbits sit
+   * wider and closer to the edge, leaving room for a label under every machine on a phone.
+   */
+  limits: {
+    readonly machines: number;
+    readonly agents: number;
+    readonly compact?: boolean;
+  } = {
     machines: MAX_GRAPH_MACHINES,
     agents: MAX_GRAPH_AGENTS,
   },
 ): FleetLayout {
   const center = { x: width / 2, y: height / 2 };
-  const narrow = width < 640;
-  const outer = narrow
-    ? { rx: width / 2 - 42, ry: height / 2 - 40 }
-    : { rx: width / 2 - 70, ry: height / 2 - 40 };
-  const inner = {
-    rx: width * (narrow ? 0.17 : 0.25),
-    ry: Math.min(height * 0.22, outer.ry - ORBIT_GAP),
-  };
+  const compact = limits.compact === true;
+  const narrow = compact || width < 640;
+  const outer = compact
+    ? { rx: width / 2 - 16, ry: height / 2 - 16 }
+    : narrow
+      ? { rx: width / 2 - 42, ry: height / 2 - 40 }
+      : { rx: width / 2 - 70, ry: height / 2 - 40 };
+  const inner = compact
+    ? { rx: width * 0.22, ry: height * 0.22 }
+    : {
+        rx: width * (narrow ? 0.17 : 0.25),
+        ry: Math.min(height * 0.22, outer.ry - ORBIT_GAP),
+      };
   const { shown, folded } = fold(machines, limits.machines);
   const nodes: ReadonlyArray<LayoutMachineInput | null> = folded ? [...shown, null] : shown;
   const angles = machineAngles(nodes.length, narrow);

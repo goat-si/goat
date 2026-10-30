@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  COMPACT_GRAPH_LIMITS,
   COMPACT_GRAPH_NODES,
   compactGraphHeight,
+  compactGraphLimits,
   MAX_GRAPH_AGENTS,
   MAX_GRAPH_MACHINES,
   layoutFleet,
@@ -80,12 +80,14 @@ describe("layoutFleet", () => {
     expect(agents.at(-1)!.aggregate).toEqual({ count: 4, running: 4, attention: 0, reported: 0 });
   });
 
-  it("keeps phone and tablet touch targets on screen and apart at every fleet size, folding past the cap", () => {
-    const limits = COMPACT_GRAPH_LIMITS;
-    const machineReach = COMPACT_GRAPH_NODES.machineRadius + COMPACT_GRAPH_NODES.machineHitSlop;
-    const agentReach = COMPACT_GRAPH_NODES.agentRadius + COMPACT_GRAPH_NODES.agentHitSlop;
-    for (const width of [320, 375, 430, 744, 1024]) {
+  it("keeps compact touch targets and machine labels on screen and apart at phone and tablet widths", () => {
+    const nodes = COMPACT_GRAPH_NODES;
+    const machineReach = nodes.machineRadius + nodes.machineHitSlop;
+    const agentReach = nodes.agentRadius + nodes.agentHitSlop;
+    // Graph widths after the Usage screen's 20 pt padding on 320, 375, 390, 430, 744 and 1024 pt screens.
+    for (const width of [280, 335, 350, 390, 704, 984]) {
       const height = compactGraphHeight(width);
+      const limits = compactGraphLimits(width);
       for (let count = 1; count <= 15; count++) {
         const layout = layoutFleet(
           Array.from({ length: count }, (_, index) => machine("m" + index, idle, 8)),
@@ -94,36 +96,45 @@ describe("layoutFleet", () => {
           limits,
         );
         expect(layout.machines.length).toBe(Math.min(count, limits.machines));
-        const agents = layout.machines.flatMap((node) => node.agents);
-        for (const node of layout.machines) {
+        const boxes = layout.machines.flatMap((node, index) => {
           expect(node.agents.length).toBeLessThanOrEqual(limits.agents);
+          return [
+            { owner: index, ...square(node, machineReach) },
+            {
+              owner: index,
+              left: node.x - nodes.labelWidth / 2,
+              right: node.x + nodes.labelWidth / 2,
+              top: node.y + nodes.machineRadius,
+              bottom: node.y + nodes.machineRadius + nodes.labelHeight,
+            },
+            ...node.agents.map((agent) => ({ owner: -1, ...square(agent, agentReach) })),
+          ];
+        });
+        for (const box of boxes) {
+          expect(box.left).toBeGreaterThanOrEqual(0);
+          expect(box.right).toBeLessThanOrEqual(width);
+          expect(box.top).toBeGreaterThanOrEqual(0);
+          expect(box.bottom).toBeLessThanOrEqual(height);
         }
-        for (const node of [...layout.machines, ...agents]) {
-          expect(node.x - machineReach).toBeGreaterThanOrEqual(0);
-          expect(node.x + machineReach).toBeLessThanOrEqual(width);
-          expect(node.y - machineReach).toBeGreaterThanOrEqual(0);
-          expect(node.y + machineReach).toBeLessThanOrEqual(height);
-        }
-        // Square touch targets: neighbors stay apart when their centers differ by more than the
-        // sum of reaches along either axis.
-        const separate = (
-          nodes: ReadonlyArray<{ readonly x: number; readonly y: number }>,
-          others: ReadonlyArray<{ readonly x: number; readonly y: number }>,
-          gap: number,
-        ) => {
-          for (const a of nodes) {
-            for (const b of others) {
-              if (a === b) continue;
-              expect(Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y))).toBeGreaterThanOrEqual(
-                gap,
-              );
-            }
+        for (const [index, a] of boxes.entries()) {
+          for (const b of boxes.slice(index + 1)) {
+            // A machine's own label sits right under its node.
+            if (a.owner >= 0 && a.owner === b.owner) continue;
+            const overlaps =
+              a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+            expect(overlaps, JSON.stringify({ width, count, a, b })).toBe(false);
           }
-        };
-        separate(layout.machines, layout.machines, 2 * machineReach);
-        separate(agents, agents, 2 * agentReach);
-        separate(agents, layout.machines, machineReach + agentReach);
+        }
       }
     }
   });
 });
+
+function square(point: { readonly x: number; readonly y: number }, reach: number) {
+  return {
+    left: point.x - reach,
+    right: point.x + reach,
+    top: point.y - reach,
+    bottom: point.y + reach,
+  };
+}

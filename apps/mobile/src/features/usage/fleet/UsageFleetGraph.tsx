@@ -6,7 +6,7 @@ import type {
   FleetThread,
 } from "@goat/client-runtime/state/fleet";
 import {
-  COMPACT_GRAPH_LIMITS,
+  compactGraphLimits,
   COMPACT_GRAPH_NODES,
   compactGraphHeight,
   layoutFleet,
@@ -28,7 +28,7 @@ import { FleetMachineDot } from "./usageFleetRows";
 type Work = Pick<FleetMachine, "running" | "attention" | "reported">;
 type Tone = "attention" | "running" | "idle" | "away";
 
-const LABEL_WIDTH = 84;
+const { labelWidth: LABEL_WIDTH, labelHeight: LABEL_HEIGHT } = COMPACT_GRAPH_NODES;
 
 const toneOf = (work: Work, answering: boolean): Tone =>
   work.attention > 0
@@ -80,7 +80,9 @@ export function UsageFleetGraph(props: {
   const height = compactGraphHeight(width);
   const { machineRadius, agentRadius } = COMPACT_GRAPH_NODES;
   const layout =
-    width > 0 ? layoutFleet(props.snapshot.machines, width, height, COMPACT_GRAPH_LIMITS) : null;
+    width > 0
+      ? layoutFleet(props.snapshot.machines, width, height, compactGraphLimits(width))
+      : null;
   const machinesById = new Map(props.snapshot.machines.map((machine) => [machine.id, machine]));
   // Per agent, how many threads it runs and the one to open when it runs exactly one.
   const threadsByAgent = new Map<string, { count: number; ref: FleetThread["ref"] }>();
@@ -287,11 +289,12 @@ function MachineNode(props: {
         importantForAccessibility="no"
         className={props.selected ? "font-goat-bold text-foreground" : "text-foreground-muted"}
         numberOfLines={1}
-        maxFontSizeMultiplier={1.3}
+        maxFontSizeMultiplier={1.2}
         style={{
           position: "absolute",
           left: props.x - LABEL_WIDTH / 2,
-          top: props.y + radius + 2,
+          top: props.y + radius,
+          height: LABEL_HEIGHT,
           width: LABEL_WIDTH,
           textAlign: "center",
         }}
