@@ -487,6 +487,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     onHumanInput: (
       events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
+    onScreenLocked: () =>
+      Effect.promise(() =>
+        report(url, authorization, { controlId, screenLocked: true }, proxyChannelToken),
+      ),
     onPersonStop: () =>
       Effect.promise(() =>
         report(url, authorization, { controlId, personStop: "person_esc" }, proxyChannelToken),

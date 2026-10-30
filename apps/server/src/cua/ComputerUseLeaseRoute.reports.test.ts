@@ -62,6 +62,15 @@ describe("ComputerUseLeaseRoute reports", () => {
           services,
         );
         assert.equal(forgedStop.status, 401);
+        const forgedLock = await handler(
+          new Request(`http://goat.test${COMPUTER_USE_LEASE_ROUTE}`, {
+            method: "POST",
+            headers: { authorization: "Bearer good" },
+            body: JSON.stringify({ controlId: "one", screenLocked: true }),
+          }),
+          services,
+        );
+        assert.equal(forgedLock.status, 401);
         for (const [path, body] of [
           [
             "primitive-control-ready",

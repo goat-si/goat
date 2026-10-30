@@ -28,6 +28,47 @@ const shortForeground = () => {
 };
 
 describe("proxy lifecycle ownership across foreground expiry", () => {
+  it.effect("a typed screen lock pauses the control and rejects later calls", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ screenLock: true });
+      yield* h.push(active());
+      yield* h.applied;
+      yield* h.send(call(77, "list_apps"));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 77,
+          result: {
+            isError: true,
+            content: [],
+            structuredContent: { code: "screen_locked", effect: "refused" },
+          },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 77);
+      yield* h.screenLockedReported;
+      yield* h.killed;
+      yield* h.push(active());
+      yield* h.applied;
+      assert.equal(yield* h.liveDrivers, 0);
+      yield* h.send(call(78, "list_apps"));
+      assert.deepInclude((yield* h.nextToProvider).result, {
+        isError: true,
+        structuredContent: {
+          refused: "screenLocked",
+          detail: "screen_locked",
+          safety: {
+            possibleCommit: false,
+            retryClass: "never",
+            writeStatus: "not_started",
+            code: "write_refused_terminal",
+          },
+        },
+      });
+    }),
+  );
+
   it.effect("reports helper Escape from the active control", () =>
     Effect.gen(function* () {
       const h = yield* harness({ personStop: true });

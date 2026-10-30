@@ -40,7 +40,12 @@ import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { makeLeaseFences, type TakenUpdate } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
-import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
+import {
+  captureStalled,
+  driverExitReason,
+  driverRefused,
+  driverScreenLocked,
+} from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
@@ -113,6 +118,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let finished: LeaseEnd | undefined;
   let paused: ComputerUsePauseReason | undefined;
   let idle = false;
+  let screenLockPending = false;
+  let screenLockConfirmed = false;
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
@@ -360,8 +367,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           outstanding.delete(key);
         }
       }
+      const screenLocked = message !== undefined && driverScreenLocked(message);
+      if (screenLocked) screenLockPending = true;
       if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
       yield* sink.answer(admitDriverReplyScreenshots(delivered), "settled", { tool });
+      if (screenLocked) {
+        if (options.onScreenLocked !== undefined)
+          yield* options.onScreenLocked().pipe(Effect.forkIn(scope));
+        yield* pause("screen_locked").pipe(Effect.forkIn(scope));
+      }
     });
     return current.driver.lines.pipe(
       Stream.onEnd(Deferred.succeed(exited, undefined)),
@@ -454,6 +468,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
+    if (screenLockPending && !screenLockConfirmed) return;
+    if (paused === "screen_locked") {
+      screenLockPending = false;
+      screenLockConfirmed = false;
+    }
     const next = approvedApps(update.apps);
     const nextForeground = update.foreground ?? [];
     const foregroundRemoved = foreground.some(
@@ -522,8 +541,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const apply = (
     update: ComputerUseLeaseUpdate | undefined,
     fence: ReturnType<typeof fences.take>,
-  ) =>
-    lifecycleLock
+  ) => {
+    if (update?.state === "paused" && update.reason === "screen_locked") screenLockConfirmed = true;
+    return lifecycleLock
       .withPermits(1)(
         (update === undefined
           ? end("lost")
@@ -548,6 +568,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ),
       )
       .pipe(Effect.ensuring(Effect.sync(() => fences.release(fence))));
+  };
   const transportDropped = Transport.dropTransport({
     running: () => finished === undefined && lifecycle.current !== undefined,
     calls: () => outstanding.values(),
@@ -729,6 +750,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if ("answer" in keyCall) return yield* sink.answer(keyCall.answer);
     if (isRequest && message?.method === "tools/call") {
+      if (screenLockPending)
+        return yield* sink.answer(
+          refusal(
+            id,
+            message.method,
+            "screen_locked",
+            "The screen is locked. Do not retry until it is unlocked.",
+          ),
+        );
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
       // Before anything reaches the driver; a known pause, end or idle turn answers first.
       if (held()) return yield* sink.answer(notSent(id));

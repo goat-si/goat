@@ -100,6 +100,7 @@ export const harness = Effect.fn(function* (
      */
     readonly humanInput?: boolean;
     readonly personStop?: boolean;
+    readonly screenLock?: boolean;
     readonly onHumanInput?: (
       events: ReadonlyArray<{
         readonly source: ComputerUseHumanInputSource;
@@ -162,6 +163,7 @@ export const harness = Effect.fn(function* (
   const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
   const escapeEvents = yield* Queue.unbounded<void>();
   const escapeReports = yield* Queue.unbounded<void>();
+  const lockedReports = yield* Queue.unbounded<void>();
   const humanBatches: Array<{ readonly at: number; readonly sources: ReadonlyArray<string> }> = [];
   const taken = yield* Queue.unbounded<string>();
   const applied = yield* Queue.unbounded<string>();
@@ -226,6 +228,7 @@ export const harness = Effect.fn(function* (
         Effect.asVoid,
       ),
     ...(options.personStop ? { onPersonStop: () => Queue.offer(escapeReports, undefined) } : {}),
+    ...(options.screenLock ? { onScreenLocked: () => Queue.offer(lockedReports, undefined) } : {}),
     output: (line, reply) =>
       Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
     ...(options.cursors
@@ -454,6 +457,7 @@ export const harness = Effect.fn(function* (
     person: Queue.take(people),
     escape: Queue.offer(escapeEvents, undefined),
     escapeReported: Queue.take(escapeReports),
+    screenLockedReported: Queue.take(lockedReports),
     /** How many events each report of a person's input carried, in order. */
     humanBatches: Effect.sync(() => [...humanBatches]),
     /** The next input call start or end the proxy told the server about, as "start 1". */

@@ -211,7 +211,7 @@ export const reportLayer = HttpRouter.add(
       return HttpServerResponse.empty({ status: 204 });
     }
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    if ("personStop" in value) {
+    if ("personStop" in value || "screenLocked" in value) {
       const channel = yield* Effect.serviceOption(
         ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel,
       );
@@ -219,6 +219,13 @@ export const reportLayer = HttpRouter.add(
       const token = request.headers["x-goat-proxy-channel"] ?? "";
       if ((yield* channel.value.authenticate({ threadId, proxyChannelToken: token })) === undefined)
         return HttpServerResponse.empty({ status: 401 });
+      if ("screenLocked" in value) {
+        const accepted =
+          leases.screenLocked === undefined
+            ? false
+            : yield* leases.screenLocked(threadId, value.controlId);
+        return HttpServerResponse.empty({ status: accepted ? 204 : 409 });
+      }
       const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
       if (Option.isNone(handoffs)) return HttpServerResponse.empty({ status: 503 });
       const result = yield* stopComputerUseFromHelper(

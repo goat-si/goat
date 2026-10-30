@@ -227,6 +227,7 @@ export class ComputerUseLeases extends Context.Service<
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly stopIfCurrent?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
+    readonly screenLocked?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /**
      * Records the window an agent's admitted call named, or where its cursor is on it (see
      * withCursor), reported by that control's own proxy; false when not the thread's live one.
@@ -742,6 +743,12 @@ const make = Effect.gen(function* () {
         }),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
+    screenLocked: Effect.fn("ComputerUseLeases.screenLocked")(function* (threadId, controlId) {
+      const record = yield* liveControl(threadId, controlId);
+      if (record === undefined || !acting(record)) return false;
+      yield* pause("screen_locked");
+      return true;
+    }),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,

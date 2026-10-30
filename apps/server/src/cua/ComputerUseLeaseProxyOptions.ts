@@ -451,5 +451,6 @@ export interface LeaseProxyOptions<EU, ED> {
    * report has answered, so the server knows the call before any helper can see its events.
    */
   readonly onPersonStop?: () => Effect.Effect<unknown>;
+  readonly onScreenLocked?: () => Effect.Effect<unknown>;
   readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
 }

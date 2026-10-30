@@ -271,8 +271,14 @@ export const ComputerUseLeasePersonStop = Schema.Struct({
   personStop: Schema.Literal("person_esc"),
 });
 
+export const ComputerUseLeaseScreenLocked = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  screenLocked: Schema.Literal(true),
+});
+
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeasePersonStop,
+  ComputerUseLeaseScreenLocked,
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,
