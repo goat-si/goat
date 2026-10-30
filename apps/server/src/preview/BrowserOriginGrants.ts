@@ -73,6 +73,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
   const grants = new Map<string, BrowserOriginGrant>();
+  const ended = new Map<
+    string,
+    { readonly threadId: ThreadId; readonly reason: "origin_changed" }
+  >();
   let sequence = 0;
   const key = (threadId: ThreadId, origin: string) => JSON.stringify([threadId, origin]);
   const union = (): Union => {
@@ -190,6 +194,28 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }),
     ),
   );
+  const end = Effect.fn("BrowserOriginGrants.end")(
+    (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          const claim = claims.get(claimId);
+          if (claim?.threadId !== threadId || claim.claimGeneration !== generation) return false;
+          claims.delete(claimId);
+          ended.set(claimId, { threadId, reason });
+          yield* deps.publish(union());
+          return true;
+        }),
+      ),
+  );
+  const endReason = Effect.fn("BrowserOriginGrants.endReason")(
+    (threadId: ThreadId, claimId: string) =>
+      lock.withPermits(1)(
+        Effect.sync(() => {
+          const entry = ended.get(claimId);
+          return entry?.threadId === threadId ? entry.reason : undefined;
+        }),
+      ),
+  );
   const driverRestarted = lock.withPermits(1)(
     Effect.gen(function* () {
       pending.clear();
@@ -197,5 +223,5 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       yield* deps.publish(union());
     }),
   );
-  return { request, answer, list, revoke, stop, driverRestarted };
+  return { request, answer, list, revoke, stop, end, endReason, driverRestarted };
 });

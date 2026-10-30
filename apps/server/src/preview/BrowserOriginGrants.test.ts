@@ -174,3 +174,41 @@ it.effect("serializes a revoke behind an in-flight bind", () =>
     assert.deepEqual(yield* service.list(threadId), { grants: [], claims: [] });
   }),
 );
+
+it.effect("ends only the matching claim generation when its origin changes", () =>
+  Effect.gen(function* () {
+    const manifests: Array<unknown> = [];
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (value) => Effect.sync(() => void manifests.push(value)),
+      bind: () =>
+        Effect.succeed({
+          tabId: "tab-1",
+          title: "Site",
+          url: "https://example.test/",
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending request");
+    const answer = yield* service.answer(request.claimId, true);
+    if (answer.agentResult.status !== "attached") return assert.fail("expected attached claim");
+    const generation = answer.agentResult.claim.claimGeneration;
+    const stale = yield* service.end(threadId, request.claimId, generation + 1, "origin_changed");
+    assert.isFalse(stale);
+    assert.lengthOf((yield* service.list(threadId)).claims, 1);
+    const ended = yield* service.end(threadId, request.claimId, generation, "origin_changed");
+    assert.isTrue(ended);
+    assert.equal(yield* service.endReason(threadId, request.claimId), "origin_changed");
+    assert.deepEqual((yield* service.list(threadId)).claims, []);
+    assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
+  }),
+);
