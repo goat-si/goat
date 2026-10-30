@@ -180,20 +180,15 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
-  (settings.cuaAllowedApps.some(isExcludedCuaApplication)
-    ? Effect.fail(
-        new ServerSettingsError({
-          settingsPath: "<memory>",
-          operation: "normalize",
-          cause: "A protected app cannot be always allowed.",
-        }),
-      )
-    : encodeServerSettings({
-        ...settings,
-        memoryHubProvenance: settings.memoryHubProvenance ?? null,
-      })
-  ).pipe(
+  encodeServerSettings({
+    ...settings,
+    memoryHubProvenance: settings.memoryHubProvenance ?? null,
+  }).pipe(
     Effect.flatMap(decodeServerSettings),
+    Effect.filterOrFail(
+      (next) => !next.cuaAllowedApps.some(isExcludedCuaApplication),
+      () => "A protected app cannot be always allowed.",
+    ),
     Effect.map(foldProviderInstanceEnabledFlags),
     Effect.map((next) => ({ ...next, defaultTheme: normalizeThemePreference(next.defaultTheme) })),
     Effect.map((next) => withIdleCompaction(next, globalIdleCompaction(next))),
