@@ -208,6 +208,71 @@ it.live.each([
     }),
 );
 
+it.live.each([
+  { note: "first notice", warning: "second warning", expected: ["first notice", "second warning"] },
+  { note: "same notice", warning: "  same   notice ", expected: ["same notice"] },
+])(
+  "observations expose distinct structured warnings without debug",
+  ({ note, warning, expected }) =>
+    Effect.gen(function* () {
+      const { host } = fixture({ get_window_state: { ...state, note, warning } });
+      const result = yield* runCell(
+        host,
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return (await app.observe()).warnings;",
+      );
+      expect(result.value).toEqual(expected);
+    }),
+);
+
+it.live("an input deduplicates a disabled read sentence repeated as a structured note", () =>
+  Effect.gen(function* () {
+    const note = "The item read disabled before the press.";
+    const { host } = fixture({
+      get_window_state: state,
+      press_key: new DriverSuccess(
+        { effect: "unverifiable", code: "ax_action_unverified", note },
+        `Sent AXPress to Edit > Undo for window 7; the requested chord was not sent as keys. Its effect is unverified. ${note}`,
+      ),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return await app.press('cmd+z');",
+    );
+    expect(result.value).toEqual({ ok: true, verdict: "unverifiable", warnings: [note] });
+  }),
+);
+
+it.live("an input deduplicates identical structured notes and warnings", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      get_window_state: state,
+      click: { effect: "confirmed", note: "same notice", warning: "  same   notice " },
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); return await app.click(1);",
+    );
+    expect(result.value).toEqual({ ok: true, verdict: "confirmed", warnings: ["same notice"] });
+  }),
+);
+
+it.live("a window read never turns input-only driver text into a warning", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      get_window_state: new DriverSuccess(
+        state,
+        "Window 7. Its effect is unverified. The item read disabled before the press.",
+      ),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+        "const observation = await app.observe(); return { hasWarnings: 'warnings' in observation };",
+    );
+    expect(result.value).toEqual({ hasWarnings: false });
+  }),
+);
+
 it.live("a routine app observation has no warnings", () =>
   Effect.gen(function* () {
     const { host } = fixture({ get_window_state: state });

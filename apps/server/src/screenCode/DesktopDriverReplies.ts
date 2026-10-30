@@ -155,7 +155,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   return undefined;
 };
 
-export const focusRestorationWarning = (value: unknown): string | undefined => {
+const focusRestorationWarning = (value: unknown): string | undefined => {
   const fields = object(value);
   const focus = object(fields?.focus_restoration);
   const pid =
@@ -176,10 +176,15 @@ export const focusRestorationWarning = (value: unknown): string | undefined => {
       : undefined;
 };
 
-const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): readonly string[] => {
+/** Driver notes the model must see; only an input's own text can carry a disabled-action note. */
+export const driverWarnings = (
+  reply: ComputerUsePrimitiveReply,
+  source: "input" | "read",
+): readonly string[] => {
+  const value = driverValue(reply);
   const fields = object(value);
   const focusWarning = focusRestorationWarning(value);
-  const texts = array(object(reply.result)?.content)
+  const texts = (source === "input" ? array(object(reply.result)?.content) : [])
     .map(object)
     .map((part) => (part?.type === "text" ? string(part.text) : undefined));
   const marked = texts.find((part) => part?.includes("Its effect is unverified."));
@@ -191,11 +196,11 @@ const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): reado
   const disabled = (after ?? fallback)
     ?.split(/(?<=[.!?])\s+/u)
     .find((sentence) => /disabled/i.test(sentence));
-  return [focusWarning, disabled, string(fields?.note), string(fields?.warning)]
+  const warnings = [focusWarning, disabled, string(fields?.note), string(fields?.warning)]
     .filter((item): item is string => item !== undefined)
     .map((item) => item.replace(/\s+/gu, " ").trim().slice(0, 200))
-    .filter((item) => item.length > 0)
-    .slice(0, 4);
+    .filter((item) => item.length > 0);
+  return [...new Set(warnings)].slice(0, 4);
 };
 
 /** An input tool's answer as a receipt category, read the way computer use reads it. */
@@ -211,7 +216,7 @@ export const driverResult = (
       : effect === "suspected_noop" || effect === "no_drop" || effect === "not_applied"
         ? "suspected_noop"
         : "unverifiable";
-  const warnings = driverWarnings(reply, value);
+  const warnings = driverWarnings(reply, "input");
   return {
     value,
     category,

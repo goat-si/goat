@@ -16,7 +16,7 @@ import type {
   ScreenRunError,
 } from "@goat/contracts";
 import { COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE } from "@goat/contracts";
-import { driverValue, fail, focusRestorationWarning } from "./DesktopDriverReplies.ts";
+import { driverValue, driverWarnings, fail } from "./DesktopDriverReplies.ts";
 import { hopsOf } from "./DesktopHops.ts";
 import { settleCaptureIfNeeded } from "./DesktopEvidence.ts";
 import { boundsOf, elementFrames, sameRect, windowOrigin } from "./DesktopFrames.ts";
@@ -499,9 +499,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       context,
     );
     driverMs += elapsed(sentAt, yield* Clock.currentTimeMillis);
-    const warning = focusRestorationWarning(driverValue(reply));
-    if (warning && !warnings.includes(warning) && warnings.length < 4)
-      warnings.push(warning.slice(0, 200));
+    for (const warning of driverWarnings(reply, "read"))
+      if (!warnings.includes(warning) && warnings.length < 4) warnings.push(warning);
     return reply;
   });
   // A read that ran retired the driver's earlier tokens, so their refs go even when its
