@@ -350,6 +350,26 @@ describe("thread lease proxy", () => {
       }),
   );
 
+  it.effect("a later expiry for the same control keeps it past its first deadline", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A", "1970-01-01T01:00:00.000Z"));
+      const a = yield* h.started;
+      yield* h.applied;
+      yield* TestClock.adjust("50 minutes");
+      yield* h.push(snapshot("A", "1970-01-01T01:50:00.000Z"));
+      yield* h.applied;
+      yield* TestClock.adjust("20 minutes");
+      yield* h.send(call(1, "get_guide"));
+      assert.equal((JSON.parse(yield* Queue.take(a.sent)) as { id: number }).id, 1);
+      yield* TestClock.adjust("40 minutes");
+      yield* Deferred.await(a.killed);
+      assert.equal((yield* h.next).id, 1);
+      yield* h.send(work(2));
+      assert.deepInclude((yield* h.next).result?.structuredContent, { detail: "expired" });
+    }),
+  );
+
   it.effect("A's deadline cannot expire B and B enforces its own independent deadline", () =>
     Effect.gen(function* () {
       const h = yield* threadHarness();

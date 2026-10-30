@@ -208,7 +208,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     const expiresAt = DateTime.make(update.expiresAt);
     if (Option.isNone(expiresAt)) return yield* finish("lost");
     if (current?.controlId === update.controlId) {
-      current.deadline = Math.min(current.deadline, DateTime.toEpochMillis(expiresAt.value));
+      // The server's latest word: a reused control's expiry moves later with its last use.
+      current.deadline = DateTime.toEpochMillis(expiresAt.value);
       yield* Queue.offer(current.wake, undefined);
       return;
     }

@@ -439,8 +439,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
     const expiresAt = DateTime.make(update.expiresAt);
-    if (Option.isSome(expiresAt))
-      deadline = Math.min(deadline, DateTime.toEpochMillis(expiresAt.value));
+    // The server's latest word: a reused control's expiry moves later with its last use.
+    if (Option.isSome(expiresAt)) deadline = DateTime.toEpochMillis(expiresAt.value);
     const next = approvedApps(update.apps);
     const nextForeground = update.foreground ?? [];
     const foregroundRemoved = foreground.some(

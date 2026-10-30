@@ -408,7 +408,7 @@ describe("ComputerUseLeaseProxy", () => {
       }),
   );
 
-  it.effect("keeps the earlier of its own deadline and the server's", () =>
+  it.effect("takes the server.s expiry over its launch deadline", () =>
     Effect.gen(function* () {
       const h = yield* harness({ expiresAt: "1970-01-01T00:30:00.000Z" });
       yield* h.push(active("1970-01-01T00:05:00.000Z"));

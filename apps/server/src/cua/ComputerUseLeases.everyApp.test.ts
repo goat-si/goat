@@ -10,6 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
+import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -72,6 +73,35 @@ it.effect.each(["replacement", "approval after Stop"] as const)(
       if (second !== undefined)
         assert.equal((yield* leases.controlState(owner, second.controlId))._tag, "active");
       else assert.isTrue(yield* leases.foregroundAvailable(owner, "Check the build status"));
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect.each([
+  { reused: true, at: "70 minutes", state: "active" },
+  { reused: false, at: "60 minutes", state: "ended" },
+] as const)(
+  "a full access control lasts an hour from its last use (reused $reused, $at: $state)",
+  ({ reused, at, state }) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make(`thread-control-hour-${String(reused)}`);
+      yield* threadIn(owner, "full-access");
+      const first = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+      if (reused) {
+        yield* TestClock.adjust("50 minutes");
+        const next = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+        assert.equal(next.controlId, first.controlId);
+        yield* TestClock.adjust("20 minutes");
+      } else yield* TestClock.adjust(at);
+      assert.equal((yield* leases.controlState(owner, first.controlId))._tag, state);
+      if (!reused) return;
+      // Not unbounded: an hour after that last use it ends.
+      yield* TestClock.adjust("40 minutes");
+      assert.deepEqual(yield* leases.controlState(owner, first.controlId), {
+        _tag: "ended",
+        reason: "expired",
+      });
     }).pipe(Effect.provide(everyAppLayer)),
 );
 

@@ -101,7 +101,7 @@ export type {
   Interruptions,
 } from "./ComputerUseControl.ts";
 
-/** How long an interactive control lasts before the thread's next turn mints another. */
+/** How long a control without a grant lasts after the turn that last used it. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
 /** Separates a control id from a call id in an input log key; a control id never contains it. */
 const CALL_KEY = "\u0000";
@@ -410,6 +410,10 @@ const make = Effect.gen(function* () {
           const reused: ControlRecord = {
             ...nextTurn(existing),
             uses: existing.uses + 1,
+            // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
+            ...(Option.isSome(lease)
+              ? {}
+              : { expiresAt: DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }) }),
             ...(runId === undefined ? {} : { runId }),
           };
           controls.set(threadId, reused);

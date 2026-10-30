@@ -16,6 +16,7 @@ import {
   CONTROL,
   foregroundActive,
   harness,
+  refusedCall,
 } from "./ComputerUseLeaseProxy.testkit.ts";
 
 const shortForeground = () => {
@@ -377,5 +378,28 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
         assert.isTrue(yield* Deferred.isDone(handback.closed));
         assert.lengthOf(h.drivers, 2);
       }),
+  );
+});
+
+describe("proxy expiry follows the server", () => {
+  it.effect("a later expiry from the server keeps the control past its first deadline", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ expiresAt: "1970-01-01T01:00:00.000Z" });
+      yield* h.push(active("1970-01-01T01:00:00.000Z"));
+      assert.equal(yield* h.applied, "active");
+      yield* TestClock.adjust("50 minutes");
+      // The thread's next turn reused the control: it now lasts an hour from that use.
+      yield* h.push(active("1970-01-01T01:50:00.000Z"));
+      assert.equal(yield* h.applied, "active");
+      yield* TestClock.adjust("20 minutes");
+      yield* h.send(call(1, "list_apps"));
+      assert.equal((yield* h.nextToDriver).id, 1);
+      assert.isFalse(yield* h.isKilled);
+      yield* TestClock.adjust("40 minutes");
+      yield* h.killed;
+      yield* h.send(call(2, "click"));
+      assert.equal((yield* h.nextToProvider).id, 1);
+      assert.deepEqual(yield* h.nextToProvider, refusedCall(2, "expired"));
+    }),
   );
 });
