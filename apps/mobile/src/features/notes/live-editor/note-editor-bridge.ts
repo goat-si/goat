@@ -1,14 +1,20 @@
 import type { NoteEditorInbound, NoteEditorOutbound } from "./note-editor-protocol";
 import { applyNoteEditorChanges } from "./note-editor-support";
 
-type EditorReport = Extract<NoteEditorOutbound, { type: "change" | "doc" }>;
-export type NoteEditorReceipt =
-  | { readonly kind: "value"; readonly value: string; readonly checkbox: boolean }
-  | { readonly kind: "send"; readonly message: NoteEditorInbound }
-  | { readonly kind: "ignore" };
+type EditorChange = Extract<NoteEditorOutbound, { type: "change" }>;
+type EditorReport = EditorChange | Extract<NoteEditorOutbound, { type: "doc" }>;
+export interface NoteEditorReceipt {
+  /** The new text for React, when it changed. */
+  readonly value?: { readonly text: string; readonly checkbox: boolean };
+  /** A message the page must receive. */
+  readonly send?: NoteEditorInbound;
+}
 
 // More unacknowledged values than this means React stopped adopting them; resync instead.
 const MAX_LAG = 64;
+// Edits buffered while a snapshot is outstanding; past this, ask again in case it was lost.
+const RESEND_AFTER = 100;
+const requestDoc = { type: "requestDoc" } as const;
 
 /**
  * React Native's copy of the editor text. The page numbers its edits within a generation, so a
@@ -19,6 +25,8 @@ export class NoteEditorBridge {
   private generation = 0;
   private seq = 0;
   private awaitingDoc = false;
+  /** Edits that arrived while a snapshot was outstanding; newer ones replay on top of it. */
+  private buffered: EditorChange[] = [];
   /** Values handed to React that it may not have rendered yet. */
   private reported: string[] = [];
 
@@ -42,33 +50,56 @@ export class NoteEditorBridge {
     this.known = value;
     this.reported = [];
     this.awaitingDoc = false;
+    this.buffered = [];
     return { type: "setDoc", generation: this.generation, doc: value };
   }
 
   receive(message: EditorReport): NoteEditorReceipt {
-    if (message.generation !== this.generation) return { kind: "ignore" };
-    if (message.type === "doc") {
-      this.awaitingDoc = false;
-      this.seq = message.seq;
-      return this.accept(message.doc, false);
+    if (message.generation !== this.generation) return {};
+    if (message.type === "doc") return this.snapshot(message.doc, message.seq);
+    if (this.awaitingDoc) {
+      this.buffered.push(message);
+      return this.buffered.length % RESEND_AFTER === 0 ? { send: requestDoc } : {};
     }
-    if (this.awaitingDoc) return { kind: "ignore" };
-    const next =
-      message.seq === this.seq + 1
-        ? applyNoteEditorChanges(this.known, message.changes, message.length)
-        : null;
-    if (next === null) {
-      this.awaitingDoc = true;
-      return { kind: "send", message: { type: "requestDoc" } };
-    }
-    this.seq = message.seq;
+    const next = this.apply(message);
+    if (next === null) return this.resync();
     return this.accept(next, message.checkbox);
   }
 
-  private accept(value: string, checkbox: boolean): NoteEditorReceipt {
-    this.known = value;
-    this.reported.push(value);
+  private snapshot(doc: string, seq: number): NoteEditorReceipt {
+    if (!this.awaitingDoc) return {};
+    this.awaitingDoc = false;
+    this.known = doc;
+    this.seq = seq;
+    let checkbox = false;
+    const newer = this.buffered.filter((change) => change.seq > seq).sort((a, b) => a.seq - b.seq);
+    this.buffered = [];
+    for (const change of newer) {
+      const next = this.apply(change);
+      if (next === null) return { ...this.accept(this.known, false), ...this.resync() };
+      this.known = next;
+      checkbox ||= change.checkbox;
+    }
+    return this.accept(this.known, checkbox);
+  }
+
+  private apply(change: EditorChange) {
+    if (change.seq !== this.seq + 1) return null;
+    const next = applyNoteEditorChanges(this.known, change.changes, change.length);
+    if (next !== null) this.seq = change.seq;
+    return next;
+  }
+
+  private resync(): NoteEditorReceipt {
+    this.awaitingDoc = true;
+    this.buffered = [];
+    return { send: requestDoc };
+  }
+
+  private accept(text: string, checkbox: boolean): NoteEditorReceipt {
+    this.known = text;
+    this.reported.push(text);
     if (this.reported.length > MAX_LAG) this.reported.shift();
-    return { kind: "value", value, checkbox };
+    return { value: { text, checkbox } };
   }
 }

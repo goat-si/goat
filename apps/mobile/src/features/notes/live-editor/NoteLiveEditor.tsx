@@ -100,7 +100,11 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
           uri={uri}
           {...props}
           // The OS can end a WebView's process under memory pressure; start a fresh page.
-          onTerminated={() => setAttempt((value) => value + 1)}
+          onTerminated={() => {
+            // The fresh page starts unfocused; the screen must not keep editing chrome for it.
+            props.onFocusChange(false);
+            setAttempt((value) => value + 1);
+          }}
         />
       ) : (
         <View className="flex-1 items-center justify-center">
@@ -181,8 +185,8 @@ function NoteEditorPage({
       case "change":
       case "doc": {
         const receipt = bridge.receive(message);
-        if (receipt.kind === "send") send(receipt.message);
-        else if (receipt.kind === "value") props.onChange(receipt.value, receipt.checkbox);
+        if (receipt.value) props.onChange(receipt.value.text, receipt.value.checkbox);
+        if (receipt.send) send(receipt.send);
         return;
       }
       case "focus":

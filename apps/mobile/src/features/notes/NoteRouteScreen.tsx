@@ -24,6 +24,7 @@ import {
 } from "./live-editor/NoteLiveEditor";
 import { NoteEditorToolbar } from "./live-editor/NoteEditorToolbar";
 import { noteEditorSupport } from "./live-editor/note-editor-support";
+import type { NoteLineBreak } from "./live-editor/note-editor-protocol";
 import { noteSyncLabel, noteSyncState } from "./notes-model";
 import { notesRpc } from "./rpc/notes";
 import { noteConflictCurrent } from "./rpc/delivery";
@@ -135,25 +136,15 @@ function NoteContent(props: NoteParams) {
     };
   }, [environmentId, props.path]);
   useEffect(() => {
-    if (!restored || !connected || row || saving || (props.create && !latest)) return;
-    // While text is being edited, a read only refreshes the base of this phone's own last save.
-    const baseOnly = editing || dirty;
-    if (baseOnly && savedSnapshot.current === null) return;
+    if (!restored || !connected || row || editing || saving || dirty || (props.create && !latest))
+      return;
     let active = true;
     const epoch = readEpoch.current;
     void read({ environmentId: readRequest.environmentId, input: readRequest.input }).then(
       (result) => {
         if (!active || epoch !== readEpoch.current) return;
         if (AsyncResult.isSuccess(result)) {
-          const saved = savedSnapshot.current;
           savedSnapshot.current = null;
-          if (baseOnly) {
-            if (saved?.body === result.value.body && saved.status === result.value.status) {
-              setNote(result.value);
-              editBase.current = result.value.revision;
-            }
-            return;
-          }
           setHasSnapshot(true);
           setNote(result.value);
           setBody(result.value.body);
@@ -184,6 +175,20 @@ function NoteContent(props: NoteParams) {
 
   const save = async (nextBody: string, nextStatus: NoteStatus) => {
     if (!canWrite || deletingRef.current) return;
+    // A focused editor skips the read after an acknowledged save, so take the base from the
+    // outbox's copy of what the hub stored, when it is exactly this phone's last save.
+    const saved = savedSnapshot.current;
+    const acknowledged = notesOutbox.acknowledged(environmentId, props.path);
+    const queued = notesOutbox
+      .getSnapshot()
+      .some((entry) => entry.environmentId === environmentId && entry.path === props.path);
+    if (
+      !queued &&
+      saved &&
+      acknowledged?.body === saved.body &&
+      acknowledged.status === saved.status
+    )
+      editBase.current = acknowledged.revision;
     setSaving(true);
     pendingSaves.current++;
     setBody(nextBody);
@@ -269,11 +274,17 @@ function NoteContent(props: NoteParams) {
     setEditing(true);
   };
   const support = noteEditorSupport(body);
+  const liveEditing = editing && surface === "live";
+  // An editing session keeps its line break, so deleting the last CRLF does not remount it.
+  const [liveBreak, setLiveBreak] = useState<NoteLineBreak>(
+    support.kind === "live" ? support.lineBreak : "\n",
+  );
+  if (!liveEditing && support.kind === "live" && support.lineBreak !== liveBreak)
+    setLiveBreak(support.lineBreak);
   const live =
     bodyAvailable &&
-    support.kind === "live" &&
     liveUnavailable === null &&
-    !(editing && surface === "source");
+    (liveEditing || (support.kind === "live" && !(editing && surface === "source")));
   const sourceReason = liveUnavailable ?? (support.kind === "source" ? support.reason : null);
   const canEditBody = canWrite && row?.state !== "conflict";
   const syncText = saving
@@ -474,10 +485,10 @@ function NoteContent(props: NoteParams) {
             </NativeScrollView>
           )}
           <NoteLiveEditor
-            key={support.kind === "live" ? support.lineBreak : "source"}
+            key={liveBreak}
             ref={liveEditor}
             value={body}
-            lineBreak={support.kind === "live" ? support.lineBreak : "\n"}
+            lineBreak={liveBreak}
             autoFocus={props.create}
             config={{ editable: canEditBody, readOnly: busy || !restored, theme: editorTheme }}
             onChange={(next, checkbox) => {

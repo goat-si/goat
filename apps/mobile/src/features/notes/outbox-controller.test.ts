@@ -74,6 +74,27 @@ describe("durable notes delivery", () => {
         expect(controller.getSnapshot()).toEqual([]);
       }),
   );
+  it.effect(
+    "remembers the hub document of the save that emptied a row, for the next edit's base",
+    () =>
+      Effect.gen(function* () {
+        const controller = createNotesOutboxController(memoryStorage().storage);
+        yield* Effect.promise(() => controller.enqueue(edit));
+        expect(controller.acknowledged("hub", "note.md")).toBeUndefined();
+        yield* Effect.promise(() =>
+          controller.flush(
+            "hub",
+            async (input) => ({ type: "saved", note: document(input.body, "c".repeat(64)) }),
+            () => true,
+          ),
+        );
+        expect(controller.getSnapshot()).toEqual([]);
+        expect(controller.acknowledged("hub", "note.md")).toMatchObject({
+          body: "mine",
+          revision: "c".repeat(64),
+        });
+      }),
+  );
   it.effect("does not send or publish an edit whose durable write failed", () =>
     Effect.gen(function* () {
       const memory = memoryStorage();

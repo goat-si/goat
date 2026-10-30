@@ -28,6 +28,7 @@ const { mocks, Children } = vi.hoisted(() => ({
     live: false,
     liveNext: "",
     liveCheckbox: false,
+    acknowledged: undefined as ReturnType<typeof noteDocument> | undefined,
   },
 }));
 vi.mock("react-native", () => ({
@@ -49,11 +50,16 @@ vi.mock("./live-editor/NoteLiveEditor", () => ({
   useNoteEditorTheme: () => ({}),
   NoteLiveEditor: (props: {
     value: string;
+    lineBreak: string;
     config: { editable: boolean; readOnly: boolean };
     onChange: (value: string, checkbox: boolean) => void;
     onFocusChange: (focused: boolean) => void;
   }) => (
-    <div data-testid="live-editor" data-readonly={String(props.config.readOnly)}>
+    <div
+      data-testid="live-editor"
+      data-readonly={String(props.config.readOnly)}
+      data-linebreak={props.lineBreak}
+    >
       <output>{props.value}</output>
       <button onClick={() => props.onFocusChange(true)}>Focus live editor</button>
       <button onClick={() => props.onFocusChange(false)}>Blur live editor</button>
@@ -158,6 +164,7 @@ vi.mock("./notes-state", () => ({
     getSnapshot: () => mocks.rows,
     enqueue: mocks.enqueue,
     error: () => undefined,
+    acknowledged: () => mocks.acknowledged,
   },
 }));
 
@@ -198,6 +205,7 @@ beforeEach(() => {
   mocks.live = false;
   mocks.liveNext = "";
   mocks.liveCheckbox = false;
+  mocks.acknowledged = undefined;
   mocks.read.mockReset().mockResolvedValue(AsyncResult.success(noteDocument()));
   mocks.remove.mockReset().mockResolvedValue(AsyncResult.success({ path: "note.md" }));
   mocks.alert.mockReset();
@@ -537,7 +545,7 @@ describe("live note editor", () => {
     expect(button("Delete note").disabled).toBe(false);
   });
 
-  it("bases a second save on the hub revision of the first one while the editor keeps focus", async () => {
+  it("bases a second save on the hub revision of the first, without waiting for a read", async () => {
     await live("v0\n");
     act(() => button("Focus live editor").click());
     mocks.liveNext = "v1\n";
@@ -546,7 +554,9 @@ describe("live note editor", () => {
     expect(mocks.enqueue).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "v1\n", baseRevision: "a".repeat(64) }),
     );
-    mocks.read.mockResolvedValue(AsyncResult.success(noteDocument("v1\n", "c".repeat(64))));
+    // The flush acknowledged the save and emptied the row; no read has run.
+    mocks.read.mockReturnValue(new Promise(() => {}));
+    mocks.acknowledged = noteDocument("v1\n", "c".repeat(64));
     await act(async () => {
       mocks.connected = true;
       mocks.rows = [];
@@ -554,32 +564,40 @@ describe("live note editor", () => {
     });
     mocks.liveNext = "v2\n";
     act(() => button("Live edit").click());
-    expect(editor()?.textContent).toContain("v2");
     await act(async () => button("Save on phone").click());
     expect(mocks.enqueue).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "v2\n", baseRevision: "c".repeat(64) }),
     );
   });
 
-  it("keeps the base when the hub holds someone else's text after this phone's save", async () => {
+  it("keeps its base when the acknowledged copy is not this phone's last save", async () => {
     await live("v0\n");
     act(() => button("Focus live editor").click());
     mocks.liveNext = "v1\n";
     act(() => button("Live edit").click());
     await act(async () => button("Save on phone").click());
-    mocks.read.mockResolvedValue(AsyncResult.success(noteDocument("theirs\n", "c".repeat(64))));
+    mocks.acknowledged = noteDocument("older\n", "c".repeat(64));
     await act(async () => {
-      mocks.connected = true;
       mocks.rows = [];
       render();
     });
-    expect(editor()?.textContent).toContain("v1");
     mocks.liveNext = "v2\n";
     act(() => button("Live edit").click());
     await act(async () => button("Save on phone").click());
     expect(mocks.enqueue).toHaveBeenLastCalledWith(
       expect.objectContaining({ body: "v2\n", baseRevision: "a".repeat(64) }),
     );
+  });
+
+  it("keeps the editor mounted when the last Windows line break is deleted", async () => {
+    await live("a\r\nb");
+    expect(editor()?.getAttribute("data-linebreak")).toBe("\r\n");
+    const mounted = editor();
+    act(() => button("Focus live editor").click());
+    mocks.liveNext = "ab";
+    act(() => button("Live edit").click());
+    expect(editor()).toBe(mounted);
+    expect(editor()?.getAttribute("data-linebreak")).toBe("\r\n");
   });
 
   it("keeps edits that arrive while a save is being written as unsaved", async () => {

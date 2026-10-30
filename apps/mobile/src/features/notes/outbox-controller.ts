@@ -33,6 +33,8 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
   const errors = new Map<string, string>();
   const changedDuringFlush = new Set<string>();
   const requestedDuringFlush = new Map<string, number>();
+  // The hub's copy of each note whose last edit was acknowledged and left the outbox.
+  const acknowledged = new Map<string, NoteDocument>();
   const emit = () => {
     for (const listener of listeners) listener();
   };
@@ -77,6 +79,9 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
       };
     },
     error: (environmentId: string) => errors.get(environmentId),
+    /** The hub document from the save that emptied this note's outbox row, if any. */
+    acknowledged: (environmentId: string, path: string) =>
+      acknowledged.get(noteOutboxKey(environmentId, path)),
     async enqueue(edit: NoteEdit) {
       await restore();
       await serialize(async () => {
@@ -172,12 +177,16 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
           await serialize(async () => {
             const row = find(environmentId, sent.path);
             if (!row) return;
-            if (delivery.type === "saved")
-              await replace(
+            if (delivery.type === "saved") {
+              const next = acknowledgeNote(
                 row,
-                acknowledgeNote(row, sent.inFlight!.localUpdatedAt, delivery.note.revision),
+                sent.inFlight!.localUpdatedAt,
+                delivery.note.revision,
               );
-            else if (delivery.type === "conflict")
+              if (!next)
+                acknowledged.set(noteOutboxKey(row.environmentId, row.path), delivery.note);
+              await replace(row, next);
+            } else if (delivery.type === "conflict")
               await replace(row, conflictNote(row, delivery.current));
             else {
               errors.set(environmentId, delivery.message);

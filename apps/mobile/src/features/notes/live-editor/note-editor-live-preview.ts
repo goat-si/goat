@@ -1,5 +1,5 @@
 import { syntaxTree } from "@codemirror/language";
-import type { EditorState, Range, Text } from "@codemirror/state";
+import type { EditorState, Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -8,16 +8,17 @@ import {
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
-import type { SyntaxNodeRef } from "@lezer/common";
+import type { SyntaxNodeRef, Tree } from "@lezer/common";
 import { noteLinkDefinitions, normalizeLinkLabel } from "./note-editor-links";
 import { toggleTaskAt } from "./note-editor-state";
 
-const definitionsByDoc = new WeakMap<Text, ReadonlyMap<string, string>>();
-function linkDefinitions(doc: Text) {
-  let definitions = definitionsByDoc.get(doc);
+const definitionsByTree = new WeakMap<Tree, ReadonlyMap<string, string>>();
+function linkDefinitions(state: EditorState) {
+  const tree = syntaxTree(state);
+  let definitions = definitionsByTree.get(tree);
   if (!definitions) {
-    definitions = noteLinkDefinitions(doc.toString());
-    definitionsByDoc.set(doc, definitions);
+    definitions = noteLinkDefinitions(tree, (from, to) => state.doc.sliceString(from, to));
+    definitionsByTree.set(tree, definitions);
   }
   return definitions;
 }
@@ -183,7 +184,7 @@ function buildDecorations(view: EditorView): DecorationSet {
           const named = label ? doc.sliceString(label.from + 1, label.to - 1) : "";
           const href = text.startsWith("^")
             ? undefined
-            : linkDefinitions(doc).get(normalizeLinkLabel(named || text));
+            : linkDefinitions(state).get(normalizeLinkLabel(named || text));
           if (href) {
             replace(open.from, open.to);
             replace(close.from, node.to);
