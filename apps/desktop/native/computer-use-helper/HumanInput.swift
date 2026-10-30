@@ -31,6 +31,12 @@ enum PointerTap {
   }
 }
 
+enum EscapeTap {
+  static func shouldStop(type: CGEventType, keyCode: Int64, userData: Int64, active: Bool) -> Bool {
+    active && type == .keyDown && keyCode == 53 && !PointerTap.isDriverOwned(userData: userData)
+  }
+}
+
 /// One kind's poll of its newest event, kept free of the system so it can be tested. The system
 /// keeps only each kind's newest event, so a poll reports at most one; two events of a kind within
 /// one interval show as the later one. The interval is short so that hardly happens between a
@@ -63,6 +69,9 @@ struct PolledKind {
 final class InputActivity {
   private static let keyboard: [CGEventType] = [.keyDown, .flagsChanged]
   private let report: (String, Double) -> Void
+  private let onEscape: () -> Void
+  private let isActive: () -> Bool
+  private(set) var escapeAvailable = false
   private let queue = DispatchQueue(label: "si.goat.computer-use.input")
   private var tap: CFMachPort?
   private var timer: DispatchSourceTimer?
@@ -71,8 +80,14 @@ final class InputActivity {
   private var tapLoop: CFRunLoop?
 
   /// `at` is on `InputActivity.now()`'s clock, so a later writer can say how long ago it was.
-  init(report: @escaping (_ source: String, _ at: Double) -> Void) {
+  init(
+    report: @escaping (_ source: String, _ at: Double) -> Void,
+    isActive: @escaping () -> Bool = { false },
+    onEscape: @escaping () -> Void = {}
+  ) {
     self.report = report
+    self.isActive = isActive
+    self.onEscape = onEscape
   }
 
   /// Seconds on a clock that never steps back with the wall clock.
@@ -102,7 +117,9 @@ final class InputActivity {
   // MARK: Pointer tap
 
   private func startTap() -> Bool {
-    let mask = PointerTap.types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+    let pointerMask = PointerTap.types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+    let keyboardAllowed = CGPreflightListenEventAccess()
+    let mask = pointerMask | (keyboardAllowed ? (CGEventMask(1) << CGEventType.keyDown.rawValue) : 0)
     guard
       let tap = CGEvent.tapCreate(
         tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .listenOnly,
@@ -113,14 +130,16 @@ final class InputActivity {
           // kept or sent.
           if let info {
             let userData = event.getIntegerValueField(.eventSourceUserData)
+            let keyCode = type == .keyDown ? event.getIntegerValueField(.keyboardEventKeycode) : -1
             Unmanaged<InputActivity>.fromOpaque(info).takeUnretainedValue()
-              .received(type, userData: userData)
+              .received(type, userData: userData, keyCode: keyCode)
           }
           return Unmanaged.passUnretained(event)
         },
         userInfo: Unmanaged.passUnretained(self).toOpaque())
     else { return false }
     self.tap = tap
+    escapeAvailable = keyboardAllowed
     let thread = Thread {
       let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
       CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
@@ -138,7 +157,7 @@ final class InputActivity {
   }
 
   /// On the tap's thread, as each event arrives, with its type and driver tag only.
-  private func received(_ type: CGEventType, userData: Int64 = 0) {
+  private func received(_ type: CGEventType, userData: Int64 = 0, keyCode: Int64 = -1) {
     // The system turns off a tap it judges slow or during secure input; listening goes on.
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
       if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -147,6 +166,9 @@ final class InputActivity {
     let at = Self.now()
     queue.async { [self] in
       guard !stopped else { return }
+      if EscapeTap.shouldStop(type: type, keyCode: keyCode, userData: userData, active: isActive()) {
+        onEscape()
+      }
       if let at = PointerTap.report(type, userData: userData, at: at) { report("pointer", at) }
     }
   }

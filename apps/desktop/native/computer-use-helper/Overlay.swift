@@ -334,12 +334,16 @@ final class OverlayChannel: SessionOverlay {
     var on: Int32 = 1
     setsockopt(channel, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
     // A person's input is dated as it is written: time spent queued must not make it look newer.
-    let input = InputActivity { [weak self] source, at in
+    let input = InputActivity(report: { [weak self] source, at in
       self?.write {
         let ageMs = max(0, Int(((InputActivity.now() - at) * 1000).rounded()))
         return "{\"humanInput\":{\"source\":\"\(source)\",\"ageMs\":\(ageMs)}}\n"
       }
-    }
+    }, isActive: { [weak self] in
+      self.map { !$0.isEnded } ?? false
+    }, onEscape: { [weak self] in
+      self?.write { "{\"personStop\":\"person_esc\"}\n" }
+    })
     self.input = input
     input.start()
     let overlay = self.overlay
