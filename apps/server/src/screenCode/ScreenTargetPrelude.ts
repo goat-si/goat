@@ -167,6 +167,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
     const args = { ...withRegion, targetRef: ref };
+    if (method === 'tab_evaluate') return __call(method, args);
     if (__inputs.has(method)) return __reply(method, [args]).then((reply) => done(reply, args));
     return __call(method, args).then((value) => {
       if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
