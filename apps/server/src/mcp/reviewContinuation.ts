@@ -155,7 +155,11 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
     yield* serialize(
       commandId,
       Effect.gen(function* () {
-        const existing = parent.subagents.find((task) => task.id === taskId);
+        // Read under the lock: a call that just committed this id is visible only now.
+        const { subagents } = yield* threadManagement
+          .getThreadRecords(parent.thread.id, ["subagents"])
+          .pipe(Effect.mapError(deps.threadManagementFailure));
+        const existing = subagents.find((task) => task.id === taskId);
         if (existing !== undefined) {
           if (existing.continuedFrom !== input.continueFrom)
             return yield* failure(
@@ -167,7 +171,7 @@ export const makeContinueReviewTask = (deps: ContinueReviewDeps) => {
             yield* permissions.complete(commandId, existing.childThreadId);
           return;
         }
-        const earlier = parent.subagents.find(
+        const earlier = subagents.find(
           (task) =>
             task.id === input.continueFrom &&
             task.origin === "app_owned" &&
