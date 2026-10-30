@@ -304,6 +304,14 @@ const CURSOR_AGENT_SETTING_SOURCES = [
   "plugins",
 ] as const satisfies ReadonlyArray<SettingSource>;
 
+/**
+ * Cursor can drop its `task` tool but has no concurrency cap, so a goatclaw limit of zero
+ * switches native subagents off and any other limit leaves them uncapped.
+ */
+const cursorSubagentsDisabled = (
+  mcpSession: McpProviderSession.McpProviderSessionConfig | undefined,
+) => mcpSession?.nativeSubagentLimit === 0;
+
 export function makeCursorAgentOptions(input: {
   readonly apiKey?: string;
   readonly modelSelection: ModelSelection;
@@ -319,6 +327,7 @@ export function makeCursorAgentOptions(input: {
     name: `GOAT ${input.threadId}`,
     mode: input.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
     ...(input.apiKey === undefined ? {} : { apiKey: input.apiKey }),
+    ...(cursorSubagentsDisabled(input.mcpSession) ? { disallowedTools: ["task"] } : {}),
     local: {
       ...(input.runtimePolicy.cwd === null ? {} : { cwd: input.runtimePolicy.cwd }),
       autoReview: policy.autoReview,
@@ -867,6 +876,7 @@ interface CursorLiveAgent {
   readonly mcpEndpoint: string | undefined;
   /** The Cua Driver the agent was opened with (`cuaDriverKey`); empty when none. */
   readonly cuaDriverKey: string;
+  readonly subagentsDisabled: boolean;
   readonly nativeThreadId: string;
   readonly session: CursorAgentSdk.CursorAgentSdkSession;
 }
@@ -2151,7 +2161,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             existing.mcpAuthorization === mcpSession?.authorizationHeader &&
             existing.mcpEndpoint === mcpSession?.endpoint &&
             // Servers are fixed when the agent opens; computer use changes reopen it.
-            existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver)
+            existing.cuaDriverKey === McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver) &&
+            existing.subagentsDisabled === cursorSubagentsDisabled(mcpSession)
           ) {
             return existing;
           }
@@ -2195,6 +2206,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             mcpAuthorization: mcpSession?.authorizationHeader,
             mcpEndpoint: mcpSession?.endpoint,
             cuaDriverKey: McpProviderSession.cuaDriverKey(mcpSession?.cuaDriver),
+            subagentsDisabled: cursorSubagentsDisabled(mcpSession),
           } satisfies CursorLiveAgent;
           yield* Ref.set(liveAgent, next);
           return next;

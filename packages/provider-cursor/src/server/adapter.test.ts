@@ -953,12 +953,30 @@ describe("CursorAdapterV2", () => {
         );
         assert.equal(sentMessages[12 + offset]!.includes("<computer_use>"), offset === 0);
       }
+      // A goatclaw limit of zero removes Cursor's subagent tool; Cursor has no concurrency cap, so
+      // any other limit leaves it in place. Exclusions are fixed at open, so a change reopens.
+      for (const [offset, nativeSubagentLimit] of [0, 2, 3].entries()) {
+        yield* sessions.set({ ...authorizationConfig, nativeSubagentLimit });
+        yield* runtime.startTurn({
+          ...ordinaryInput,
+          runtimePolicy: movedPolicy,
+          runOrdinal: 15 + offset,
+          providerTurnOrdinal: 15 + offset,
+        });
+        yield* runtime.events.pipe(
+          Stream.filter((event) => event.type === "turn.terminal"),
+          Stream.runHead,
+        );
+      }
+      assert.equal(opens.length, 10);
+      assert.deepEqual(opens[8]!.options.disallowedTools, ["task"]);
+      assert.equal(opens[9]!.options.disallowedTools, undefined);
       memory = { ...snapshot, renderedText: snapshot.renderedText.replace("data", "tampered") };
       const failed = yield* runtime
         .startTurn({ ...ordinaryInput, runOrdinal: 4, providerTurnOrdinal: 4 })
         .pipe(Effect.exit);
       assert.isTrue(Exit.isFailure(failed));
-      assert.equal(sentMessages.length, 14);
+      assert.equal(sentMessages.length, 17);
     }).pipe(
       Effect.scoped,
       Effect.provide(
