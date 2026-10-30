@@ -83,6 +83,7 @@ export const AgentCursorEvent = Schema.Union([
 export type AgentCursorEvent = typeof AgentCursorEvent.Type;
 
 export const ComputerUseOverlayCommand = Schema.Union([
+  Schema.Struct({ op: Schema.Literal("status"), message: Schema.Literal("screen locked") }),
   Schema.Struct({
     op: Schema.Literal("show"),
     identity: AgentCursorOwner,

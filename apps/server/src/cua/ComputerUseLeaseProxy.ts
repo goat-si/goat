@@ -369,7 +369,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         }
       }
       const screenLocked = message !== undefined && driverScreenLocked(message);
-      if (screenLocked) screenLockPending = true;
+      if (screenLocked) {
+        screenLockPending = true;
+        yield* overlay.screenLocked();
+      }
       if (delivered === line) delivered = options.screenshots?.scrub(line) ?? line;
       yield* sink.answer(admitDriverReplyScreenshots(delivered), "settled", { tool });
       if (screenLocked) {

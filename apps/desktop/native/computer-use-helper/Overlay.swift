@@ -169,6 +169,10 @@ final class AgentOverlay {
 
   /// One command from the proxy: {op:"show", windowId, point?:{fx,fy}, phase} or {op:"hide"}.
   func apply(_ command: [String: Any]) {
+    if command["op"] as? String == "status", command["message"] as? String == "screen locked" {
+      if panel.isVisible { view.statusText = "screen locked" }
+      return
+    }
     guard command["op"] as? String == "show", let windowId = command["windowId"] as? Int else {
       return hide()
     }
