@@ -35,13 +35,12 @@ export const applyPatch = Effect.fn("ComputerUseSettings.applyPatch")(function* 
 ) {
   const result = yield* patch.enableCua === undefined
     ? update
-    : handoffs
-        .withComputerUseToggle(patch.enableCua, update)
-        .pipe(
-          Effect.catchTag("HandoffError", (cause) =>
+    : handoffs.withComputerUseToggle(patch.enableCua, update).pipe(
+        Effect.catchTags({
+          HandoffError: (cause) =>
             Effect.fail(new ServerSettingsError({ settingsPath, operation: "normalize", cause })),
-          ),
-        );
+        }),
+      );
   if (patch.cuaAllowedApps !== undefined)
     yield* handoffs
       .revalidateComputerUse()
