@@ -1,8 +1,9 @@
 import { driverCallCapMs } from "./ComputerUseCallCaps.ts";
 /**
- * A server call its driver leaves unanswered past the call's deadline: the server already failed
- * it and later calls would queue behind the stuck child, so the child is replaced. The cut-off
- * answers what it held and releases its reservations; the next call reaches a fresh driver.
+ * A server call its driver leaves unanswered: the server fails it at its deadline, but the child
+ * is replaced only once the call is stuck, since a loaded host keeps a live driver slow, or once
+ * its cell ended without it so the next cell does not queue behind it. The cut-off answers what
+ * it held and releases its reservations; the next call reaches a fresh driver.
  */
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -16,6 +17,8 @@ import { driverBoolArg, driverIntegerArg } from "./ComputerUseCallCaps.ts";
 
 /** Lets a reply already on its way land before the child is judged stuck. */
 const UNANSWERED_GRACE_MS = 1_000;
+/** No call is judged stuck sooner: under load a 3 s click has run several times its cap. */
+const STUCK_FLOOR_MS = 20_000;
 
 const DRIVER_UNANSWERED: Interruption = {
   _tag: "other",
@@ -114,6 +117,9 @@ const headExecutionBoundMs = (tool: string, args: unknown): number => {
   return Math.max(EXTRA_HEAD_BOUNDS_MS[tool] ?? 0, driverCallCapMs(tool, args));
 };
 
+const stuckAfterMs = (tool: string | undefined, args: unknown) =>
+  Math.max(STUCK_FLOOR_MS, headExecutionBoundMs(tool ?? "", args));
+
 const replyKey = (line: string): string | undefined => {
   try {
     const parsed = JSON.parse(line) as { id?: unknown; method?: unknown };
@@ -136,6 +142,7 @@ export const makeUnansweredWatch = <E>(
         readonly tool?: string | undefined;
         readonly args?: unknown;
         readonly sentAt?: number | undefined;
+        readonly primitiveRequestId?: string | undefined;
       }
     >;
     readonly lifecycle: { readonly current: { readonly connectionId: string } | undefined };
@@ -162,6 +169,8 @@ export const makeUnansweredWatch = <E>(
     { readonly connectionId: string; readonly blocking: object; readonly target: object }
   >();
   let settled = Deferred.makeUnsafe<void>();
+  // Primitive calls whose cell ended without their answer: nobody waits for them any more.
+  const abandoned = new Set<string>();
   const wake = () => {
     Deferred.doneUnsafe(settled, Effect.void);
     settled = Deferred.makeUnsafe<void>();
@@ -251,6 +260,27 @@ export const makeUnansweredWatch = <E>(
       return replaceUnder(DRIVER_UNANSWERED, blockingCall.connectionId, isDue);
     });
   return {
+    /**
+     * Follows the server's cancellations of primitive calls: a call the driver already has that
+     * its cell gave up on holds the driver only until its own deadline.
+     */
+    followCancels: (
+      subscribe: ((listener: (requestId: string) => void) => () => void) | undefined,
+    ) =>
+      subscribe === undefined
+        ? Effect.void
+        : Effect.acquireRelease(
+            Effect.sync(() =>
+              subscribe((requestId) => {
+                for (const [key, call] of proxy.outstanding)
+                  if (call.primitiveRequestId === requestId && !replied.has(call)) {
+                    abandoned.add(key);
+                    wake();
+                  }
+              }),
+            ),
+            (unsubscribe) => Effect.sync(unsubscribe),
+          ).pipe(Effect.asVoid),
     /** Whether a call may not go to this chain now: it is closing, or has an overdue call. */
     blocks: (connectionId: string) => fenced === connectionId || hasOverdue(connectionId),
     fenceTarget: (reason: "private" | "takeover", connectionId: string) => {
@@ -305,12 +335,11 @@ export const makeUnansweredWatch = <E>(
     // Every primitive call forks one watch; untraced to avoid a span per background timer.
     watch: Effect.fnUntraced(
       function* (key: string, deadlineMillis: number) {
-        const started = yield* Clock.currentTimeMillis;
-        const budgetMs = Math.max(0, deadlineMillis - started);
         const target = proxy.outstanding.get(key);
         if (!target) return;
-        // Wait only while the currently blocking call at the head of the pipe is within its own
-        // cap; if that head call remains unanswered through its grace window, replace immediately.
+        // Wait only while the call at the head of the pipe may still be running; if it stays
+        // unanswered through its grace window, replace immediately.
+        let since = yield* Clock.currentTimeMillis;
         for (;;) {
           const woken = Deferred.await(settled);
           const now = yield* Clock.currentTimeMillis;
@@ -322,9 +351,13 @@ export const makeUnansweredWatch = <E>(
           )
             return;
           const head = currentHead(call.connectionId, now);
-          if (!head || head.call === target) break;
-          const headDeadline =
-            head.since + headExecutionBoundMs(head.call.tool ?? "", head.call.args);
+          if (!head || head.call === target) {
+            since = head?.since ?? now;
+            break;
+          }
+          // A call its cell gave up on waits behind the head only until its own deadline.
+          const stuck = head.since + stuckAfterMs(head.call.tool, head.call.args);
+          const headDeadline = abandoned.has(key) ? Math.min(stuck, deadlineMillis) : stuck;
           if (now < headDeadline) {
             const step = yield* woken.pipe(Effect.timeoutOption(headDeadline - now));
             if (Option.isSome(step)) continue;
@@ -375,7 +408,16 @@ export const makeUnansweredWatch = <E>(
           proxy.lifecycle.current?.connectionId !== activeCall.connectionId
         )
           return;
-        yield* Effect.sleep(budgetMs);
+        for (;;) {
+          const woken = Deferred.await(settled);
+          const now = yield* Clock.currentTimeMillis;
+          if (proxy.outstanding.get(key) !== target || replied.has(target)) return;
+          const stuckAt = abandoned.has(key)
+            ? deadlineMillis
+            : Math.max(deadlineMillis, since + stuckAfterMs(target.tool, target.args));
+          if (now >= stuckAt) break;
+          yield* woken.pipe(Effect.timeoutOption(stuckAt - now));
+        }
         const call = proxy.outstanding.get(key);
         if (call === target && !replied.has(target))
           overdue.set(key, {
@@ -388,7 +430,12 @@ export const makeUnansweredWatch = <E>(
       },
       (effect, key) =>
         effect.pipe(
-          Effect.ensuring(Effect.sync(() => settle(key))),
+          Effect.ensuring(
+            Effect.sync(() => {
+              abandoned.delete(key);
+              settle(key);
+            }),
+          ),
           Effect.forkIn(proxy.scope),
           Effect.asVoid,
         ),

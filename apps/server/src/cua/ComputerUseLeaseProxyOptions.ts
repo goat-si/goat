@@ -23,12 +23,15 @@ import {
   DEFAULT_SCREEN_RUN_LIMITS,
 } from "@goat/contracts";
 import type * as DateTime from "effect/DateTime";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import type { AgentInputReport } from "./agentInputReports.ts";
-import type { JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { SCREEN_CALL_EXPIRED } from "./ComputerUseLeaseMessages.ts";
+import { type JsonRpcId, refusal } from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
@@ -55,6 +58,8 @@ export interface OutstandingCall {
   readonly reservationId?: string;
   readonly connectionId: string;
   readonly sentAt?: number;
+  /** The server's request id, for a call that came from a screen cell. */
+  readonly primitiveRequestId?: string;
   cancelled?: boolean;
   readonly sink: ReplySink;
 }
@@ -171,7 +176,15 @@ export const primitiveReplySink = (
   ),
 });
 
-export const forwardPrimitiveRequests = <E>(
+/** Screen calls whose line reached the driver, marked in the same step that sends it. */
+export const dispatchedPrimitives = new WeakSet<ComputerUsePrimitiveRequest>();
+
+/**
+ * Runs screen calls one at a time in arrival order. One held up (a slow reservation, a held
+ * chain) must not leave those behind it silent: each still unsent at its own deadline is answered
+ * then as never sent, so the cell does not take it for a call the driver may be running.
+ */
+export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
   requests: Stream.Stream<ComputerUsePrimitiveRequest> | undefined,
   reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
   nextId: () => string,
@@ -182,26 +195,61 @@ export const forwardPrimitiveRequests = <E>(
     request: ComputerUsePrimitiveRequest,
   ) => Effect.Effect<unknown, E>,
   onSettled?: (requestId: string) => void,
-) =>
-  requests === undefined
-    ? Effect.void
-    : requests.pipe(
-        Stream.runForEach((request) =>
-          forward(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: nextId(),
-              method: "tools/call",
-              params: { name: request.tool, arguments: request.args },
+) {
+  if (requests === undefined) return;
+  const waiting = yield* Queue.unbounded<{
+    readonly request: ComputerUsePrimitiveRequest;
+    readonly id: string;
+    readonly sink: ReplySink;
+  }>();
+  yield* Queue.take(waiting).pipe(
+    Effect.flatMap(({ request, id, sink }) =>
+      forward(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: request.tool, arguments: request.args },
+        }),
+        sink,
+        request.connectionGeneration,
+        request,
+      ).pipe(Effect.ensuring(Effect.sync(() => onSettled?.(request.requestId)))),
+    ),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+  yield* requests.pipe(
+    Stream.runForEach((request) =>
+      Effect.gen(function* () {
+        const id = nextId();
+        const first = primitiveReplySink(request, reply);
+        let answered = false;
+        const sink: ReplySink = {
+          answer: (line, status, context) =>
+            Effect.suspend(() => {
+              if (answered) return Effect.void;
+              answered = true;
+              return first.answer(line, status, context);
             }),
-            primitiveReplySink(request, reply),
-            request.connectionGeneration,
-            request,
-          ).pipe(Effect.ensuring(Effect.sync(() => onSettled?.(request.requestId)))),
-        ),
-        Effect.forkScoped,
-        Effect.asVoid,
-      );
+        };
+        yield* Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => Effect.sleep(Math.max(0, request.deadlineMillis - now))),
+          Effect.andThen(
+            Effect.suspend(() =>
+              dispatchedPrimitives.has(request)
+                ? Effect.void
+                : sink.answer(refusal(id, "tools/call", "expired", SCREEN_CALL_EXPIRED)),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        yield* Queue.offer(waiting, { request, id, sink });
+      }),
+    ),
+    Effect.forkScoped,
+  );
+});
 
 export interface LeaseProxyDriver {
   readonly send: (line: string) => Effect.Effect<void>;
@@ -242,6 +290,8 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly primitiveRequests?: Stream.Stream<ComputerUsePrimitiveRequest>;
   readonly primitiveCancelled?: (requestId: string) => boolean;
   readonly onPrimitiveSettled?: (requestId: string) => void;
+  /** Delivers each screen call the server cancelled; returns the unsubscribe. */
+  readonly subscribePrimitiveCancels?: (listener: (requestId: string) => void) => () => void;
   readonly cursorEvents?: Stream.Stream<AgentCursorLeaseUpdate>;
   readonly primitiveReply?: (reply: ComputerUsePrimitiveReply) => Effect.Effect<unknown>;
   readonly onDriverStarted?: (current: {

@@ -165,6 +165,7 @@ export const harness = Effect.fn(function* (
   const agentCalls = yield* Queue.unbounded<string>();
   const hidFeeds: Array<Effect.Success<ReturnType<typeof makeHelperInputFeed>>> = [];
   const reservations: Array<ComputerUseCallReservation> = [];
+  const cancelListeners = new Set<(requestId: string) => void>();
   const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const validationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
@@ -207,6 +208,10 @@ export const harness = Effect.fn(function* (
       ? {}
       : { primitiveCancelled: options.primitiveCancelled }),
     primitiveReply: (reply) => Queue.offer(primitiveOutput, reply).pipe(Effect.asVoid),
+    subscribePrimitiveCancels: (listener) => {
+      cancelListeners.add(listener);
+      return () => void cancelListeners.delete(listener);
+    },
     onDriverStarted: (current) => Queue.offer(driverStarted, current).pipe(Effect.asVoid),
     onDriverCutoff: (current) =>
       Queue.offer(driverCutoff, current).pipe(
@@ -386,6 +391,11 @@ export const harness = Effect.fn(function* (
     send: (line: string) => Queue.offer(input, line),
     cursor: (update: AgentCursorLeaseUpdate) => Queue.offer(cursorEvents, update),
     sendPrimitive: (request: ComputerUsePrimitiveRequest) => Queue.offer(primitiveInput, request),
+    /** The server cancels a screen call, as when its cell ends without the call's answer. */
+    cancelPrimitive: (requestId: string) =>
+      Effect.sync(() => {
+        for (const listener of cancelListeners) listener(requestId);
+      }),
     primitiveReply: Queue.take(primitiveOutput),
     driverStarted: Queue.take(driverStarted),
     driverCutoff: Queue.take(driverCutoff),

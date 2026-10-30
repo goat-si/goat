@@ -378,13 +378,10 @@ const callLayer = HttpRouter.add(
         encodeAdmission({ status: "refused", detail: "pointer_locked" }),
         { contentType: "application/json", headers: { "cache-control": "no-store" } },
       );
-    const result = yield* leases.callReservation(threadId, call.value).pipe(
-      Effect.orElseSucceed((): ComputerUseCallAdmission => ({
-        status: "refused",
-        detail: "unauthorized",
-      })),
-    );
-    return HttpServerResponse.text(encodeAdmission(result), {
+    const result = yield* leases.callReservation(threadId, call.value).pipe(Effect.option);
+    // The session is still accepted; GOAT could not read the authority that judges the call.
+    if (Option.isNone(result)) return HttpServerResponse.empty({ status: 503 });
+    return HttpServerResponse.text(encodeAdmission(result.value), {
       contentType: "application/json",
       headers: { "cache-control": "no-store" },
     });

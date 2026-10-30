@@ -43,16 +43,25 @@ interface Pending {
   readonly request: ComputerUsePrimitiveRequest;
   readonly answer: Deferred.Deferred<ComputerUsePrimitiveReply>;
   sent: boolean;
+  /** When its answer reached the server; a loaded server may resume the caller later. */
+  answeredAt?: number;
 }
 
 /** How long a call waits for a restarting driver to bind, inside its own deadline. */
 export const DRIVER_BIND_WAIT_MS = 10_000;
+/**
+ * Past a call's deadline, how long its proxy has to say it never sent it; until it does, a call
+ * the proxy took counts as one the driver may be running. Within CELL_RESERVE_MS.
+ */
+export const PROXY_ANSWER_GRACE_MS = 1_000;
 
 interface Control {
   maxAcceptedGeneration: number;
   maxCutoffGeneration: number;
   binding: { readonly connectionId: string; readonly generation: number } | undefined;
   readonly pending: Map<string, Pending>;
+  /** Calls the driver had at their deadline; their cell's end cancels them, so it replaces it. */
+  readonly abandoned: Map<string, Pending>;
 }
 
 interface Registration {
@@ -187,6 +196,7 @@ export const make = Effect.gen(function* () {
   };
   const clear = (registration: Registration, control: Control) => {
     control.binding = undefined;
+    control.abandoned.clear();
     for (const [id, pending] of control.pending) {
       control.pending.delete(id);
       cancelDelivered(registration, pending);
@@ -200,6 +210,7 @@ export const make = Effect.gen(function* () {
     wake();
     for (const control of registration.controls.values()) {
       control.binding = undefined;
+      control.abandoned.clear();
       for (const pending of control.pending.values()) {
         cancelDelivered(registration, pending);
         settle(pending);
@@ -241,6 +252,7 @@ export const make = Effect.gen(function* () {
         maxCutoffGeneration: -1,
         binding: undefined,
         pending: new Map(),
+        abandoned: new Map(),
       };
       value.controls.set(controlId, record);
     }
@@ -338,22 +350,40 @@ export const make = Effect.gen(function* () {
       record.pending.delete(request.requestId);
       return yield* Effect.fail(desktopNotReady("unbound"));
     }
+    let timedOut = false;
+    const deadlineFailure = () => ({
+      code: "deadline" as const,
+      effectStarted: pending.sent,
+      nextStep: pending.sent
+        ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
+        : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
+    });
     return yield* Deferred.await(answer).pipe(
       Effect.timeoutOrElse({
-        duration: Math.max(0, deadlineMillis - now),
-        orElse: () =>
-          Effect.fail({
-            code: "deadline" as const,
-            effectStarted: pending.sent,
-            nextStep: pending.sent
-              ? `The driver did not answer within ${seconds(deadlineMillis - now)}, so GOAT is restarting it. Observe before acting again; do not resend input.`
-              : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
-          }),
+        duration: Math.max(0, deadlineMillis - now) + PROXY_ANSWER_GRACE_MS,
+        orElse: () => {
+          timedOut = true;
+          return Effect.fail(deadlineFailure());
+        },
       }),
+      // The grace is only for the proxy to say it never sent the call; an answer the driver
+      // gave past the deadline is still a call that missed it.
+      // GOAT's own settlement (a cutoff, a cancel) records no arrival; it counts when seen.
+      Effect.flatMap((answered) =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((resumed) => ({ answered, at: pending.answeredAt ?? resumed })),
+        ),
+      ),
+      Effect.filterOrFail(
+        ({ answered, at }) => at <= deadlineMillis || answered.status === "not_started",
+        deadlineFailure,
+      ),
+      Effect.map(({ answered }) => answered),
       Effect.ensuring(
         Effect.sync(() => {
-          if (record.pending.has(request.requestId)) cancelDelivered(registered, pending);
-          record.pending.delete(request.requestId);
+          if (!record.pending.delete(request.requestId)) return;
+          if (timedOut && pending.sent) record.abandoned.set(request.requestId, pending);
+          else cancelDelivered(registered, pending);
         }),
       ),
     );
@@ -604,20 +634,24 @@ export const make = Effect.gen(function* () {
         Effect.map((now) => {
           const registered = registration(input, now);
           const record = registered?.controls.get(input.reply.controlId);
+          const answers = (original: ComputerUsePrimitiveRequest) =>
+            original.registrationId === input.reply.registrationId &&
+            original.controlId === input.reply.controlId &&
+            original.connectionGeneration === input.reply.connectionGeneration &&
+            original.runId === input.reply.runId &&
+            original.turnId === input.reply.turnId &&
+            original.callId === input.reply.callId;
+          // A late answer to a call its cell gave up on: the driver is free again.
+          const abandoned = record?.abandoned.get(input.reply.requestId);
+          if (abandoned !== undefined && record !== undefined)
+            return answers(abandoned.request) && record.abandoned.delete(input.reply.requestId);
           const pending = record?.pending.get(input.reply.requestId);
           if (pending === undefined || registered === undefined || record === undefined)
             return false;
           const original = pending.request;
-          if (
-            original.registrationId !== input.reply.registrationId ||
-            original.controlId !== input.reply.controlId ||
-            original.connectionGeneration !== input.reply.connectionGeneration ||
-            original.runId !== input.reply.runId ||
-            original.turnId !== input.reply.turnId ||
-            original.callId !== input.reply.callId
-          )
-            return false;
+          if (!answers(original)) return false;
           record.pending.delete(original.requestId);
+          pending.answeredAt = now;
           Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
           return true;
         }),
@@ -626,13 +660,19 @@ export const make = Effect.gen(function* () {
     cancel: Effect.fn("ComputerUsePrimitiveChannel.cancel")((runId, turnId) =>
       Effect.sync(() => {
         for (const value of attachments.values())
-          for (const record of value.registration?.controls.values() ?? [])
+          for (const record of value.registration?.controls.values() ?? []) {
+            for (const [id, pending] of record.abandoned)
+              if (pending.request.runId === runId && pending.request.turnId === turnId) {
+                record.abandoned.delete(id);
+                if (value.registration) cancelDelivered(value.registration, pending);
+              }
             for (const [id, pending] of record.pending)
               if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
                 if (value.registration) cancelDelivered(value.registration, pending);
                 settle(pending);
               }
+          }
       }),
     ),
   });

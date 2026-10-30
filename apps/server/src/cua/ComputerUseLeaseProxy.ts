@@ -88,6 +88,7 @@ import {
 } from "./ComputerUseLeaseResponses.ts";
 import {
   PRIMITIVE_ID,
+  dispatchedPrimitives,
   forwardPrimitiveRequests,
   type OutstandingCall,
   type ReplySink,
@@ -310,10 +311,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (admitted === undefined) return;
             delivered = admitted;
           }
-          // Every answered call updates the overlay; a display refusal counts as failed. It is
-          // drawn while the call is still outstanding, so a stop or pause that lands during
-          // the draw answers the call itself, and the check below drops this reply. A pause
-          // still hiding the overlay has not answered it yet, but will.
+          // Every answered call updates the overlay, a display refusal as failed, while the call
+          // is still outstanding: a stop or pause during the draw answers it, and the check below
+          // drops this reply.
           const failed =
             message.error !== undefined ||
             message.result?.isError === true ||
@@ -361,9 +361,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       Stream.tap(unanswered.received),
       Stream.buffer({ capacity: "unbounded" }),
       Stream.runForEach(handle),
-      // A driver that exits on its own cannot be trusted with the rest of the control. A helper
-      // restart also invalidates its route; either way this proxy stays ended (#1348), and the
-      // agent hears why instead of an approval failure (#1233).
+      // A driver that exits on its own, or a helper restart, ends this proxy for good (#1348),
+      // and the agent hears why instead of an approval failure (#1233).
       Effect.andThen(
         Effect.suspend(() =>
           lifecycle.current === current
@@ -421,13 +420,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     { lock: lifecycleLock, scope, outstanding, lifecycle },
     { active, interrupt, start, end, fenced: (cause) => void (lastInterruption = cause) },
   );
+  yield* unanswered.followCancels(options.subscribePrimitiveCancels);
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
     reason: ComputerUsePauseReason,
   ) {
     if (finished !== undefined) return;
     const wasPaused = paused !== undefined;
-    // Recorded first: a call that was drawing while this pause stopped its driver refuses
-    // with this reason.
+    // Recorded first: a call drawing while this pause stopped its driver refuses with it.
     paused = reason;
     if (!wasPaused) {
       yield* drawOverlay({ type: "pause", reason });
@@ -782,8 +781,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     }
     if (isRequest && !(yield* unanswered.hold(primitiveDeadline)))
       return yield* sink.answer(notSent(id));
-    // Paused: no driver until control comes back. The handshake is still answered (#1604), in
-    // the background so a cancel or Stop on the input reaches it; tool calls hear the pause.
+    // Paused: no driver until control comes back. The handshake is still answered in the
+    // background (#1604); tool calls hear the pause.
     if (lifecycle.current === undefined) {
       if (!isRequest || message.method === undefined) return;
       const refuse = sink.answer(
@@ -793,9 +792,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         ? handshakeAnswers.answer(id, message.method, line, refuse).pipe(Effect.forkIn(scope))
         : refuse;
     }
-    // The child this line goes to. A pause, end or replacement before the send below means the
-    // call never reached a driver, so it is refused; once sent, an interruption answers it as
-    // cut off instead (interrupt above).
+    // The child this line goes to. Replaced before the send below, the call is refused; once
+    // sent, an interruption answers it as cut off (interrupt above).
     const current = lifecycle.current;
     const stillCurrent = () =>
       lifecycle.current === current &&
@@ -942,6 +940,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const register = (sentAt: number) =>
       Effect.sync(() => {
         if (!isRequest) return;
+        if (primitive !== undefined) dispatchedPrimitives.add(primitive);
         outstanding.set(JSON.stringify(id), {
           id,
           method: message!.method!,
@@ -953,6 +952,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           sentAt,
           sink,
           ...(reservationId === undefined ? {} : { reservationId }),
+          ...(primitive === undefined ? {} : { primitiveRequestId: primitive.requestId }),
         });
       });
     const outcome = yield* sendUnlessShared(
