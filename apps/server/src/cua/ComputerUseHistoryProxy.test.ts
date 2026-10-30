@@ -14,7 +14,12 @@ it("classifies the action outcome and drops text when the field is unknown", () 
   const result = callOutcome(
     "control:a",
     action,
-    JSON.stringify({ result: { content: [], structuredContent: { effect: "confirmed" } } }),
+    JSON.stringify({
+      result: {
+        content: [],
+        structuredContent: { effect: "confirmed", hit: { role: "AXButton", label: "Save" } },
+      },
+    }),
   );
   assert.deepInclude(result, {
     type: "callOutcome",
@@ -22,6 +27,7 @@ it("classifies the action outcome and drops text when the field is unknown", () 
     tool: "type_text",
     verdict: "sent",
   });
+  assert.equal(result?.targetLabel, "AXButton: Save");
   assert.deepEqual(result?.typed, { length: 6, fieldKind: "unknown" });
   assert.deepEqual(
     callOutcome(

@@ -33,6 +33,10 @@ export function callOutcome(
     : isRecord(error.data)
       ? error.data
       : {};
+  const hit = isRecord(fields.hit) ? fields.hit : {};
+  const role = typeof hit.role === "string" ? hit.role.trim() : "";
+  const label = typeof hit.label === "string" ? hit.label.trim() : "";
+  const targetLabel = role ? (label ? `${role}: ${label}` : role).slice(0, 160) : undefined;
   const safety = driverOutcomeSafety(call.tool, message, call.args);
   const refused =
     safety.writeStatus === "not_started" ||
@@ -54,6 +58,7 @@ export function callOutcome(
     controlId,
     tool: call.tool,
     ...(call.app === undefined ? {} : { app: call.app }),
+    ...(targetLabel === undefined ? {} : { targetLabel }),
     verdict: refused
       ? "refused"
       : safety.writeStatus === "committed" && status !== "unknown_outcome"
