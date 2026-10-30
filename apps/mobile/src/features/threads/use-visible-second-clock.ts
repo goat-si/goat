@@ -10,10 +10,14 @@ const subscribeNever = () => () => undefined;
  * Retained routes stay mounted when hidden, so an ungated tick would keep
  * re-rendering them. Every visible label shares one module-level tick.
  */
-export function useVisibleSecondClock(enabled: boolean): number {
+export function useVisibleSecondClock(
+  enabled: boolean,
+  /** The iPad sidebar stays on screen while the route that mounts it loses focus to a thread. */
+  options?: { readonly whileUnfocused?: boolean },
+): number {
   const focused = useIsFocused();
   const appActive = useAppActive();
-  const ticking = enabled && focused && appActive;
+  const ticking = enabled && (focused || options?.whileUnfocused === true) && appActive;
   // While paused the snapshot still reads the shared tick, so resuming shows
   // the current second rather than the one the clock stopped on.
   return useSyncExternalStore(

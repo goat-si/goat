@@ -1,9 +1,11 @@
+import { formatWorkingDurationLabel } from "@goat/client-runtime/state/models";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import { View } from "react-native";
 
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
+import { useVisibleSecondClock } from "./use-visible-second-clock";
 
 const SPINNER_SIZE = 13;
 // The native small indicator is 20pt; scaled, it matches the 13pt status icons.
@@ -52,4 +54,17 @@ export function ThreadListV2RowOrigin(props: {
       {text}
     </Text>
   );
+}
+
+/** Elapsed time after a Working or Waiting label. */
+export function ThreadListV2Duration(props: {
+  readonly startedAt: string | null;
+  sidebar: boolean;
+}) {
+  const startedAtMs = Date.parse(props.startedAt ?? "");
+  const nowMs = useVisibleSecondClock(Number.isFinite(startedAtMs), {
+    whileUnfocused: props.sidebar,
+  });
+  if (!Number.isFinite(startedAtMs)) return null;
+  return ` ${formatWorkingDurationLabel(nowMs - startedAtMs)}`;
 }

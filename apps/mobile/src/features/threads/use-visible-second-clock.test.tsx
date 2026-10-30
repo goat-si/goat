@@ -51,3 +51,28 @@ it("shares one timer across visible labels and releases it while hidden or inact
     vi.useRealTimers();
   }
 });
+
+it("keeps an always-visible pane's label ticking while its route is unfocused, until the app is inactive", async () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-01T03:00:00.000Z"));
+  state.focused = false;
+  state.active = true;
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const Sidebar = () => <span>{useVisibleSecondClock(true, { whileUnfocused: true })}</span>;
+  try {
+    await act(async () => root.render(<Sidebar />));
+    expect(vi.getTimerCount()).toBe(1);
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(container.querySelector("span")?.textContent).toBe(
+      String(Date.parse("2026-06-01T03:00:03.000Z")),
+    );
+    state.active = false;
+    await act(async () => root.render(<Sidebar />));
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    await act(async () => root.unmount());
+    vi.useRealTimers();
+  }
+});

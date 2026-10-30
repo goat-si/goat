@@ -16,14 +16,10 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
 import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { useVisibleSecondClock } from "./use-visible-second-clock";
 import type { ThreadMoveDestination } from "./threadOrder";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
-import {
-  formatWorkingDurationLabel,
-  resolveThreadWorkingStartedAt,
-} from "@goat/client-runtime/state/models";
+import { resolveThreadWorkingStartedAt } from "@goat/client-runtime/state/models";
 import { AuthOrchestrationOperateScope, type EnvironmentMachineKind } from "@goat/contracts";
 import { canSnooze } from "@goat/client-runtime/state/thread-settled";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -75,7 +71,11 @@ import { liftedThreadListV2Status, type LaunchLift } from "./threadListV2LaunchF
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
-import { ThreadListV2RowOrigin, ThreadListV2WorkingSpinner } from "./thread-list-v2-row-meta";
+import {
+  ThreadListV2Duration,
+  ThreadListV2RowOrigin,
+  ThreadListV2WorkingSpinner,
+} from "./thread-list-v2-row-meta";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -141,13 +141,6 @@ const DONE_STATUS_LABEL: StatusLabel = {
   className: "text-adaptive-emerald-700-300",
   iconTintClassName: "accent-adaptive-emerald-700-300",
 };
-
-function ThreadListV2Duration(props: { readonly startedAt: string | null }) {
-  const startedAtMs = Date.parse(props.startedAt ?? "");
-  const nowMs = useVisibleSecondClock(Number.isFinite(startedAtMs));
-  if (!Number.isFinite(startedAtMs)) return null;
-  return ` ${formatWorkingDurationLabel(nowMs - startedAtMs)}`;
-}
 
 export function ThreadListV2Section(props: {
   readonly label: string;
@@ -1061,10 +1054,15 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 )}
               >
                 {statusLabel.label}
-                {status === "working" ? (
-                  <ThreadListV2Duration startedAt={resolveThreadWorkingStartedAt(thread)} />
-                ) : status === "waiting" ? (
-                  <ThreadListV2Duration startedAt={thread.latestRun?.completedAt ?? null} />
+                {status === "working" || status === "waiting" ? (
+                  <ThreadListV2Duration
+                    startedAt={
+                      status === "working"
+                        ? resolveThreadWorkingStartedAt(thread)
+                        : (thread.latestRun?.completedAt ?? null)
+                    }
+                    sidebar={sidebarPane}
+                  />
                 ) : null}
               </Text>
             </View>
