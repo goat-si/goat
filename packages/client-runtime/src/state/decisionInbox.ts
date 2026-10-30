@@ -36,8 +36,8 @@ export type DecisionItem = {
 const PERSON: DecisionRouting = { routedTo: "person" };
 
 /**
- * The reason sent with a person's answer. The server requires one but only records it, so a
- * blank reason names the choice instead of blocking the answer.
+ * The reason sent with a person's answer. The server requires one: a projected request passes it
+ * to its asking thread's response, a durable decision drops it. A blank reason names the choice.
  */
 export function decisionAnswerReason(reason: string, choice: string) {
   const typed = reason.trim();
