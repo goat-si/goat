@@ -49,6 +49,8 @@ function FleetContent() {
   const { snapshot, connections, loading } = useAtomValue(mobileFleet.fleetPageAtom);
   const cloudAgents = useAtomValue(mobileFleet.fleetCloudAgentsAtom);
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
+  // At accessibility text sizes the graph cannot show readable names; the list below carries them.
+  const largeText = useWindowDimensions().fontScale >= 1.5;
   const navigation = useNavigation();
   const selectDetail = useSelectWorkspaceDetail();
   const { startNewTask } = useAdaptiveWorkspaceLayout();
@@ -118,7 +120,7 @@ function FleetContent() {
         ) : null}
       </View>
 
-      {snapshot.machines.length > 0 ? (
+      {snapshot.machines.length > 0 && !largeText ? (
         <UsageFleetGraph
           snapshot={snapshot}
           connections={connections}

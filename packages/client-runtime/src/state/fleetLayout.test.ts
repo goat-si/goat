@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   COMPACT_GRAPH_LIMITS,
+  COMPACT_GRAPH_NODES,
   compactGraphHeight,
   MAX_GRAPH_AGENTS,
   MAX_GRAPH_MACHINES,
@@ -79,10 +80,10 @@ describe("layoutFleet", () => {
     expect(agents.at(-1)!.aggregate).toEqual({ count: 4, running: 4, attention: 0, reported: 0 });
   });
 
-  it("keeps phone and tablet nodes on screen and apart at every fleet size, folding past the cap", () => {
+  it("keeps phone and tablet touch targets on screen and apart at every fleet size, folding past the cap", () => {
     const limits = COMPACT_GRAPH_LIMITS;
-    const machineRadius = 16;
-    const agentRadius = 11;
+    const machineReach = COMPACT_GRAPH_NODES.machineRadius + COMPACT_GRAPH_NODES.machineHitSlop;
+    const agentReach = COMPACT_GRAPH_NODES.agentRadius + COMPACT_GRAPH_NODES.agentHitSlop;
     for (const width of [320, 375, 430, 744, 1024]) {
       const height = compactGraphHeight(width);
       for (let count = 1; count <= 15; count++) {
@@ -98,25 +99,30 @@ describe("layoutFleet", () => {
           expect(node.agents.length).toBeLessThanOrEqual(limits.agents);
         }
         for (const node of [...layout.machines, ...agents]) {
-          expect(node.x - agentRadius).toBeGreaterThanOrEqual(0);
-          expect(node.x + agentRadius).toBeLessThanOrEqual(width);
-          expect(node.y - agentRadius).toBeGreaterThanOrEqual(0);
-          expect(node.y + agentRadius).toBeLessThanOrEqual(height);
+          expect(node.x - machineReach).toBeGreaterThanOrEqual(0);
+          expect(node.x + machineReach).toBeLessThanOrEqual(width);
+          expect(node.y - machineReach).toBeGreaterThanOrEqual(0);
+          expect(node.y + machineReach).toBeLessThanOrEqual(height);
         }
-        const apart = (
+        // Square touch targets: neighbors stay apart when their centers differ by more than the
+        // sum of reaches along either axis.
+        const separate = (
           nodes: ReadonlyArray<{ readonly x: number; readonly y: number }>,
           others: ReadonlyArray<{ readonly x: number; readonly y: number }>,
           gap: number,
         ) => {
           for (const a of nodes) {
             for (const b of others) {
-              if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(gap);
+              if (a === b) continue;
+              expect(Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y))).toBeGreaterThanOrEqual(
+                gap,
+              );
             }
           }
         };
-        apart(layout.machines, layout.machines, 2 * machineRadius);
-        apart(agents, agents, 2 * agentRadius);
-        apart(agents, layout.machines, machineRadius + agentRadius);
+        separate(layout.machines, layout.machines, 2 * machineReach);
+        separate(agents, agents, 2 * agentReach);
+        separate(agents, layout.machines, machineReach + agentReach);
       }
     }
   });

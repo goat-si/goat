@@ -7,6 +7,7 @@ import type {
 } from "@goat/client-runtime/state/fleet";
 import {
   COMPACT_GRAPH_LIMITS,
+  COMPACT_GRAPH_NODES,
   compactGraphHeight,
   layoutFleet,
   type FleetAggregate,
@@ -77,16 +78,17 @@ export function UsageFleetGraph(props: {
   const border = useResolveClassNames("border-border").borderColor;
   const orbitColor = typeof border === "string" ? border : colors.away;
   const height = compactGraphHeight(width);
-  const wide = width >= 600;
-  const machineRadius = wide ? 20 : 16;
-  const agentRadius = wide ? 13 : 11;
+  const { machineRadius, agentRadius } = COMPACT_GRAPH_NODES;
   const layout =
     width > 0 ? layoutFleet(props.snapshot.machines, width, height, COMPACT_GRAPH_LIMITS) : null;
   const machinesById = new Map(props.snapshot.machines.map((machine) => [machine.id, machine]));
-  const threadsByAgent = new Map<string, FleetThread[]>();
+  // Per agent, how many threads it runs and the one to open when it runs exactly one.
+  const threadsByAgent = new Map<string, { count: number; ref: FleetThread["ref"] }>();
   for (const thread of props.snapshot.threads) {
     const key = thread.machineId + "\n" + thread.agentKey;
-    threadsByAgent.set(key, [...(threadsByAgent.get(key) ?? []), thread]);
+    const entry = threadsByAgent.get(key);
+    if (entry === undefined) threadsByAgent.set(key, { count: 1, ref: thread.ref });
+    else entry.count += 1;
   }
   const { totals } = props.snapshot;
 
@@ -170,9 +172,9 @@ export function UsageFleetGraph(props: {
               const agent = machine?.agents.find((candidate) => candidate.key === agentNode.key);
               const threads =
                 machine === undefined || agent === undefined
-                  ? []
-                  : (threadsByAgent.get(machine.id + "\n" + agent.key) ?? []);
-              const only = threads.length === 1 ? threads[0]?.ref : null;
+                  ? undefined
+                  : threadsByAgent.get(machine.id + "\n" + agent.key);
+              const only = threads?.count === 1 ? threads.ref : null;
               return (
                 <AgentNode
                   key={"agent:" + (node.id ?? "more") + ":" + agentNode.key}
@@ -237,26 +239,23 @@ function MachineNode(props: {
   const accessibilityLabel = [label, status, describeWork(work)]
     .filter((part) => part !== null)
     .join(", ");
+  // The touch target is the node itself; the label below is drawn only, so a long name never
+  // reaches over a neighbor's node.
   return (
-    <Pressable
-      accessibilityRole={props.onPress === null ? "text" : "button"}
-      accessibilityLabel={accessibilityLabel}
-      accessibilityHint={props.onPress === null ? undefined : "Shows only this machine's threads"}
-      accessibilityState={{ selected: props.selected }}
-      disabled={props.onPress === null}
-      onPress={props.onPress ?? undefined}
-      hitSlop={8}
-      style={{
-        position: "absolute",
-        left: props.x - LABEL_WIDTH / 2,
-        top: props.y - radius,
-        width: LABEL_WIDTH,
-        alignItems: "center",
-      }}
-    >
-      <View
+    <>
+      <Pressable
+        accessibilityRole={props.onPress === null ? "text" : "button"}
+        accessibilityLabel={accessibilityLabel}
+        accessibilityHint={props.onPress === null ? undefined : "Shows only this machine's threads"}
+        accessibilityState={{ selected: props.selected }}
+        disabled={props.onPress === null}
+        onPress={props.onPress ?? undefined}
+        hitSlop={COMPACT_GRAPH_NODES.machineHitSlop}
         className="items-center justify-center rounded-full bg-grouped-card"
         style={{
+          position: "absolute",
+          left: props.x - radius,
+          top: props.y - radius,
           width: radius * 2,
           height: radius * 2,
           borderWidth: props.selected ? 3 : 2,
@@ -280,17 +279,26 @@ function MachineNode(props: {
             <FleetMachineDot connection={props.connection} />
           </View>
         )}
-      </View>
+      </Pressable>
       <Text
         textRole="footnote"
+        pointerEvents="none"
+        accessibilityElementsHidden
+        importantForAccessibility="no"
         className={props.selected ? "font-goat-bold text-foreground" : "text-foreground-muted"}
         numberOfLines={1}
         maxFontSizeMultiplier={1.3}
-        style={{ maxWidth: LABEL_WIDTH, marginTop: 2 }}
+        style={{
+          position: "absolute",
+          left: props.x - LABEL_WIDTH / 2,
+          top: props.y + radius + 2,
+          width: LABEL_WIDTH,
+          textAlign: "center",
+        }}
       >
         {label}
       </Text>
-    </Pressable>
+    </>
   );
 }
 
@@ -321,7 +329,7 @@ function AgentNode(props: {
       }
       disabled={props.onPress === null}
       onPress={props.onPress ?? undefined}
-      hitSlop={6}
+      hitSlop={COMPACT_GRAPH_NODES.agentHitSlop}
       className="items-center justify-center rounded-full bg-grouped-card"
       style={{
         position: "absolute",

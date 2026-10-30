@@ -11,6 +11,14 @@ export const MAX_GRAPH_AGENTS = 6;
 /** Phones and tablets: at these caps no two nodes touch at any width from 320 up. */
 export const COMPACT_GRAPH_LIMITS = { machines: 6, agents: 3 } as const;
 
+/** Node radii and touch margins for the compact graph; touch targets of neighbors never overlap. */
+export const COMPACT_GRAPH_NODES = {
+  machineRadius: 16,
+  machineHitSlop: 2,
+  agentRadius: 10,
+  agentHitSlop: 2,
+} as const;
+
 /** The compact graph's height for a width: taller on tablets, never too short for the orbit gap. */
 export function compactGraphHeight(width: number): number {
   return width >= 600 ? 420 : Math.min(380, Math.max(300, Math.round(width * 0.9)));
