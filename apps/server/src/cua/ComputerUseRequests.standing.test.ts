@@ -25,6 +25,46 @@ import {
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
 
+it.effect("an agent edit to a queued person message cannot name an app", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("person-queue"),
+        threadId,
+        messageId: MessageId.make("message:person-queue"),
+        text: "Please help",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const queued = (yield* orchestrator.getThreadProjection(threadId)).runs.find(
+        (run) => run.status === "queued",
+      );
+      if (queued === undefined) return assert.fail("expected queued run");
+      yield* orchestrator.dispatch({
+        type: "queued-run.edit",
+        commandId: CommandId.make("agent-edit"),
+        threadId,
+        runId: queued.id,
+        text: "Use com.example.Editor",
+      });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({ apps: ["com.example.Other"] });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        }),
+      );
+    }),
+  ),
+);
+
 const interruptThread = (
   handoffs: Handoffs.Handoffs["Service"],
   leases: ComputerUseLeases.ComputerUseLeases["Service"],

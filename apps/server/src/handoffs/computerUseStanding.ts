@@ -18,6 +18,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import type * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import type * as DateTime from "effect/DateTime";
+import { mentions } from "../cua/ComputerUseNamedApps.ts";
 import type { SshProgressBinding } from "./Handoffs.ts";
 
 export type CreateInput = {
@@ -34,7 +35,11 @@ export type CreateInput = {
   readonly sshProgress?: SshProgressBinding;
   readonly apps?: ReadonlyArray<string>;
   readonly computerUseForeground?: Handoff["computerUseForeground"];
-  readonly namedMessages?: ReadonlyArray<{ readonly app: string; readonly messageId: string }>;
+  readonly namedMessages?: ReadonlyArray<{
+    readonly app: string;
+    readonly messageId: string;
+    readonly name?: string;
+  }>;
 };
 
 const unavailable = (cause: unknown) => new HandoffError({ reason: "unavailable", cause });
@@ -156,19 +161,27 @@ export const makeComputerUseStanding = (deps: {
           return Option.none();
         const standing = yield* allowed(input.requestedBy.threadId, apps, list);
         const named: Array<{ readonly app: string; readonly messageId: string }> = [];
-        if (!standing && input.namedMessages !== undefined) {
+        if (!standing && input.namedMessages !== undefined && input.namedMessages.length > 0) {
           const approved = yield* sql`SELECT id FROM computer_use_person_approval LIMIT 1`.pipe(
             Effect.mapError(unavailable),
           );
           if (approved.length > 0) {
+            const ids = JSON.stringify([
+              ...new Set(input.namedMessages.map((entry) => entry.messageId)),
+            ]);
             const eligible = yield* sql<{
               message_id: string;
-            }>`SELECT json_extract(payload_json, '$.id') AS message_id
-              FROM orchestration_events
-              WHERE application_event_version = 2 AND aggregate_kind = 'thread'
-                AND stream_id = ${input.requestedBy.threadId} AND event_type = 'message.updated'
-              GROUP BY json_extract(payload_json, '$.id')
-              HAVING MIN(sequence) > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks
+              text: string;
+            }>`SELECT ids.value AS message_id, json_extract(event.payload_json, '$.text') AS text
+              FROM json_each(${ids}) AS ids
+              JOIN orchestration_events AS event ON event.sequence = (
+                SELECT sequence FROM orchestration_events
+                WHERE application_event_version = 2 AND aggregate_kind = 'thread'
+                  AND stream_id = ${input.requestedBy.threadId} AND event_type = 'message.updated'
+                  AND json_extract(payload_json, '$.id') = ids.value
+                ORDER BY sequence LIMIT 1
+              )
+              WHERE event.sequence > COALESCE((SELECT MAX(sequence) FROM computer_use_revocation_watermarks
                 WHERE scope IN ('', ${input.requestedBy.threadId})), 0)`.pipe(
               Effect.mapError(unavailable),
             );
@@ -181,18 +194,25 @@ export const makeComputerUseStanding = (deps: {
                 WHERE thread_id = ${input.requestedBy.threadId} AND app_key = ${cuaAppKey(app)}`.pipe(
                 Effect.mapError(unavailable),
               );
+              const matches = (entry: (typeof input.namedMessages)[number]) => {
+                const original = eligible.find((row) => row.message_id === entry.messageId);
+                return (
+                  original !== undefined &&
+                  typeof original.text === "string" &&
+                  (mentions(original.text, entry.app) ||
+                    (entry.name !== undefined && mentions(original.text, entry.name)))
+                );
+              };
               const candidate = input.namedMessages.find(
                 (entry) =>
                   cuaAppKey(entry.app) === cuaAppKey(app) &&
-                  eligible.some((row) => row.message_id === entry.messageId) &&
+                  matches(entry) &&
                   !used.some((row) => row.message_id === entry.messageId),
               );
               if (candidate === undefined) return Option.none();
               named.push(
                 ...input.namedMessages.filter(
-                  (entry) =>
-                    cuaAppKey(entry.app) === cuaAppKey(app) &&
-                    eligible.some((row) => row.message_id === entry.messageId),
+                  (entry) => cuaAppKey(entry.app) === cuaAppKey(app) && matches(entry),
                 ),
               );
             }
