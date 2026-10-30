@@ -10,7 +10,7 @@ import * as Schema from "effect/Schema";
 
 const isLogsInput = Schema.is(PreviewAutomationLogsInput);
 
-export const readTabLogs = Effect.fn("PreviewTargetHost.logs")(function* (
+const readTabLogs = Effect.fn("PreviewTargetHost.logs")(function* (
   arg: Record<string, unknown>,
   invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
 ) {
@@ -26,7 +26,7 @@ export const readTabLogs = Effect.fn("PreviewTargetHost.logs")(function* (
 });
 
 const isEvaluation = Schema.is(PreviewAutomationEvaluateInput);
-export const evaluateTab = Effect.fn("PreviewTargetHost.evaluate")(function* (
+const evaluateTab = Effect.fn("PreviewTargetHost.evaluate")(function* (
   arg: Record<string, unknown>,
   invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
 ) {
@@ -45,7 +45,7 @@ export const evaluateTab = Effect.fn("PreviewTargetHost.evaluate")(function* (
   };
 });
 
-export const answerDialog = Effect.fn("PreviewTargetHost.dialog")(function* (
+const answerDialog = Effect.fn("PreviewTargetHost.dialog")(function* (
   arg: Record<string, unknown>,
   invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
 ) {
@@ -67,7 +67,7 @@ export const answerDialog = Effect.fn("PreviewTargetHost.dialog")(function* (
 });
 
 const isUpload = Schema.is(PreviewAutomationUploadInput);
-export const uploadTab = Effect.fn("PreviewTargetHost.upload")(function* (
+const uploadTab = Effect.fn("PreviewTargetHost.upload")(function* (
   arg: Record<string, unknown>,
   locator: string | undefined,
   invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
@@ -84,7 +84,7 @@ export const uploadTab = Effect.fn("PreviewTargetHost.upload")(function* (
 });
 
 const isSecret = Schema.is(PreviewAutomationFillSecretInput);
-export const fillTabSecret = Effect.fn("PreviewTargetHost.fillSecret")(function* (
+const fillTabSecret = Effect.fn("PreviewTargetHost.fillSecret")(function* (
   arg: Record<string, unknown>,
   invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
 ) {
