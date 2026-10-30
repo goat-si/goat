@@ -266,7 +266,9 @@ export function ConnectionsNewRouteScreen({
     setCompletionError(null);
     onChangeConnectionPairingUrl(pairingUrl);
     try {
-      const result = await onConnectPress(pairingUrl, params.routeFor, params.preferRoute === true);
+      const result = await (params.preferRoute === true
+        ? onConnectPress(pairingUrl, params.routeFor, true)
+        : onConnectPress(pairingUrl, params.routeFor));
       if (!isCurrentAttempt()) return;
       if (AsyncResult.isFailure(result)) {
         const error = Cause.squash(result.cause);
