@@ -435,6 +435,10 @@
       "types": "./src/state/fleetHostHealth.ts",
       "default": "./src/state/fleetHostHealth.ts"
     },
+    "./state/fleet-machine-description": {
+      "types": "./src/state/fleetMachineDescription.ts",
+      "default": "./src/state/fleetMachineDescription.ts"
+    },
     "./state/fleet-page": {
       "types": "./src/state/fleetPage.ts",
       "default": "./src/state/fleetPage.ts"
