@@ -49,6 +49,8 @@ const finish = Effect.gen(function* () {
   yield* service.finishTurn({ ...turn, reason: "test" });
 });
 
+const decodeKey = Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }));
+
 const BIND =
   "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe();";
 /** Each settled click as its verdict, or its error code and whether nothing was sent. */
@@ -427,12 +429,7 @@ it.live("adjacent groups for separate windows keep each window's inputs together
       ["press_key", "press_key"],
     ]);
     expect(
-      sent
-        .filter((entry) => entry.tool === "press_key")
-        .map(
-          (entry) =>
-            Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }))(entry.args).key,
-        ),
+      sent.filter((entry) => entry.tool === "press_key").map((entry) => decodeKey(entry.args).key),
     ).toEqual(["a", "b", "c", "d"]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host, groups)));
@@ -661,12 +658,7 @@ it.live("a refused window group does not stop the next window's group", () => {
       "confirmed",
     ]);
     expect(
-      sent
-        .filter((entry) => entry.tool === "press_key")
-        .map(
-          (entry) =>
-            Schema.decodeUnknownSync(Schema.Struct({ key: Schema.String }))(entry.args).key,
-        ),
+      sent.filter((entry) => entry.tool === "press_key").map((entry) => decodeKey(entry.args).key),
     ).toEqual(["a", "c", "d"]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));

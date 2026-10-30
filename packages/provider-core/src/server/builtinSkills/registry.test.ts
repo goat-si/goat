@@ -184,17 +184,12 @@ describe("computer use skill text", () => {
     );
   });
 
-  it("teaches starting decided desktop steps together, which is what batches them for the driver", () => {
-    // A cell's element input reaches the driver as one run_steps only when it is started without
-    // an await on each call (ScreenBatchGroups); agents write a for loop with await otherwise.
+  it("teaches grouping decided desktop steps while sending individual driver calls", () => {
     for (const guide of [screenCodeSkillFiles()["SKILL.md"] ?? "", SCREEN_TARGET_API]) {
       expect(guide).toContain('await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))');
       expect(guide).toMatch(/for\`? loop, sends each alone/);
-      // A driver no-op does not stop the batch, so nothing after a failure may be assumed unsent.
-      expect(guide).toMatch(
-        /after a failed or unknown (step|one),\s+later steps may already have run/,
-      );
-      expect(guide).not.toContain("the first failure stops the rest");
+      expect(guide).toContain("individual driver call");
+      expect(guide).toMatch(/after a failed step,\s+later group members are not run/);
     }
   });
 
