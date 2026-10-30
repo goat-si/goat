@@ -54,6 +54,7 @@ export const makeComputerUseStanding = (deps: {
   lock: Semaphore.Semaphore;
   leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>;
   settings: Option.Option<ServerSettings.ServerSettingsService["Service"]>;
+  expirePending: (threadId: ThreadId) => Effect.Effect<void, HandoffError>;
   create: (input: CreateInput, automatic: boolean) => Effect.Effect<HandoffSummary, HandoffError>;
   read: (
     threadId: ThreadId,
@@ -184,6 +185,7 @@ export const makeComputerUseStanding = (deps: {
     const attempt = withAllowedSettings((list, enabled) =>
       Effect.gen(function* () {
         if (!enabled) return yield* new HandoffError({ reason: "unavailable" });
+        yield* deps.expirePending(input.requestedBy.threadId);
         yield* reconcileAllowed(list);
         const apps = input.apps;
         if (
@@ -508,10 +510,11 @@ export const makeComputerUseStanding = (deps: {
   const end = Effect.fn("Handoffs.endComputerUseSession")(function* (
     threadId: ThreadId,
     handoffId: Handoff["handoffId"],
+    releaseCard = true,
   ) {
     yield* clear(threadId);
     if (Option.isSome(leases)) {
-      yield* leases.value.release([handoffId]);
+      if (releaseCard) yield* leases.value.release([handoffId]);
       const cutoff = yield* sql<{
         sequence: number;
       }>`SELECT COALESCE(MAX(sequence), 0) AS sequence FROM computer_use_revocation_watermarks WHERE scope = ${threadId}`.pipe(
@@ -530,7 +533,7 @@ export const makeComputerUseStanding = (deps: {
         yield* deps.revoke(handoff);
       }
     }
-    yield* revalidateUnlocked(threadId, handoffId);
+    if (releaseCard) yield* revalidateUnlocked(threadId, handoffId);
   });
   const removeAllowedApp = Effect.fn("Handoffs.removeComputerUseAllowedApp")((
     app: string,

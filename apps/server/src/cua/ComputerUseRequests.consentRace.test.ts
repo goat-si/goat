@@ -12,37 +12,35 @@ import { sessionId, supported, withRequests } from "./ComputerUseRequests.testki
 
 it.effect("a later automatic grant cannot outlive Stop of its earlier naming consent", () =>
   withHarness(({ orchestrator }) =>
-    Effect.gen(function* () {
-      yield* orchestrator.dispatch({
-        type: "message.dispatch",
-        commandId: CommandId.make("before-stop-named"),
-        threadId,
-        messageId: MessageId.make("message:before-stop-named"),
-        text: "Use com.example.Editor",
-        attachments: [],
-        dispatchMode: { type: "queue_after_active" },
-        createdBy: "user",
-        creationSource: "web",
-      });
-      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
-        Effect.gen(function* () {
-          const prior = yield* request({ apps: ["com.example.Other"] });
-          if (prior.kind !== "needs_human") return assert.fail("expected prior approval");
-          yield* handoffs.respond(
-            { threadId, handoffId: prior.handoff.handoffId, action: "completed" },
-            sessionId,
-          );
-          const sql = yield* SqlClient.SqlClient;
-          const rows = yield* sql<{
-            sequence: number;
-          }>`SELECT MAX(sequence) AS sequence FROM orchestration_events`;
-          const cutoff = rows[0]?.sequence ?? 0;
-          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
-          yield* handoffs.stopComputerUseSessions(threadId, cutoff);
-          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
-        }),
-      );
-    }),
+    withRequests(orchestrator, supported, ({ request, handoffs }) =>
+      Effect.gen(function* () {
+        const prior = yield* request({ apps: ["com.example.Other"] });
+        if (prior.kind !== "needs_human") return assert.fail("expected prior approval");
+        yield* handoffs.respond(
+          { threadId, handoffId: prior.handoff.handoffId, action: "completed" },
+          sessionId,
+        );
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("before-stop-named"),
+          threadId,
+          messageId: MessageId.make("message:before-stop-named"),
+          text: "Use com.example.Editor",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          sequence: number;
+        }>`SELECT MAX(sequence) AS sequence FROM orchestration_events`;
+        const cutoff = rows[0]?.sequence ?? 0;
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        yield* handoffs.stopComputerUseSessions(threadId, cutoff);
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+      }),
+    ),
   ),
 );
 
@@ -99,17 +97,6 @@ it.effect("Stop removes a named grant created after the stop commit", () =>
     yield* withHarness(
       ({ orchestrator, worker }) =>
         Effect.gen(function* () {
-          yield* orchestrator.dispatch({
-            type: "message.dispatch",
-            commandId: CommandId.make("race-named"),
-            threadId,
-            messageId: MessageId.make("message:race-named"),
-            text: "Use com.example.Editor",
-            attachments: [],
-            dispatchMode: { type: "queue_after_active" },
-            createdBy: "user",
-            creationSource: "web",
-          });
           const intercepted = {
             ...orchestrator,
             dispatch: (command: Parameters<typeof orchestrator.dispatch>[0]) =>
@@ -129,6 +116,17 @@ it.effect("Stop removes a named grant created after the stop commit", () =>
                 { threadId, handoffId: prior.handoff.handoffId, action: "completed" },
                 sessionId,
               );
+              yield* orchestrator.dispatch({
+                type: "message.dispatch",
+                commandId: CommandId.make("race-named"),
+                threadId,
+                messageId: MessageId.make("message:race-named"),
+                text: "Use com.example.Editor",
+                attachments: [],
+                dispatchMode: { type: "queue_after_active" },
+                createdBy: "user",
+                creationSource: "web",
+              });
               const pending = yield* request({ apps: ["com.example.Editor"] }).pipe(
                 Effect.forkChild,
               );

@@ -364,10 +364,16 @@ const make = Effect.gen(function* () {
     read,
     expire: (input) =>
       standing
-        .end(input.threadId, input.handoffId)
+        .end(input.threadId, input.handoffId, false)
         .pipe(Effect.andThen(transition(input, "expired", { type: "server" }))),
     cancelAsAgent: (input) =>
-      transition(input, "cancelled", { type: "agent", threadId: input.threadId }),
+      standing
+        .end(input.threadId, input.handoffId, false)
+        .pipe(
+          Effect.andThen(
+            transition(input, "cancelled", { type: "agent", threadId: input.threadId }),
+          ),
+        ),
     recordKind: (id) =>
       loadPrivate(id).pipe(
         Effect.map((payload) => (payload !== null && "kind" in payload ? payload.kind : null)),
@@ -468,15 +474,9 @@ const make = Effect.gen(function* () {
       }
       const endsApproved =
         isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
-      const refusesPending =
-        isComputerUseGrant &&
-        isHandoffPending(record.state) &&
-        (input.action === "declined" ||
-          input.action === "cancelled" ||
-          expiredAt(record, yield* DateTime.now));
-      if (endsApproved || refusesPending) yield* standing.end(input.threadId, input.handoffId);
-      // Recorded before the transition commits, so the wake reactor never sees the end without
-      // it; a repeated cancel keeps it.
+      if (endsApproved || (isComputerUseGrant && isHandoffPending(record.state)))
+        yield* standing.end(input.threadId, input.handoffId, endsApproved);
+      // Record the end before the transition so the wake reactor sees it.
       if (endsApproved)
         yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
       const result = yield* transition(
@@ -535,8 +535,7 @@ const make = Effect.gen(function* () {
   });
   const createUnlocked = (input: CreateInput, automatic = false) =>
     Effect.gen(function* () {
-      yield* expirePending(input.requestedBy.threadId);
-      // Serializes private-payload ownership, including duplicate calls with different request IDs.
+      if (!automatic) yield* expirePending(input.requestedBy.threadId);
       const records = yield* threads
         .getThreadRecords(input.requestedBy.threadId, ["turnItems"], {
           turnItemTypes: ["human_handoff", "secret_request"],
@@ -639,6 +638,7 @@ const make = Effect.gen(function* () {
     lock,
     leases: computerUseLeases,
     settings,
+    expirePending: (threadId) => expirePending(threadId),
     create: createUnlocked,
     read: (threadId, handoffId) => read({ threadId, handoffId }),
     revoke: (handoff) =>
@@ -690,7 +690,7 @@ const make = Effect.gen(function* () {
           handoffId: row.turn_item_id,
         }).pipe(Effect.mapError(unavailable));
         if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
-          yield* standing.end(input.threadId, input.handoffId);
+          yield* standing.end(input.threadId, input.handoffId, false);
         yield* transition(input, "expired", { type: "server" });
         if (handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH)
           yield* continuations.answered(input.handoffId);

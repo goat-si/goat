@@ -120,6 +120,45 @@ it.effect("a failed decline transition still retires the earlier mention", () =>
   }),
 );
 
+it.effect("declining a pending card ends an earlier automatic grant", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const prior = yield* request({ apps: ["com.example.Other"] });
+        if (prior.kind !== "needs_human") return assert.fail("expected prior approval");
+        yield* handoffs.respond(
+          { threadId, handoffId: prior.handoff.handoffId, action: "completed" },
+          sessionId,
+        );
+        const pending = yield* request({ apps: ["com.example.Editor"] });
+        if (pending.kind !== "needs_human") return assert.fail("expected pending card");
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("auto-before-decline"),
+          threadId,
+          messageId: MessageId.make("message:auto-before-decline"),
+          text: "Use com.example.Automatic",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        assert.equal((yield* request({ apps: ["com.example.Automatic"] })).kind, "available");
+        const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+        const grant = records.turnItems.find(
+          (item) => item.type === "human_handoff" && item.handoff.computerUseScope === "standing",
+        );
+        if (grant?.type !== "human_handoff") return assert.fail("expected automatic grant");
+        yield* handoffs.respond(
+          { threadId, handoffId: pending.handoff.handoffId, action: "declined" },
+          sessionId,
+        );
+        assert.equal((yield* leases.state(threadId, grant.handoff.handoffId))._tag, "ended");
+      }),
+    ),
+  ),
+);
+
 it.effect("expiry while a request waits retires the earlier mention", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {
