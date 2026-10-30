@@ -7,12 +7,19 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { memo, useCallback, useState } from "react";
-import { Platform, Pressable, Text, TextInput, View } from "react-native";
-import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
+import { HeaderHeightContext } from "@react-navigation/elements";
+import { memo, useCallback, useContext, useState } from "react";
+import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
+import {
+  KeyboardAvoidingView,
+  useReanimatedKeyboardAnimation,
+} from "react-native-keyboard-controller";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
@@ -22,6 +29,7 @@ import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
+import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 
@@ -320,6 +328,8 @@ function GoatBotActivityBubble({ text }: { readonly text: string }) {
 export function GoatBotScreen(props: {
   readonly visible: boolean;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
+  /** Floating tabs cover the bottom of the screen; the composer rests above them. */
+  readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
   const session = useMobileGoatBotSession(props.visible);
   const homeSettings = useMobileGoatBotHomeSettings();
@@ -338,12 +348,32 @@ export function GoatBotScreen(props: {
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const insets = useSafeAreaInsets();
-  const keyboardVisible = useKeyboardState((state) => state.isVisible);
-  const bottomInset = keyboardVisible ? 8 : Math.max(8, insets.bottom);
-  const topInset = Platform.OS === "ios" ? insets.top : 0;
+  const composerPadding = goatBotComposerBottomPadding(
+    props.floatingTabs
+      ? { bottomSafeArea: props.floatingTabs.bottomSafeArea, floatingTabs: true }
+      : { bottomSafeArea: insets.bottom, floatingTabs: false },
+  );
+  // The padding follows the keyboard frame by frame on the UI thread, in step with the
+  // KeyboardAvoidingView lift, so the composer never jumps when the keyboard opens or closes.
+  const keyboard = useReanimatedKeyboardAnimation();
+  const composerPaddingStyle = useAnimatedStyle(() => ({
+    paddingBottom:
+      composerPadding.closed +
+      (composerPadding.open - composerPadding.closed) * keyboard.progress.value,
+  }));
+  // A glass header is transparent: the list reaches under it and UIKit insets it, so the header's
+  // scroll-edge effect covers the rows. Anything pinned above the list starts below that header.
+  // An opaque header already sits above the content.
+  const headerHeight = useContext(HeaderHeightContext) ?? insets.top + IOS_NAV_BAR_HEIGHT;
   const hasBanner = session.availability !== "ready";
+  const homeError = homeSettings.error;
+  const topInset = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED ? headerHeight : 0;
+  // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
+  // conversation by the header height and its last message starts below the composer's top.
+  const listTopInset = hasBanner || homeError ? 0 : topInset;
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(44);
+  const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
     ({ item }: { item: GoatBotRow }) => (
       <GoatBotTimelineRow
@@ -409,9 +439,13 @@ export function GoatBotScreen(props: {
           ) : null}
         </View>
       ) : null}
-      {homeSettings.error ? (
-        <Text accessibilityRole="alert" className="px-4 py-2 text-sm text-danger-foreground">
-          {homeSettings.error}
+      {homeError ? (
+        <Text
+          accessibilityRole="alert"
+          className="px-4 py-2 text-sm text-danger-foreground"
+          style={hasBanner ? undefined : { paddingTop: topInset + 8 }}
+        >
+          {homeError}
         </Text>
       ) : null}
       <LegendList
@@ -423,8 +457,9 @@ export function GoatBotScreen(props: {
         maintainScrollAtEnd
         alignItemsAtEnd
         keyboardShouldPersistTaps="handled"
-        contentInsetAdjustmentBehavior="never"
-        contentInset={{ top: hasBanner ? 0 : topInset }}
+        // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
+        contentInsetAdjustmentBehavior="automatic"
+        contentInsetStartAdjustment={listTopInset}
         contentContainerStyle={{ padding: 16 }}
         ListEmptyComponent={
           <Text className="py-6 text-center text-foreground-muted">
@@ -435,9 +470,9 @@ export function GoatBotScreen(props: {
           session.activity ? <GoatBotActivityBubble text={session.activity.text} /> : null
         }
       />
-      <View
+      <Animated.View
         className="flex-row items-end gap-2 border-t border-border px-4 pt-2"
-        style={{ paddingBottom: bottomInset }}
+        style={composerPaddingStyle}
       >
         <TextInput
           accessibilityLabel="Message GOAT Bot"
@@ -452,7 +487,7 @@ export function GoatBotScreen(props: {
           }
           className="flex-1 px-3 py-2 text-foreground"
           style={{
-            height: inputHeight,
+            height: Math.min(inputHeight, inputMaxHeight),
             minHeight: 44,
             borderRadius: 22,
             borderWidth: 0.5,
@@ -480,7 +515,7 @@ export function GoatBotScreen(props: {
             <Text className="text-xl font-semibold text-white">↑</Text>
           </View>
         </Pressable>
-      </View>
+      </Animated.View>
     </KeyboardAvoidingView>
   );
 }

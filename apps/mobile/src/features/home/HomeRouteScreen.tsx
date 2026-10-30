@@ -40,6 +40,7 @@ import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode
 import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
 import { GoatBotModelAndroidMenu } from "../goat-bot/GoatBotModelAndroidMenu";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
+import { useCompactWorkspaceTabs } from "../workspace/useSystemWorkspaceTabBar";
 import { openSettings } from "../settings/settings-navigation";
 import { useSelectWorkspaceTab } from "../workspace/useSelectWorkspaceTab";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
@@ -49,6 +50,7 @@ export function HomeRouteScreen() {
   const nativePrimaryColumn = use(NativePrimaryColumnContext);
   const columnMetrics = useNativeColumnLayoutMetrics();
   const deviceType = useDeviceType();
+  const compactTabs = useCompactWorkspaceTabs();
   const headerWidth = nativePrimaryColumn ? (columnMetrics?.width ?? windowWidth) : windowWidth;
   const { layout, panes, primarySidebarSearchQuery, setPrimarySidebarSearchQuery, startNewTask } =
     useAdaptiveWorkspaceLayout();
@@ -74,6 +76,10 @@ export function HomeRouteScreen() {
   const navigation = useNavigation();
   const selectTab = useSelectWorkspaceTab();
   const workspace = useWorkspaceTabs();
+  const floatingTabs =
+    Platform.OS === "ios" && workspace !== null && (compactTabs || deviceType === "pad")
+      ? { bottomSafeArea: workspace.bottomSafeArea ?? 0 }
+      : undefined;
   const [localSearchQuery, setLocalSearchQuery] = useState("");
   const searchQuery =
     Platform.OS === "android"
@@ -313,7 +319,7 @@ export function HomeRouteScreen() {
           }}
         />
         {homeHeader}
-        <GoatBotScreen visible={visible} />
+        <GoatBotScreen visible={visible} floatingTabs={floatingTabs} />
       </>
     );
 

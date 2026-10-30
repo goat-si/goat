@@ -13,9 +13,16 @@ const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark" }));
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
+vi.mock("@react-navigation/elements", async () => ({
+  HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
+}));
+vi.mock("react-native-reanimated", () => ({
+  default: { View: (props: { children?: unknown }) => props.children },
+  useAnimatedStyle: (style: () => object) => style(),
+}));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: () => null,
-  useKeyboardState: () => false,
+  useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }),
 }));
 vi.mock("../../native/NativeScrollViewMarker", () => ({ NativeScrollView: () => null }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ bottom: 0 }) }));

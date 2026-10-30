@@ -62,6 +62,7 @@ vi.mock("react-native", () => ({
     <input aria-label="Message GOAT Bot" data-style={JSON.stringify(style)} />
   ),
   Platform: { OS: "ios" },
+  useWindowDimensions: () => ({ width: 393, height: 852 }),
 }));
 vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 // The native Markdown renderer cannot load under Vitest.
@@ -71,9 +72,16 @@ vi.mock("@legendapp/list/react-native", () => ({
     <>{ListFooterComponent}</>
   ),
 }));
+vi.mock("@react-navigation/elements", async () => ({
+  HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
+}));
+vi.mock("react-native-reanimated", () => ({
+  default: { View: (props: { children?: unknown }) => props.children },
+  useAnimatedStyle: (style: () => object) => style(),
+}));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  useKeyboardState: () => false,
+  useReanimatedKeyboardAnimation: () => ({ progress: { value: 0 } }),
 }));
 vi.mock("react-native-safe-area-context", () => ({
   useSafeAreaInsets: () => ({ bottom: 0, top: 0 }),
