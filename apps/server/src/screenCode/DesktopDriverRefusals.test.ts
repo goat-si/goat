@@ -151,3 +151,115 @@ it.live.each(["user_interacting", "screen_locked"])(
     );
   },
 );
+
+it.live.each([
+  { label: "observe", expression: "app.observe()" },
+  { label: "query", expression: "app.observe({query: {name: 'Apply'}})" },
+])("a locked accessibility tree fails $label without retrying", ({ expression }) => {
+  const { host, sent } = fixture({
+    get_window_state: {
+      pid: 42,
+      window_id: 7,
+      tree_markdown: "",
+      elements: [],
+      degraded: true,
+      degraded_reason:
+        "screen_locked: window_id 7 has no accessibility tree because the screen is locked.",
+      escalation: { recommended: "wait_for_unlock", reason: "Unlock the screen." },
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+        try { await ${expression}; return 'success'; }
+        catch (e) { return {name: e.name, code: e.code, nothingSent: e.nothingSent, effectStarted: e.effectStarted, retryClass: e.safety?.retryClass}; }`,
+    });
+    expect(result.value).toEqual({
+      name: "ScreenError",
+      code: "screen_locked",
+      nothingSent: true,
+      effectStarted: false,
+      retryClass: "never",
+    });
+    expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(1);
+    yield* service.finishTurn({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      reason: "test",
+    });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
+it.live("a screenshot-only read succeeds while the screen is locked", () => {
+  const { host, sent } = fixture({
+    get_window_state: {
+      pid: 42,
+      window_id: 7,
+      tree_markdown: "",
+      elements: [],
+      degraded: true,
+      degraded_reason:
+        "screen_locked: window_id 7 has no accessibility tree because the screen is locked.",
+      escalation: { recommended: "wait_for_unlock" },
+      screenshot_width: 100,
+      screenshot_height: 80,
+      image: {
+        mimeType: "image/png",
+        bytes: Buffer.from("png").toString("base64"),
+        width: 100,
+        height: 80,
+      },
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source:
+        "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); return 'captured';",
+    });
+    expect(result.value).toBe("captured");
+    expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(1);
+    yield* service.finishTurn({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      reason: "test",
+    });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});

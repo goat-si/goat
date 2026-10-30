@@ -621,6 +621,16 @@ export const checkWindowReplyState = (
     };
   if (pid !== expectedPid || wid !== expectedWindowId)
     return { ok: false, evictTarget: true, error: fail("stale_reference") };
+  if (
+    !capture &&
+    state.degraded === true &&
+    typeof state.degraded_reason === "string" &&
+    state.degraded_reason.startsWith("screen_locked:")
+  )
+    return {
+      ok: false,
+      error: fail("screen_locked", "The screen is locked; stop until the person unlocks it."),
+    };
   return { ok: true, state };
 };
 
