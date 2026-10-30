@@ -19,6 +19,9 @@ export type HelperHumanInput = typeof HelperHumanInput.Type;
 const decodeHumanInput = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ humanInput: HelperHumanInput })),
 );
+const decodePersonStop = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Struct({ personStop: Schema.Literal("person_esc") })),
+);
 const encodeLine = Schema.encodeSync(
   Schema.fromJsonString(Schema.Struct({ seq: Schema.Number, command: ComputerUseOverlayCommand })),
 );
@@ -42,6 +45,7 @@ export type OverlayAckOutcome = "applied" | "unavailable" | "timed_out";
 export function overlayChannel(
   socket: NodeStream.Duplex,
   onHumanInput: (input: HelperHumanInput) => void = () => undefined,
+  onPersonStop: () => void = () => undefined,
 ) {
   let seq = 0;
   let buffered = "";
@@ -58,6 +62,7 @@ export function overlayChannel(
       if (Option.isSome(ack)) waiting.get(ack.value.ack)?.("applied");
       const input = decodeHumanInput(line);
       if (Option.isSome(input)) onHumanInput(input.value.humanInput);
+      if (Option.isSome(decodePersonStop(line))) onPersonStop();
     }
   });
   const release = () => {

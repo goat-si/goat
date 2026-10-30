@@ -116,6 +116,25 @@ describe("overlayChannel", () => {
     }),
   );
 
+  it.effect("reports a person's Escape stop on the helper channel", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const last = yield* Deferred.make<void>();
+      let stops = 0;
+      overlayChannel(
+        helper.socket,
+        () => Deferred.doneUnsafe(last, Effect.void),
+        () => {
+          stops += 1;
+        },
+      );
+      helper.socket.push(JSON.stringify({ personStop: "person_esc" }) + "\n");
+      helper.socket.push(JSON.stringify({ humanInput: { source: "pointer", ageMs: 0 } }) + "\n");
+      yield* Deferred.await(last);
+      assert.equal(stops, 1);
+    }),
+  );
+
   it.effect("sends nothing and returns at once once the helper is gone", () =>
     Effect.gen(function* () {
       const helper = helperEnd(true);
