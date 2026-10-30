@@ -85,37 +85,13 @@ import { AgentToolListing, DEFAULT_AGENT_TOOL_LISTING } from "./agentSurface/lis
 import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings.ts";
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
+import * as BlockedBrowser from "./blockedBrowserHosts.ts";
 
 export * from "./settingsFontSizes.ts";
 export { requiredScopesForServerSettingsPatch } from "./auth.ts";
-
-export function normalizeBlockedBrowserHost(value: string): string | null {
-  const input = value.trim();
-  if (!input || /[\s/@?#\\]/u.test(input)) return null;
-  if (input.startsWith("[") ? !/^\[[\da-f:.]+\]$/i.test(input) : input.includes(":")) return null;
-  try {
-    return new URL(`http://${input}/`).hostname.replace(/\.$/, "") || null;
-  } catch {
-    return null;
-  }
-}
-
-const BlockedBrowserHost = Schema.String.check(
-  Schema.makeFilter((value) => normalizeBlockedBrowserHost(value) !== null),
-).pipe(
-  Schema.decodeTo(
-    Schema.String,
-    SchemaTransformation.transform({
-      decode: (value) => normalizeBlockedBrowserHost(value) ?? value,
-      encode: (value) => value,
-    }),
-  ),
-);
-
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
-
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
@@ -1464,9 +1440,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
   enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  blockedBrowserHosts: Schema.Array(BlockedBrowserHost).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
+  ...BlockedBrowser.BlockedBrowserSettingsFields,
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1940,7 +1914,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
-  blockedBrowserHosts: Schema.optionalKey(Schema.Array(BlockedBrowserHost)),
+  ...BlockedBrowser.BlockedBrowserSettingsPatchFields,
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),
