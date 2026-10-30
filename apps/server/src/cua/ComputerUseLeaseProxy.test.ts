@@ -15,11 +15,14 @@ import {
   call,
   CONTROL,
   foregroundActive,
-  harness,
+  harness as makeHarness,
   refusedCall,
   cutOffCall,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("ComputerUseLeaseProxy", () => {
   it.effect("rejects JSON-RPC arrays and non-objects locally without forwarding any member", () =>
@@ -343,7 +346,13 @@ describe("ComputerUseLeaseProxy", () => {
       Effect.gen(function* () {
         const h = yield* harness();
         yield* h.push(foregroundActive());
-        yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
+        yield* h.send(
+          call(7, "run_script", {
+            script: "/* long */",
+            session: "work",
+            app_scope: { apps: ["com.apple.calculator"] },
+          }),
+        );
         assert.equal((yield* h.nextToDriver).id, 7);
         // The person ends it while run_script is still running and the provider stays up.
         yield* h.push({ state: "ended", reason: "revoked" });
@@ -369,7 +378,9 @@ describe("ComputerUseLeaseProxy", () => {
     Effect.gen(function* () {
       const h = yield* harness({ expiresAt: "1970-01-01T00:10:00.000Z" });
       yield* h.push(foregroundActive("1970-01-01T00:10:00.000Z"));
-      yield* h.send(call(3, "run_steps", { steps: [] }));
+      yield* h.send(
+        call(3, "run_steps", { steps: [], app_scope: { apps: ["com.apple.calculator"] } }),
+      );
       assert.equal((yield* h.nextToDriver).id, 3);
       yield* TestClock.adjust("9 minutes");
       assert.isFalse(yield* h.isKilled);
@@ -392,7 +403,13 @@ describe("ComputerUseLeaseProxy", () => {
           revoke: () => Deferred.await(stuck),
         });
         yield* h.push(foregroundActive("1970-01-01T00:10:00.000Z"));
-        yield* h.send(call(7, "run_script", { script: "/* long */", session: "work" }));
+        yield* h.send(
+          call(7, "run_script", {
+            script: "/* long */",
+            session: "work",
+            app_scope: { apps: ["com.apple.calculator"] },
+          }),
+        );
         assert.equal((yield* h.nextToDriver).id, 7);
         if (reason === "revoked") yield* h.push({ state: "ended", reason: "revoked" });
         else yield* TestClock.adjust("10 minutes");
@@ -428,7 +445,7 @@ describe("ComputerUseLeaseProxy", () => {
       Effect.gen(function* () {
         const h = yield* harness();
         yield* h.push(active());
-        yield* h.send(call(1, "click"));
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
         assert.equal((yield* h.nextToDriver).id, 1);
         yield* h.driverExits;
         assert.deepEqual(yield* h.nextToProvider, cutOffCall(1, "helper_restarted"));
@@ -444,7 +461,7 @@ describe("ComputerUseLeaseProxy", () => {
       Effect.gen(function* () {
         const h = yield* harness({ exitCode: 77 });
         yield* h.push(active());
-        yield* h.send(call(1, "click"));
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
         assert.equal((yield* h.nextToDriver).id, 1);
         yield* h.driverExits;
         assert.deepEqual(yield* h.nextToProvider, cutOffCall(1, "helper_refused"));
@@ -499,7 +516,12 @@ describe("ComputerUseLeaseProxy", () => {
     Effect.gen(function* () {
       const h = yield* harness();
       yield* h.push(foregroundActive());
-      yield* h.send(call(1, "run_script", { script: "/* long */" }));
+      yield* h.send(
+        call(1, "run_script", {
+          script: "/* long */",
+          app_scope: { apps: ["com.apple.calculator"] },
+        }),
+      );
       assert.equal((yield* h.nextToDriver).id, 1);
       yield* h.push({ state: "ended", reason: "stopped" });
       yield* h.killed;
@@ -579,7 +601,7 @@ describe("ComputerUseLeaseProxy", () => {
     "lets a thread act only on its approved apps, asking the driver which app a pid is",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness();
+        const h = yield* harness({ autoAppListing: false });
         yield* h.push(active(undefined, ["com.apple.calculator"]));
         yield* h.send(call(1, "click", { target: { kind: "window", pid: 42, window_id: 1 } }));
         const lookup = yield* h.nextToDriver;
@@ -624,8 +646,8 @@ describe("ComputerUseLeaseProxy", () => {
           assert.deepInclude(
             (answer.result as Record<string, unknown>).structuredContent as object,
             {
-              refused: "targetRefused",
-              detail: "desktop_not_approved",
+              refused: "appNotAllowed",
+              detail: "app_not_allowed",
             },
           );
         }

@@ -120,7 +120,7 @@ it.effect(
       );
       // That driver could run a scope it does not know unscoped, so nothing is added either.
       yield* h.send(call(2, "run_script", { script: "click()" }));
-      assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "desktop_not_approved" });
+      assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "app_not_allowed" });
       assert.equal(yield* h.driverQueued, 0);
     }),
 );

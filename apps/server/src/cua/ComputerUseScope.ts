@@ -172,7 +172,7 @@ export function scopeVerdict(input: {
     const scope = batchAppScope(input.name, input.args);
     return scope !== undefined && !scope.apps.some(isExcludedCuaApplication)
       ? { _tag: "allow" }
-      : { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
+      : { _tag: "refuse", reason: "app_not_allowed", opaque: true };
   }
   if (
     pid !== undefined &&
@@ -199,7 +199,11 @@ export function scopeVerdict(input: {
     const scope = batchAppScope(name, input.args);
     return scope !== undefined && scope.apps.every((app) => approves(approved, app))
       ? { _tag: "allow" }
-      : { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
+      : {
+          _tag: "refuse",
+          reason: scope === undefined ? "app_not_allowed" : "desktop_not_approved",
+          opaque: true,
+        };
   }
   if (name === "launch_app") {
     // The driver picks what to open from a name, a path, an AUMID or URLs before any id a grant
@@ -215,7 +219,11 @@ export function scopeVerdict(input: {
       ? { _tag: "allow" }
       : { _tag: "refuse", reason: "app_not_approved", app: bundle };
   }
-  if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
+  if (pid === undefined)
+    return {
+      _tag: "refuse",
+      reason: isReadOnlyCall(name, input.args) ? "desktop_not_approved" : "app_not_allowed",
+    };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };
   // Only the id list_apps reports counts, or the exact executable it runs: a display name would

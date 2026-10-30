@@ -11,8 +11,11 @@ import {
   foregroundActive,
   call,
   CONTROL,
-  harness,
+  harness as makeHarness,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("proxy execution ownership", () => {
   it.effect("an expired primitive cannot start display proof after placement stalls", () =>
@@ -427,7 +430,12 @@ describe("proxy execution ownership", () => {
           ...update,
           foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
         });
-        yield* h.send(call(1, "run_script", { script: "opaque work" }));
+        yield* h.send(
+          call(1, "run_script", {
+            script: "opaque work",
+            app_scope: { apps: ["com.apple.calculator"] },
+          }),
+        );
         yield* h.nextToDriver;
         yield* TestClock.adjust("5 minutes");
         yield* h.nextToProvider;
@@ -447,7 +455,12 @@ describe("proxy execution ownership", () => {
         ...update,
         foreground: update.foreground.map((grant) => ({ ...grant, expiresAtMillis: 300_000 })),
       });
-      yield* h.send(call(1, "run_script", { script: "opaque work" }));
+      yield* h.send(
+        call(1, "run_script", {
+          script: "opaque work",
+          app_scope: { apps: ["com.apple.calculator"] },
+        }),
+      );
       yield* h.nextToDriver;
       yield* h.nextReservation;
       yield* TestClock.adjust("5 minutes");
@@ -488,7 +501,12 @@ describe("proxy execution ownership", () => {
           const refused = (yield* h.nextToProvider).result as {
             structuredContent: { detail: string };
           };
-          assert.equal(refused.structuredContent.detail, "foreground_not_approved");
+          assert.equal(
+            refused.structuredContent.detail,
+            name === "move_cursor" || name === "run_steps" || name === "run_script"
+              ? "app_not_allowed"
+              : "foreground_not_approved",
+          );
           yield* h.reply(
             JSON.stringify({ jsonrpc: "2.0", id: discoveryId, result: { tools: [] } }),
           );
@@ -502,7 +520,9 @@ describe("proxy execution ownership", () => {
     Effect.gen(function* () {
       const h = yield* harness({ humanInput: true });
       yield* h.push(foregroundActive());
-      yield* h.send(call(1, "run_script", { code: "opaque" }));
+      yield* h.send(
+        call(1, "run_script", { code: "opaque", app_scope: { apps: ["com.apple.calculator"] } }),
+      );
       yield* h.nextToDriver;
       const acquired = yield* h.nextReservation;
       assert.equal(yield* h.agentCall, "start 1");
@@ -690,7 +710,9 @@ describe("proxy execution ownership", () => {
       Effect.gen(function* () {
         const h = yield* harness({ humanInput: true });
         yield* h.push(foregroundActive());
-        yield* h.send(call(1, "run_script", { code: "opaque" }));
+        yield* h.send(
+          call(1, "run_script", { code: "opaque", app_scope: { apps: ["com.apple.calculator"] } }),
+        );
         yield* h.nextToDriver;
         const acquired = yield* h.nextReservation;
         assert.equal(yield* h.agentCall, "start 1");
