@@ -190,6 +190,7 @@ function NoteContent(props: NoteParams) {
     localBody.current = nextBody;
     setStatus(nextStatus);
     localStatus.current = nextStatus;
+    let stored = false;
     try {
       await notesOutbox.enqueue({
         environmentId,
@@ -199,6 +200,12 @@ function NoteContent(props: NoteParams) {
         baseRevision: editBase.current,
         localUpdatedAt: Date.now(),
       });
+      stored = true;
+    } catch (error) {
+      setDirty(true);
+      setError(notesError(error));
+    }
+    if (stored) {
       savedSnapshot.current = { body: nextBody, status: nextStatus };
       // Edits that arrived while the outbox was writing are not in this snapshot.
       if (localBody.current === nextBody && localStatus.current === nextStatus) {
@@ -208,9 +215,6 @@ function NoteContent(props: NoteParams) {
       }
       setError(null);
       void flushNotes(environmentId).catch((error: unknown) => setError(notesError(error)));
-    } catch (error) {
-      setDirty(true);
-      setError(notesError(error));
     }
     pendingSaves.current--;
     if (pendingSaves.current === 0) setSaving(false);
