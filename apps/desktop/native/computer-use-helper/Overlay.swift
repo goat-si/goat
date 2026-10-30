@@ -180,7 +180,8 @@ final class AgentOverlay {
     }
     let pid = command["pid"] as? Int
     let app = pid.flatMap { NSRunningApplication(processIdentifier: pid_t($0))?.localizedName } ?? "an app"
-    let stopHint = escapeAvailable ? "press Esc to stop" : "use Stop in GOAT"
+    let stopHint = escapeAvailable && command["escEnabled"] as? Bool == true
+      ? "press Esc to stop" : "use Stop in GOAT"
     view.statusText = "GOAT is using \(app) — \(stopHint)"
     let phase = command["phase"] as? String ?? "resting"
     currentPhase = phase

@@ -429,6 +429,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
                         at: Date.now() - input.ageMs,
                       }),
                     () => void Queue.offerUnsafe(personStops, undefined),
+                    proxyChannelToken !== undefined,
                   ),
                   humanInput: seen.events,
                   personStop: Stream.fromQueue(personStops),

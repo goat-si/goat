@@ -87,6 +87,7 @@ export const ComputerUseOverlayCommand = Schema.Union([
     identity: AgentCursorOwner,
     pid: Schema.Int,
     windowId: Schema.Int,
+    escEnabled: Schema.optionalKey(Schema.Boolean),
     point: Schema.optionalKey(ComputerUseOverlayPoint),
     phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
   }),
@@ -100,6 +101,7 @@ export const ComputerUseOverlayCommand = Schema.Union([
     op: Schema.Literal("show"),
     pid: Schema.Int,
     windowId: Schema.Int,
+    escEnabled: Schema.optionalKey(Schema.Boolean),
     /** Absent when the call named an element, a zoomed region or a window not yet seen. */
     point: Schema.optionalKey(ComputerUseOverlayPoint),
     /** Direct driver calls retain their original marker. */
