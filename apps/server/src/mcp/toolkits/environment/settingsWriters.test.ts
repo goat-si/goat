@@ -19,6 +19,8 @@ const SETTINGS_WRITERS: Readonly<Record<string, string>> = {
   "fleet/resources/Fallback.ts": "Validates and stores fallback chains.",
   "device/DeviceService.ts": "Stores device hosts after checking them.",
   "cua/ComputerUseSettings.ts": "Turns computer use on after admission.",
+  "handoffs/computerUseStanding.ts":
+    "Records a person's standing app choice when an authorized computer-use handoff completes.",
   "mcp/ThreadReplicaService.ts": "Sets checkpoint replication for a host.",
   "memory/MemorySettingsService.ts": "Versioned memory settings transitions.",
   "provider/ProjectSettingsOverrideSweep.ts": "Removes overrides for deleted provider instances.",
