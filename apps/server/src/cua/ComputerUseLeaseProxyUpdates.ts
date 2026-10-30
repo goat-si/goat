@@ -13,7 +13,10 @@ import * as Stream from "effect/Stream";
 import { TURN_ENDED, type Interruption, type LeaseEnd } from "./ComputerUseLeaseMessages.ts";
 import type { makeLeaseFences, TakenUpdate } from "./leaseUpdateFences.ts";
 
-export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(function* <E>(input: {
+export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(function* <
+  E,
+  ED,
+>(input: {
   readonly updates: Stream.Stream<ComputerUseLeaseUpdate, E>;
   readonly controlId: string;
   readonly fences: ReturnType<typeof makeLeaseFences>;
@@ -22,7 +25,7 @@ export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(func
   readonly shared: (value: boolean) => void;
   readonly deadline: (value: number) => void;
   readonly confirm: (update: ComputerUseLeaseUpdate | undefined) => void;
-  readonly lock: (effect: Effect.Effect<void>) => Effect.Effect<void>;
+  readonly lock: <A, Err>(effect: Effect.Effect<A, Err>) => Effect.Effect<A, Err>;
   readonly end: (reason: LeaseEnd) => Effect.Effect<void>;
   readonly pause: (reason: ComputerUsePauseReason) => Effect.Effect<void>;
   readonly idle: () => void;
@@ -30,9 +33,9 @@ export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(func
   readonly confirmed: Deferred.Deferred<void>;
   readonly activate: (
     update: Extract<ComputerUseLeaseUpdate, { state: "active" }>,
-  ) => Effect.Effect<void>;
+  ) => Effect.Effect<void, ED>;
   readonly onApplied: ((update: ComputerUseLeaseUpdate) => Effect.Effect<void>) | undefined;
-  readonly transportDropped: Effect.Effect<void>;
+  readonly transportDropped: Effect.Effect<void, ED>;
   readonly register: (
     receive: (update: ComputerUseLeaseUpdate | undefined) => void,
     drop: () => void,
@@ -97,7 +100,7 @@ export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(func
   const take = (update: ComputerUseLeaseUpdate | undefined) => Effect.sync(() => receive(update));
   yield* input.updates.pipe(
     Stream.runForEach(take),
-    Effect.catchCause(() => Effect.void),
+    Effect.ignoreCause,
     Effect.andThen(take(undefined)),
     Effect.forkScoped,
   );
