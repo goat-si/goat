@@ -2,9 +2,7 @@ import {
   EnvironmentId,
   EventId,
   MessageId,
-  NodeId,
   ORCHESTRATION_V2_WS_METHODS,
-  RuntimeRequestId,
   ThreadId,
   TurnItemId,
   type OrchestrationV2ThreadDetailSnapshot,
@@ -45,7 +43,15 @@ import {
   decodeOrDiscardOrchestrationCache,
 } from "../platform/orchestrationCache.ts";
 import * as RpcSession from "../rpc/session.ts";
-import { v2Now, v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
+import { v2Projection, v2ThreadId } from "./orchestrationV2TestFixtures.ts";
+import {
+  PENDING_QUESTION,
+  deleted,
+  questionResolved,
+  snapshot,
+  synchronized,
+  titleUpdated,
+} from "./threadsSyncFixtures.ts";
 import { onThreadRequestsResolved, type ThreadRequestsResolved } from "./threadRequests.ts";
 import { EMPTY_THREAD_HISTORY_META } from "./threadHistoryMerge.ts";
 import * as ThreadHistoryController from "./threadHistoryController.ts";
@@ -300,71 +306,6 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     ),
   };
 });
-
-const snapshot = (
-  projection: OrchestrationV2ThreadProjection,
-  snapshotSequence = 1,
-): Extract<OrchestrationV2ThreadStreamItem, { readonly kind: "snapshot" }> => ({
-  kind: "snapshot",
-  snapshotSequence,
-  projection,
-});
-
-const synchronized = (): OrchestrationV2ThreadStreamItem => ({ kind: "synchronized" });
-
-const PENDING_QUESTION = {
-  id: RuntimeRequestId.make("question"),
-  nodeId: NodeId.make("question-node"),
-  providerTurnId: null,
-  nativeRequestRef: null,
-  kind: "user_input" as const,
-  status: "pending" as const,
-  responseCapability: { type: "message" as const },
-  createdAt: v2Now,
-  resolvedAt: null,
-};
-
-const questionResolved = (sequence: number): OrchestrationV2ThreadStreamItem => ({
-  kind: "event",
-  sequence,
-  event: {
-    id: EventId.make("event-request"),
-    type: "runtime-request.updated",
-    threadId: THREAD_ID,
-    occurredAt: v2Now,
-    payload: { ...PENDING_QUESTION, status: "resolved", resolvedAt: v2Now },
-  },
-});
-
-const titleUpdated = (title: string, sequence = 2): OrchestrationV2ThreadStreamItem => {
-  const occurredAt = DateTime.makeUnsafe("2026-06-20T01:00:00.000Z");
-  return {
-    kind: "event",
-    sequence,
-    event: {
-      id: EventId.make("event-title"),
-      type: "thread.metadata-updated",
-      threadId: THREAD_ID,
-      occurredAt,
-      payload: { ...v2Projection.thread, title, updatedAt: occurredAt },
-    },
-  };
-};
-
-const deleted = (sequence = 3): OrchestrationV2ThreadStreamItem => {
-  const occurredAt = DateTime.makeUnsafe("2026-06-20T02:00:00.000Z");
-  return {
-    kind: "event",
-    sequence,
-    event: {
-      id: EventId.make("event-deleted"),
-      type: "thread.deleted",
-      threadId: THREAD_ID,
-      occurredAt,
-      payload: { ...v2Projection.thread, updatedAt: occurredAt, deletedAt: occurredAt },
-    },
-  };
-};
 
 describe("EnvironmentThreads", () => {
   it.effect("discards an oversized version-4 cache and requests a fresh bounded snapshot", () =>

@@ -21,6 +21,8 @@ import {
   parseStartupCrashRecords,
   type StartupCrashRecord,
 } from "./crash-log-model";
+import { ThreadStreamsSection, useThreadStreamDiagnostics } from "./ThreadStreamsSection";
+import { formatThreadStreamReport } from "@goat/client-runtime/state/thread-stream-diagnostics";
 
 // expo-updates retains only seven days of logs.
 const LOG_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -68,6 +70,8 @@ export function SettingsDiagnosticsRouteScreen() {
   const insets = useSafeAreaInsets();
   const state = useCrashLogState();
   const [copied, setCopied] = useState(false);
+  const [streamCopied, setStreamCopied] = useState(false);
+  const streams = useThreadStreamDiagnostics();
 
   const records = state.status === "ready" ? state.records : [];
   const copyReport = async () => {
@@ -75,6 +79,11 @@ export function SettingsDiagnosticsRouteScreen() {
       target: "crash report",
     });
     if (ok) setCopied(true);
+  };
+  const copyStreamReport = async () => {
+    const { version, build } = appIdentity();
+    const report = `GOAT ${version} (${build}), copied ${new Date().toISOString()}\n\n${formatThreadStreamReport(streams)}`;
+    if (await tryCopyTextWithHaptic(report, { target: "stream report" })) setStreamCopied(true);
   };
 
   return (
@@ -111,6 +120,8 @@ export function SettingsDiagnosticsRouteScreen() {
           )}
         </SettingsSection>
 
+        <ThreadStreamsSection diagnostics={streams} />
+
         <View className="gap-3">
           <SettingsSection title="Actions">
             <SettingsActionRow
@@ -119,11 +130,17 @@ export function SettingsDiagnosticsRouteScreen() {
               disabled={state.status !== "ready"}
               onPress={() => void copyReport()}
             />
+            <SettingsActionRow
+              icon={streamCopied ? "checkmark" : "doc.on.doc"}
+              label={streamCopied ? "Copied" : "Copy stream report"}
+              onPress={() => void copyStreamReport()}
+            />
           </SettingsSection>
           <Text className="px-2 text-sm leading-normal text-foreground-muted">
             Paste the report into a GitHub issue. It contains the app version, the JavaScript error
             message, and the component stack. Error messages can quote values from the app, so read
-            it over before sharing.
+            it over before sharing. The stream report lists thread ids, event counts and times; it
+            stays on this device until you paste it.
           </Text>
         </View>
       </ScrollView>

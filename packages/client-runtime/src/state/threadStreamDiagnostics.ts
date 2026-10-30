@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+
 /**
  * In-memory diagnostics for live thread streams, read by a client's Diagnostics screen.
  *
@@ -43,6 +45,7 @@ type MutableDiagnostic = {
 
 const records = new Map<string, MutableDiagnostic>();
 const listeners = new Set<() => void>();
+let version = 0;
 let clock: () => number = Date.now;
 
 function keyOf(environmentId: string, threadId: string): string {
@@ -50,6 +53,7 @@ function keyOf(environmentId: string, threadId: string): string {
 }
 
 function notify(): void {
+  version += 1;
   for (const listener of listeners) listener();
 }
 
@@ -221,27 +225,29 @@ export function subscribeThreadStreamDiagnostics(listener: () => void): () => vo
   };
 }
 
-function formatAge(now: number, at: number | null): string {
-  if (at === null) return "never";
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  return seconds < 120 ? `${seconds}s ago` : `${Math.round(seconds / 60)}m ago`;
+/** Changes whenever a subscribed reader should read the diagnostics again. */
+export function threadStreamDiagnosticsVersion(): number {
+  return version;
+}
+
+function formatTime(at: number | null): string {
+  return at === null ? "never" : `${DateTime.formatIso(DateTime.makeUnsafe(at)).slice(11, 19)} UTC`;
 }
 
 export function formatThreadStreamReport(
   diagnostics: ReadonlyArray<ThreadStreamDiagnostic>,
-  now: number = clock(),
 ): string {
   if (diagnostics.length === 0) return "No thread streams opened since the app started.";
   return diagnostics
     .map((d) =>
       [
-        `Thread ${d.threadId} (environment ${d.environmentId})${d.closedAt === null ? "" : ` closed ${formatAge(now, d.closedAt)}`}`,
+        `Thread ${d.threadId} (environment ${d.environmentId})${d.closedAt === null ? "" : `, closed ${formatTime(d.closedAt)}`}`,
         `  status: ${d.status}${d.error === null ? "" : ` (${d.error})`}`,
-        `  subscriptions: ${d.subscriptions}, last ${formatAge(now, d.lastSubscribedAt)}, started by ${d.lastStart ?? "nothing yet"}`,
-        `  events: ${d.events}, last #${d.lastSequence ?? "-"} ${d.lastEventType ?? ""} ${formatAge(now, d.lastEventAt)}`,
+        `  subscriptions: ${d.subscriptions}, last ${formatTime(d.lastSubscribedAt)}, started by ${d.lastStart ?? "nothing yet"}`,
+        `  events: ${d.events}, last #${d.lastSequence ?? "-"} ${d.lastEventType ?? ""} at ${formatTime(d.lastEventAt)}`,
         `  snapshots: ${d.snapshots}, latest item ordinal: ${d.latestItemOrdinal ?? "-"}`,
-        `  visible items: ${d.visibleItems ?? "-"}, feed rows drawn: ${d.renderedRows ?? "-"} (${formatAge(now, d.renderedAt)})`,
-        `  recent: ${d.transitions.map((t) => `${t.what} (${formatAge(now, t.at)})`).join(", ")}`,
+        `  visible items: ${d.visibleItems ?? "-"}, feed rows drawn: ${d.renderedRows ?? "-"} at ${formatTime(d.renderedAt)}`,
+        `  recent: ${d.transitions.map((t) => `${t.what} ${formatTime(t.at)}`).join(", ")}`,
       ].join("\n"),
     )
     .join("\n\n");

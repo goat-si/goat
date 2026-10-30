@@ -57,11 +57,10 @@ describe("thread stream diagnostics", () => {
     noteThreadStreamSubscribed("env", "thread", null);
     noteThreadStreamEvents("env", "thread", event(9, 12));
     noteThreadFeedRendered("env", "thread", 1);
-    now = 31_000;
-    const report = formatThreadStreamReport(readThreadStreamDiagnostics(), now);
-    expect(report).toContain("events: 1, last #9 turn-item.updated 30s ago");
-    expect(report).toContain("visible items: 3, feed rows drawn: 1 (30s ago)");
-    expect(report).toContain("subscriptions: 1, last 30s ago, started by replay");
+    const report = formatThreadStreamReport(readThreadStreamDiagnostics());
+    expect(report).toContain("events: 1, last #9 turn-item.updated at 00:00:01 UTC");
+    expect(report).toContain("visible items: 3, feed rows drawn: 1 at 00:00:01 UTC");
+    expect(report).toContain("subscriptions: 1, last 00:00:01 UTC, started by replay");
   });
 
   it("keeps a bounded number of threads and transitions", () => {

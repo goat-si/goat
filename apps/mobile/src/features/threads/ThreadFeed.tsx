@@ -159,6 +159,7 @@ import {
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { ThreadFeedPlaceholder } from "./ThreadFeedPlaceholder";
+import { ThreadFeedRenderProbe } from "./ThreadFeedRenderProbe";
 import { VideoPreviewModal, type VideoPreviewSource } from "../../components/VideoPreviewModal";
 import { markdownFileEmbedLabel, resolveMarkdownMediaPreview } from "../../lib/markdownMedia";
 import { attachmentVideoPreviewSource } from "../../lib/videoPreviewSource";
@@ -3318,6 +3319,11 @@ export const ThreadFeed = memo(function ThreadFeed({
           </View>
         ) : null}
         <VideoPreviewModal source={expandedVideo} onRequestClose={closeVideoPreview} />
+        <ThreadFeedRenderProbe
+          environmentId={String(props.environmentId)}
+          threadId={String(props.threadId)}
+          rows={presentedFeed.length}
+        />
         <FilePreviewModal source={expandedFile} onRequestClose={closeFilePreview} />
       </View>
     </PresentationSource>
