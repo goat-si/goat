@@ -1,7 +1,8 @@
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ExecutionEnvironmentDescriptor, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
 
@@ -26,8 +27,16 @@ it.effect(
       Effect.provide(
         Grants.layer.pipe(
           Layer.provide(
-            Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-              getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                Schema.decodeSync(ExecutionEnvironmentDescriptor)({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
             }),
           ),
         ),

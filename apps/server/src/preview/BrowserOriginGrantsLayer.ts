@@ -8,8 +8,8 @@ import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
 
 const make = Effect.gen(function* () {
-  const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
-  const environmentId = yield* identity.getEnvironmentId;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   let supported = false;

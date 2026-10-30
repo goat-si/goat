@@ -14,6 +14,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as BrowserOriginGrants from "../preview/BrowserOriginGrantsLayer.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { PER_SIGNAL_READ } from "./ComputerUseLeaseQueries.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -33,7 +34,14 @@ export const threadLeaseUpdates = (input: {
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
       const registry = yield* McpSessionRegistry.McpSessionRegistry;
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const wake = yield* Queue.sliding<void>(1);
+      if (Option.isSome(grants))
+        yield* grants.value.changes.pipe(
+          Stream.drop(1),
+          Stream.runForEach(() => Queue.offer(wake, undefined)),
+          Effect.forkScoped,
+        );
       // Acquire every subscription before reading authority, including while no control exists.
       const controls = yield* leases.subscribe;
       const credentials = yield* registry.subscribeChanges;
@@ -146,6 +154,10 @@ export const threadLeaseUpdates = (input: {
           controlId: current.controlId,
           expiresAt: DateTime.formatIso(current.expiresAt),
         };
+        const browserClaims = Option.isSome(grants)
+          ? yield* grants.value.claimsFor(input.threadId)
+          : [];
+        const claimedBrowserPids = Option.isSome(grants) ? yield* grants.value.claimedPids() : [];
         yield* Queue.offer(
           queue,
           value._tag === "paused"
@@ -162,6 +174,8 @@ export const threadLeaseUpdates = (input: {
                     ? {}
                     : { interruptions: value.interruptions }),
                   ...(value.shared === true ? { shared: true } : {}),
+                  ...(browserClaims.length === 0 ? {} : { browserClaims }),
+                  ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
                 },
         );
         const deadline = DateTime.toEpochMillis(current.expiresAt);

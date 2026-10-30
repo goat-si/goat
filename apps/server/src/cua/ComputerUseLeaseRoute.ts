@@ -102,10 +102,17 @@ export const leaseUpdates = (input: {
     Effect.gen(function* () {
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       // The proxy reading this exited, crashed or lost its connection: its app leases end (D17).
       yield* leases.streamOpened(input.controlId);
       yield* Effect.addFinalizer(() => leases.releaseApps(input.threadId, input.controlId));
       const wake = yield* Queue.sliding<void>(1);
+      if (Option.isSome(grants))
+        yield* grants.value.changes.pipe(
+          Stream.drop(1),
+          Stream.runForEach(() => Queue.offer(wake, undefined)),
+          Effect.forkScoped,
+        );
       const subscription = yield* leases.subscribe;
       yield* PubSub.take(subscription).pipe(
         Effect.andThen(Queue.offer(wake, undefined)),
@@ -145,6 +152,10 @@ export const leaseUpdates = (input: {
           yield* Queue.take(wake);
           continue;
         }
+        const browserClaims = Option.isSome(grants)
+          ? yield* grants.value.claimsFor(input.threadId)
+          : [];
+        const claimedBrowserPids = Option.isSome(grants) ? yield* grants.value.claimedPids() : [];
         yield* Queue.offer(
           queue,
           state.idle === true
@@ -161,6 +172,8 @@ export const leaseUpdates = (input: {
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
+                ...(browserClaims.length === 0 ? {} : { browserClaims }),
+                ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
               },
         );
         const remaining = state.wakeAt - (yield* Clock.currentTimeMillis);

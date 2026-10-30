@@ -225,6 +225,7 @@ import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
+import * as BrowserOriginGrants from "./preview/BrowserOriginGrantsLayer.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
@@ -935,6 +936,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
+  Layer.provideMerge(BrowserOriginGrants.layer),
   Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
