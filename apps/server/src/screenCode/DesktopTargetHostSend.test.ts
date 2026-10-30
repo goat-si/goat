@@ -20,8 +20,17 @@ const SCHEMA: Readonly<Record<string, ReadonlySet<string>>> = {
     "modifier",
     "action",
     "delivery_mode",
+    "post_action_wait",
   ]),
-  press_key: new Set(["session", "target", "element_token", "key", "modifiers", "delivery_mode"]),
+  press_key: new Set([
+    "session",
+    "target",
+    "element_token",
+    "key",
+    "modifiers",
+    "delivery_mode",
+    "post_action_wait",
+  ]),
   type_text: new Set([
     "session",
     "target",
@@ -29,6 +38,7 @@ const SCHEMA: Readonly<Record<string, ReadonlySet<string>>> = {
     "text",
     "inter_char_delay_ms",
     "delivery_mode",
+    "post_action_wait",
   ]),
   invoke_menu: new Set(["session", "pid", "window_id", "path"]),
 };

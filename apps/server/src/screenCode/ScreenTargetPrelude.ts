@@ -383,7 +383,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         return call('click', target);
       }
       // timeoutMs is a tab's wait for its target; action names an app's accessibility action.
-      options = __only('click options', options, ['button', 'count', 'send', tab ? 'timeoutMs' : 'action']);
+      options = __only('click options', options, ['button', 'count', 'send', ...(tab ? ['timeoutMs'] : ['action', 'verify'])]);
       if (options.button !== undefined && options.button !== 'left' && options.button !== 'right')
         throw new ScreenError('invalid_argument', 'button is "left" or "right"; nothing was sent.', true);
       if (tab && options.count !== undefined && !(Number.isInteger(options.count) && options.count >= 1 && options.count <= 3))
@@ -395,6 +395,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(tab && options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
           ...(!tab && options.send === true ? { send: true } : {}),
           ...(!tab && options.action !== undefined ? { action: options.action } : {}),
+          ...(!tab && options.verify === true ? { verify: true } : {}),
         });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
@@ -408,7 +409,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       });
     },
     type: (text, target, options = {}) => {
-      options = __only('type options', options, tab ? ['send'] : ['send', 'replace']);
+      options = __only('type options', options, tab ? ['send'] : ['send', 'replace', 'verify']);
       if (Array.isArray(target) || __winPt(target))
         throw new ScreenError('invalid_argument', 'Click the point first, then type without a target.', true);
       const run = () =>
@@ -417,6 +418,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           ...(target === undefined ? {} : aim(target)),
           ...(!tab && options && options.replace === true ? { replace: true } : {}),
           ...(!tab && options && options.send === true ? { send: true } : {}),
+          ...(!tab && options && options.verify === true ? { verify: true } : {}),
         });
       return needsImplicitObserve(target) ? ensureObserved().then(run) : run();
     },
@@ -426,7 +428,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
         !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
-      const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send']);
+      const actualOpts = __only('press options', targetIsSendOpts ? target : options, tab ? ['send'] : ['send', 'verify']);
       if (!tab && (Array.isArray(actualTarget) || __winPt(actualTarget)))
         throw new ScreenError('invalid_argument', 'Click the point first, then press the key without a target.', true);
       if (needsImplicitObserve(actualTarget)) await ensureObserved();
@@ -435,6 +437,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ...__keys(key, tab),
         ...(!tab && actualTarget !== undefined ? aim(actualTarget) : {}),
         ...(!tab && actualOpts && actualOpts.send === true ? { send: true } : {}),
+        ...(!tab && actualOpts && actualOpts.verify === true ? { verify: true } : {}),
       });
     },
     scroll: (target, direction, amount = 3) => {
@@ -464,7 +467,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
     drag: (from, to, options = {}) => {
       if (to === undefined) return call('drag', from ?? {});
-      options = __only('drag options', options, ['send']);
+      options = __only('drag options', options, tab ? ['send'] : ['send', 'verify']);
       if (tab) {
         const source = aim(from);
         const target = aim(to);
@@ -482,6 +485,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
           fromEnd: aim(from),
           toEnd: aim(to),
           ...(options && options.send === true ? { send: true } : {}),
+          ...(options && options.verify === true ? { verify: true } : {}),
         });
       return needsImplicitObserve(from) || needsImplicitObserve(to)
         ? ensureObserved().then(run)
@@ -533,7 +537,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
     ...common,
     ...extraProps,
     menu: (path, options = {}) =>
-      act('menu', 'invoke_menu', { path, ...(__only('menu options', options, ['send']).send === true ? { send: true } : {}) }),
+      act('menu', 'invoke_menu', {
+        path,
+        ...(__only('menu options', options, ['send', 'verify']).send === true ? { send: true } : {}),
+        ...(options && options.verify === true ? { verify: true } : {}),
+      }),
     launch: () => act('launch', 'launch_app', {}),
     getWindowState: async (arg = {}) => {
       try { return remember(await call('get_window_state', arg)); }

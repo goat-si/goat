@@ -53,6 +53,7 @@ import {
   INPUT_METHODS,
   prepareDesktopInput,
   validateMenuInput,
+  withoutWindowWatch,
 } from "./DesktopInputPlan.ts";
 import {
   CellWindowTracker,
@@ -64,6 +65,7 @@ import {
   type WindowEntry,
   withHolders,
 } from "./DesktopWindows.ts";
+import { noteHops } from "./DesktopHops.ts";
 import { runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
@@ -113,6 +115,8 @@ export interface BoundWindow {
   pointsStale?: "input" | "restart";
   /** Input ran without a post-input 60 ms settle sleep; the next screenshot settles first. */
   needsSettleBeforeCapture?: boolean;
+  /** When that input returned; the next capture waits only for the rest of the settle time. */
+  inputDrivenAt?: number;
   /** Element frames from the tree behind observationId, by driver token. */
   frames?: ReadonlyMap<string, Placed>;
   /** Element roles, labels and table-cell ancestry from the tree behind observationId. */
@@ -206,7 +210,8 @@ export const createDesktopTargetHost = (deps: {
   ) {
     if (!isJson(args) || !withinPrimitiveCap(args))
       return yield* Effect.fail(fail("invalid_argument"));
-    return yield* deps.primitiveChannel.request({
+    const requestedAt = yield* Clock.currentTimeMillis;
+    const reply = yield* deps.primitiveChannel.request({
       threadId: context.invocation.thread.threadId,
       runId: context.runId,
       turnId: context.turnId,
@@ -233,6 +238,8 @@ export const createDesktopTargetHost = (deps: {
             },
           }),
     });
+    noteHops(call, reply, (yield* Clock.currentTimeMillis) - requestedAt);
+    return reply;
   });
   const request = Effect.fn("DesktopTargetHost.request")(function* (
     ...input: Parameters<typeof send>
@@ -553,6 +560,7 @@ export const createDesktopTargetHost = (deps: {
     boundRequest,
     listWindows: (bound: BoundWindow, call: ScreenHostCall, context: ScreenHostContext) =>
       request("list_windows", { pid: bound.pid }, call, context),
+    jpegScreenshots: isMac,
     epoch: () => epoch,
     setEpoch: (next: number) => void (epoch = next),
   };
@@ -585,12 +593,19 @@ export const createDesktopTargetHost = (deps: {
       forwarded: Record<string, unknown>,
       acted: DesktopRow | undefined,
       runInput: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
+      verify: boolean,
     ) =>
       Effect.suspend(() => {
         bound.needsSettleBeforeCapture = true;
-        // A batch member skips window reads, except one that opens or closes a window.
-        if (inBatch && windowIntentOf(tool, forwarded, acted) === undefined)
-          return Effect.map(runInput, (result) => withoutUnprovenClose(tool, result));
+        delete bound.inputDrivenAt;
+        const driven = (at: number) => void (bound.inputDrivenAt = at);
+        // A batch member reads nothing around itself unless it asks to verify; one that opens or
+        // closes a window goes through the single-call path, which keeps it unverifiable.
+        if (inBatch && !verify && windowIntentOf(tool, forwarded, acted) === undefined)
+          return runInput.pipe(
+            Effect.tap(() => Effect.map(Clock.currentTimeMillis, driven)),
+            Effect.map((result) => withoutUnprovenClose(tool, result)),
+          );
         return runInputWithEvidence({
           send,
           call,
@@ -604,7 +619,10 @@ export const createDesktopTargetHost = (deps: {
           acted,
           rows: bound.rows ?? [],
           runInput,
+          verify,
+          seedWindows: bound.boundInCellId === context.cellId ? bound.boundWindows : undefined,
           opensWindow: bound.sheetTrigger !== undefined,
+          onDriven: driven,
           onSettled: () => {
             delete bound.needsSettleBeforeCapture;
           },
@@ -637,6 +655,7 @@ export const createDesktopTargetHost = (deps: {
           ),
           (reply) => driverResult("invoke_menu", reply),
         ),
+        callArgs(call.args).verify === true,
       );
     }
     if (call.method === "wait_for") {
@@ -703,7 +722,10 @@ export const createDesktopTargetHost = (deps: {
     const prepared = prepareDesktopInput(call.method, args, bound, tokenOf, tracker);
     if (prepared.error || !prepared.forwarded || !prepared.admission)
       return yield* Effect.fail(prepared.error ?? fail("invalid_argument"));
-    const { forwarded, elementToken, actedRow, admission } = prepared;
+    const { elementToken, actedRow, admission } = prepared;
+    const forwarded = isMac
+      ? withoutWindowWatch(call.method, prepared.forwarded, args)
+      : prepared.forwarded;
     const tool = call.method === "right_click" ? "right_click" : call.method;
     const pointerResolved = applyDesktopPointerArgs(
       call.method,
@@ -750,6 +772,7 @@ export const createDesktopTargetHost = (deps: {
           return result;
         },
       ),
+      args.verify === true,
     );
   });
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>

@@ -19,7 +19,11 @@ import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
-const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 10000 });
+// Evidence is read around an input only when the call asks for it.
+const evCall = (...[method, args, ref]: Parameters<typeof call>) => ({
+  ...call(method, { ...(args as object), verify: true }, ref),
+  deadlineMillis: 10000,
+});
 
 // A close or open shortcut re-reads windows a few times, so its caller moves the clock past them.
 const invokeEv = (
@@ -477,7 +481,7 @@ it.live(
     return Effect.gen(function* () {
       const failedCell = yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10]); await app.menu([]); return c;",
+          "const c = await app.click([10, 10], {verify: true}); await app.menu([]); return c;",
       ).pipe(Effect.result);
       expect(failedCell._tag).toBe("Failure");
       if (failedCell._tag === "Failure") {
@@ -488,7 +492,7 @@ it.live(
       step = 0;
       const manyRes = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10]); return c.result.windows;",
+          "const c = await app.click([10, 10], {verify: true}); return c.result.windows;",
       )) as ScreenRunResult;
       expect(manyRes.windowsOpened).toHaveLength(16);
       expect(manyRes.windowsOpenedTruncated).toBe(true);
@@ -500,7 +504,7 @@ it.live(
       step = 0;
       const smallBudget = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10]); return c.result;",
+          "const c = await app.click([10, 10], {verify: true}); return c.result;",
         { returnBytes: 900 },
       )) as ScreenRunResult;
       expect((smallBudget.value as { windowsTruncated?: boolean })?.windowsTruncated).toBe(true);
@@ -510,7 +514,7 @@ it.live(
       step = 0;
       const exactBudget = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "const c = await app.click([10, 10]); return Boolean(c.result.pad);",
+          "const c = await app.click([10, 10], {verify: true}); return Boolean(c.result.pad);",
         { returnBytes: 540 },
       )) as ScreenRunResult;
       expect(exactBudget.value).toBe(true);
@@ -520,7 +524,7 @@ it.live(
       step = 0;
       const unvStart = (yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "await app.click([10, 10]); return 1;",
+          "await app.click([10, 10], {verify: true}); return 1;",
       )) as ScreenRunResult;
       expect(unvStart.windowsOpenedUnverified).toBe(true);
     }).pipe(Effect.provide(cellService(host)));
@@ -696,7 +700,7 @@ it.live(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
           "globalThis.calcApp = app; await app.observe(); await app.screenshot(); " +
           "const pxDone = await app.click([20, 20]); " +
-          "const elDone = await app.click(11); " +
+          "const elDone = await app.click(11, {verify: true}); " +
           "return { pxObs: pxDone.observed, pxRawObs: pxDone.result?._observed, elObs: elDone.observed, " +
           "elMs: typeof elDone.ms, elDriverMs: typeof elDone.phases?.driverMs, elSettleMs: typeof elDone.phases?.settleMs, " +
           "elRawTiming: elDone.result?._timing };",

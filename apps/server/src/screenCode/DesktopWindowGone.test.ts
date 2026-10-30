@@ -97,7 +97,10 @@ it.effect(
       const ref = bound.value as ScreenTargetRef;
       yield* host.observe(call("get_window_state", {}, ref), context);
       const out = yield* host.invoke(
-        { ...call("press_key", { key: "w", modifiers: ["cmd"] }, ref), deadlineMillis: 10_000 },
+        {
+          ...call("press_key", { key: "w", modifiers: ["cmd"], verify: true }, ref),
+          deadlineMillis: 10_000,
+        },
         context,
       );
       expect(out.category).toBe("confirmed");

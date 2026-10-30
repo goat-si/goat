@@ -182,7 +182,13 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
         if (next.scoped === undefined || (command.op === "hide" && command.reason === "capture"))
           yield* report(command);
         else if (scopedReport) yield* scopedReport.placed(command);
-        if (draw !== undefined) yield* draw(toHelper(command));
+        if (draw !== undefined) {
+          const toDraw = toHelper(command);
+          const post = (draw as { readonly post?: typeof draw }).post;
+          // A show is not waited for: only a hide has to be on screen before a call goes on.
+          if (toDraw.op === "show" && typeof post === "function") yield* post(toDraw);
+          else yield* draw(toDraw);
+        }
       }
     }),
     view: () => ({ enabled, visible: enabled && state.shown?.op === "show" }),

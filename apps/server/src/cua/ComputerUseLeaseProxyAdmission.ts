@@ -1,6 +1,7 @@
 import type { ComputerUseForegroundGrant } from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
@@ -97,3 +98,12 @@ export const makeProxyRelease =
     notSent?: boolean,
   ) =>
     releaseProxyCall(options, request, completed, notSent);
+
+/** A release that follows the call's answer: it only frees the ticket for other threads' calls. */
+export const makeProxyReleaseLater =
+  (
+    options: Pick<LeaseProxyOptions<never, never>, "reservation" | "controlId">,
+    scope: Scope.Scope,
+  ) =>
+  (...request: Parameters<ReturnType<typeof makeProxyRelease>>) =>
+    makeProxyRelease(options)(...request).pipe(Effect.forkIn(scope));

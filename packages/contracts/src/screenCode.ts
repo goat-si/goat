@@ -220,12 +220,29 @@ const base64 = Schema.String.check(
 export const ScreenImage = Schema.Struct({ ...imageFields, bytes: base64 });
 export type ScreenImage = typeof ScreenImage.Type;
 
+/**
+ * Where one driver call spent its time, in ms: the proxy's queueMs, admitMs (to the line reaching
+ * the driver), driverMs and replyMs, and channelMs, what the host measured beyond them.
+ */
+export const proxyHopFields = {
+  queueMs: Schema.optionalKey(natural),
+  admitMs: Schema.optionalKey(natural),
+  driverMs: Schema.optionalKey(natural),
+  replyMs: Schema.optionalKey(natural),
+};
+export const ScreenHopTimes = Schema.Struct({
+  ...proxyHopFields,
+  channelMs: Schema.optionalKey(natural),
+});
+export type ScreenHopTimes = typeof ScreenHopTimes.Type;
+
 /** Host time of one read by step: driver calls, tree parsing, rendering, and the rest of the host. */
 export const ScreenReadPhases = Schema.Struct({
   driverMs: natural,
   parseMs: natural,
   renderMs: natural,
   bridgeMs: natural,
+  hops: Schema.optionalKey(ScreenHopTimes),
 });
 export type ScreenReadPhases = typeof ScreenReadPhases.Type;
 

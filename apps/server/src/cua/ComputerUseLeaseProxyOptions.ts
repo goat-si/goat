@@ -33,11 +33,46 @@ import type { AgentInputReport } from "./agentInputReports.ts";
 import { SCREEN_CALL_EXPIRED } from "./ComputerUseLeaseMessages.ts";
 import { type JsonRpcId, refusal } from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
-import type { LinuxScreenshotPolicy } from "./ComputerUseLinuxScreenshots.ts";
+import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
-import { parse } from "./ComputerUseLeaseProtocol.ts";
+import { type Envelope, parse } from "./ComputerUseLeaseProtocol.ts";
 
 export const PRIMITIVE_ID = "goat:primitive:";
+
+/** The record of a request just written to the driver. */
+export const outstandingCall = (
+  message: Envelope,
+  id: JsonRpcId,
+  sentAt: number,
+  current: { readonly connectionId: string },
+  sink: ReplySink,
+  reservationId: string | undefined,
+  primitive: ComputerUsePrimitiveRequest | undefined,
+): OutstandingCall => {
+  const hops = primitive === undefined ? undefined : primitiveHops.get(primitive);
+  if (hops !== undefined) hops.sentAt = sentAt;
+  return {
+    id,
+    method: message.method ?? "",
+    ...(typeof message.params?.name === "string" ? { tool: message.params.name } : {}),
+    args: message.params?.arguments,
+    ...windowArgument(message.params?.arguments),
+    unfiltered: Object.keys(message.params?.arguments ?? {}).every((k) => k === "session"),
+    connectionId: current.connectionId,
+    sentAt,
+    sink,
+    ...(reservationId === undefined ? {} : { reservationId }),
+    ...(primitive === undefined ? {} : { primitiveRequestId: primitive.requestId }),
+    ...(hops === undefined ? {} : { hops }),
+  };
+};
+
+/** Notes when the proxy took a screen call up, after any wait behind earlier ones. */
+export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
+  Effect.map(Clock.currentTimeMillis, (now) => {
+    const hops = primitive === undefined ? undefined : primitiveHops.get(primitive);
+    if (hops !== undefined) hops.forwardAt = now;
+  });
 
 export interface ReplySink {
   readonly answer: (
@@ -46,6 +81,32 @@ export interface ReplySink {
     context?: { readonly tool?: string | undefined },
   ) => Effect.Effect<unknown>;
 }
+
+/** When a screen call reached each step of the proxy, on its clock; the reply reports the gaps. */
+export interface PrimitiveHops {
+  readonly receivedAt: number;
+  forwardAt?: number;
+  sentAt?: number;
+  lineAt?: number;
+}
+
+const primitiveHops = new WeakMap<ComputerUsePrimitiveRequest, PrimitiveHops>();
+
+const hopTimes = (hops: PrimitiveHops | undefined, answeredAt: number) => {
+  if (hops === undefined) return undefined;
+  const between = (from: number | undefined, to: number | undefined) =>
+    from === undefined || to === undefined ? undefined : { ms: Math.max(0, to - from) };
+  const queue = between(hops.receivedAt, hops.forwardAt);
+  const admit = between(hops.forwardAt, hops.sentAt);
+  const driver = between(hops.sentAt, hops.lineAt);
+  const reply = between(hops.lineAt, answeredAt);
+  return {
+    ...(queue === undefined ? {} : { queueMs: queue.ms }),
+    ...(admit === undefined ? {} : { admitMs: admit.ms }),
+    ...(driver === undefined ? {} : { driverMs: driver.ms }),
+    ...(reply === undefined ? {} : { replyMs: reply.ms }),
+  };
+};
 
 /** A request the proxy sent to the driver and has not answered yet. */
 export interface OutstandingCall {
@@ -60,6 +121,8 @@ export interface OutstandingCall {
   readonly sentAt?: number;
   /** The server's request id, for a call that came from a screen cell. */
   readonly primitiveRequestId?: string;
+  /** The screen call's step times, finished when the driver's line arrives. */
+  readonly hops?: PrimitiveHops;
   cancelled?: boolean;
   readonly sink: ReplySink;
 }
@@ -68,112 +131,116 @@ export const primitiveReplySink = (
   request: ComputerUsePrimitiveRequest,
   reply: ((value: ComputerUsePrimitiveReply) => Effect.Effect<unknown>) | undefined,
 ): ReplySink => ({
-  answer: Effect.fn("ComputerUseLeaseProxyOptions.answer")(
-    (line: string, status: ComputerUsePrimitiveReply["status"] = "not_started") => {
-      const envelope = parse(line);
-      const rawResult = envelope?.result;
-      const record = (value: unknown): Record<string, unknown> | undefined =>
-        value !== null && typeof value === "object" && !Array.isArray(value)
-          ? (value as Record<string, unknown>)
-          : undefined;
-      const resultObject = record(rawResult);
-      const content = Array.isArray(resultObject?.content) ? resultObject.content : [];
-      const imagePart = content.map(record).find((part) => part?.type === "image");
-      const jsonRecord = (text: unknown) => {
-        if (typeof text !== "string") return undefined;
-        try {
-          return record(JSON.parse(text));
-        } catch {
-          return undefined;
-        }
-      };
-      // Cua Driver sends a window read with an image as that image and its state in JSON text.
-      const textState =
-        resultObject?.structuredContent === undefined
-          ? content
-              .map(record)
-              .filter((part) => part?.type === "text")
-              .map((part) => jsonRecord(part?.text))
-              .find((value) => value !== undefined)
-          : undefined;
-      const state = record(resultObject?.structuredContent) ?? textState;
-      const width = state?.screenshot_width;
-      const height = state?.screenshot_height;
-      const bytes = imagePart?.data;
-      const imageSize =
-        typeof bytes === "string" &&
-        bytes.length <= Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 &&
-        /^[A-Za-z0-9+/]*={0,2}$/.test(bytes)
-          ? Buffer.from(bytes, "base64").byteLength
-          : Infinity;
-      const validImage =
-        imagePart !== undefined &&
-        (imagePart.mimeType === "image/png" || imagePart.mimeType === "image/jpeg") &&
-        typeof bytes === "string" &&
-        bytes.length % 4 === 0 &&
-        imageSize <= DEFAULT_SCREEN_RUN_LIMITS.imageBytes &&
-        Number.isSafeInteger(width) &&
-        (width as number) > 0 &&
-        Number.isSafeInteger(height) &&
-        (height as number) > 0;
-      const image = validImage
-        ? {
-            mimeType: imagePart.mimeType as "image/png" | "image/jpeg",
-            bytes: bytes as string,
-            width: width as number,
-            height: height as number,
-          }
+  answer: Effect.fn("ComputerUseLeaseProxyOptions.answer")(function* (
+    line: string,
+    status: ComputerUsePrimitiveReply["status"] = "not_started",
+  ) {
+    const answeredAt = yield* Clock.currentTimeMillis;
+    const envelope = parse(line);
+    const rawResult = envelope?.result;
+    const record = (value: unknown): Record<string, unknown> | undefined =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
         : undefined;
-      const imageError = imagePart !== undefined && !validImage;
-      const strippedResult =
-        imagePart === undefined && textState === undefined
-          ? rawResult
-          : {
-              ...resultObject,
-              ...(textState === undefined ? {} : { structuredContent: textState }),
-              content: content.filter((part) => record(part)?.type !== "image"),
-            };
-      const bounded = (value: unknown, maxBytes: number) => {
-        if (value === undefined) return undefined;
-        const encoded = JSON.stringify(value);
-        const bytes = encoded === undefined ? Infinity : Buffer.byteLength(encoded);
-        return encoded !== undefined && bytes <= maxBytes
-          ? (JSON.parse(encoded) as ComputerUsePrimitiveReply["result"])
-          : {
-              code: COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
-              message: "Driver reply exceeded the primitive channel limit.",
-              ...(Number.isFinite(bytes) ? { bytes } : {}),
-              maxBytes,
-              // A driver failure stays one when only its size is lost.
-              ...(record(value)?.isError === true ? { isError: true } : {}),
-            };
-      };
-      const result = imageError
-        ? undefined
-        : bounded(strippedResult, COMPUTER_USE_PRIMITIVE_RESULT_BYTES);
-      const error = bounded(
-        imageError
-          ? { message: "Driver image exceeded the primitive image limit or was invalid." }
-          : envelope?.error,
-        64 * 1024,
-      );
-      return (
-        reply?.({
-          requestId: request.requestId,
-          registrationId: request.registrationId,
-          controlId: request.controlId,
-          connectionGeneration: request.connectionGeneration,
-          runId: request.runId,
-          turnId: request.turnId,
-          callId: request.callId,
-          status,
-          ...(result === undefined ? {} : { result }),
-          ...(error === undefined ? {} : { error }),
-          ...(image === undefined ? {} : { image }),
-        }) ?? Effect.void
-      );
-    },
-  ),
+    const resultObject = record(rawResult);
+    const content = Array.isArray(resultObject?.content) ? resultObject.content : [];
+    const imagePart = content.map(record).find((part) => part?.type === "image");
+    const jsonRecord = (text: unknown) => {
+      if (typeof text !== "string") return undefined;
+      try {
+        return record(JSON.parse(text));
+      } catch {
+        return undefined;
+      }
+    };
+    // Cua Driver sends a window read with an image as that image and its state in JSON text.
+    const textState =
+      resultObject?.structuredContent === undefined
+        ? content
+            .map(record)
+            .filter((part) => part?.type === "text")
+            .map((part) => jsonRecord(part?.text))
+            .find((value) => value !== undefined)
+        : undefined;
+    const state = record(resultObject?.structuredContent) ?? textState;
+    const width = state?.screenshot_width;
+    const height = state?.screenshot_height;
+    const bytes = imagePart?.data;
+    const imageSize =
+      typeof bytes === "string" &&
+      bytes.length <= Math.ceil(DEFAULT_SCREEN_RUN_LIMITS.imageBytes / 3) * 4 &&
+      /^[A-Za-z0-9+/]*={0,2}$/.test(bytes)
+        ? Buffer.from(bytes, "base64").byteLength
+        : Infinity;
+    const validImage =
+      imagePart !== undefined &&
+      (imagePart.mimeType === "image/png" || imagePart.mimeType === "image/jpeg") &&
+      typeof bytes === "string" &&
+      bytes.length % 4 === 0 &&
+      imageSize <= DEFAULT_SCREEN_RUN_LIMITS.imageBytes &&
+      Number.isSafeInteger(width) &&
+      (width as number) > 0 &&
+      Number.isSafeInteger(height) &&
+      (height as number) > 0;
+    const image = validImage
+      ? {
+          mimeType: imagePart.mimeType as "image/png" | "image/jpeg",
+          bytes: bytes as string,
+          width: width as number,
+          height: height as number,
+        }
+      : undefined;
+    const imageError = imagePart !== undefined && !validImage;
+    const strippedResult =
+      imagePart === undefined && textState === undefined
+        ? rawResult
+        : {
+            ...resultObject,
+            ...(textState === undefined ? {} : { structuredContent: textState }),
+            content: content.filter((part) => record(part)?.type !== "image"),
+          };
+    const bounded = (value: unknown, maxBytes: number) => {
+      if (value === undefined) return undefined;
+      const encoded = JSON.stringify(value);
+      const bytes = encoded === undefined ? Infinity : Buffer.byteLength(encoded);
+      return encoded !== undefined && bytes <= maxBytes
+        ? (JSON.parse(encoded) as ComputerUsePrimitiveReply["result"])
+        : {
+            code: COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
+            message: "Driver reply exceeded the primitive channel limit.",
+            ...(Number.isFinite(bytes) ? { bytes } : {}),
+            maxBytes,
+            // A driver failure stays one when only its size is lost.
+            ...(record(value)?.isError === true ? { isError: true } : {}),
+          };
+    };
+    const result = imageError
+      ? undefined
+      : bounded(strippedResult, COMPUTER_USE_PRIMITIVE_RESULT_BYTES);
+    const error = bounded(
+      imageError
+        ? { message: "Driver image exceeded the primitive image limit or was invalid." }
+        : envelope?.error,
+      64 * 1024,
+    );
+    const hops = hopTimes(primitiveHops.get(request), answeredAt);
+    return yield* (
+      reply?.({
+        requestId: request.requestId,
+        registrationId: request.registrationId,
+        controlId: request.controlId,
+        connectionGeneration: request.connectionGeneration,
+        runId: request.runId,
+        turnId: request.turnId,
+        callId: request.callId,
+        status,
+        ...(result === undefined ? {} : { result }),
+        ...(error === undefined ? {} : { error }),
+        ...(image === undefined ? {} : { image }),
+        ...(hops === undefined || Object.keys(hops).length === 0 ? {} : { hops }),
+      }) ?? Effect.void
+    );
+  }),
 });
 
 /** Screen calls whose line reached the driver, marked in the same step that sends it. */
@@ -223,6 +290,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
     Stream.runForEach((request) =>
       Effect.gen(function* () {
         const id = nextId();
+        primitiveHops.set(request, { receivedAt: yield* Clock.currentTimeMillis });
         const first = primitiveReplySink(request, reply);
         let answered = false;
         const sink: ReplySink = {

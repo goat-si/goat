@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -113,6 +114,35 @@ const structured = (reply: { readonly result?: unknown }) =>
     .structuredContent;
 const text = (reply: { readonly result?: unknown }) =>
   (reply.result as { content: ReadonlyArray<{ text: string }> }).content[0]?.text ?? "";
+
+describe("ComputerUseLeaseProxy ticket release", () => {
+  it.effect("answers a screen call before the server has acknowledged its ticket's release", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const releases: Array<ComputerUseCallReservation> = [];
+      const h = yield* harness({
+        humanInput: true,
+        reservation: (call) =>
+          call.action === "release"
+            ? Effect.sync(() => void releases.push(call)).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as(admit(call)),
+              )
+            : Effect.succeed(admit(call)),
+      });
+      yield* h.push(active());
+      const first = yield* h.driverStarted;
+      yield* h.sendPrimitive(primitive("click:one", first.connectionId, 60_000, "click", WINDOW));
+      const sent = yield* h.nextToDriver;
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: sent.id, result: { content: [] } }));
+      assert.equal((yield* h.primitiveReply).status, "settled");
+      yield* TestClock.adjust(1);
+      assert.lengthOf(releases, 1);
+      assert.include(releases[0] as object, { completed: true });
+      yield* Deferred.succeed(gate, undefined);
+    }),
+  );
+});
 
 describe("ComputerUseLeaseProxy after a driver replacement while GOAT answers slowly", () => {
   it.effect(

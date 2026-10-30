@@ -20,7 +20,11 @@ import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 
-const evCall = (...args: Parameters<typeof call>) => ({ ...call(...args), deadlineMillis: 500000 });
+// Evidence is read around an input only when the call asks for it.
+const evCall = (...[method, args, ref]: Parameters<typeof call>) => ({
+  ...call(method, { ...(args as object), verify: true }, ref),
+  deadlineMillis: 500000,
+});
 
 const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
   Effect.gen(function* () {
@@ -386,7 +390,7 @@ it.live(
       step = 0;
       const ocRes = yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "await app.click([10, 10]); await app.screenshot(); await app.click([10, 10]);",
+          "await app.click([10, 10], {verify: true}); await app.screenshot(); await app.click([10, 10], {verify: true});",
       );
       expect(ocRes.windowsOpened).toBeUndefined();
 
@@ -395,7 +399,7 @@ it.live(
       step = 0;
       const eeRes = yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "await app.click([10, 10]);",
+          "await app.click([10, 10], {verify: true});",
       );
       expect(eeRes.windowsOpenedUnverified).toBe(true);
       expect(eeRes.windowsOpened?.map((w) => w.window_id)).toEqual([82779]);
@@ -405,7 +409,7 @@ it.live(
       step = 0;
       const dlRes = yield* runCell(
         "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.screenshot(); " +
-          "await app.click([10, 10]); await app.screenshot(); await new Promise(() => {});",
+          "await app.click([10, 10], {verify: true}); await app.screenshot(); await new Promise(() => {});",
       ).pipe(Effect.result);
       expect(dlRes._tag).toBe("Failure");
       if (dlRes._tag === "Failure") {
@@ -475,7 +479,7 @@ it.live(
     return Effect.gen(function* () {
       const cell1 = yield* runCell(
         "globalThis.savedApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
-          "await savedApp.observe(); const c = await savedApp.click('Apply'); return c.result.windows;",
+          "await savedApp.observe(); const c = await savedApp.click('Apply', {verify: true}); return c.result.windows;",
       );
       expect(
         (cell1.value as { opened?: Array<{ window_id: number }> })?.opened?.map((w) => w.window_id),

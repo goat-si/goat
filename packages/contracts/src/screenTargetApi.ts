@@ -3,11 +3,11 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/13";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/14";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
-// unverifiable or any unknown outcome: observe again, never resend. Stop from the person ends the cell at once.`;
+// An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Never resend an input. Stop from the person ends the cell at once.`;
 
 const COMMON = `type Target = number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
@@ -15,15 +15,15 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page; Linux and Windows app actions use element numbers from observe().
 type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: { role?: string; name?: string; id?: string } | null; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
-// ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
+// ms and phases: host time of this call (the driver or browser call; an app's first input on a process in a cell adds preMs, one window read for the cell's baseline; with verify, the post-reads too, and a settle wait when an element is read); absent for steps sent as one batch.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
 // ReadTime on observe and screenshot: host time of the read (the driver call, for a tab the browser's snapshot; tree parsing; rendering; the rest); absent when it would not fit the reply.
 type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted?: boolean; [k: string]: unknown };
 // The picture comes back as an image beside the cell's JSON, under its imageRef; [x, y] count its pixels from the top-left. omitted: it did not fit the cell's image limit.
 // An option, query or tab condition key a method below does not take is refused unsent (invalid_argument), naming the keys it takes.
-// App observed lists only the acted element's own state change; read other elements with observe(). A key with no target and no modifiers carries no windows report.
-// confirmed: the effect is proven. unverifiable: the input may already have taken effect; observe before
-// deciding whether to act again, and never resend it. A refused or failed call, in any call form, throws
+// App observed lists only the acted element's own state change; read other elements with observe(). An input carries observed evidence and a windows report only when it passes verify: true or opens a Go to Folder sheet.
+// confirmed: the effect is proven. unverifiable: the input was sent and no proof of its effect was found; it may already have taken effect,
+// so never resend it. Nothing waits on it: go on with the next step and observe when you need the result. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
 // after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
 // later input, but observe, read, status, waitFor and verify still run.
@@ -48,12 +48,12 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action is apps only
-  type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
-  press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui"; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and verify are apps only. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); an input that opens or closes a window may list windows up to four more times. observed: lines are evidence, not a verdict: only a window it proves opened or closed makes the verdict confirmed
+  type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: apps only, as on click
+  press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
   setValue(t: Target, value: string): Promise<Done>;
-  drag(from: Target, to: Target, o?: { send?: boolean }): Promise<Done>;
+  drag(from: Target, to: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>;
   waitFor(c: Condition, o?: number | { timeoutMs?: number }): Promise<{ met: boolean }>; // default 15 s; answers before the cell ends
   verify(c: Condition): Promise<{ met: boolean }> }`;
 
@@ -76,7 +76,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
-interface App extends TargetBase { menu(path: string[], o?: { send?: boolean }): Promise<Done>; launch(): Promise<Done>;
+interface App extends TargetBase { menu(path: string[], o?: { send?: boolean; verify?: boolean }): Promise<Done>; launch(): Promise<Done>;
   selectText(t: Target, text: string, o?: { occurrence?: number; prefix?: string; suffix?: string; selection?: "text" | "cursor_before" | "cursor_after" }): Promise<Done>;
   // selectText (macOS): selects text inside a field named by number, id or role and name, never a point, leaving its value as is; the text must match once
   // unless a zero-based occurrence picks one (prefix and suffix narrow the matches); cursor_before or cursor_after places the caret there instead.

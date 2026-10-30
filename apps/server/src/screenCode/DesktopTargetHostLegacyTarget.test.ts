@@ -24,7 +24,7 @@ const TARGETED = new Set([
   "hotkey",
 ]);
 const SCHEMA: Readonly<Record<string, ReadonlySet<string>>> = {
-  set_value: new Set(["session", "pid", "window_id", "element_token", "value"]),
+  set_value: new Set(["session", "pid", "window_id", "element_token", "value", "post_action_wait"]),
   right_click: new Set([
     "session",
     "pid",
@@ -34,6 +34,7 @@ const SCHEMA: Readonly<Record<string, ReadonlySet<string>>> = {
     "y",
     "modifier",
     "delivery_mode",
+    "post_action_wait",
   ]),
 };
 /** Answers a call as the driver would: refused before it runs unless its arguments fit. */
@@ -82,9 +83,21 @@ it.effect("setValue and a right click reach the driver with the arguments it tak
     );
     // An element token carries its window, so only a point names the window itself.
     expect(forwarded.map((entry) => entry.args)).toEqual([
-      { value: "hello", pid: 42, element_token: "s0000000a:0" },
-      { delivery_mode: "background", pid: 42, element_token: "s0000000a:0" },
-      { x: 10, y: 20, delivery_mode: "background", pid: 42, window_id: 7 },
+      { value: "hello", pid: 42, element_token: "s0000000a:0", post_action_wait: "none" },
+      {
+        delivery_mode: "background",
+        pid: 42,
+        element_token: "s0000000a:0",
+        post_action_wait: "none",
+      },
+      {
+        x: 10,
+        y: 20,
+        delivery_mode: "background",
+        pid: 42,
+        window_id: 7,
+        post_action_wait: "none",
+      },
     ]);
   }),
 );

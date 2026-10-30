@@ -11,11 +11,13 @@ import type {
   ScreenHostCall,
   ScreenImageMetadata,
   ScreenObservation,
+  ScreenHopTimes,
   ScreenReadPhases,
   ScreenRunError,
 } from "@goat/contracts";
 import { COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE } from "@goat/contracts";
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
+import { hopsOf } from "./DesktopHops.ts";
 import { settleCaptureIfNeeded } from "./DesktopEvidence.ts";
 import { boundsOf, elementFrames, sameRect, windowOrigin } from "./DesktopFrames.ts";
 import { inspectTreeElements } from "./DesktopInputGuards.ts";
@@ -79,6 +81,7 @@ export const buildObserveTiming = (input: {
   readonly driverMs: number;
   readonly parseMs: number;
   readonly renderMs: number;
+  readonly hops?: ScreenHopTimes | undefined;
 }): ObserveTiming => {
   const ms = elapsed(input.startedAt, input.endedAt);
   const driverMs = Math.max(0, input.driverMs);
@@ -91,6 +94,7 @@ export const buildObserveTiming = (input: {
       parseMs,
       renderMs,
       bridgeMs: Math.max(0, ms - driverMs - parseMs - renderMs),
+      ...(input.hops === undefined ? {} : { hops: input.hops }),
     },
   };
 };
@@ -121,6 +125,8 @@ const buildDesktopReadArgs = (input: {
   readonly pid: number;
   readonly windowId: number;
   readonly capture: boolean;
+  /** The macOS driver's JPEG is under half the PNG's bytes and takes a pixel click all the same. */
+  readonly jpeg: boolean;
   readonly limit: number;
   readonly filter?: string | undefined;
 }): Record<string, unknown> => ({
@@ -128,6 +134,7 @@ const buildDesktopReadArgs = (input: {
   window_id: input.windowId,
   include_accessibility_tree: !input.capture,
   include_screenshot: input.capture,
+  ...(input.capture && input.jpeg ? { screenshot_format: "jpeg" } : {}),
   max_elements: input.limit,
   ...(input.capture ? {} : { tree_format: "both" }),
   ...(input.filter === undefined ? {} : { query: input.filter }),
@@ -256,6 +263,7 @@ export interface DesktopObserveDeps {
     call: ScreenHostCall,
     context: ScreenHostContext,
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly jpegScreenshots: boolean;
   /** The host's latest target generation, and its update when a sheet's parent takes over. */
   readonly epoch: () => number;
   readonly setEpoch: (epoch: number) => void;
@@ -331,7 +339,14 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       bound,
       "nothing",
       "get_window_state",
-      buildDesktopReadArgs({ pid: bound.pid, windowId, capture, limit, filter }),
+      buildDesktopReadArgs({
+        pid: bound.pid,
+        windowId,
+        capture,
+        jpeg: deps.jpegScreenshots,
+        limit,
+        filter,
+      }),
       call,
       context,
     );
@@ -498,6 +513,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         driverMs,
         parseMs,
         renderMs,
+        hops: hopsOf(call),
       });
       return { value: withObserveTiming(observation, timing, rawBudget), category: "unverifiable" };
     }
@@ -537,6 +553,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     driverMs,
     parseMs,
     renderMs,
+    hops: hopsOf(call),
   });
   return {
     value: withScreenshotTiming(metadata, timing, context.limits.returnBytes),

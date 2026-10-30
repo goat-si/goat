@@ -282,3 +282,22 @@ it.live(
     });
   },
 );
+
+it.live(
+  "a batched click that asks to verify reads the windows around itself, and one that does not reads none",
+  () => {
+    const { host, sent } = fixture({ click: { effect: "unverifiable" } });
+    return Effect.gen(function* () {
+      yield* runCell(
+        `${BIND} await Promise.all([app.click('Apply'), app.click('Apply', {verify: true})]);`,
+      );
+      expect(sent.map((entry) => entry.tool).slice(3)).toEqual([
+        "click",
+        "list_windows",
+        "click",
+        "list_windows",
+      ]);
+      yield* finish;
+    }).pipe(Effect.provide(cellService(host)));
+  },
+);

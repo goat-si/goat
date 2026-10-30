@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import type { ScreenHostCall, ScreenObservation, ScreenTargetRef } from "@goat/contracts";
-import { call, context, fixture } from "./DesktopTargetHost.testkit.ts";
+import { call, context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { withInputTiming } from "./DesktopWindows.ts";
 
@@ -77,7 +77,75 @@ const answersWithoutSettle = <A, E>(effect: Effect.Effect<A, E>) =>
     return yield* Fiber.join(fiber);
   });
 
-it.effect("a stateless element click sends no verify_state and answers without a settle", () =>
+const otherCell = { ...context, cellId: "c2" };
+
+it.effect(
+  "an element click sends only the click, with the cell's baseline taken from its bind",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({
+        list_windows: { windows: [win] },
+        get_window_state: calculator,
+        click: { effect: "unverifiable" },
+        verify_state: unchanged,
+      });
+      const { ref, element } = yield* bound(host);
+      const first = sent.length;
+      const done = yield* answersWithoutSettle(
+        host.invoke(at(10_000, call("click", { elementRef: element("All Clear") }, ref)), context),
+      );
+      expect(sent.slice(first).map((each) => each.tool)).toEqual(["click"]);
+      expect(done.category).toBe("unverifiable");
+      expect(done.value).not.toHaveProperty("windows");
+      expect(done.evidence ?? []).toEqual([]);
+    }),
+);
+
+it.effect(
+  "an input leaves the driver's window watch to the next observe unless it asks to verify",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({
+        list_windows: { windows: [win] },
+        get_window_state: calculator,
+        click: { effect: "unverifiable" },
+        press_key: { effect: "unverifiable" },
+        verify_state: unchanged,
+      });
+      const { ref, element } = yield* bound(host);
+      yield* host.invoke(at(10_000, call("press_key", { key: "Enter" }, ref)), context);
+      yield* host.invoke(
+        at(10_000, call("click", { elementRef: element("All Clear"), verify: true }, ref)),
+        context,
+      );
+      const inputs = sent.filter((each) => each.tool === "press_key" || each.tool === "click");
+      expect(inputs[0]?.args).toMatchObject({ post_action_wait: "none" });
+      expect(inputs[1]?.args).not.toHaveProperty("post_action_wait");
+    }),
+);
+
+it.effect("a key without modifiers that asks to verify reads the windows around it", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_windows: { windows: [win] },
+      get_window_state: calculator,
+      press_key: { effect: "unverifiable" },
+    });
+    const { ref } = yield* bound(host);
+    const first = sent.length;
+    const done = yield* answersWithoutSettle(
+      host.invoke(at(10_000, call("press_key", { key: "Enter", verify: true }, ref)), context),
+    );
+    expect(sent.slice(first).map((each) => each.tool)).toEqual([
+      "list_windows",
+      "press_key",
+      "list_windows",
+    ]);
+    expect((done.value as { windows?: { bound?: string } }).windows?.bound).toBe("present");
+  }),
+);
+
+it.effect("a click that asks to verify reads the windows around the input", () =>
   Effect.gen(function* () {
     const { host, sent } = fixture({
       list_windows: { windows: [win] },
@@ -86,17 +154,26 @@ it.effect("a stateless element click sends no verify_state and answers without a
       verify_state: unchanged,
     });
     const { ref, element } = yield* bound(host);
+    const first = sent.length;
     const done = yield* answersWithoutSettle(
-      host.invoke(at(10_000, call("click", { elementRef: element("All Clear") }, ref)), context),
+      host.invoke(
+        at(10_000, call("click", { elementRef: element("All Clear"), verify: true }, ref)),
+        context,
+      ),
     );
+    expect(sent.slice(first).map((each) => each.tool)).toEqual([
+      "list_windows",
+      "click",
+      "list_windows",
+    ]);
+    expect(sent.find((each) => each.tool === "click")?.args).not.toHaveProperty("verify");
     expect(done.category).toBe("unverifiable");
-    expect(sent.filter((each) => each.tool === "verify_state")).toHaveLength(0);
     expect((done.value as { windows?: { bound?: string } }).windows?.bound).toBe("present");
   }),
 );
 
 it.effect(
-  "an untargeted key without modifiers sends only the key once the cell has a baseline",
+  "the first input on a process in a cell reads one baseline, and later inputs read nothing",
   () =>
     Effect.gen(function* () {
       const { host, sent } = fixture({
@@ -108,12 +185,12 @@ it.effect(
       const { ref } = yield* bound(host);
       const first = sent.length;
       yield* answersWithoutSettle(
-        host.invoke(at(10_000, call("press_key", { key: "Escape" }, ref)), context),
+        host.invoke(at(10_000, call("press_key", { key: "Escape" }, ref)), otherCell),
       );
       expect(sent.slice(first).map((each) => each.tool)).toEqual(["list_windows", "press_key"]);
       const second = sent.length;
       const done = yield* answersWithoutSettle(
-        host.invoke(at(10_000, call("press_key", { key: "Escape" }, ref)), context),
+        host.invoke(at(10_000, call("press_key", { key: "Escape" }, ref)), otherCell),
       );
       expect(sent.slice(second).map((each) => each.tool)).toEqual(["press_key"]);
       expect(done.value).not.toHaveProperty("windows");
@@ -132,15 +209,53 @@ it.effect(
       const { ref } = yield* bound(host);
       const first = sent.length;
       // The testkit's 1,000 ms deadline leaves no room for a list_windows before the key's own cap.
-      yield* host.invoke(call("press_key", { key: "Escape" }, ref), context);
+      yield* host.invoke(call("press_key", { key: "Escape" }, ref), otherCell);
       expect(sent.slice(first).map((each) => each.tool)).toEqual(["press_key"]);
-      const cell = yield* host.finishCell!(context, { cellDeadlineMillis: 10_000 });
+      const cell = yield* host.finishCell!(otherCell, { cellDeadlineMillis: 10_000 });
       expect(cell.windowsOpenedUnverified).toBe(true);
     }),
 );
 
+it.effect("an input the driver reports done never reads a window to confirm it", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_windows: { windows: [win] },
+      get_window_state: calculator,
+      press_key: { effect: "confirmed" },
+    });
+    const { ref } = yield* bound(host);
+    const first = sent.length;
+    const key = yield* host.invoke(at(10_000, call("press_key", { key: "Enter" }, ref)), context);
+    expect(key.category).toBe("confirmed");
+    // A close shortcut proves nothing without a window list, so it is not reported as done.
+    const close = yield* host.invoke(
+      at(10_000, call("press_key", { key: "w", modifiers: ["command"] }, ref)),
+      context,
+    );
+    expect(close.category).toBe("unverifiable");
+    expect(sent.slice(first).map((each) => each.tool)).toEqual(["press_key", "press_key"]);
+  }),
+);
+
+it.effect("a refused or failed input stays a typed error with no read around it", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_windows: { windows: [win] },
+      get_window_state: calculator,
+      click: new DriverError({ status: "failed" }, "the element is gone"),
+    });
+    const { ref, element } = yield* bound(host);
+    const first = sent.length;
+    const failed = yield* host
+      .invoke(at(10_000, call("click", { elementRef: element("All Clear") }, ref)), context)
+      .pipe(Effect.result);
+    expect(failed._tag).toBe("Failure");
+    expect(sent.slice(first).map((each) => each.tool)).toEqual(["click"]);
+  }),
+);
+
 it.effect(
-  "a tree read after an unsettled input waits out the settle first, unless the cell is nearly over",
+  "a tree read after an input waits only for what is left of the settle time, unless the cell is nearly over",
   () =>
     Effect.gen(function* () {
       const { host, sent } = fixture({
@@ -150,22 +265,34 @@ it.effect(
       });
       const { ref, element } = yield* bound(host);
       const reads = () => sent.filter((each) => each.tool === "get_window_state").length;
-      yield* answersWithoutSettle(
-        host.invoke(at(10_000, call("click", { elementRef: element("All Clear") }, ref)), context),
+      yield* host.invoke(
+        at(10_000, call("click", { elementRef: element("All Clear") }, ref)),
+        context,
       );
       const before = reads();
+      // 40 ms pass after the input, so the read owes 20 ms more.
+      yield* TestClock.adjust("40 millis");
       const read = yield* host
         .observe(at(10_000, call("get_window_state", {}, ref)), context)
         .pipe(Effect.forkChild);
-      yield* TestClock.adjust("59 millis");
+      yield* TestClock.adjust("19 millis");
       expect(reads()).toBe(before);
       yield* TestClock.adjust("1 millis");
       const fresh = (yield* Fiber.join(read)).value as ScreenObservation;
       expect(reads()).toBe(before + 1);
 
+      // Once 60 ms have passed since the input, the next read goes out at once.
       const clear = fresh.elements.find((each) => each.name === "All Clear")!.ref;
+      yield* host.invoke(at(10_000, call("click", { elementRef: clear }, ref)), context);
+      yield* TestClock.adjust("60 millis");
+      const late = reads();
+      const latest = (yield* host.observe(at(10_000, call("get_window_state", {}, ref)), context))
+        .value as ScreenObservation;
+      expect(reads()).toBe(late + 1);
+
+      const again = latest.elements.find((each) => each.name === "All Clear")!.ref;
       yield* answersWithoutSettle(
-        host.invoke(at(10_000, call("click", { elementRef: clear }, ref)), context),
+        host.invoke(at(10_000, call("click", { elementRef: again }, ref)), context),
       );
       const tight = reads();
       yield* host.observe(call("get_window_state", {}, ref), context);
@@ -225,13 +352,13 @@ it.effect("an input's result carries its total and per-phase host time", () =>
 
     expect(
       yield* timed(at(10_000, call("click", { elementRef: named("All Clear") }, ref))),
-    ).toEqual({
-      ms: 11,
-      phases: { preMs: 2, driverMs: 7, postMs: 2 },
-    });
+    ).toEqual({ ms: 7, phases: { driverMs: 7 } });
+    // The reads before and after the input run side by side, so each phase costs its slowest read.
     expect(
-      yield* timed(at(10_000, call("click", { elementRef: named("Secondary Functions") }, ref))),
-    ).toEqual({ ms: 77, phases: { preMs: 5, driverMs: 7, settleMs: 60, postMs: 5 } });
+      yield* timed(
+        at(10_000, call("click", { elementRef: named("Secondary Functions"), verify: true }, ref)),
+      ),
+    ).toEqual({ ms: 73, phases: { preMs: 3, driverMs: 7, settleMs: 60, postMs: 3 } });
     expect(yield* timed(at(10_000, call("press_key", { key: "Escape" }, ref)))).toEqual({
       ms: 5,
       phases: { driverMs: 5 },

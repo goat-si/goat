@@ -108,6 +108,54 @@ it.effect(
     }),
 );
 
+it.effect("an observe lists where the proxy and the host spent the driver call", () =>
+  Effect.gen(function* () {
+    const base = fixture({ get_window_state: goat2WindowState });
+    const channel = {
+      request: (request: { tool: string }) =>
+        request.tool === "get_window_state"
+          ? TestClock.adjust("10 millis").pipe(
+              Effect.andThen(base.channel.request(request as never)),
+              Effect.map((reply) => ({
+                ...reply,
+                hops: { queueMs: 1, admitMs: 2, driverMs: 5, replyMs: 1 },
+              })),
+            )
+          : base.channel.request(request as never),
+    } as unknown as ComputerUsePrimitiveChannel["Service"];
+    const host = createDesktopTargetHost({
+      primitiveChannel: channel,
+      leases: base.leases,
+      platform: "darwin",
+    });
+    const ref = yield* bind(host as never);
+    const tree = (yield* host.observe(call("get_accessibility_tree", {}, ref), context)).value;
+    expect(tree).toMatchObject({
+      ms: 10,
+      phases: {
+        driverMs: 10,
+        hops: { queueMs: 1, admitMs: 2, driverMs: 5, replyMs: 1, channelMs: 1 },
+      },
+    });
+    expect(isObservation(tree)).toBe(true);
+  }),
+);
+
+it.effect("a macOS screenshot asks the driver for a JPEG, and a tree read does not", () =>
+  Effect.gen(function* () {
+    const { host, sent } = timedHost({ get_window_state: goat2WindowState });
+    const ref = yield* bind(host);
+    yield* host.observe(call("get_accessibility_tree", {}, ref), context);
+    yield* host.observe(call("screenshot", {}, ref), context);
+    const reads = sent.filter((entry) => entry.tool === "get_window_state");
+    expect(reads.map((entry) => entry.args)).toMatchObject([
+      { include_accessibility_tree: true, include_screenshot: false },
+      { include_accessibility_tree: false, include_screenshot: true, screenshot_format: "jpeg" },
+    ]);
+    expect(reads[0]?.args).not.toHaveProperty("screenshot_format");
+  }),
+);
+
 it.effect(
   "a screenshot that keeps the tree's snapshot renders nothing and keeps its refs; one that replaces it renders once and retires them",
   () =>
