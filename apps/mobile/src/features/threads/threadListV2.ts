@@ -390,6 +390,10 @@ export function buildThreadListV2Items(input: {
     snoozeEnvironmentIds: input.snoozeEnvironmentIds,
     queuedThreadKeys: input.queuedThreadKeys,
   };
+  // Rows this list holds in Priority are out of the move planner's order, so out of this one too.
+  const heldKeys = [...(input.priorityHolds?.keys() ?? [])].filter(
+    (key) => input.priorityReleases?.has(key) !== true,
+  );
   const pending =
     input.pendingOrder == null
       ? null
@@ -399,7 +403,10 @@ export function buildThreadListV2Items(input: {
             ...input,
             section: input.pendingOrder.section,
             pendingOrder: null,
-            excludedThreadKeys: input.reorderExcludedKeys,
+            excludedThreadKeys:
+              heldKeys.length === 0
+                ? input.reorderExcludedKeys
+                : new Set([...(input.reorderExcludedKeys ?? []), ...heldKeys]),
           }),
         );
   const query = foldSearchQuery(input.searchQuery);

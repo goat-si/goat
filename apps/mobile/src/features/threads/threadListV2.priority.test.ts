@@ -21,6 +21,7 @@ import {
   type ThreadListV2ListItem,
 } from "./threadListV2";
 import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
+import { createPendingThreadOrder } from "./threadOrder";
 import { publishHeldPriorityKeys } from "./threadListV2PriorityHolds";
 import { threadListV2PriorityReadPlans } from "./threadListV2PriorityRead";
 
@@ -253,5 +254,30 @@ describe("threadListV2 Priority", () => {
       publishHeldPriorityKeys("home", null);
     }
     expect(excluded("sidebar")).toBe(false);
+  });
+
+  it("keeps an in-flight move while a read row stays held in Priority", () => {
+    const rows = [
+      makeThread("a", { activeOrderKey: "a1" }),
+      makeThread("held", { activeOrderKey: "a2", latestRun: completedRun, lastVisitedAt: AFTER }),
+      makeThread("b", { activeOrderKey: "a3" }),
+    ];
+    const planned = [rows[0]!, rows[2]!];
+    const pendingOrder = createPendingThreadOrder({
+      section: "active",
+      ordered: planned,
+      movedId: `${environmentId}:b`,
+      direction: "up",
+      assignments: [{ id: `${environmentId}:b`, orderKey: "a0" }],
+    });
+    const layout = buildThreadListV2Items({
+      threads: rows,
+      pendingOrder,
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+      priorityHolds: new Map([[`${environmentId}:held`, null]]),
+    });
+    expect(layout.items.map((item) => String(item.thread.id))).toEqual(["held", "b", "a"]);
   });
 });
