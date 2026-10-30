@@ -55,6 +55,10 @@
       "types": "./src/state/memory.ts",
       "default": "./src/state/memory.ts"
     },
+    "./state/thread-stream-diagnostics": {
+      "types": "./src/state/threadStreamDiagnostics.ts",
+      "default": "./src/state/threadStreamDiagnostics.ts"
+    },
     "./state/cloud-task": {
       "types": "./src/state/cloudTask.ts",
       "default": "./src/state/cloudTask.ts"

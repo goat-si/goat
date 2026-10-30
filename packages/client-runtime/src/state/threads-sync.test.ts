@@ -56,6 +56,7 @@ import {
   type ThreadSnapshotLoadResult,
 } from "./threads.ts";
 import * as ThreadSnapshotLoader from "./threadSnapshotHttp.ts";
+import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -694,6 +695,38 @@ describe("EnvironmentThreads", () => {
 
       expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
+    }),
+  );
+
+  it.effect("records a foreground resubscribe and the events it replays for diagnostics", () =>
+    Effect.gen(function* () {
+      StreamDiagnostics.resetThreadStreamDiagnosticsForTest();
+      const harness = yield* makeHarness({ cached: BASE_PROJECTION });
+      yield* Queue.offer(harness.inputs, titleUpdated("Before", CACHED_SNAPSHOT_SEQUENCE + 1));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.getOrNull(value.data)?.thread.title === "Before",
+      );
+
+      yield* Queue.offer(harness.wakeups, "application-active");
+      yield* SubscriptionRef.changes(harness.subscriptionCount).pipe(
+        Stream.filter((count) => count === 2),
+        Stream.runHead,
+      );
+      yield* Queue.offer(harness.inputs, titleUpdated("After", CACHED_SNAPSHOT_SEQUENCE + 2));
+      yield* awaitThreadState(
+        harness.observed,
+        (value) => Option.getOrNull(value.data)?.thread.title === "After",
+      );
+
+      expect(StreamDiagnostics.readThreadStreamDiagnostics()[0]).toMatchObject({
+        threadId: String(THREAD_ID),
+        subscriptions: 2,
+        lastStart: "replay",
+        events: 2,
+        lastSequence: CACHED_SNAPSHOT_SEQUENCE + 2,
+        lastEventType: "thread.metadata-updated",
+      });
     }),
   );
 
