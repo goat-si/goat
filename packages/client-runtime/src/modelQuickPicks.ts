@@ -15,7 +15,7 @@ export interface RecentModelThread {
 
 export type ModelQuickPickReason = "favorite" | "recent";
 
-export function providerModelKey(instanceId: string, model: string): string {
+function providerModelKey(instanceId: string, model: string): string {
   return `${instanceId}:${model}`;
 }
 
