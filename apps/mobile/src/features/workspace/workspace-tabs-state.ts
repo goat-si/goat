@@ -109,12 +109,14 @@ export function workspaceTabsReducer(
 
 export const WORKSPACE_TOOLBAR = { height: 48, expandedGap: 10, edge: 16, gap: 8 };
 export const WORKSPACE_DOCK = { height: 48, tabsWidth: 176, gap: 12, bottomGap: 6 };
+/** The compact floating tab bar's height above the bottom safe area. */
+export const COMPACT_WORKSPACE_DOCK_HEIGHT = 64;
 
 export function workspaceDockBottomClearance(input: {
   readonly bottomInset: number;
   readonly keyboardHeight: number;
 }) {
-  return 64 + Math.max(input.bottomInset, input.keyboardHeight) + 16;
+  return COMPACT_WORKSPACE_DOCK_HEIGHT + Math.max(input.bottomInset, input.keyboardHeight) + 16;
 }
 
 export function workspaceSearchBottomClearance(input: {

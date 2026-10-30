@@ -7,12 +7,14 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { memo, useCallback, useState } from "react";
+import { HeaderHeightContext } from "@react-navigation/elements";
+import { memo, useCallback, useContext, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View } from "react-native";
-import { KeyboardAvoidingView, useKeyboardState } from "react-native-keyboard-controller";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
@@ -22,6 +24,7 @@ import { GoatBotDayStamp } from "./GoatBotDayStamp";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
+import { goatBotComposerBottomInsets } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 
@@ -320,6 +323,8 @@ function GoatBotActivityBubble({ text }: { readonly text: string }) {
 export function GoatBotScreen(props: {
   readonly visible: boolean;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
+  /** Floating tabs cover the bottom of the screen; the composer rests above them. */
+  readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
   const session = useMobileGoatBotSession(props.visible);
   const homeSettings = useMobileGoatBotHomeSettings();
@@ -338,10 +343,19 @@ export function GoatBotScreen(props: {
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
   const insets = useSafeAreaInsets();
-  const keyboardVisible = useKeyboardState((state) => state.isVisible);
-  const bottomInset = keyboardVisible ? 8 : Math.max(8, insets.bottom);
-  const topInset = Platform.OS === "ios" ? insets.top : 0;
+  // A fixed resting padding, with the keyboard lift net of it, keeps the composer from jumping
+  // when the keyboard opens or closes.
+  const composerInsets = goatBotComposerBottomInsets(
+    props.floatingTabs
+      ? { bottomSafeArea: props.floatingTabs.bottomSafeArea, floatingTabs: true }
+      : { bottomSafeArea: insets.bottom, floatingTabs: false },
+  );
+  // The header is transparent; the list reaches under it and UIKit insets it, so the header's
+  // scroll-edge effect covers the rows. Anything pinned above the list starts below the header.
+  const headerHeight = useContext(HeaderHeightContext) ?? insets.top + IOS_NAV_BAR_HEIGHT;
+  const topInset = Platform.OS === "ios" ? headerHeight : 0;
   const hasBanner = session.availability !== "ready";
+  const homeError = homeSettings.error;
   const [text, setText] = useState("");
   const [inputHeight, setInputHeight] = useState(44);
   const renderItem = useCallback(
@@ -370,7 +384,12 @@ export function GoatBotScreen(props: {
     }
   };
   return (
-    <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
+    <KeyboardAvoidingView
+      className="flex-1 bg-screen"
+      automaticOffset
+      behavior="height"
+      keyboardVerticalOffset={composerInsets.keyboardVerticalOffset}
+    >
       {hasBanner ? (
         <View
           accessibilityRole="alert"
@@ -409,9 +428,13 @@ export function GoatBotScreen(props: {
           ) : null}
         </View>
       ) : null}
-      {homeSettings.error ? (
-        <Text accessibilityRole="alert" className="px-4 py-2 text-sm text-danger-foreground">
-          {homeSettings.error}
+      {homeError ? (
+        <Text
+          accessibilityRole="alert"
+          className="px-4 py-2 text-sm text-danger-foreground"
+          style={hasBanner ? undefined : { paddingTop: topInset + 8 }}
+        >
+          {homeError}
         </Text>
       ) : null}
       <LegendList
@@ -423,8 +446,8 @@ export function GoatBotScreen(props: {
         maintainScrollAtEnd
         alignItemsAtEnd
         keyboardShouldPersistTaps="handled"
-        contentInsetAdjustmentBehavior="never"
-        contentInset={{ top: hasBanner ? 0 : topInset }}
+        // A manual contentInset would zero UIKit's header inset and its scroll-edge region.
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ padding: 16 }}
         ListEmptyComponent={
           <Text className="py-6 text-center text-foreground-muted">
@@ -437,7 +460,7 @@ export function GoatBotScreen(props: {
       />
       <View
         className="flex-row items-end gap-2 border-t border-border px-4 pt-2"
-        style={{ paddingBottom: bottomInset }}
+        style={{ paddingBottom: composerInsets.paddingBottom }}
       >
         <TextInput
           accessibilityLabel="Message GOAT Bot"

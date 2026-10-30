@@ -71,6 +71,9 @@ vi.mock("@legendapp/list/react-native", () => ({
     <>{ListFooterComponent}</>
   ),
 }));
+vi.mock("@react-navigation/elements", async () => ({
+  HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
+}));
 vi.mock("react-native-keyboard-controller", () => ({
   KeyboardAvoidingView: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   useKeyboardState: () => false,
