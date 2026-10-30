@@ -210,6 +210,20 @@ describe("tab observation elements", () => {
     expect(third).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
   });
 
+  it("returns a full read when a new document reuses a native ref", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- button "Save" [ref=t3-1-e1]', {
+      documentGeneration: 1,
+    });
+    const second = observe(observations, '- button "Save" [ref=t3-2-e1]', {
+      base: first,
+      documentGeneration: 2,
+      overrides: { refGeneration: "2" },
+    });
+    expect(second).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
+    expect(second.indexedText).toBe('- button "Save" [0]');
+  });
+
   it("every number shown in an over-budget tab observation has a ref, and the dropped ones are named", () => {
     const observations = new ScreenObservations();
     const tree = Array.from(
