@@ -1,11 +1,29 @@
 import { expect, it } from "@effect/vitest";
 import {
   PreviewAutomationTimeoutError,
+  PreviewAutomationControlInterruptedError,
   type ScreenHostCall,
   type ScreenObservation,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { actionErrorContext, browserFixture, call, context } from "./PreviewTargetHost.testkit.ts";
+
+it.effect("preserves blocked_url when the browser refuses input before dispatch", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    const ref = (yield* fixture.observe()).elements[0]!.ref;
+    fixture.state.failure = new PreviewAutomationControlInterruptedError({
+      ...actionErrorContext,
+      operation: "click",
+      reason: "blocked_url",
+      dispatched: false,
+    });
+    const result = yield* fixture.dispatch("click", { ref });
+    expect(result?.error?.code).toBe("blocked_url");
+    expect(result?.error?.effectStarted).toBe(false);
+  }),
+);
 
 it.effect("a click the browser saw change something is a confirmed receipt", () =>
   Effect.gen(function* () {
