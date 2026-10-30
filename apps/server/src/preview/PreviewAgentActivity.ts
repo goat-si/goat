@@ -68,9 +68,10 @@ const make = Effect.gen(function* () {
     currentRun: Effect.fn("PreviewAgentActivity.currentRun")(function (threadId) {
       return Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].at(-1));
     }),
-    isRunActive: (threadId, runId) =>
+    isRunActive: Effect.fn("PreviewAgentActivity.isRunActive")((threadId, runId) =>
       Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].includes(runId)),
-    onRunEnd: (handler) =>
+    ),
+    onRunEnd: Effect.fn("PreviewAgentActivity.onRunEnd")((handler) =>
       Effect.acquireRelease(
         Effect.sync(() => {
           endHandlers.add(handler);
@@ -80,6 +81,7 @@ const make = Effect.gen(function* () {
             endHandlers.delete(handler);
           }),
       ).pipe(Effect.asVoid),
+    ),
     changes: PubSub.subscribe(changes),
   });
 });

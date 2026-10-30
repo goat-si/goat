@@ -30,12 +30,10 @@ it.effect("a late observation cannot fence a later turn with the same run id", (
         );
       });
       const fence = yield* makeBlockedTabFence().pipe(
-        Effect.provide(
-          Layer.succeed(ServerSettings.ServerSettingsService, {
-            ...settings,
-            getSettings: delayed,
-          }),
-        ),
+        Effect.provideService(ServerSettings.ServerSettingsService, {
+          ...settings,
+          getSettings: delayed,
+        }),
       );
       const threadId = ThreadId.make("fence-thread");
       const tab = {

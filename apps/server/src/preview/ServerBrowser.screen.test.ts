@@ -302,13 +302,11 @@ it.effect("does not evaluate after a blocked navigation during the secret guard"
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
       const entered = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      const fork = Effect.runForkWith(yield* Effect.context<never>());
-      guardHook.wait = () =>
-        new Promise<void>((resolve) => {
-          fork(Deferred.succeed(entered, undefined));
-          fork(Deferred.await(release).pipe(Effect.andThen(Effect.sync(resolve))));
-        });
+      const release = Promise.withResolvers<void>();
+      guardHook.wait = () => {
+        Deferred.doneUnsafe(entered, Effect.void);
+        return release.promise;
+      };
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {
           guardHook.wait = undefined;
@@ -321,7 +319,7 @@ it.effect("does not evaluate after a blocked navigation during the secret guard"
         .pipe(Effect.result, Effect.forkChild);
       yield* Deferred.await(entered);
       yield* Effect.promise(() => context.page.goto("https://example.com/"));
-      yield* Deferred.succeed(release, undefined);
+      release.resolve();
       const result = yield* Fiber.join(fiber);
       expect(
         session.send.mock.calls.some(
@@ -344,9 +342,8 @@ it.effect("clears a turn fence and ignores visits after the turn ends", () =>
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
       const ended = yield* Deferred.make<void>();
-      const fork = Effect.runForkWith(yield* Effect.context<never>());
       turnHook.end = () => {
-        fork(Deferred.succeed(ended, undefined));
+        Deferred.doneUnsafe(ended, Effect.void);
       };
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {

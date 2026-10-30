@@ -26,18 +26,19 @@ const navigateHistory = async (
     await page.reload(options);
     return;
   }
-  let entryId: number | undefined;
+  let dispatch = () => cdp.send("Page.reload", { ignoreCache: true });
   if (operation !== "reload") {
     const history = await cdp.send("Page.getNavigationHistory");
     const index = history.currentIndex + (operation === "back" ? -1 : 1);
     const entry = history.entries[index];
-    entryId = entry?.id;
-    if (entryId === undefined) {
+    if (entry?.id === undefined) {
       throw new ServerBrowserPage.ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         `No ${operation} history entry exists for this browser tab.`,
       );
     }
+    const entryId = entry.id;
+    dispatch = () => cdp.send("Page.navigateToHistoryEntry", { entryId });
     await assertDestination(entry.url);
   }
   await assertDestination();
@@ -45,12 +46,7 @@ const navigateHistory = async (
   ServerBrowserPage.invalidateRefs(page);
   // Install the waiter before sending CDP: an acknowledgement alone does not
   // prove that Electron's guest page actually committed a navigation.
-  await Promise.all([
-    page.waitForNavigation(options),
-    operation === "reload"
-      ? cdp.send("Page.reload", { ignoreCache: true })
-      : cdp.send("Page.navigateToHistoryEntry", { entryId: entryId! }),
-  ]);
+  await Promise.all([page.waitForNavigation(options), dispatch()]);
 };
 
 /**
