@@ -315,6 +315,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     yield* Deferred.succeed(previousSignal, undefined);
     yield* shrink(union());
   });
+  const bindingsFor = Effect.fn("BrowserOriginGrants.bindingsFor")((threadId: ThreadId) =>
+    Effect.sync(() =>
+      [...pending.values()]
+        .filter((entry) => entry.threadId === threadId && entry.granted)
+        .map(({ claimId, pid, windowId, origin }) => ({ claimId, pid, windowId, origin })),
+    ),
+  );
   const claimsFor = Effect.fn("BrowserOriginGrants.claimsFor")((threadId: ThreadId) =>
     Effect.sync(() => {
       const origins = [...grants.values()]
@@ -348,6 +355,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     end,
     endReason,
     driverRestarted,
+    bindingsFor,
     claimsFor,
     claimedPids,
     changes: SubscriptionRef.changes(version),
