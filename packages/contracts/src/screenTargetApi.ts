@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/17";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/18";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -66,9 +66,9 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }. "gone" is met, and bound "closed", only when the driver proves the window closed.
 // Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
-// one batch, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
+// one GOAT-side group; each member is an individual driver call, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
-// after a failed or unknown one, later steps may already have run: read every result; a step went
+// after a failed step, later group members are not run: read every result; a step went
 // unsent only when its own result says nothingSent.
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })

@@ -97,7 +97,7 @@ export interface BoundWindow {
   readonly pid: number;
   windowId: number;
   readonly appId: string;
-  /** The bundle id list_apps gave the app; a run_steps app_scope names the app by it. */
+  /** The bundle id list_apps gave the app, used for input admission. */
   readonly bundleId?: string;
   readonly controlId: string;
   epoch: number;
@@ -618,7 +618,12 @@ export const createDesktopTargetHost = (deps: {
         const driven = (at: number) => void (bound.inputDrivenAt = at);
         // A batch member reads nothing around itself unless it asks to verify; one that opens or
         // closes a window goes through the single-call path, which keeps it unverifiable.
-        if (inBatch && !verify && windowIntentOf(tool, forwarded, acted) === undefined)
+        if (
+          inBatch &&
+          !verify &&
+          bound.sheetTrigger === undefined &&
+          windowIntentOf(tool, forwarded, acted) === undefined
+        )
           return runInput.pipe(
             Effect.tap(() => Effect.map(Clock.currentTimeMillis, driven)),
             Effect.map((result) => withoutUnprovenClose(tool, result)),
