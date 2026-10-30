@@ -1,49 +1,55 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
-import { type EnvironmentId, type SiteNoteListEntry } from "@goat/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import type { EnvironmentId, SiteNoteListEntry } from "@goat/contracts";
 import { useContext, useEffect, useState } from "react";
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
-import { validateMemorySettingsSearch } from "./MemorySettings.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
+const NOTE_LIMIT_BYTES = 1024;
 const size = (text: string) => new TextEncoder().encode(text).length;
 
-export function MemorySitesSettings({
-  environmentId,
-  canRead,
-}: {
-  environmentId: EnvironmentId;
-  canRead: boolean;
-}) {
+type Setters = {
+  readonly setNotes: (notes: ReadonlyArray<SiteNoteListEntry>) => void;
+  readonly setError: (error: string | null) => void;
+};
+
+const loadNotes = (
+  registry: Parameters<typeof memoryEnvironment.siteNotesList.run>[0],
+  environmentId: EnvironmentId,
+  { setNotes, setError }: Setters,
+  isCurrent: () => boolean = () => true,
+) =>
+  memoryEnvironment.siteNotesList.run(registry, { environmentId, input: {} }).then((result) => {
+    if (!isCurrent()) return;
+    if (result._tag === "Success") {
+      setNotes(result.value);
+      setError(null);
+    } else setError("Could not load site notes.");
+  });
+
+/** Site notes agents receive the first time a thread opens each site. */
+export function MemorySitesSettings({ environmentId }: { environmentId: EnvironmentId }) {
   const registry = useContext(RegistryContext);
-  const navigate = useNavigate();
+  const canRead = useAtomValue(memoryEnvironment.siteNotesList.permissionAtom(environmentId));
   const canWrite = useAtomValue(memoryEnvironment.siteNotesWrite.permissionAtom(environmentId));
-  const [notes, setNotes] = useState<readonly SiteNoteListEntry[]>([]);
-  const [reload, setReload] = useState(0);
+  const [notes, setNotes] = useState<ReadonlyArray<SiteNoteListEntry>>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [origin, setOrigin] = useState("");
   const [text, setText] = useState("");
-  // oxlint-disable-next-line goat/react-effect-budget -- Load site notes for the selected connection and after a mutation.
+  // oxlint-disable-next-line goat/react-effect-budget -- Loads the selected connection's site notes from the server.
   useEffect(() => {
     if (!canRead) return;
     let active = true;
-    void memoryEnvironment.siteNotesList
-      .run(registry, { environmentId, input: {} })
-      .then((result) => {
-        if (!active) return;
-        if (result._tag === "Success") {
-          setNotes(result.value);
-          setError(null);
-        } else setError("Could not load site notes.");
-      });
+    void loadNotes(registry, environmentId, { setNotes, setError }, () => active);
     return () => {
       active = false;
     };
-  }, [canRead, environmentId, registry, reload]);
+  }, [canRead, environmentId, registry]);
+  if (!canRead) return null;
+  const reload = () => loadNotes(registry, environmentId, { setNotes, setError });
   const save = async (noteOrigin: string, noteText: string) => {
     setBusy(true);
     const result = await memoryEnvironment.siteNotesWrite.run(registry, {
@@ -51,13 +57,12 @@ export function MemorySitesSettings({
       input: { origin: noteOrigin, text: noteText },
     });
     setBusy(false);
-    if (result._tag === "Success") {
-      setError(null);
-      setReload((n) => n + 1);
-      return true;
+    if (result._tag !== "Success") {
+      setError("Could not save the site note. Check the site address, its size and its contents.");
+      return false;
     }
-    setError("Could not save the site note. Check the origin, size, and contents.");
-    return false;
+    await reload();
+    return true;
   };
   const change = async (kind: "delete" | "restore", noteOrigin: string) => {
     setBusy(true);
@@ -67,78 +72,58 @@ export function MemorySitesSettings({
         : memoryEnvironment.siteNotesRestoreSeed;
     const result = await command.run(registry, { environmentId, input: { origin: noteOrigin } });
     setBusy(false);
-    if (result._tag === "Success") {
-      setError(null);
-      setReload((n) => n + 1);
-    } else setError("Could not update the site note.");
+    if (result._tag !== "Success") {
+      setError("Could not update the site note.");
+      return;
+    }
+    await reload();
   };
   return (
-    <SettingsSection
-      title="Site notes"
-      headerAction={
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() =>
-            void navigate({
-              to: "/settings/memory",
-              search: validateMemorySettingsSearch({ environmentId }),
-            })
-          }
-        >
-          Back to Memory
-        </Button>
-      }
-    >
-      {!canRead ? (
-        <SettingsRow title="Memory read permission required" />
-      ) : (
-        <>
-          {error ? <SettingsRow title={<span role="alert">{error}</span>} /> : null}
-          {notes.map((note) => (
-            <SiteNoteRow
-              key={note.origin}
-              note={note}
-              disabled={!canWrite || busy}
-              save={save}
-              change={change}
-            />
-          ))}
-          <SettingsRow
-            title="Add a site note"
-            description="Enter an HTTP or HTTPS origin and a short note."
+    <SettingsSection title="Site notes">
+      {error ? <SettingsRow title={<span role="alert">{error}</span>} /> : null}
+      {notes.map((note) => (
+        <SiteNoteRow
+          key={note.origin}
+          note={note}
+          disabled={!canWrite || busy}
+          save={save}
+          change={change}
+        />
+      ))}
+      <SettingsRow
+        title="Add a site note"
+        description="Agents receive a site's note the first time a conversation opens that site."
+      >
+        <div className="space-y-2">
+          <Input
+            aria-label="Site address"
+            value={origin}
+            onChange={(event) => setOrigin(event.target.value)}
+            placeholder="https://example.com"
+          />
+          <Textarea
+            aria-label="Site note"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+          />
+          <span>
+            {size(text)} / {NOTE_LIMIT_BYTES} bytes
+          </span>{" "}
+          <Button
+            size="sm"
+            disabled={!canWrite || busy || !origin || size(text) > NOTE_LIMIT_BYTES}
+            onClick={() =>
+              void save(origin, text).then((ok) => {
+                if (!ok) return;
+                setOrigin("");
+                setText("");
+              })
+            }
           >
-            <div className="space-y-2">
-              <Input
-                aria-label="Site origin"
-                value={origin}
-                onChange={(event) => setOrigin(event.target.value)}
-                placeholder="https://example.com"
-              />
-              <Textarea
-                aria-label="Site note"
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-              />
-              <span>{size(text)} / 1024 bytes</span>{" "}
-              <Button
-                size="sm"
-                disabled={!canWrite || busy || !origin || size(text) > 1024}
-                onClick={() =>
-                  void save(origin, text).then((ok) => {
-                    if (ok) {
-                      setOrigin("");
-                      setText("");
-                    }
-                  })
-                }
-              >
-                Save
-              </Button>
-            </div>
-          </SettingsRow>
-        </>
-      )}
+            Save
+          </Button>
+        </div>
+      </SettingsRow>
     </SettingsSection>
   );
 }
@@ -149,31 +134,31 @@ function SiteNoteRow({
   save,
   change,
 }: {
-  note: SiteNoteListEntry;
-  disabled: boolean;
-  save: (origin: string, text: string) => Promise<boolean>;
-  change: (kind: "delete" | "restore", origin: string) => Promise<void>;
+  readonly note: SiteNoteListEntry;
+  readonly disabled: boolean;
+  readonly save: (origin: string, text: string) => Promise<boolean>;
+  readonly change: (kind: "delete" | "restore", origin: string) => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note.text);
-  return (
-    <SettingsRow
-      title={note.origin}
-      description={
-        note.hidden ? "Default hidden" : `${note.author}${note.seed ? " · default available" : ""}`
-      }
-    >
-      {editing ? (
+  const description = note.hidden
+    ? "Default hidden"
+    : `${note.author}${note.seed ? " · default available" : ""}`;
+  if (editing)
+    return (
+      <SettingsRow title={note.origin} description={description}>
         <div className="space-y-2">
           <Textarea
             aria-label={`Note for ${note.origin}`}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
-          <span>{size(draft)} / 1024 bytes</span>{" "}
+          <span>
+            {size(draft)} / {NOTE_LIMIT_BYTES} bytes
+          </span>{" "}
           <Button
             size="sm"
-            disabled={disabled || size(draft) > 1024}
+            disabled={disabled || size(draft) > NOTE_LIMIT_BYTES}
             onClick={() =>
               void save(note.origin, draft).then((ok) => {
                 if (ok) setEditing(false);
@@ -186,44 +171,44 @@ function SiteNoteRow({
             Cancel
           </Button>
         </div>
-      ) : (
+      </SettingsRow>
+    );
+  return (
+    <SettingsRow title={note.origin} description={description}>
+      {note.hidden ? null : (
         <>
-          {!note.hidden ? <p>{note.text}</p> : null}
-          {!note.hidden ? (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disabled}
-                onClick={() => {
-                  setDraft(note.text);
-                  setEditing(true);
-                }}
-              >
-                Edit
-              </Button>{" "}
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disabled}
-                onClick={() => void change("delete", note.origin)}
-              >
-                Delete
-              </Button>{" "}
-            </>
-          ) : null}
-          {note.seed && (note.hidden || note.author !== "seed") ? (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={disabled}
-              onClick={() => void change("restore", note.origin)}
-            >
-              Restore default
-            </Button>
-          ) : null}
+          <p>{note.text}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => {
+              setDraft(note.text);
+              setEditing(true);
+            }}
+          >
+            Edit
+          </Button>{" "}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => void change("delete", note.origin)}
+          >
+            Delete
+          </Button>{" "}
         </>
       )}
+      {note.seed && (note.hidden || note.author !== "seed") ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => void change("restore", note.origin)}
+        >
+          Restore default
+        </Button>
+      ) : null}
     </SettingsRow>
   );
 }

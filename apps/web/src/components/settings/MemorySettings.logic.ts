@@ -33,7 +33,6 @@ export function validateMemorySettingsSearch(raw: Record<string, unknown>) {
   const memoryId = memorySpaceId ? decoded(MemoryId, raw.memoryId) : undefined;
   const resolutionId = memoryId ? decoded(MemoryResolutionId, raw.resolutionId) : undefined;
   return {
-    ...(raw.section === "sites" ? { section: "sites" as const } : {}),
     ...(environmentId ? { environmentId, machine: environmentId } : {}),
     ...(memorySpaceId ? { memorySpaceId } : {}),
     ...(memoryId ? { memoryId } : {}),

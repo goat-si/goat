@@ -118,11 +118,6 @@ import {
   type MemoryReportDelivery,
 } from "@goat/contracts";
 import { memoryReportRetryIntent } from "./MemorySettings.logic";
-
-it("retains the Sites destination and ignores unknown sections", () => {
-  expect(validateMemorySettingsSearch({ section: "sites" })).toMatchObject({ section: "sites" });
-  expect(validateMemorySettingsSearch({ section: "other" })).not.toHaveProperty("section");
-});
 const decodeRetry = Schema.decodeUnknownSync(MemoryResetReportAttemptsInput);
 it("builds a valid bounded retry command from current exhausted exact-owner rows", () => {
   const owner = EnvironmentId.make("owner");

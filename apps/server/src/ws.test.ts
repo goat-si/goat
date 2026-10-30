@@ -87,7 +87,6 @@ import * as Keybindings from "./keybindings.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
-import * as SiteNotes from "./preview/SiteNotes.ts";
 import * as OtlpEndpointCheck from "./observability/OtlpEndpointCheck.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as EventStore from "./orchestration-v2/EventStore.ts";
@@ -693,12 +692,6 @@ const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(MemoryService.MemoryService)({
     importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],
-  }),
-  Layer.mock(SiteNotes.SiteNotes)({
-    noteFor: () => Effect.runSync(Effect.die("site notes are unused in this test")),
-    list: () => Effect.runSync(Effect.die("site notes are unused in this test")),
-    deliverOnce: () => Effect.runSync(Effect.die("site notes are unused in this test")),
-    hasTouched: () => Effect.runSync(Effect.die("site notes are unused in this test")),
   }),
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),

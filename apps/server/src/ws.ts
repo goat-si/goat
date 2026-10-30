@@ -1402,7 +1402,10 @@ export const layerWsRpc = (
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const memory = yield* MemoryService.MemoryService;
-      const siteNotes = yield* SiteNotes.SiteNotes;
+      // Absent only in runtimes that serve no browser, such as RPC test layers.
+      const siteNotes = Effect.fromOption(yield* Effect.serviceOption(SiteNotes.SiteNotes)).pipe(
+        Effect.mapError(() => new MemoryRpcError({ code: "unsupported_operation" })),
+      );
       const memorySync = yield* MemorySyncService.MemorySyncService;
       const ownerPolicy = yield* ServerSettings.MemoryOwnerSourceReadPolicyAdministration;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1460,21 +1463,28 @@ export const layerWsRpc = (
       const memoryHandlers = WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).of({
         [WS_METHODS.siteNotesList]: () =>
           memoryRead.pipe(
-            Effect.map(() => siteNotes.list()),
             Effect.mapError(memoryError),
+            Effect.andThen(siteNotes),
+            Effect.map((notes) => notes.list()),
           ),
         [WS_METHODS.siteNotesWrite]: (input) =>
-          siteNotes
-            .write({ ...input, author: "person" }, memoryWrite)
-            .pipe(Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError)),
+          siteNotes.pipe(
+            Effect.flatMap((notes) => notes.write({ ...input, author: "person" }, memoryWrite)),
+            Effect.as({ ok: true as const }),
+            Effect.mapError(siteNoteRpcError),
+          ),
         [WS_METHODS.siteNotesDelete]: (input) =>
-          siteNotes
-            .delete(input.origin, memoryWrite)
-            .pipe(Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError)),
+          siteNotes.pipe(
+            Effect.flatMap((notes) => notes.delete(input.origin, memoryWrite)),
+            Effect.as({ ok: true as const }),
+            Effect.mapError(siteNoteRpcError),
+          ),
         [WS_METHODS.siteNotesRestoreSeed]: (input) =>
-          siteNotes
-            .restoreSeed(input.origin, memoryWrite)
-            .pipe(Effect.as({ ok: true as const }), Effect.mapError(siteNoteRpcError)),
+          siteNotes.pipe(
+            Effect.flatMap((notes) => notes.restoreSeed(input.origin, memoryWrite)),
+            Effect.as({ ok: true as const }),
+            Effect.mapError(siteNoteRpcError),
+          ),
         [WS_METHODS.memoryProjectBindingGet]: (input) =>
           memory.getProjectBinding(input, memoryWrite).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryProjectBindingUpdate]: (input) =>
