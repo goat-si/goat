@@ -289,3 +289,38 @@ it.effect(
       ).toEqual([{ app: "thunar" }, { pid: 900 }]);
     }),
 );
+
+it.effect("a window another app's filter leaves out is named with its owner, not as closed", () =>
+  Effect.gen(function* () {
+    const { host } = fixture(
+      { list_apps: cut, list_windows: listWindows([script, thunarWindow]) },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
+    const result = yield* bindResult(host, { bundle_id: "thunar", window_id: 4194307 });
+    expect(result._tag === "Failure" && result.failure.code).toBe("target_missing");
+    expect(result._tag === "Failure" && result.failure.nextStep).toContain(
+      "Scratch-cu-window.py (pid 1555)",
+    );
+  }),
+);
+
+it.effect("a bind whose process window list comes back cut is refused", () =>
+  Effect.gen(function* () {
+    const { host } = fixture(
+      {
+        list_apps: { apps: appRows },
+        list_windows: (args: { pid?: number }) =>
+          args.pid === undefined ? listWindows([script, thunarWindow])(args) : cut,
+      },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
+    const result = yield* bindResult(host, { window_id: 4194307 });
+    expect(result._tag === "Failure" && result.failure.code).toBe("downstream_failure");
+  }),
+);

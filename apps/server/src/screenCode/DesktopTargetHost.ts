@@ -385,17 +385,17 @@ export const createDesktopTargetHost = (deps: {
       // cut app list narrows by the bundle filter, a name substring match on every platform, so
       // matchBindWindow then checks the window's own app_name.
       const [onlyPid] = Array.isArray(listed) && pids.size === 1 ? [...pids] : [];
-      let { reply: windowsReply, windows: listedWindows } = yield* listWindows(
+      const filter =
         onlyPid !== undefined
           ? { pid: onlyPid }
           : bundleId && !Array.isArray(listed)
             ? { app: bundleId }
-            : {},
-      );
+            : undefined;
+      let { reply: windowsReply, windows: listedWindows } = yield* listWindows(filter ?? {});
       let listedPid = onlyPid;
-      // Not among that process's windows: whose window it is, if anyone's, decides the answer.
+      // Not among the filtered windows: whose window it is, if anyone's, decides the answer.
       if (
-        onlyPid !== undefined &&
+        filter !== undefined &&
         Array.isArray(listedWindows) &&
         !listedWindows.some((window) => object(window)?.window_id === requestedWindow)
       ) {
@@ -424,6 +424,15 @@ export const createDesktopTargetHost = (deps: {
       const { pid, app, window: foundWin } = matched;
       // The baseline later window checks compare with: the bound process's own complete list.
       const baseline = listedPid === pid ? listedWindows : (yield* listWindows({ pid })).windows;
+      if (!Array.isArray(baseline))
+        return yield* Effect.fail(
+          fail(
+            "downstream_failure",
+            "The window list of pid " +
+              pid +
+              " came back incomplete, so nothing was bound. Try again.",
+          ),
+        );
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),
       );
