@@ -1,0 +1,39 @@
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { BrowserClaimBind } from "./BrowserClaimBind.ts";
+import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
+import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+
+const make = Effect.gen(function* () {
+  const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
+  const environmentId = yield* identity.getEnvironmentId;
+  const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
+  const bind = yield* Effect.serviceOption(BrowserClaimBind);
+  let supported = false;
+  const service = yield* makeBrowserOriginGrants({
+    environmentId,
+    supported: () => supported && Option.isSome(manifest),
+    publish: (union) => (Option.isSome(manifest) ? manifest.value.publish(union) : Effect.void),
+    bind: (request) =>
+      Option.isSome(bind)
+        ? bind.value.bind(request)
+        : Effect.fail(new Error("Browser claim binding is unavailable.")),
+  });
+  const reportDriverCapability = Effect.fn("BrowserOriginGrants.reportDriverCapability")(function* (
+    value: boolean,
+  ) {
+    if (supported === value) return;
+    supported = value;
+    if (!value) yield* service.driverRestarted;
+  });
+  return { ...service, reportDriverCapability };
+});
+
+export class BrowserOriginGrants extends Context.Service<
+  BrowserOriginGrants,
+  Effect.Success<typeof make>
+>()("goat/preview/BrowserOriginGrants") {}
+export const layer = Layer.effect(BrowserOriginGrants, make);

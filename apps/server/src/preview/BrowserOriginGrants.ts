@@ -8,8 +8,9 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
-interface Request {
+export interface Request {
   readonly threadId: ThreadId;
   readonly pid: number;
   readonly windowId: number;
@@ -22,7 +23,7 @@ interface Pending extends Request {
   granted: boolean;
 }
 
-interface Union {
+export interface Union {
   readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
   readonly origins: ReadonlyArray<string>;
 }
@@ -70,6 +71,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   deps: Dependencies,
 ) {
   const lock = yield* Semaphore.make(1);
+  const version = yield* SubscriptionRef.make(0);
+  const publish = (value: Union) =>
+    SubscriptionRef.update(version, (current) => current + 1).pipe(
+      Effect.andThen(deps.publish(value)),
+    );
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
   const grants = new Map<string, BrowserOriginGrant>();
@@ -136,10 +142,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           pending.delete(claimId);
           claims.delete(claimId);
           if (!existed) grants.delete(grantKey);
-          yield* deps.publish(union());
+          yield* publish(union());
         });
         const result = yield* Effect.gen(function* () {
-          yield* deps.publish(union());
+          yield* publish(union());
           const tab = yield* deps.bind(entry);
           if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
@@ -158,7 +164,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           };
           claims.set(claimId, claim);
           pending.delete(claimId);
-          yield* deps.publish(union());
+          yield* publish(union());
           return { agentResult: { status: "attached" as const, claim } };
         }).pipe(Effect.catch((error) => rollback.pipe(Effect.andThen(Effect.fail(error)))));
         return result;
@@ -181,7 +187,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
         for (const [id, claim] of claims)
           if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
-        yield* deps.publish(union());
+        yield* publish(union());
       }),
     ),
   );
@@ -190,7 +196,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       Effect.gen(function* () {
         for (const [id, entry] of pending) if (entry.threadId === threadId) pending.delete(id);
         for (const [id, claim] of claims) if (claim.threadId === threadId) claims.delete(id);
-        yield* deps.publish(union());
+        yield* publish(union());
       }),
     ),
   );
@@ -202,7 +208,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (claim?.threadId !== threadId || claim.claimGeneration !== generation) return false;
           claims.delete(claimId);
           ended.set(claimId, { threadId, reason });
-          yield* deps.publish(union());
+          yield* publish(union());
           return true;
         }),
       ),
@@ -220,7 +226,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     Effect.gen(function* () {
       pending.clear();
       claims.clear();
-      yield* deps.publish(union());
+      yield* publish(union());
     }),
   );
   const claimsFor = Effect.fn("BrowserOriginGrants.claimsFor")((threadId: ThreadId) =>
@@ -258,5 +264,6 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     driverRestarted,
     claimsFor,
     claimedPids,
+    changes: SubscriptionRef.changes(version),
   };
 });
