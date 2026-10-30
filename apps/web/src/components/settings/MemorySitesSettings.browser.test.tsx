@@ -57,7 +57,7 @@ vi.mock("./settingsLayout", async (original) => ({
 function setup(available: boolean) {
   vi.mocked(useAtomValue).mockReset();
   vi.mocked(useAtomValue).mockImplementation(
-    (atom) => (atom === "siteNotes" ? available : true) as never,
+    (atom) => ((atom as unknown) === "siteNotes" ? available : true) as never,
   );
 }
 
