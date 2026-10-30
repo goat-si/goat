@@ -60,12 +60,12 @@ const pointerPreparation = (operation: "click" | "hover" | "drag") =>
           (error: unknown) => ({ ok: false as const, error }),
         ),
       );
+      yield* Effect.promise(() => control.system(async () => {}));
       yield* Effect.promise(() =>
         page.evaluate(
           "document.body.insertAdjacentHTML('beforeend','<button id=late>late</button>')",
         ),
       );
-      yield* Effect.promise(() => control.system(async () => {}));
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error).toMatchObject({ reason: "blocked_url" });
       expect(yield* Effect.promise(() => page.evaluate("scrollY"))).toBe(0);
