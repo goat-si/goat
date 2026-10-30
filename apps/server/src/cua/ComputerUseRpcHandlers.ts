@@ -108,7 +108,7 @@ export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")
   if (!stopped) return { stopped: false, failed: 0 };
   const { failed } = yield* endGrants(leases.value, handoffs, undefined, () => true);
   return { stopped: true, failed };
-});
+}, Effect.uninterruptible);
 
 export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(function* (
   sessionId: AuthSessionId,

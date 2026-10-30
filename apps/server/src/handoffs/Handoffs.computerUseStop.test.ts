@@ -10,6 +10,8 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -120,16 +122,33 @@ it.effect.each(["button", "person_esc"] as const)(
 
           // Stopping takes only the authority to stop agents, as Stop all does.
           const handlers = yield* makeComputerUseRpcHandlers(operator.sessionId);
-          const result =
-            source === "button"
-              ? yield* handlers[WS_METHODS.computerUseStop]({ threadId })
-              : yield* stopComputerUseFromHelper(
-                  Option.some(leases),
-                  service,
-                  threadId,
-                  live.controlId,
-                );
-          assert.isTrue(result.stopped);
+          if (source === "button") {
+            const result = yield* handlers[WS_METHODS.computerUseStop]({ threadId });
+            assert.isTrue(result.stopped);
+          } else {
+            const entered = yield* Deferred.make<void>();
+            const gate = yield* Deferred.make<void>();
+            const delayed = {
+              ...service,
+              cancelComputerUseByPerson: (
+                input: Parameters<typeof service.cancelComputerUseByPerson>[0],
+              ) =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(gate)),
+                  Effect.andThen(service.cancelComputerUseByPerson(input)),
+                ),
+            };
+            const stopping = yield* stopComputerUseFromHelper(
+              Option.some(leases),
+              delayed,
+              threadId,
+              live.controlId,
+            ).pipe(Effect.forkChild);
+            yield* Deferred.await(entered);
+            yield* Effect.sync(() => stopping.interruptUnsafe());
+            yield* Deferred.succeed(gate, undefined);
+            yield* Fiber.await(stopping);
+          }
 
           assert.isTrue(Option.isNone(yield* leases.holder(otherThread, [app])));
           // The stopped card stays listed as stopped until a person closes it.
