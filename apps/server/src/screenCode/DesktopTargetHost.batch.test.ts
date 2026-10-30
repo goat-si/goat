@@ -523,3 +523,17 @@ it.live("app group inputs use the pinned driver schemas", () => {
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live("a refused drag prevents its concurrent group from sending", () => {
+  const { host, sent } = fixture({
+    list_apps: { apps: [{ pid: 42, name: "KakaoTalk", bundle_id: "com.kakao.KakaoTalkMac" }] },
+  });
+  return Effect.gen(function* () {
+    const result =
+      yield* runCell(`const app = await screen.app({bundle_id:'com.kakao.KakaoTalkMac', window_id:7}); await app.observe();
+      const clicks = [app.click('Apply'), app.drag('Apply', 'Apply')]; ${SETTLED}`);
+    expect(result.value).toEqual(["not_run:true", "invalid_argument:true"]);
+    expect(sent.filter((entry) => ["click", "drag"].includes(entry.tool))).toEqual([]);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
