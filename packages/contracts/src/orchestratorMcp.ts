@@ -54,6 +54,8 @@ import {
   OrchestrationV2TaskRole,
   ReviewLedgerEntry,
   ReviewLedgerEntryInput,
+  OrchestratorMcpContinueFrom,
+  OrchestratorMcpReviewRound,
   OrchestrationV2RuntimeRequest,
   OrchestrationV2UserInputQuestion,
   OrchestrationV2CreationSource,
@@ -213,6 +215,7 @@ export const OrchestratorMcpDelegateTaskInput = Schema.Struct({
   ),
   title: Schema.optional(OrchestratorMcpTitle),
   role: Schema.optional(OrchestratorMcpTaskRole),
+  continueFrom: Schema.optional(OrchestratorMcpContinueFrom),
   isolation: Schema.optional(
     Schema.Literals(["shared", "worktree"]).annotate({
       description:
@@ -265,6 +268,7 @@ export const OrchestratorMcpDelegateTaskResult = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   parentModelSelection: Schema.optional(ModelSelection),
   reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
+  reviewRound: Schema.optional(OrchestratorMcpReviewRound),
   options: Schema.optional(Schema.Array(ProviderOptionSelection)),
   summary: Schema.NullOr(Schema.String),
   resultContextTransferId: Schema.NullOr(ContextTransferId),
