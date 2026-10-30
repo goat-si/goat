@@ -18,6 +18,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -111,10 +112,10 @@ function makeContext() {
     setViewportSize: async (size: typeof viewport) => {
       viewport = size;
     },
-    goto: async (next: string) => {
+    goto: vi.fn(async (next: string) => {
       url = next;
       events.emit("load");
-    },
+    }),
     emulateMedia: async () => {},
     waitForLoadState: async () => {},
     evaluate: async () => ({
@@ -175,6 +176,7 @@ const layer = ServerBrowser.layer.pipe(
         pointer: () => Effect.void,
       }),
       PreviewAgentActivity.layer,
+      ServerSettings.layerTest(),
       Layer.mock(SecretRequests.SecretRequests)({}),
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-browser-screen-" })),
@@ -195,6 +197,70 @@ const ready = Effect.gen(function* () {
   const tabId = PreviewTabId.make(opened.tabId!);
   return { broker, tabId };
 });
+
+it.effect("refuses a blocked navigation before sending it to the page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      const result = yield* broker
+        .invoke({ scope, tabId, operation: "navigate", input: { url: "https://a.example.com/" } })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(page.goto).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses an initial blocked URL before opening a tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const count = contexts.length;
+      const result = yield* broker
+        .invoke({
+          scope,
+          operation: "open",
+          input: { reuseExistingTab: false, show: false, url: "https://example.com/" },
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(contexts).toHaveLength(count);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses input when the tab currently shows a blocked host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      const result = yield* broker
+        .invoke({
+          scope,
+          tabId,
+          operation: "click",
+          input: { locator: "button" },
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(page.locator).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
 
 it.effect("a queued input cannot dispatch after its expected control generation changes", () =>
   Effect.scoped(

@@ -24,6 +24,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, describe, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -112,6 +113,7 @@ const layerFor = (secrets: ReturnType<typeof makeSecrets>) =>
   ServerBrowser.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
+        ServerSettings.layerTest(),
         Manager.layer,
         Broker.layer,
         secrets.layer,

@@ -44,7 +44,7 @@ import {
   type PreviewViewportSetting,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { normalizePreviewUrl } from "@goat/shared/preview";
+import { isBlockedBrowserUrl, normalizePreviewUrl } from "@goat/shared/preview";
 import { resolvePreviewViewport } from "@goat/shared/previewViewport";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -75,6 +75,7 @@ import type {
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
@@ -340,6 +341,7 @@ const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
   const manager = yield* PreviewManager.PreviewManager;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -350,6 +352,11 @@ const make = Effect.gen(function* () {
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const assertAllowedUrl = async (url: string) => {
+    const current = await runPromise(settings.getSettings);
+    if (isBlockedBrowserUrl(url, current.blockedBrowserHosts))
+      throw new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
+  };
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
@@ -1625,6 +1632,7 @@ const make = Effect.gen(function* () {
         SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
+        if (url) await assertAllowedUrl(url);
         const reuse = open.reuseExistingTab ?? true;
         if (
           reuse &&
@@ -1748,6 +1756,7 @@ const make = Effect.gen(function* () {
       }
     }
     const tab = await requireTab(request);
+    if (!READ_OPERATIONS.has(request.operation)) await assertAllowedUrl(tab.page.url());
     if (request.operation === "fillSecret")
       return secretFill.fill(tab, request, deadlineMs, recordAction);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
@@ -1838,6 +1847,7 @@ const make = Effect.gen(function* () {
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
+        await assertAllowedUrl(resolveNavigationUrl(navigateInput));
         await recordAction(tab, "navigate", () =>
           navigate(
             tab,

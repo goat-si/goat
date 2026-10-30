@@ -17,6 +17,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -119,6 +120,7 @@ const scope = {
 const layer = ServerBrowser.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
+      ServerSettings.layerTest(),
       Broker.layer,
       PreviewAgentActivity.layer,
       Layer.mock(SecretRequests.SecretRequests)({}),
