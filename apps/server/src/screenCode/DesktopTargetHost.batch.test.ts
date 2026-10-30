@@ -472,15 +472,24 @@ it.live("app group inputs use the pinned driver schemas", () => {
     scope: { type: "string", enum: ["window", "desktop"] },
     delivery_mode: { type: "string", enum: ["background", "foreground"] },
     target: {
-      type: "object",
-      properties: {
-        kind: { enum: ["window", "desktop"] },
-        pid: { type: "integer", minimum: 0 },
-        window_id: { type: "integer", minimum: 0 },
-        display_id: { type: "string" },
-      },
-      required: ["kind"],
-      additionalProperties: true,
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            kind: { const: "window" },
+            pid: { type: "integer", minimum: 1, maximum: 4294967295 },
+            window_id: { type: "integer", minimum: 1 },
+          },
+          required: ["kind", "pid", "window_id"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: { kind: { const: "desktop" }, display_id: { const: "primary" } },
+          required: ["kind", "display_id"],
+          additionalProperties: false,
+        },
+      ],
     },
     post_action_wait: { type: "string", enum: ["default", "none"] },
     direction: { type: "string", enum: ["up", "down", "left", "right"] },
@@ -550,12 +559,25 @@ it.live("app group inputs use the pinned driver schemas", () => {
     });
     return (args: Record<string, unknown>) => {
       const result = check(args);
-      if (result.valid) return { effect: "confirmed" };
-      return new DriverError({ effect: "refused", code: "invalid_arguments" }, result.errorMessage);
+      if (
+        result.valid &&
+        !("target" in args && ["scope", "pid", "window_id"].some((key) => key in args))
+      )
+        return { effect: "confirmed" };
+      return new DriverError(
+        { effect: "refused", code: "invalid_arguments" },
+        result.valid ? "invalid target" : result.errorMessage,
+      );
     };
   };
   expect(checked("press_key")({ key: "a", duration_ms: 10 })).toBeInstanceOf(DriverError);
   expect(checked("scroll")({ direction: "sideways" })).toBeInstanceOf(DriverError);
+  expect(
+    checked("press_key")({ key: "a", target: { kind: "window", pid: 0, window_id: 7 } }),
+  ).toBeInstanceOf(DriverError);
+  expect(
+    checked("press_key")({ key: "a", pid: 42, target: { kind: "window", pid: 42, window_id: 7 } }),
+  ).toBeInstanceOf(DriverError);
   expect(checked("click")({ element_token: "stale" })).toBeInstanceOf(DriverError);
   const { host } = fixture({
     list_windows: {
