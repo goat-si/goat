@@ -528,6 +528,7 @@ describe("formatted note editor", () => {
     "saves the deleted line break between mixed endings after %s",
     async (_name, after, saved) => {
       await editorFor("a\r\n\nb");
+      using _now = vi.spyOn(Date, "now").mockReturnValue(0);
       mocks.selection = { start: 2, end: 2 };
       act(() => button("Report selection").click());
       act(() => type("a\nb"));
@@ -539,6 +540,28 @@ describe("formatted note editor", () => {
       expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe(saved);
     },
   );
+
+  it("keeps a forward delete when the cursor moves back later", async () => {
+    await editorFor("a\r\n\nb");
+    using now = vi.spyOn(Date, "now").mockReturnValue(0);
+    mocks.selection = { start: 2, end: 2 };
+    act(() => button("Report selection").click());
+    act(() => type("a\nb"));
+    now.mockReturnValue(1000);
+    mocks.selection = { start: 1, end: 1 };
+    act(() => button("Report selection").click());
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("a\r\nb");
+  });
+
+  it("moves to the plain editor when a paste passes the formatted editor's limit", async () => {
+    await editorFor("short");
+    act(() => type("x".repeat(100_001)));
+    expect(container.querySelector('[data-testid="live-markdown"]')).toBeNull();
+    expect(container.textContent).toContain("This note is large");
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("x".repeat(100_001));
+  });
 
   it("opens a note it cannot round-trip in the plain editor and says why", async () => {
     await editorFor("old\rmac");

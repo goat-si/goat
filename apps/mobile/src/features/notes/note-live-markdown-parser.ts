@@ -57,6 +57,8 @@ function isAsciiPunctuation(code: number) {
 
 /** Letters and digits, treating non-ASCII as letters apart from common spaces and punctuation. */
 function isWordCode(code: number) {
+  // Reading past either end of the note gives NaN, which is a boundary.
+  if (Number.isNaN(code)) return false;
   if (code < 128)
     return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
   return !(

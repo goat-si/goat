@@ -144,6 +144,12 @@ describe("note live markdown parser", () => {
     expect(styled(text, "bold")).toEqual([]);
   });
 
+  it("styles emphasis and bare URLs at the very start and end of a note", () => {
+    expect(styled("_word_", "italic")).toEqual(["word"]);
+    expect(styled("https://goat.si", "link")).toEqual(["https://goat.si"]);
+    expect(styled("end with __bold__", "bold")).toEqual(["bold"]);
+  });
+
   it("keeps correct output on adversarial lines", () => {
     const stars = ("*a ".repeat(600) + "\n").repeat(50);
     const brackets = ("[".repeat(1500) + "\n").repeat(50);
