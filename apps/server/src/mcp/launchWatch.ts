@@ -128,6 +128,8 @@ export const LaunchWatch = Schema.Struct({
   skippedRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** Runs under way whose start a look could not read yet; each later look reads them again. */
   heldRuns: Schema.Array(RunId).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** When a retry was last held; until a look attributes it, retention counts from here too. */
+  heldSince: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   /** The newest run a look has seen; later runs are new to the watch. */
   seen: Schema.NullOr(Schema.Struct({ runId: RunId, ordinal: Schema.Number })).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
@@ -312,6 +314,7 @@ export function newLaunchWatch(input: {
     discoveredRuns: [],
     skippedRuns: [],
     heldRuns: [],
+    heldSince: null,
     seen: null,
     reportedQuestions: [],
     lastEpisode: 0,
@@ -439,20 +442,24 @@ export function discoverRuns(
     watch.seen?.ordinal ?? sorted.findLast(known)?.ordinal ?? Math.max(0, newest.ordinal - 1);
   const visible = new Set(sorted.map((run) => run.runId));
   const pending: Array<RunId> = [];
+  const found: Array<RunId> = [];
   const held: Array<RunId> = [];
   let skipped = watch.heldRuns
     .filter((id) => !visible.has(id))
     .reduce(keepRecent, watch.skippedRuns);
   for (const run of sorted) {
-    if (!watch.heldRuns.includes(run.runId) && (run.ordinal <= from || known(run))) continue;
+    const wasHeld = watch.heldRuns.includes(run.runId);
+    if (!wasHeld && (run.ordinal <= from || known(run))) continue;
     if (run.trigger === undefined && !run.terminal) held.push(run.runId);
-    // A held run is looked at again after its first end, so how that end went no longer counts.
-    else if (
-      ownRun(watch, run.trigger) &&
-      !(run.terminal && !watch.heldRuns.includes(run.runId) && wentOn(watch, run, sorted))
-    )
+    else if (!ownRun(watch, run.trigger)) skipped = keepRecent(skipped, run.runId);
+    // A held run (a retry, or one whose start was unread) is reported however the thread went
+    // on, so it is owed like an armed run rather than found.
+    else if (wasHeld) pending.push(run.runId);
+    else if (run.terminal && wentOn(watch, run, sorted)) skipped = keepRecent(skipped, run.runId);
+    else {
       pending.push(run.runId);
-    else skipped = keepRecent(skipped, run.runId);
+      found.push(run.runId);
+    }
   }
   const seen =
     newest.ordinal > (watch.seen?.ordinal ?? 0)
@@ -469,12 +476,13 @@ export function discoverRuns(
     ...watch,
     seen,
     heldRuns: held,
+    heldSince: held.length === 0 ? null : watch.heldSince,
     skippedRuns: skipped,
     ...(pending.length === 0
       ? {}
       : {
           pendingRuns: [...watch.pendingRuns, ...pending],
-          discoveredRuns: [...watch.discoveredRuns, ...pending],
+          discoveredRuns: [...watch.discoveredRuns, ...found],
           armedAt: now,
           updatedAt: now,
         }),
@@ -539,6 +547,7 @@ export function rearmRetriedRun(watch: LaunchWatch, runId: RunId, now: number): 
           ...watch,
           skippedRuns: watch.skippedRuns.filter((skipped) => skipped !== runId),
           heldRuns: [...watch.heldRuns, runId],
+          heldSince: now,
           updatedAt: now,
         };
   return {
@@ -600,7 +609,9 @@ const LAUNCHERLESS_RETENTION_MS = DORMANT_RETENTION_MS;
 
 export const launcherlessExpired = (watch: LaunchWatch, now: number) =>
   watch.launcherThreadId === null &&
-  now - (watch.armedAt ?? watch.createdAt) >= LAUNCHERLESS_RETENTION_MS;
+  // A retry awaiting its look keeps the watch until that look decides whose it is.
+  now - Math.max(watch.armedAt ?? watch.createdAt, watch.heldSince ?? 0) >=
+    LAUNCHERLESS_RETENTION_MS;
 
 /** A watch past its retention, which every operation treats as gone. */
 export const watchExpired = (watch: LaunchWatch, now: number) =>
