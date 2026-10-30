@@ -203,8 +203,9 @@ The Project category, shown while a project is selected, holds the project's nam
 checkouts and removal. Actions belong to a project: editing them creates the project's own list
 on each selected environment, and reset returns to the environment's shared list.
 
-Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
-resolve in one order: a project override, then the environment setting, then `t3.json`, then the
+Settings a repository can also declare in `goat.json` (or an older `t3.json` in a branch without
+one), such as the workspace for new threads, resolve in one order: a project override, then the
+environment setting, then `goat.json`, then the
 built-in default. Leave a setting on **Inherit** to let the next tier decide.
 Browser access changes apply when an agent session next starts.
 
@@ -212,11 +213,11 @@ New worktrees initialize git submodules recursively. If that step is slow becaus
 declares many nested submodules, set **Submodules** in **Settings → General** (with the project
 selected to override it there) to **Top level only** to stop at the ones the repository declares
 itself, or **Skip** to leave them for a setup script. It resolves in the same order as the
-workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
+workspace default: a `"worktreeSubmodules"` value in the `goat.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
 A repository with large folders that agents only read, such as vendored reference code, can keep
-them out of new worktrees with `"worktreeSparseExclude": [".repos/"]` in `t3.json`. GOAT checks
+them out of new worktrees with `"worktreeSparseExclude": [".repos/"]` in `goat.json`. GOAT checks
 the worktree out with Git sparse checkout, so those folders are never written, which matters most
 on Windows. Run `git sparse-checkout disable` in a worktree to bring them back there.
 

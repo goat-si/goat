@@ -40,7 +40,10 @@ handoff is also a good choice when the old conversation contains conflicting ins
 
 GOAT does not currently have a whole-thread export command. Before a major server update, stop
 the server and copy its `userdata` directory to a safe location. The default is
-`~/.t3/userdata`; a server started with `--home-dir <path>` uses `<path>/userdata`.
+`~/.goat/userdata` for `goat serve` and `~/.goat/desktop/userdata` for the desktop app
+([GOAT (Nightly) uses its own folder](./install.md#goat-and-goat-nightly-side-by-side)). A server
+started with `--base-dir <path>` or `GOAT_HOME=<path>` uses `<path>/userdata`. `goat serve`
+keeps using `~/.t3/userdata` from an older install while `~/.goat/userdata` does not exist.
 
 If a migrated transcript is missing from the app, keep that copy unchanged. You can inspect the
 old transcript without starting a server against it:

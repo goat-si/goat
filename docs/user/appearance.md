@@ -94,8 +94,10 @@ the default and published themes.
 
 ### Publish a theme
 
-Save a theme exported from GOAT into `~/.t3/userdata/themes/` on the server, or the `themes`
-directory under your custom state directory. The filename supplies the theme ID: `nightfall.json`
+Save a theme exported from GOAT into the server's `userdata/themes/` folder:
+`~/.goat/userdata/themes/` for `goat serve`, `~/.goat/desktop/userdata/themes/` for the desktop
+app, or `<path>/userdata/themes/` for a server started with `--base-dir <path>`. The filename
+supplies the theme ID: `nightfall.json`
 can be selected with `goat theme set nightfall`. Keep the filename stable when updating its colors.
 Do not use `system`, `light`, `dark`, or a built-in theme's ID.
 
