@@ -1867,6 +1867,7 @@ const make = Effect.gen(function* () {
           timeoutMs: request.timeoutMs,
           recordAction,
           status: (current) => statusWithTitle(current, request.agentSessionId),
+          assertDestination: (url) => blockedTabs.assertTab(tab, request.runId, url),
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;

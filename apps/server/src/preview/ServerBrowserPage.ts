@@ -8,7 +8,6 @@ import {
   type PreviewAutomationHoverInput,
   type PreviewAutomationNetworkEntry,
   type PreviewAutomationPressInput,
-  type PreviewAutomationReloadInput,
   type PreviewAutomationScrollInput,
   type PreviewAutomationSelectInput,
   type PreviewAutomationSelectResult,
@@ -127,50 +126,6 @@ const withReceiver = async (
     ...(typeof error.detail === "object" ? error.detail : {}),
     interceptedBy: `${intercepted} Now at the target: ${receiver}.`.slice(0, 300),
   });
-};
-
-/** Real Chromium history, including same-document entries whose response is null. */
-export const navigateHistory = async (
-  page: Page,
-  cdp: CDPSession,
-  operation: "back" | "forward" | "reload",
-  input: PreviewAutomationReloadInput,
-  timeout: number,
-  assertControl: () => void,
-) => {
-  const options = {
-    timeout: input.timeoutMs ?? timeout,
-    waitUntil:
-      input.readiness === "domContentLoaded" ? ("domcontentloaded" as const) : ("load" as const),
-  };
-  if (operation === "reload" && input.ignoreCache !== true) {
-    assertControl();
-    invalidateRefs(page);
-    await page.reload(options);
-    return;
-  }
-  let entryId: number | undefined;
-  if (operation !== "reload") {
-    const history = await cdp.send("Page.getNavigationHistory");
-    const index = history.currentIndex + (operation === "back" ? -1 : 1);
-    entryId = history.entries[index]?.id;
-    if (entryId === undefined) {
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `No ${operation} history entry exists for this browser tab.`,
-      );
-    }
-  }
-  assertControl();
-  invalidateRefs(page);
-  // Install the waiter before sending CDP: an acknowledgement alone does not
-  // prove that Electron's guest page actually committed a navigation.
-  await Promise.all([
-    page.waitForNavigation(options),
-    operation === "reload"
-      ? cdp.send("Page.reload", { ignoreCache: true })
-      : cdp.send("Page.navigateToHistoryEntry", { entryId: entryId! }),
-  ]);
 };
 
 const pageRefs = new WeakMap<Page, { generation: string; refs: Map<string, string> }>();

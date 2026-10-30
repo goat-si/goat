@@ -96,6 +96,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
 
 function makeContext() {
   const events = new NodeEvents.EventEmitter();
+  const sessions: Array<ReturnType<typeof makeSession>> = [];
   let url = "about:blank";
   let viewport = { width: 1280, height: 800 };
   const page = {
@@ -121,6 +122,7 @@ function makeContext() {
     keyboard: { press: vi.fn(async (_key: string) => {}) },
     emulateMedia: async () => {},
     waitForLoadState: async () => {},
+    waitForNavigation: async () => null,
     evaluate: async () => ({
       url,
       title: "test page",
@@ -137,13 +139,55 @@ function makeContext() {
   };
   const context = {
     page,
+    sessions,
     newPage: async () => page as unknown as Page,
     grantPermissions: async () => {},
-    newCDPSession: async (_target: unknown) => makeSession(),
+    newCDPSession: async (_target: unknown) => {
+      const session = makeSession();
+      sessions.push(session);
+      return session;
+    },
     close: async () => {},
   };
   return context;
 }
+
+it.effect("blocks a history destination before dispatch and fences the tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const session = contexts.at(-1)!.sessions[0]!;
+      const send = session.send.getMockImplementation()!;
+      session.send.mockImplementation(async (method, input) =>
+        method === "Page.getNavigationHistory"
+          ? {
+              currentIndex: 1,
+              entries: [
+                { id: 1, url: "https://example.com/" },
+                { id: 2, url: "about:blank" },
+              ],
+            }
+          : send(method, input),
+      );
+      const result = yield* broker
+        .invoke({ scope, tabId, operation: "back", input: {} })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(
+        session.send.mock.calls.some(([method]) => method === "Page.navigateToHistoryEntry"),
+      ).toBe(false);
+      const retry = yield* broker
+        .invoke({ scope, tabId, operation: "claim", input: {} })
+        .pipe(Effect.result);
+      expect(retry._tag).toBe("Failure");
+      if (retry._tag === "Failure") expect(retry.failure).toMatchObject({ reason: "blocked_url" });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
 
 const scope = {
   environmentId: EnvironmentId.make("browser-screen-test-environment"),
