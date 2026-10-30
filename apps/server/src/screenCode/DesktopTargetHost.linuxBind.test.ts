@@ -420,3 +420,58 @@ it.effect.each([
     expect(result._tag === "Failure" && result.failure.code).toBe(code);
   }),
 );
+
+it.effect("macOS's bundle filter binds a window whose name does not contain the bundle id", () =>
+  Effect.gen(function* () {
+    const editor = { pid: 42, window_id: 7, app_name: "Editor", layer: 0 };
+    const { host } = fixture({
+      list_apps: cut,
+      // The driver passes the window's bundle id to its filter, but lists no bundle_id field.
+      list_windows: (args: { app?: string; pid?: number }) =>
+        args.app === "com.example.Editor" || args.pid === 42
+          ? { windows: [editor] }
+          : { windows: [] },
+      get_window_state: { ...state, pid: 42, window_id: 7 },
+    });
+    const bound = yield* bindResult(host, { bundle_id: "com.example.Editor", window_id: 7 });
+    expect(bound._tag).toBe("Success");
+  }),
+);
+
+it.effect("a window missing from a list that may be incomplete is not called closed", () =>
+  Effect.gen(function* () {
+    const partial = { windows: [thunarWindow], enumeration_complete: false };
+    const held = { windows: [thunarWindow], authoritative_window_ids: [4194311, 4194307] };
+    for (const reply of [partial, held]) {
+      const { host } = fixture(
+        { list_apps: { apps: appRows }, list_windows: reply },
+        undefined,
+        undefined,
+        undefined,
+        "linux",
+      );
+      const result = yield* bindResult(host, { window_id: 4194307 });
+      expect(result._tag === "Failure" && result.failure.code).toBe("downstream_failure");
+    }
+  }),
+);
+
+it.live("a name's window list that may be incomplete launches and binds nothing", () => {
+  const { host, sent } = fixture(
+    {
+      list_apps: { apps: appRows },
+      list_windows: { windows: [script], enumeration_complete: false },
+      launch_app: { pid: 1 },
+    },
+    undefined,
+    undefined,
+    undefined,
+    "linux",
+  );
+  return Effect.gen(function* () {
+    const result = yield* cell(host, caught("await screen.app('Scratch-cu-window.py');"));
+    expect(result.value).toMatchObject({ code: "target_missing" });
+    expect(tools(sent)).not.toContain("launch_app");
+    expect(tools(sent)).not.toContain("bind_app");
+  });
+});

@@ -459,19 +459,35 @@ export class CellWindowTracker {
  * a script's window carries its WM_CLASS while its row is the interpreter's process) the window's
  * own app_name, as screen.discover() shows it. Without either, the window id alone names it.
  */
+/**
+ * Whether a window missing from a list_windows reply is absent: not when the driver says its
+ * enumeration may be incomplete, nor when its id snapshot still holds the window.
+ */
+export const listingProvesAbsent = (value: unknown, windowId: number) => {
+  const reply = object(value);
+  if (reply?.enumeration_complete === false) return false;
+  const ids = reply?.authoritative_window_ids;
+  return !(Array.isArray(ids) && ids.includes(windowId));
+};
+
 export const matchBindWindow = (input: {
   readonly listedApps: unknown;
   readonly listedWindows: unknown;
   readonly bundleId: string | undefined;
   readonly name: string | undefined;
   readonly requestedWindow: number;
+  /**
+   * The windows came from macOS's `app` filter, which passes an exact bundle id or a name
+   * containing the filter: a window whose name does not contain it matched by bundle id.
+   */
+  readonly bundleFiltered?: boolean;
 }): {
   readonly pid?: number;
   readonly app?: Record<string, unknown> | undefined;
   readonly window?: Record<string, unknown>;
   readonly error?: ScreenRunError;
 } => {
-  const { listedApps, listedWindows, bundleId, name, requestedWindow } = input;
+  const { listedApps, listedWindows, bundleId, name, requestedWindow, bundleFiltered } = input;
   if (!Array.isArray(listedWindows)) return { error: fail("downstream_failure") };
   const rows = Array.isArray(listedApps)
     ? listedApps.map(object).filter((app): app is Record<string, unknown> => app !== undefined)
@@ -532,7 +548,10 @@ export const matchBindWindow = (input: {
       : // A cut app list: the driver's filter matched a substring of a name, so only the
         // window's own bundle id or app_name proves which app it is.
         bundleId !== undefined
-        ? first.bundle_id === bundleId || lower(first.app_name) === bundleId.toLowerCase()
+        ? first.bundle_id === bundleId ||
+          lower(first.app_name) === bundleId.toLowerCase() ||
+          (bundleFiltered === true &&
+            !(lower(first.app_name) ?? "").includes(bundleId.toLowerCase()))
         : first.app_name === name);
   if (!agrees)
     return {

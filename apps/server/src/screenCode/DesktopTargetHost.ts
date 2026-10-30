@@ -57,6 +57,7 @@ import {
 import {
   CellWindowTracker,
   type CellWindowsOutcome,
+  listingProvesAbsent,
   matchBindWindow,
   parseWindowList,
   type SheetTrigger,
@@ -394,6 +395,7 @@ export const createDesktopTargetHost = (deps: {
       let { reply: windowsReply, windows: listedWindows } = yield* listWindows(filter ?? {});
       let listedPid = onlyPid;
       let unfiltered = filter === undefined;
+      let bundleFiltered = isMac && filter !== undefined && "app" in filter;
       // Not among the filtered windows: whose window it is, if anyone's, decides the answer.
       if (
         filter !== undefined &&
@@ -403,6 +405,7 @@ export const createDesktopTargetHost = (deps: {
         ({ reply: windowsReply, windows: listedWindows } = yield* listWindows({}));
         listedPid = undefined;
         unfiltered = true;
+        bundleFiltered = false;
       }
       // A list cut at the reply cap cannot show the window, its owner, or a duplicate of its id.
       if (!Array.isArray(listedWindows))
@@ -414,13 +417,25 @@ export const createDesktopTargetHost = (deps: {
               " could not be checked and nothing was bound. Try again.",
           ),
         );
+      const unproven = fail(
+        "downstream_failure",
+        "The driver's window list says it may be incomplete, so window " +
+          requestedWindow +
+          " could not be checked and nothing was bound. Try again.",
+      );
       const matched = matchBindWindow({
         listedApps: listed,
         listedWindows,
         bundleId,
         name,
         requestedWindow,
+        bundleFiltered,
       });
+      if (
+        matched.error?.detail === "window_gone" &&
+        !listingProvesAbsent(driverValue(windowsReply), requestedWindow)
+      )
+        return yield* Effect.fail(unproven);
       // macOS lists windows above layer 0 (panels, popovers) only for their pid.
       if (matched.error?.detail === "window_gone" && isMac && unfiltered)
         return yield* Effect.fail({
@@ -434,7 +449,8 @@ export const createDesktopTargetHost = (deps: {
         return yield* Effect.fail(matched.error ?? fail("target_missing"));
       const { pid, app, window: foundWin } = matched;
       // The baseline later window checks compare with: the bound process's own complete list.
-      const baseline = listedPid === pid ? listedWindows : (yield* listWindows({ pid })).windows;
+      const own = listedPid === pid ? undefined : yield* listWindows({ pid });
+      const baseline = own === undefined ? listedWindows : own.windows;
       if (!Array.isArray(baseline))
         return yield* Effect.fail(
           fail(
@@ -446,6 +462,11 @@ export const createDesktopTargetHost = (deps: {
         );
       // The process's own list is read last, so it decides: the window must still be in it, once.
       const again = baseline.filter((window) => object(window)?.window_id === requestedWindow);
+      if (
+        again.length === 0 &&
+        !listingProvesAbsent(driverValue(own?.reply ?? windowsReply), requestedWindow)
+      )
+        return yield* Effect.fail(unproven);
       if (again.length !== 1 || object(again[0])?.pid !== pid)
         return yield* Effect.fail(
           again.length > 1
