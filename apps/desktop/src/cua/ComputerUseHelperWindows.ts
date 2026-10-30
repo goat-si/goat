@@ -13,6 +13,7 @@ import {
   helperFeatures,
   type HelperProcess,
   openHelperSession,
+  unlessAborted,
 } from "./ComputerUseHelper.ts";
 
 /**
@@ -84,6 +85,7 @@ export function windowsReadinessBlocker(
 export async function probeWindowsReadiness(
   process: HelperProcess,
   expectedBundleId: string,
+  signal?: AbortSignal,
 ): Promise<{
   accessibility: boolean;
   screenRecording: boolean;
@@ -91,9 +93,10 @@ export async function probeWindowsReadiness(
   blocker?: ComputerUseReadiness["blockers"][number];
   features: HelperFeatures;
 }> {
-  const session = await openHelperSession(process, expectedBundleId);
+  const session = await openHelperSession(process, expectedBundleId, signal);
   try {
-    const readiness = decodeReadiness(await session.request("permissions", { prompt: false }));
+    const asked = session.request("permissions", { prompt: false });
+    const readiness = decodeReadiness(await (signal ? unlessAborted(asked, signal) : asked));
     const detail = windowsReadinessFailure(readiness);
     const blocker = windowsReadinessBlocker(readiness);
     const features = helperFeatures(session);
@@ -111,7 +114,7 @@ export async function probeWindowsReadiness(
           features,
         };
   } finally {
-    await session.close();
+    await session.close({ force: signal?.aborted === true });
   }
 }
 

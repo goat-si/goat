@@ -118,7 +118,8 @@ export const fixture = Effect.fn(function* (
       | "agentManifest"
       | "manifestOnly"
       | "listing"
-      | "capture";
+      | "capture"
+      | "grants";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -176,6 +177,8 @@ export const fixture = Effect.fn(function* (
   let listingCancelled = false;
   const capturing = yield* Deferred.make<void>();
   let captureCancelled = false;
+  const askingGrants = yield* Deferred.make<void>();
+  let grantsCancelled = false;
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
@@ -246,8 +249,18 @@ export const fixture = Effect.fn(function* (
       return createClient();
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
-    helperGrants: async (bundle, prompt) => {
+    helperGrants: async (bundle, prompt, _platform, signal) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
+      // grants holds the first prompt until the start it serves is stopped.
+      if (options.hold === "grants" && prompt && signal && !grantsCancelled) {
+        Deferred.doneUnsafe(askingGrants, Exit.void);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        grantsCancelled = true;
+        throw signal.reason;
+      }
       if (helperAnswer?.fails) throw helperAnswer.fails;
       const granted = helperAnswer?.granted ?? false;
       return {
@@ -705,6 +718,9 @@ export const fixture = Effect.fn(function* (
     /** The readiness check's capture check has started. */
     capturing: Deferred.await(capturing),
     captureCancelled: () => captureCancelled,
+    /** The agent start's grant prompt is showing. */
+    askingGrants: Deferred.await(askingGrants),
+    grantsCancelled: () => grantsCancelled,
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),

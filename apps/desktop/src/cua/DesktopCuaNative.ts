@@ -124,6 +124,7 @@ export interface DesktopCuaDriverDependencies {
     bundle: HelperBundle,
     prompt: boolean,
     platform: NodeJS.Platform,
+    signal?: AbortSignal,
   ) => Promise<Grants>;
   /**
    * One capture of GOAT's own window by a fresh helper, the way live pictures capture (macOS);
@@ -141,7 +142,7 @@ export interface DesktopCuaDriverDependencies {
    */
   readonly helperBundlePath: typeof resolveHelperBundle;
   /** Starts the helper as agents do, from GOAT's own Node runtime, and runs its MCP handshake. */
-  readonly agentRoute: (mcp: AgentRouteCommand) => Promise<AgentRouteOutcome>;
+  readonly agentRoute: (mcp: AgentRouteCommand, signal?: AbortSignal) => Promise<AgentRouteOutcome>;
   /** A new manager for one channel's macOS helper service; the driver keeps one per bundle id. */
   readonly helperService: (bundle: HelperBundle) => HelperServiceManager;
   readonly helperHost: (
@@ -221,10 +222,19 @@ export const dependencies: DesktopCuaDriverDependencies = {
       screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
     };
   },
-  helperGrants: (bundle, prompt, platform) =>
+  helperGrants: (bundle, prompt, platform, signal) =>
     platform === "win32"
-      ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
-      : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
+      ? probeWindowsReadiness(
+          spawnHelperProcess(bundle.executable, platform),
+          bundle.bundleId,
+          signal,
+        )
+      : probeHelperGrants(
+          spawnHelperProcess(bundle.executable, platform),
+          bundle.bundleId,
+          prompt,
+          signal,
+        ),
   captureCheck: (bundle, target, signal) =>
     checkHelperCapture(
       spawnHelperProcess(bundle.executable, "darwin"),

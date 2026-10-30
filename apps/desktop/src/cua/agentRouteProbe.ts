@@ -50,15 +50,18 @@ const env = { ...process.env };
 delete env.GOAT_AGENT_ROUTE_TARGET;
 delete env.ELECTRON_RUN_AS_NODE;
 for (const v of target.environment) env[v.name] = v.value;
-const child = cp.spawn(target.command, target.args, { stdio: ["pipe", "pipe", "pipe"], detached: true, env });
-let out = "", err = "", done = false;
+let child, out = "", err = "", done = false;
 const finish = (result) => {
   if (done) return;
   done = true;
-  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+  try { if (child) process.kill(-child.pid, "SIGKILL"); } catch {}
   process.stdout.write(JSON.stringify(result) + "\\n");
   process.exit(0);
 };
+// Stopped: end the helper's own group before answering. Listening before the spawn leaves no
+// moment in which a stop kills this process and orphans the helper.
+process.on("SIGTERM", () => finish({ kind: "failed", reason: "stopped" }));
+child = cp.spawn(target.command, target.args, { stdio: ["pipe", "pipe", "pipe"], detached: true, env });
 child.on("error", (e) => finish({ kind: "failed", reason: String(e && e.message || e) }));
 // A helper that exits at once closes its stdin under the write below; that is its exit's story.
 child.stdin.on("error", () => {});
@@ -73,8 +76,11 @@ child.on("exit", (code, signal) => finish(code === ${UNTRUSTED_PARENT_EXIT} ? { 
 child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: "goat-agent-route", method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "goat-readiness", version: "1" } } }) + "\\n");
 `;
 
-/** Runs the helper's MCP handshake under the agents' parent. */
-export async function probeAgentRoute(target: AgentRouteCommand): Promise<AgentRouteOutcome> {
+/** Runs the helper's MCP handshake under the agents' parent; an abort stops it and its helper. */
+export async function probeAgentRoute(
+  target: AgentRouteCommand,
+  signal?: AbortSignal,
+): Promise<AgentRouteOutcome> {
   const command = await Effect.runPromise(
     resolveSelfInvocationCommand().pipe(Effect.provide(NodeServices.layer)),
   );
@@ -90,10 +96,19 @@ export async function probeAgentRoute(target: AgentRouteCommand): Promise<AgentR
     });
     let out = "";
     let settled = false;
+    // The probe ends the helper it started on SIGTERM, then answers "stopped".
+    const stop = () => {
+      try {
+        if (probe.pid !== undefined) process.kill(probe.pid, "SIGTERM");
+      } catch {
+        // Already exited.
+      }
+    };
     const settle = (outcome: AgentRouteOutcome) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
       try {
         // Only the group captured at spawn belongs to this check.
         if (probe.pid !== undefined) process.kill(-probe.pid, "SIGKILL");
@@ -107,6 +122,8 @@ export async function probeAgentRoute(target: AgentRouteCommand): Promise<AgentR
       ANSWER_WITHIN_MS,
     );
     timer.unref?.();
+    if (signal?.aborted) stop();
+    else signal?.addEventListener("abort", stop, { once: true });
     probe.on("error", (error) => settle({ kind: "failed", reason: error.message }));
     probe.stdout.on("data", (chunk) => {
       out += chunk;

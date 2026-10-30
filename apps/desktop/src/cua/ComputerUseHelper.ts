@@ -238,7 +238,7 @@ const abortedBy = (signal: AbortSignal | undefined) =>
   });
 
 /** The promise, unless the signal aborts first: then its reason. */
-const unlessAborted = async <A>(promise: Promise<A>, signal: AbortSignal): Promise<A> => {
+export const unlessAborted = async <A>(promise: Promise<A>, signal: AbortSignal): Promise<A> => {
   const result = await Promise.race([promise.then((value) => ({ value })), abortedBy(signal)]);
   if (result === "aborted") throw signal.reason;
   return result.value;
@@ -428,12 +428,17 @@ export async function probeHelperGrants(
   process: HelperProcess,
   expectedBundleId: string,
   prompt: boolean,
+  signal?: AbortSignal,
 ): Promise<typeof HelperGrants.Type & { readonly features: HelperFeatures }> {
-  const session = await openHelperSession(process, expectedBundleId);
+  const session = await openHelperSession(process, expectedBundleId, signal);
   try {
-    return { ...(await session.permissions(prompt)), features: helperFeatures(session) };
+    const granted = session.permissions(prompt);
+    return {
+      ...(await (signal ? unlessAborted(granted, signal) : granted)),
+      features: helperFeatures(session),
+    };
   } finally {
-    await session.close();
+    await session.close({ force: signal?.aborted === true });
   }
 }
 

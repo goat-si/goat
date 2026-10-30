@@ -311,9 +311,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   /** The bundle id the driver must report as its parent application. */
   const engineBundleId = (engine: Engine) =>
     engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId;
-  const engineGrants = (engine: Engine, prompt: boolean): Promise<Grants> =>
+  const engineGrants = (engine: Engine, prompt: boolean, signal?: AbortSignal): Promise<Grants> =>
     engine.kind === "helper"
-      ? native.helperGrants(engine.bundle, prompt, environment.platform)
+      ? native.helperGrants(engine.bundle, prompt, environment.platform, signal)
       : prompt
         ? native.loadElectron().then((electron) => {
             const granted = electron.hasRequiredMacOSPermissions(
@@ -491,7 +491,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const grants =
       known ??
       (yield* Effect.tryPromise(() =>
-        selected ? engineGrants(selected, false) : native.checkGrants(),
+        selected ? engineGrants(selected, false, requests.signal()) : native.checkGrants(),
       ).pipe(
         Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })),
       ));
@@ -556,7 +556,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const agentRoute =
       selected.kind === "helper" && environment.platform === "darwin"
         ? agentRouteFailure(
-            yield* Effect.promise(() => native.agentRoute(connection.value.mcp)),
+            yield* Effect.promise(() => native.agentRoute(connection.value.mcp, requests.signal())),
             COMPUTER_USE_HELPER_NAME,
           )
         : undefined;
@@ -798,7 +798,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         if (selected.kind === "helper") learnHelper(undefined);
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
-          const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
+          const grants = yield* Effect.tryPromise(() =>
+            engineGrants(selected, true, requests.signal()),
+          );
           if (selected.kind === "helper") {
             helperSeen = true;
             yield* noteHelper((state) => withGrants(state, grants, true));
@@ -821,7 +823,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             yield* reprove(request, grants);
         } else if (selected.kind === "helper") {
           // Windows has no grant to prompt for; a desktop the helper cannot use says why.
-          const ready = yield* Effect.tryPromise(() => engineGrants(selected, false));
+          const ready = yield* Effect.tryPromise(() =>
+            engineGrants(selected, false, requests.signal()),
+          );
           helperSeen = true;
           yield* noteHelper((state) => withGrants(state, ready, false));
           if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {

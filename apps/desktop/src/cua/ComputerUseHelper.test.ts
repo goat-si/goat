@@ -17,6 +17,7 @@ import {
   listHelperApplications,
   makeHelperHost,
   openHelperSession,
+  probeHelperGrants,
   type HelperProcess,
 } from "./ComputerUseHelper.ts";
 import { type HelperServiceManager, makeHelperServiceManager } from "./ComputerUseHelperService.ts";
@@ -477,6 +478,29 @@ describe("ComputerUseHelper daemon admission", () => {
     await asked.promise;
     cancel.abort(new ComputerUseHelperError("aborted", "Computer use stopped."));
     assert.equal((await checked).kind, "failed");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+  });
+
+  it("a cancelled grants probe kills its helper", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // It never answers permissions, as a helper whose prompt is still showing.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const cancel = new AbortController();
+    const probed = probeHelperGrants(helper.process, BUNDLE_ID, true, cancel.signal);
+    await asked.promise;
+    const stopped = new ComputerUseHelperError("aborted", "Computer use stopped.");
+    cancel.abort(stopped);
+    assert.strictEqual(
+      await probed.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+      stopped,
+    );
     assert.deepEqual(helper.signals, ["SIGKILL"]);
   });
 
