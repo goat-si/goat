@@ -1,7 +1,6 @@
 import { ThreadId } from "@goat/contracts";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
 import * as Effect from "effect/Effect";
-import * as Ref from "effect/Ref";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
@@ -25,57 +24,82 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   const context = yield* Effect.context<never>();
   const run = Effect.runPromiseWith(context);
   const runSync = Effect.runSyncWith(context);
-  const entries = yield* Ref.make(new Map<string, Identity>());
-  const tabRuns = new Map<string, string>();
-  const pending = new Map<string, Promise<void>>();
+  const entries = new Map<string, Identity>();
+  const pending = new Map<string, { runId: string; check: Promise<void> }>();
+  const tokens = new Map<string, object>();
   const keyOf = (tab: Tab) => `${tab.threadId}\u0000${tab.tabId}`;
+  const entryKey = (key: string, runId: string) => `${key}\u0000${runId}`;
+  const runKey = (threadId: string, runId: string) => `${threadId}\u0000${runId}`;
+  const active = (threadId: string, runId: string) =>
+    runSync(activity.isRunActive(ThreadId.make(threadId), runId));
+  const token = (threadId: string, runId: string) => {
+    if (!active(threadId, runId)) return undefined;
+    const key = runKey(threadId, runId);
+    const value = tokens.get(key) ?? {};
+    tokens.set(key, value);
+    return value;
+  };
+  yield* activity.onRunEnd((threadId, runId) => {
+    tokens.delete(runKey(threadId, runId));
+    const prefix = `${threadId}\u0000`;
+    for (const [key, value] of entries)
+      if (key.startsWith(prefix) && value.runId === runId) entries.delete(key);
+    for (const [key, value] of pending)
+      if (key.startsWith(prefix) && value.runId === runId) pending.delete(key);
+  });
   const blocked = () =>
     new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
-  const record = (key: string, identity: Identity) =>
-    run(Ref.update(entries, (current) => new Map(current).set(key, identity)));
   const observe = (tab: Tab, url: string) => {
     const key = keyOf(tab);
-    const previousRun = tabRuns.get(key);
-    if (!previousRun) return;
-    const runId = runSync(activity.currentRun(ThreadId.make(tab.threadId))) ?? previousRun;
-    const prior = pending.get(key) ?? Promise.resolve();
+    const runId = runSync(activity.currentRun(ThreadId.make(tab.threadId)));
+    if (!runId) return;
+    const version = token(tab.threadId, runId);
+    const prior = pending.get(key)?.check ?? Promise.resolve();
     const check = prior.then(async () => {
       const current = await run(settings.getSettings);
-      if (!tab.closing && isBlockedBrowserUrl(url, current.blockedBrowserHosts))
-        await record(key, { threadId: tab.threadId, runId });
+      if (
+        !tab.closing &&
+        version !== undefined &&
+        version === tokens.get(runKey(tab.threadId, runId)) &&
+        active(tab.threadId, runId) &&
+        isBlockedBrowserUrl(url, current.blockedBrowserHosts)
+      )
+        entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
     });
     void check.catch(() => undefined);
-    pending.set(key, check);
+    pending.set(key, { runId, check });
+    return check;
   };
   const assertUrl = async (url: string) => {
     const current = await run(settings.getSettings);
     if (isBlockedBrowserUrl(url, current.blockedBrowserHosts)) throw blocked();
   };
   const assertTab = async (tab: Tab, runId: string | undefined, url?: string) => {
-    // This check fences later dispatches; input already sent before a navigation cannot be recalled.
     const key = keyOf(tab);
-    const identity = runId ? { threadId: tab.threadId, runId } : undefined;
+    const version = runId ? token(tab.threadId, runId) : undefined;
     for (;;) {
       const check = pending.get(key);
-      await check;
-      const entry = (await run(Ref.get(entries))).get(key);
+      await check?.check;
+      const entry = runId ? entries.get(entryKey(key, runId)) : undefined;
       const current = await run(settings.getSettings);
       if (check !== pending.get(key)) continue;
-      if (identity && entry?.threadId === identity.threadId && entry.runId === identity.runId)
-        throw blocked();
+      if (runId && entry?.threadId === tab.threadId && entry.runId === runId) throw blocked();
       if (
         isBlockedBrowserUrl(tab.page.url(), current.blockedBrowserHosts) ||
         (url !== undefined && isBlockedBrowserUrl(url, current.blockedBrowserHosts))
       ) {
-        if (identity) await record(key, identity);
+        if (
+          runId &&
+          version !== undefined &&
+          version === tokens.get(runKey(tab.threadId, runId)) &&
+          active(tab.threadId, runId)
+        )
+          entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
         throw blocked();
       }
-      if (runId) tabRuns.set(key, runId);
       return;
     }
   };
-  const setRun = (threadId: string, tabId: string, runId: string) =>
-    tabRuns.set(`${threadId}\u0000${tabId}`, runId);
   const gate = (tab: Tab, runId: string | undefined, base: DispatchGate): DispatchGate => {
     let passed = false;
     const check = async () => {
@@ -100,18 +124,8 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   };
   const drop = (threadId: string, tabId: string) => {
     const key = `${threadId}\u0000${tabId}`;
-    tabRuns.delete(key);
-    const check = pending.get(key);
     pending.delete(key);
-    const clear = () =>
-      run(
-        Ref.update(entries, (current) => {
-          const next = new Map(current);
-          next.delete(key);
-          return next;
-        }),
-      );
-    void (check ?? Promise.resolve()).then(clear, clear);
+    for (const entry of entries.keys()) if (entry.startsWith(`${key}\u0000`)) entries.delete(entry);
   };
-  return { assertTab, assertUrl, observe, setRun, drop, gate };
+  return { assertTab, assertUrl, observe, drop, gate };
 });

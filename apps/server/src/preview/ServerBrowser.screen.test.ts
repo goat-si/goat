@@ -57,6 +57,7 @@ const calls = vi.hoisted(() => ({
   received: undefined as ((timeoutMs: number) => void) | undefined,
 }));
 const guardHook = vi.hoisted(() => ({ wait: undefined as (() => Promise<void>) | undefined }));
+const turnHook = vi.hoisted(() => ({ end: undefined as (() => void) | undefined }));
 
 vi.mock("./ServerBrowserSecretFill.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./ServerBrowserSecretFill.ts")>();
@@ -204,6 +205,29 @@ it.effect("blocks a history destination before dispatch and fences the tab", () 
         .pipe(Effect.result);
       expect(retry._tag).toBe("Failure");
       if (retry._tag === "Failure") expect(retry.failure).toMatchObject({ reason: "blocked_url" });
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const endForward = yield* activity.begin(scope.thread.threadId, "forward-run");
+      session.send.mockImplementation(async (method, input) =>
+        method === "Page.getNavigationHistory"
+          ? {
+              currentIndex: 0,
+              entries: [
+                { id: 2, url: "about:blank" },
+                { id: 1, url: "https://example.com/" },
+              ],
+            }
+          : send(method, input),
+      );
+      const forward = yield* broker
+        .invoke({ scope, tabId, runId: "forward-run", operation: "forward", input: {} })
+        .pipe(Effect.result);
+      expect(forward._tag).toBe("Failure");
+      if (forward._tag === "Failure")
+        expect(forward.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(
+        session.send.mock.calls.some(([method]) => method === "Page.navigateToHistoryEntry"),
+      ).toBe(false);
+      yield* endForward;
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -239,7 +263,10 @@ const layer = ServerBrowser.layer.pipe(
         attached: Stream.empty,
         isAttached: () => Effect.succeed(false),
         endpoint: () => Effect.die("no desktop here"),
-        turn: () => Effect.void,
+        turn: (_threadId, active) =>
+          Effect.sync(() => {
+            if (!active) turnHook.end?.();
+          }),
         pointer: () => Effect.void,
       }),
       PreviewAgentActivity.layer,
@@ -255,6 +282,9 @@ const layer = ServerBrowser.layer.pipe(
 const ready = Effect.gen(function* () {
   const broker = yield* Broker.PreviewAutomationBroker;
   yield* ServerBrowser.ServerBrowser;
+  const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+  const end = yield* activity.begin(scope.thread.threadId, scope.thread.runId);
+  yield* Effect.addFinalizer(() => end);
   yield* Effect.yieldNow;
   const opened = yield* broker.invoke<PreviewAutomationStatus>({
     scope,
@@ -262,7 +292,7 @@ const ready = Effect.gen(function* () {
     input: { reuseExistingTab: false, show: false },
   });
   const tabId = PreviewTabId.make(opened.tabId!);
-  return { broker, tabId };
+  return { broker, tabId, end };
 });
 
 it.effect("does not evaluate after a blocked navigation during the secret guard", () =>
@@ -303,6 +333,39 @@ it.effect("does not evaluate after a blocked navigation during the secret guard"
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("clears a turn fence and ignores visits after the turn ends", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId, end } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const ended = yield* Deferred.make<void>();
+      const fork = Effect.runForkWith(yield* Effect.context<never>());
+      turnHook.end = () => {
+        fork(Deferred.succeed(ended, undefined));
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          turnHook.end = undefined;
+        }),
+      );
+      const page = contexts.at(-1)!.page;
+      const claim = { scope, tabId, operation: "claim" as const, input: {} };
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      const blocked = yield* broker.invoke(claim).pipe(Effect.result);
+      expect(blocked._tag).toBe("Failure");
+      if (blocked._tag === "Failure")
+        expect(blocked.failure).toMatchObject({ reason: "blocked_url" });
+      yield* end;
+      yield* Deferred.await(ended);
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      expect((yield* broker.invoke(claim).pipe(Effect.result))._tag).toBe("Success");
     }),
   ).pipe(Effect.provide(layer)),
 );

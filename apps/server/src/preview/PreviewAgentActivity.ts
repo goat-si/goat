@@ -21,6 +21,10 @@ export class PreviewAgentActivity extends Context.Service<
     readonly begin: (threadId: ThreadId, runId?: string) => Effect.Effect<Effect.Effect<void>>;
     readonly active: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly currentRun: (threadId: ThreadId) => Effect.Effect<string | undefined>;
+    readonly isRunActive: (threadId: ThreadId, runId: string) => Effect.Effect<boolean>;
+    readonly onRunEnd: (
+      handler: (threadId: ThreadId, runId: string) => void,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     /** Each thread's transitions between no turn and some turn, from subscription on. */
     readonly changes: Effect.Effect<
       PubSub.Subscription<PreviewAgentTurnChange>,
@@ -34,6 +38,7 @@ const make = Effect.gen(function* () {
   const changes = yield* PubSub.unbounded<PreviewAgentTurnChange>();
   // A token per turn, so overlapping turns on one thread end only when the last does.
   const turns = new Map<ThreadId, Map<symbol, string | undefined>>();
+  const endHandlers = new Set<(threadId: ThreadId, runId: string) => void>();
 
   const begin = Effect.fn("PreviewAgentActivity.begin")(function* (
     threadId: ThreadId,
@@ -46,7 +51,10 @@ const make = Effect.gen(function* () {
     tokens.set(token, runId);
     if (existing === undefined) yield* PubSub.publish(changes, { threadId, active: true });
     return Effect.suspend(() => {
-      if (!tokens.delete(token) || tokens.size > 0) return Effect.void;
+      if (!tokens.delete(token)) return Effect.void;
+      if (runId !== undefined && ![...tokens.values()].includes(runId))
+        for (const handler of endHandlers) handler(threadId, runId);
+      if (tokens.size > 0) return Effect.void;
       if (turns.get(threadId) === tokens) turns.delete(threadId);
       return PubSub.publish(changes, { threadId, active: false }).pipe(Effect.asVoid);
     });
@@ -60,6 +68,18 @@ const make = Effect.gen(function* () {
     currentRun: Effect.fn("PreviewAgentActivity.currentRun")(function (threadId) {
       return Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].at(-1));
     }),
+    isRunActive: (threadId, runId) =>
+      Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].includes(runId)),
+    onRunEnd: (handler) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          endHandlers.add(handler);
+        }),
+        () =>
+          Effect.sync(() => {
+            endHandlers.delete(handler);
+          }),
+      ).pipe(Effect.asVoid),
     changes: PubSub.subscribe(changes),
   });
 });

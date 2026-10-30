@@ -1251,10 +1251,7 @@ const make = Effect.gen(function* () {
               automationOwner: request.agentSessionId,
               ...fields,
             }),
-          ).then((snapshot) => {
-            if (request.runId) blockedTabs.setRun(snapshot.threadId, snapshot.tabId, request.runId);
-            return snapshot;
-          }),
+          ),
         ensureTab,
         hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
         discard: async (snapshot, tab) => {
@@ -1680,7 +1677,6 @@ const make = Effect.gen(function* () {
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
         if (existing) assertReusable(existing.session, open, profiles);
         const tab = existing ?? (await openSessionTab(request, url, profiles.resolve(open)));
-        if (request.runId) blockedTabs.setRun(tab.threadId, tab.tabId, request.runId);
         if (existing?.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
