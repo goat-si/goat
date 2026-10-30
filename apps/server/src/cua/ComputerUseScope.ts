@@ -101,6 +101,16 @@ const GONE_CODES = new Set([
 ]);
 
 export function forgetGoneApp(value: unknown, args: unknown, listed: Map<number, ListedApp>): void {
+  const envelope = record(value);
+  const result = record(envelope?.result) ?? envelope;
+  const structured = record(result?.structuredContent);
+  if (
+    envelope?.error === undefined &&
+    result?.isError !== true &&
+    structured?.effect !== "refused" &&
+    structured?.refused === undefined
+  )
+    return;
   const hasGoneCode = (input: unknown, depth: number): boolean => {
     if (depth > 5) return false;
     if (Array.isArray(input)) return input.some((item) => hasGoneCode(item, depth + 1));

@@ -23,8 +23,18 @@ describe("learnApps", () => {
   it("forgets the pid when a call reports that its target is gone", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed, true);
-    forgetGoneApp({ structuredContent: { code: "process_not_found" } }, { pid: KAKAO.pid }, listed);
+    forgetGoneApp(
+      { isError: true, structuredContent: { code: "process_not_found" } },
+      { pid: KAKAO.pid },
+      listed,
+    );
     assert.equal(listed.has(KAKAO.pid), false);
+  });
+  it("does not invalidate cached identity for text in a successful response", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [KAKAO] }, listed, true);
+    forgetGoneApp({ structuredContent: { code: "process_not_found" } }, { pid: KAKAO.pid }, listed);
+    assert.equal(listed.has(KAKAO.pid), true);
   });
   it("keeps a cached bundle when a reply names the same display name", () => {
     const listed = new Map<number, ListedApp>();
