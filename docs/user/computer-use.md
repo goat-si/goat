@@ -48,7 +48,8 @@ Computer use also blocks System Settings, login and security prompts, and Screen
 Time. Full access started by a bot, channel, schedule, webhook, or another
 environment cannot control Terminal or iTerm. An organization can block more
 apps by adding their bundle IDs to `cuaDeniedApps` in the environment's
-`userdata/settings.json`; only a person can change this setting.
+`userdata/settings.json`; only a person can change this setting. A desktop-wide
+input with no named target cannot identify the app that has focus before it runs.
 
 ## Ask an agent to work across the browser and apps
 
