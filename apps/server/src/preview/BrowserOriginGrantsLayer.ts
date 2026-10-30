@@ -31,14 +31,14 @@ const make = Effect.gen(function* () {
             new BrowserClaimBindUnavailable({ cause: "Browser claim binding is unavailable." }),
           ),
   });
-  const reportDriverCapability = Effect.fn("BrowserOriginGrants.reportDriverCapability")(function* (
+  const setDriverCapability = Effect.fn("BrowserOriginGrants.setDriverCapability")(function* (
     value: boolean,
   ) {
     if (supported === value) return;
     supported = value;
     if (!value) yield* service.driverRestarted;
   });
-  return { ...service, reportDriverCapability };
+  return { ...service, setDriverCapability };
 });
 
 export class BrowserOriginGrants extends Context.Service<

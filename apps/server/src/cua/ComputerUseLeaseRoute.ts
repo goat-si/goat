@@ -215,7 +215,7 @@ export const reportLayer = HttpRouter.add(
         "browserClaimsSupported" in value
           ? value.browserClaimsSupported
             ? Effect.void
-            : grants.value.reportDriverCapability(false)
+            : grants.value.setDriverCapability(false)
           : grants.value.end(
               threadId,
               value.browserClaimEnded.claimId,

@@ -3,6 +3,7 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
 
 it.effect("does not bind before approval and hides a mismatch as a decline", () =>
@@ -264,6 +265,11 @@ it.effect("exposes each thread's claims and fences claimed browser pids until re
   }),
 );
 
+class ManifestConfirmationMismatch extends Schema.TaggedError<ManifestConfirmationMismatch>()(
+  "ManifestConfirmationMismatch",
+  {},
+) {}
+
 it.effect("refuses a claim when manifest confirmation fails and restores the previous union", () =>
   Effect.gen(function* () {
     const published: Array<ReadonlyArray<{ readonly pid: number; readonly windowId: number }>> = [];
@@ -274,7 +280,7 @@ it.effect("refuses a claim when manifest confirmation fails and restores the pre
         Effect.gen(function* () {
           published.push(union.existingProfiles);
           if (union.existingProfiles.some((entry) => entry.windowId === 8))
-            return yield* Effect.fail(new Error("manifest confirmation mismatch"));
+            return yield* new ManifestConfirmationMismatch();
         }),
       bind: (input) =>
         Effect.succeed({

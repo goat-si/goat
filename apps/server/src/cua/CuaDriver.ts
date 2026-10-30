@@ -36,6 +36,13 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
+import {
+  makeBrowserDriverCapabilityProbe,
+  makeBrowserCapabilityLifecycle,
+} from "./BrowserDriverCapabilityProbe.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { makeMacGrantObserver } from "./CuaDriverMacGrants.ts";
+
 import * as ServerConfig from "../config.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -272,6 +279,8 @@ export interface CuaDriverOptions {
   >;
   /** The driver binary a start would run, for a readiness check before the first turn. */
   readonly binary?: Effect.Effect<string, CuaDriverHostError>;
+  readonly probeBrowserClaims?: (mcp: CuaDriverMcpConfiguration) => Effect.Effect<unknown>;
+  readonly setDriverCapability?: (supported: boolean) => Effect.Effect<void>;
 }
 
 export const make = Effect.fn("CuaDriver.make")(function* (
@@ -285,6 +294,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   const [cachedProbe, invalidateProbe] = yield* Effect.cachedInvalidateWithTTL(probe, "10 seconds");
   const freshProbe = invalidateProbe.pipe(Effect.andThen(cachedProbe));
   const lifecycle = yield* Semaphore.make(1);
+  const capability = yield* makeBrowserCapabilityLifecycle(options);
   let active: Acquisition | undefined;
   let closed = false;
   let failure = Option.none<CuaDriverError>();
@@ -327,7 +337,10 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   const revoke = Effect.fnUntraced(function* (entry: Acquisition) {
     entry.revoked = true;
     entry.running = false;
-    if (active === entry) active = undefined;
+    if (active === entry) {
+      active = undefined;
+      yield* capability.fence;
+    }
     yield* Deferred.succeed(entry.result, Option.none());
     yield* stop(entry);
   });
@@ -373,6 +386,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       entry.mcp = mcp;
       yield* invalidateGrants;
       yield* cachedGrants.pipe(Effect.forkDetach);
+      yield* capability.probe(mcp, () => active === entry && !entry.revoked);
       yield* Deferred.succeed(entry.result, Option.some(withCuaDriverPrivacyEnvironment(mcp)));
       entry.watcher = yield* entry.host.waitForExit.pipe(
         Effect.match({
@@ -611,46 +625,6 @@ const STANDALONE_HOST_BUNDLE_ID = "si.goat.server";
 // SEA can load file-backed SDKs through require. This SDK only exports import
 // conditions, so resolve its package directory and require the entry file directly.
 const requireForCuaDriver = NodeModule.createRequire(import.meta.url);
-
-type SdkClientModule = {
-  readonly CuaDriver: {
-    readonly connect: (socketPath: string) => {
-      readonly callTool: (
-        name: string,
-        argumentsJson: string,
-      ) => Promise<{ readonly isError: boolean; readonly structuredJson?: string }>;
-      readonly uniffiDestroy?: () => void;
-    };
-  };
-};
-
-/** Asks the running daemon, which is the process macOS grants, for its own permissions. */
-const makeMacGrantObserver = Effect.fn("CuaDriver.makeMacGrantObserver")(function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  return (mcp: CuaDriverMcpConfiguration) =>
-    Effect.gen(function* () {
-      const socketPath = mcp.socketPath;
-      if (!socketPath) return null;
-      for (const lookup of requireForCuaDriver.resolve.paths("@trycua/cua-driver") ?? []) {
-        const directory = path.join(lookup, "@trycua", "cua-driver");
-        if (!(yield* fs.exists(path.join(directory, "package.json")))) continue;
-        const sdk = yield* Effect.try(
-          () => requireForCuaDriver(path.join(directory, "dist", "index.js")) as SdkClientModule,
-        );
-        return yield* Effect.tryPromise(async () => {
-          const client = sdk.CuaDriver.connect(socketPath);
-          try {
-            const result = await client.callTool("check_permissions", "{}");
-            return result.isError ? null : CuaDisplay.parseMacGrants(result.structuredJson);
-          } finally {
-            client.uniffiDestroy?.();
-          }
-        });
-      }
-      return null;
-    }).pipe(Effect.orElseSucceed(() => null));
-});
 
 export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHostFactory")(
   function* <E, M, P>(
@@ -897,6 +871,7 @@ export const layer = Layer.effect(
   CuaDriver,
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    const browserGrants = yield* BrowserOriginGrants;
     const platform = yield* HostProcess.Platform;
     const environment = yield* HostProcess.Environment;
     const { factory, install, helperReadiness, binary, requestListing, refreshManifest } =
@@ -986,6 +961,9 @@ export const layer = Layer.effect(
             })),
           )
         : {}),
+      probeBrowserClaims: yield* makeBrowserDriverCapabilityProbe(),
+      setDriverCapability: (supported) =>
+        browserGrants.setDriverCapability(supported).pipe(Effect.ignoreCause({ log: true })),
       ...(install ? { install } : {}),
       ...(helperReadiness ? { helperReadiness } : {}),
       ...(binary ? { binary } : {}),

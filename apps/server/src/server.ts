@@ -354,20 +354,6 @@ const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
   Layer.provide(layerDesktopTelemetryReceiver),
 );
 
-const layerCuaDriver = CuaDriver.layer.pipe(
-  Layer.provide(layerDesktopTelemetryReceiver),
-  Layer.provide(layerServerSettings),
-  Layer.provide(LinuxHelperReport.layer),
-);
-
-const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
-
-// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
-const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
-  Layer.provide(layerCuaDriver),
-  Layer.provide(LinuxHelperReport.layer),
-);
-
 const layerBackground = BackgroundPolicy.layer.pipe(
   Layer.provide(layerHostPowerMonitor),
   Layer.provideMerge(layerServerSettings),
@@ -628,6 +614,20 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(
   Layer.provide(layerRegisteredMemoryHub),
   Layer.provide(layerServerSettings),
   Layer.provide(ServerSecretStore.layer),
+);
+
+const layerBrowserOriginGrants = Layer.provide(BrowserOriginGrants.layer, layerServerEnvironment);
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerBrowserOriginGrants),
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
+  Layer.provide(LinuxHelperReport.layer),
+);
+const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
+// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
+const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
+  Layer.provide(layerCuaDriver),
+  Layer.provide(LinuxHelperReport.layer),
 );
 
 const layerAuth = EnvironmentAuth.layer.pipe(
@@ -935,7 +935,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerWorkspace),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
-  Layer.provideMerge(Layer.mergeAll(layerRepositoryIdentityResolver, BrowserOriginGrants.layer)),
+  Layer.provideMerge(Layer.mergeAll(layerRepositoryIdentityResolver, layerBrowserOriginGrants)),
   Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),

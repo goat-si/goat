@@ -20,12 +20,12 @@ it.effect("reports unsupported capability as unavailable and removes claims from
       origin: "https://example.test",
       windowTitle: "Browser",
     };
-    yield* service.reportDriverCapability(true);
+    yield* service.setDriverCapability(true);
     const pending = yield* service.request(input);
     if (pending.status !== "pending") return assert.fail("expected pending");
     yield* service.answer(pending.claimId, true);
     assert.lengthOf(yield* service.claimsFor(input.threadId), 1);
-    yield* service.reportDriverCapability(false);
+    yield* service.setDriverCapability(false);
     const result = yield* service.request(input);
     assert.equal(result.status, "refused");
     if (result.status === "refused") assert.equal(result.code, "unavailable");
@@ -67,7 +67,7 @@ it.effect("reports unsupported capability as unavailable and removes claims from
 it.effect("refuses an approved claim as unavailable when the bind service is absent", () =>
   Effect.gen(function* () {
     const service = yield* Grants.BrowserOriginGrants;
-    yield* service.reportDriverCapability(true);
+    yield* service.setDriverCapability(true);
     const request = yield* service.request({
       threadId: ThreadId.make("thread:test"),
       pid: 42,
@@ -110,7 +110,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const service = yield* Grants.BrowserOriginGrants;
-      yield* service.reportDriverCapability(true);
+      yield* service.setDriverCapability(true);
       const result = yield* service.request({
         threadId: ThreadId.make("thread:test"),
         pid: 42,

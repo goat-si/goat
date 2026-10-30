@@ -349,7 +349,7 @@ describe("computer use lease route", () => {
       const spoofed = yield* grants.request(input);
       assert.equal(spoofed.status, "refused");
       if (spoofed.status === "refused") assert.equal(spoofed.code, "unavailable");
-      yield* grants.reportDriverCapability(true);
+      yield* grants.setDriverCapability(true);
       assert.equal((yield* grants.request(input)).status, "pending");
       assert.equal((yield* report(false)).status, 204);
       const lowered = yield* grants.request(input);
@@ -388,7 +388,7 @@ describe("computer use lease route", () => {
           Effect.as(grants.changes),
         ),
       );
-      const f = yield* fixture({ ...grants, changes, reportDriverCapability: () => Effect.void });
+      const f = yield* fixture({ ...grants, changes, setDriverCapability: () => Effect.void });
       yield* Deferred.await(starting);
       yield* grants.revoke(threadId, "https://example.test");
       yield* Deferred.succeed(release, undefined);
@@ -421,7 +421,7 @@ describe("computer use lease route", () => {
       });
       if (request.status !== "pending") return assert.fail("expected pending");
       yield* grants.answer(request.claimId, true);
-      const stream = yield* fixture({ ...grants, reportDriverCapability: () => Effect.void }, true);
+      const stream = yield* fixture({ ...grants, setDriverCapability: () => Effect.void }, true);
       const initial = yield* stream.next;
       if (initial?.state !== "active") return assert.fail("expected active");
       const h = yield* harness();
@@ -464,7 +464,7 @@ describe("computer use lease route", () => {
         if (request.status !== "pending") return assert.fail("expected pending");
         const answer = yield* grants.answer(request.claimId, true);
         if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
-        const service = { ...grants, reportDriverCapability: () => Effect.void };
+        const service = { ...grants, setDriverCapability: () => Effect.void };
         const stream = yield* fixture(service, true);
         const initial = yield* stream.next;
         if (initial?.state !== "active") return assert.fail("expected active");
@@ -602,7 +602,7 @@ describe("computer use lease route", () => {
       const answer = yield* grants.answer(request.claimId, true);
       if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
       const f = yield* threadFixture({
-        grants: { ...grants, reportDriverCapability: () => Effect.void },
+        grants: { ...grants, setDriverCapability: () => Effect.void },
       });
       yield* f.set(controlId);
       const next = yield* f.open();
@@ -652,7 +652,7 @@ describe("computer use lease route", () => {
       if (request.status !== "pending") return assert.fail("expected pending");
       const answer = yield* grants.answer(request.claimId, true);
       if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
-      const f = yield* fixture({ ...grants, reportDriverCapability: () => Effect.void });
+      const f = yield* fixture({ ...grants, setDriverCapability: () => Effect.void });
       const initial = yield* f.next;
       if (initial?.state !== "active") return assert.fail("expected active");
       assert.deepEqual(initial.browserClaims, [
