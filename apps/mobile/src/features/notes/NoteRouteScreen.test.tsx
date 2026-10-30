@@ -46,7 +46,16 @@ vi.mock("./live-editor/note-editor-support", async (importOriginal) => {
       mocks.live ? actual.noteEditorSupport(body) : { kind: "source", reason: "" },
   };
 });
-vi.mock("./live-editor/NoteEditorToolbar", () => ({ NoteEditorToolbar: () => null }));
+vi.mock("./live-editor/NoteEditorToolbar", () => ({
+  NoteEditorToolbar: (props: {
+    save: { label: string; disabled: boolean; onPress: () => void } | null;
+  }) =>
+    props.save ? (
+      <button disabled={props.save.disabled} onClick={props.save.onPress}>
+        {props.save.label}
+      </button>
+    ) : null,
+}));
 vi.mock("./live-editor/NoteLiveEditor", () => ({
   useNoteEditorTheme: () => ({}),
   NoteLiveEditor: (props: {
@@ -56,6 +65,8 @@ vi.mock("./live-editor/NoteLiveEditor", () => ({
     onChange: (value: string, checkbox: boolean) => void;
     onFocusChange: (focused: boolean) => void;
     onPendingChange: (pending: boolean) => void;
+    onRecoveryLost: () => void;
+    onUnavailable: (reason: string) => void;
   }) => (
     <div
       data-testid="live-editor"
@@ -68,6 +79,8 @@ vi.mock("./live-editor/NoteLiveEditor", () => ({
       <button onClick={() => props.onChange(mocks.liveNext, mocks.liveCheckbox)}>Live edit</button>
       <button onClick={() => props.onPendingChange(true)}>Editor resyncing</button>
       <button onClick={() => props.onPendingChange(false)}>Editor resynced</button>
+      <button onClick={() => props.onRecoveryLost()}>Editor crashed mid-resync</button>
+      <button onClick={() => props.onUnavailable("Editor failed")}>Editor failed</button>
     </div>
   ),
 }));
@@ -631,6 +644,19 @@ describe("live note editor", () => {
     expect(button("Retry saving on phone").disabled).toBe(false);
     act(() => button("Editor resyncing").click());
     expect(button("Retry saving on phone").disabled).toBe(true);
+  });
+
+  it.each([
+    ["the editor process ends", "Editor crashed mid-resync"],
+    ["the editor falls back to source", "Editor failed"],
+  ])("warns and keeps the edits unsaved when %s during a re-sync", async (_case, trigger) => {
+    await live("- [ ] task\n");
+    act(() => button("Editor resyncing").click());
+    act(() => button(trigger).click());
+    expect(container.textContent).toContain("the last few edits may be missing");
+    expect(container.textContent).toContain("Unsaved edits");
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.preventRemove).toBe(true);
   });
 
   it("ends editing for a saved new note on blur, so the hub read resumes", async () => {

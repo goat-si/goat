@@ -74,12 +74,15 @@ interface NoteLiveEditorProps {
   readonly onUnavailable: (reason: string) => void;
   /** True while React Native's copy may lag the page; saving and leaving must wait. */
   readonly onPendingChange: (pending: boolean) => void;
+  /** The page ended while it held text React Native had not received; that text is gone. */
+  readonly onRecoveryLost: () => void;
 }
 
 export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
   const [uri, setUri] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const page = useRef<NoteLiveEditorHandle>(null);
+  const pending = useRef(false);
   useImperativeHandle(ref, () => ({ command: (command) => page.current?.command(command) }), []);
   const unavailable = useEffectEvent(() =>
     props.onUnavailable("The live editor could not load, so this note opens as markdown source."),
@@ -103,8 +106,14 @@ export function NoteLiveEditor({ ref, ...props }: NoteLiveEditorProps) {
           ref={page}
           uri={uri}
           {...props}
+          onPendingChange={(value) => {
+            pending.current = value;
+            props.onPendingChange(value);
+          }}
           // The OS can end a WebView's process under memory pressure; start a fresh page.
           onTerminated={() => {
+            if (pending.current) props.onRecoveryLost();
+            pending.current = false;
             // The fresh page starts unfocused; the screen must not keep editing chrome for it.
             props.onFocusChange(false);
             props.onPendingChange(false);

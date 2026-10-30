@@ -23,6 +23,8 @@ export type NoteDelivery =
   | { readonly type: "conflict"; readonly current: NoteDocument }
   | { readonly type: "retry"; readonly message: string };
 
+const ACKNOWLEDGED_LIMIT = 8;
+
 /** Serialize disk mutations, but let edits persist while a network request is in flight. */
 export function createNotesOutboxController(storage: NotesOutboxStorage) {
   let rows: ReadonlyArray<NoteOutboxRow> = [];
@@ -96,6 +98,8 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
       return serialize(async () => {
         const key = noteOutboxKey(edit.environmentId, edit.path);
         const previous = acknowledged.get(key);
+        // Any new edit supersedes the remembered save, so release it either way.
+        acknowledged.delete(key);
         const rebased =
           continues &&
           previous &&
@@ -203,11 +207,16 @@ export function createNotesOutboxController(storage: NotesOutboxStorage) {
               const next = sentEdit
                 ? acknowledgeNote(row, sentEdit.localUpdatedAt, delivery.note.revision)
                 : row;
-              if (!next && sentEdit)
-                acknowledged.set(noteOutboxKey(row.environmentId, row.path), {
-                  base: sentEdit.baseRevision,
-                  note: delivery.note,
-                });
+              if (!next && sentEdit) {
+                const key = noteOutboxKey(row.environmentId, row.path);
+                acknowledged.delete(key);
+                acknowledged.set(key, { base: sentEdit.baseRevision, note: delivery.note });
+                // Only notes still open need this; keep the few most recent.
+                for (const oldest of acknowledged.keys()) {
+                  if (acknowledged.size <= ACKNOWLEDGED_LIMIT) break;
+                  acknowledged.delete(oldest);
+                }
+              }
               await replace(row, next);
             } else if (delivery.type === "conflict")
               await replace(row, conflictNote(row, delivery.current));

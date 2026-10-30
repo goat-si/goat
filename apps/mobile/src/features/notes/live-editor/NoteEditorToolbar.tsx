@@ -22,6 +22,12 @@ export function NoteEditorToolbar(props: {
   readonly source: boolean;
   readonly disabled: boolean;
   readonly onCommand: (command: NoteEditorCommand) => void;
+  /** Shown while there is something to save; the toolbar is the one control above the keyboard. */
+  readonly save: {
+    readonly label: string;
+    readonly disabled: boolean;
+    readonly onPress: () => void;
+  } | null;
 }) {
   return (
     <View className="flex-row items-center border-t border-border bg-sheet">
@@ -72,6 +78,28 @@ export function NoteEditorToolbar(props: {
           onPress={() => props.onCommand("toggleSource")}
         />
       </ScrollView>
+      {props.save ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={props.save.label}
+          accessibilityState={{ disabled: props.save.disabled }}
+          disabled={props.save.disabled}
+          onPress={props.save.onPress}
+          className={cn(
+            "ml-1 rounded-full px-3 py-1.5 active:opacity-70",
+            props.save.disabled ? "bg-subtle-strong" : "bg-primary",
+          )}
+        >
+          <AppText
+            className={cn(
+              "text-sm font-goat-medium",
+              props.save.disabled ? "text-foreground-muted" : "text-primary-foreground",
+            )}
+          >
+            {props.save.label}
+          </AppText>
+        </Pressable>
+      ) : null}
       <IconButton
         icon="chevron.down"
         accessibilityLabel="Hide keyboard"

@@ -302,6 +302,16 @@ function NoteContent(props: NoteParams) {
     setSurface(target);
     setEditing(true);
   };
+  // The editor ended before sending its newest text: say so, and keep the rest as unsaved edits.
+  const recoveryLost = () => {
+    editorPendingRef.current = false;
+    setEditorPending(false);
+    beginEdit("live");
+    setDirty(true);
+    setError(
+      "The editor restarted before it sent your latest typing. Check the note; the last few edits may be missing.",
+    );
+  };
   const support = noteEditorSupport(body);
   const liveEditing = editing && surface === "live";
   // An editing session keeps its line break, so deleting the last CRLF does not remount it.
@@ -493,14 +503,6 @@ function NoteContent(props: NoteParams) {
               >
                 {syncText}
               </Text>
-              {dirty || (props.create && !note && !row) ? (
-                <Button
-                  tone="primary"
-                  label={saving ? "Saving…" : "Save on phone"}
-                  disabled={!canWrite || saving || !restored || editorHolding}
-                  onPress={() => void save(localBody.current, localStatus.current)}
-                />
-              ) : null}
             </View>
           ) : (
             <NativeScrollView
@@ -539,7 +541,11 @@ function NoteContent(props: NoteParams) {
             }}
             onSourceChange={setShowSource}
             onLink={(href) => void tryOpenExternalUrl(href, "markdown-link")}
-            onUnavailable={setLiveUnavailable}
+            onUnavailable={(reason) => {
+              if (editorPendingRef.current) recoveryLost();
+              setLiveUnavailable(reason);
+            }}
+            onRecoveryLost={recoveryLost}
             onPendingChange={(pending) => {
               editorPendingRef.current = pending;
               setEditorPending(pending);
@@ -550,6 +556,15 @@ function NoteContent(props: NoteParams) {
               source={showSource}
               disabled={!canEditBody || busy}
               onCommand={(command) => liveEditor.current?.command(command)}
+              save={
+                dirty || (props.create && !note && !row)
+                  ? {
+                      label: saving ? "Saving…" : "Save on phone",
+                      disabled: !canWrite || saving || !restored || editorHolding,
+                      onPress: () => void save(localBody.current, localStatus.current),
+                    }
+                  : null
+              }
             />
           ) : (
             <View style={{ height: insets.bottom }} />
