@@ -163,7 +163,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
     return __call(method, { ...withRegion, targetRef: ref }).then((value) => {
-      if (tab && value && Object.prototype.hasOwnProperty.call(value, 'siteNote')) currentNote = value.siteNote ?? undefined;
+      if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
       return value;
     });
   };
@@ -316,7 +316,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     let observation;
     try {
       const value = (await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v;
-      if (tab && value && Object.prototype.hasOwnProperty.call(value, 'siteNote')) currentNote = value.siteNote ?? undefined;
+      if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
       observation = page ? value : remember(value);
       // A page's elements join the read it continues, so numbers and names from every page resolve.
       if (page && seen.observation && value && Array.isArray(value.elements))
