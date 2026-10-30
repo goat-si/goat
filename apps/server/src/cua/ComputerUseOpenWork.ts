@@ -13,15 +13,16 @@ import type * as SqlError from "effect/sql/SqlError";
 export const IMPLIED_RECHECK_MS = 2_000;
 
 /**
- * Whether the thread still has a run, provider turn or native subagent open. Native subagents
- * work through the parent's provider session, and so its control, on their own child threads;
- * one can outlive a failed parent run. Delegated tasks hold controls of their own.
+ * "open" while a provider turn, a native subagent or a run that is not waiting could call the
+ * driver; "waiting" when only runs waiting on a person or a child remain, which start a new turn
+ * before they act. Native subagents use the parent's control and can resume without its turn, so
+ * any open one counts; delegated tasks hold controls of their own.
  */
 const openRuns = Effect.fn("ComputerUseLeases.openWork")(function* (
   sql: SqlClient.SqlClient,
   threadId: ThreadId,
 ) {
-  const open = yield* sql<{ readonly one: number }>`
+  const open = yield* sql<{ readonly waiting: number }>`
     WITH RECURSIVE native(child_thread_id, status) AS (
       SELECT s.child_thread_id, s.status FROM orchestration_v2_projection_subagents s
       WHERE s.thread_id = ${threadId} AND s.origin = 'provider_native'
@@ -30,18 +31,18 @@ const openRuns = Effect.fn("ComputerUseLeases.openWork")(function* (
       JOIN native n ON s.thread_id = n.child_thread_id
       WHERE s.origin = 'provider_native'
     )
-    SELECT 1 AS one FROM orchestration_v2_projection_runs
+    SELECT status = 'waiting' AS waiting FROM orchestration_v2_projection_runs
     WHERE thread_id = ${threadId}
       AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
     UNION ALL
-    SELECT 1 AS one FROM native WHERE status IN ('pending', 'running', 'waiting')
+    SELECT 0 AS waiting FROM native WHERE status IN ('pending', 'running', 'waiting')
     UNION ALL
-    SELECT 1 AS one FROM orchestration_v2_projection_provider_turns
+    SELECT 0 AS waiting FROM orchestration_v2_projection_provider_turns
     WHERE status IN ('pending', 'running')
       AND (thread_id = ${threadId} OR thread_id IN (SELECT child_thread_id FROM native))
-    LIMIT 1
   `;
-  return open.length > 0;
+  if (open.length === 0) return "none" as const;
+  return open.every((row) => Number(row.waiting) === 1) ? ("waiting" as const) : ("open" as const);
 });
 
 /** Which of these runs the projection shows ended, so their implied foreground ends (#1617). */
@@ -90,7 +91,7 @@ const revokeEndedRuns = Effect.fn("ComputerUseLeases.revokeEndedRuns")(function*
   );
 });
 
-/** Whether the thread still has work open, once runs that ended lost their implied foreground. */
+/** What the thread still has open, once runs that ended lost their implied foreground. */
 export const threadOpenWork = Effect.fn("ComputerUseLeases.threadOpenWork")(function* (
   sql: SqlClient.SqlClient,
   foreground: ImpliedForeground,
@@ -124,13 +125,17 @@ export const makeRunEnd = <C extends RunEndControl, E>(options: {
   const { sql, foreground, controls, changed } = options;
   /** Ends the implied foreground of runs that are over; see revokeEndedRuns. */
   const settle = (threadId: ThreadId) => revokeEndedRuns(sql, foreground, threadId, changed);
-  /** Whether the thread still has work open; a revocation on the way publishes. */
-  const openWork = (threadId: ThreadId) =>
+  /** What the thread still has open; a revocation on the way publishes. */
+  const work = (threadId: ThreadId) =>
     threadOpenWork(sql, foreground, threadId, changed).pipe(Effect.mapError(options.error));
+  /** Whether the thread still has work open, waiting runs included. */
+  const openWork = (threadId: ThreadId) =>
+    work(threadId).pipe(Effect.map((open) => open !== "none"));
   const turnEnded = Effect.fn("ComputerUseLeases.turnEnded")(function* (threadId: ThreadId) {
     const before = controls.get(threadId);
     if (before === undefined || before.ended !== undefined) return false;
-    if (yield* openWork(threadId)) return false;
+    const open = yield* work(threadId);
+    if (open === "open") return false;
     const now = yield* Clock.currentTimeMillis;
     // The read yields: a turn that minted or reused the control since then keeps it.
     const after = controls.get(threadId);
@@ -141,7 +146,8 @@ export const makeRunEnd = <C extends RunEndControl, E>(options: {
       after.idle === true
     )
       return false;
-    foreground.revokeControl(threadId, after.controlId);
+    // A waiting run keeps its approvals for the turn that resumes it; only its driver stops.
+    if (open === "none") foreground.revokeControl(threadId, after.controlId);
     controls.set(threadId, { ...after, idle: true, idleEpoch: (after.idleEpoch ?? 0) + 1 });
     options.idled(threadId, after.controlId, now);
     yield* changed;

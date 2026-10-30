@@ -255,8 +255,9 @@ export class ComputerUseLeases extends Context.Service<
     /** Ends every control on this host, returning the threads that held one. */
     readonly stopAll: Effect.Effect<ReadonlyArray<ThreadId>>;
     /**
-     * Marks the thread's control idle once none of its runs is still open; true when it did.
-     * A turn that starts meanwhile keeps the control it reused active.
+     * Marks the thread's control idle once no turn can call its driver: no run is open, or the
+     * open ones only wait; true when it did. A turn that starts meanwhile keeps the control it
+     * reused active.
      */
     readonly turnEnded: (threadId: ThreadId) => Effect.Effect<boolean, ComputerUseLeaseError>;
     /** Checks every acting control for a thread with nothing left open; see turnEnded. */
