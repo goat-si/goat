@@ -36,6 +36,28 @@ export function diffProviderStatuses(
   };
 }
 
+/**
+ * False when a changed provider did not decode here, or a change omits the lists of a provider
+ * `previous` lacks; only a full list can rebuild those.
+ */
+export function canApplyProviderStatusChanges(
+  previous: ReadonlyArray<ServerProvider>,
+  changes: ServerConfigProviderStatusChangesPayload,
+): boolean {
+  const known = new Set(previous.map((provider) => provider.instanceId));
+  const decoded = new Set(changes.providers.map((provider) => provider.instanceId));
+  return (
+    changes.changedInstanceIds.every((instanceId) => decoded.has(instanceId)) &&
+    changes.providers.every(
+      (change) =>
+        known.has(change.instanceId) ||
+        (change.models !== undefined &&
+          change.skills !== undefined &&
+          change.slashCommands !== undefined),
+    )
+  );
+}
+
 /** Unchanged providers and lists keep their objects, so memoized views skip them. */
 export function applyProviderStatusChanges(
   previous: ReadonlyArray<ServerProvider>,
