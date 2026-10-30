@@ -7,8 +7,11 @@ Open **Settings → Integrations → Browser profiles → Add profile**, then ch
 **Import from**. Close the source browser before importing, and allow an operating-system keyring
 unlock prompt if one appears.
 
-This is a one-time copy. Later login changes stay separate between the two browsers, and some
-sites may still require you to sign in again.
+Later login changes stay separate between the two browsers. To refresh an imported desktop browser
+profile, open its options under **Settings → Integrations → Browser profiles**, choose **Refresh
+from browser profile**, and select or add the sites to refresh. Cookies shared across related sites
+can also update those sites; GOAT reports the shared domains. This refresh applies to desktop browser
+profiles, not server-run browser profiles. Some sites may still require you to sign in again.
 
 An agent can use an imported profile when you name it, like any other profile. GOAT never imports
 on its own.
