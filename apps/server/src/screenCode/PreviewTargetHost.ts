@@ -24,7 +24,7 @@ import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
-import { answerDialog, evaluateTab, readTabLogs } from "./PreviewTabExtras.ts";
+import { answerDialog, evaluateTab, readTabLogs, uploadTab } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
@@ -517,6 +517,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
         tab_evaluate: "evaluate",
         tab_dialog: "dialog",
+        tab_upload: "upload",
         click: "click",
         right_click: "click",
         hover: "hover",
@@ -580,6 +581,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           : selector;
       if (arg.ref && !locator)
         return yield* Effect.fail(fail("stale_reference", "Observe the current tab again."));
+      if (call.method === "tab_upload")
+        return yield* uploadTab(arg, locator, (input) => invoke(bound, context, "upload", input));
       if (
         call.method === "set_value" &&
         selector === undefined &&

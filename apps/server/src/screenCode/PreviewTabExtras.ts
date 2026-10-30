@@ -1,6 +1,7 @@
 import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationLogsInput,
+  PreviewAutomationUploadInput,
   type ScreenRunError,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -62,4 +63,21 @@ export const answerDialog = Effect.fn("PreviewTargetHost.dialog")(function* (
   };
   const value = yield* invoke(input);
   return { value, category: "unverifiable" as const, evidence: ["Dialog answered"] };
+});
+
+const isUpload = Schema.is(PreviewAutomationUploadInput);
+export const uploadTab = Effect.fn("PreviewTargetHost.upload")(function* (
+  arg: Record<string, unknown>,
+  locator: string | undefined,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = { locator, paths: arg.files };
+  if (!locator || !isUpload(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a file input and up to 20 file paths.",
+    });
+  const value = yield* invoke(input);
+  return { value: value ?? {}, category: "unverifiable" as const, evidence: ["Upload dispatched"] };
 });

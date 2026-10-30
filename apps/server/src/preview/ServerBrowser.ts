@@ -956,21 +956,8 @@ const make = Effect.gen(function* () {
     return true;
   };
   const uploadFiles = async (tab: ServerTab, input: PreviewAutomationUploadInput) => {
-    const relative = input.paths.find((path) => !NodePath.isAbsolute(path));
-    if (relative !== undefined)
-      throw new ServerBrowserPage.ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `Upload paths must be absolute: ${relative}`,
-      );
+    await PreviewUpload.validatePaths(input.paths);
     const gate = gateFor(tab);
-    // Checked before the gate, so a missing file fails before anything reaches the page.
-    for (const path of input.paths)
-      await NodeFSP.access(path).catch(() => {
-        throw new ServerBrowserPage.ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          `Upload file not found or not readable: ${path}`,
-        );
-      });
     if (await PreviewUpload.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
     const open = tab.fileChooser;
     if (!open)

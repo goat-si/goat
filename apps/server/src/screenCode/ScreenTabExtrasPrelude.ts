@@ -1,5 +1,9 @@
 export const screenTabExtrasPrelude = String.raw`
-const __tabExtras = (tab, call) => ({
+const __tabExtras = (tab, call, aim) => ({
+  upload: (target, files) => {
+    if (!tab) throw new ScreenError('unsupported', 'Uploads are only available on tabs.', true);
+    return call('tab_upload', { ...aim(target), files });
+  },
   dialog: (action, promptText) => {
     if (!tab) throw new ScreenError('unsupported', 'Dialogs are only available on tabs.', true);
     return call('tab_dialog', { action, ...(promptText === undefined ? {} : { promptText }) });

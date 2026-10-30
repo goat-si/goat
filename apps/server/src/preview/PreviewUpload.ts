@@ -3,6 +3,8 @@
 import type { PreviewAutomationUploadInput } from "@goat/contracts";
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import type { CDPSession, ElementHandle, Frame, Page } from "playwright-core";
 
 import {
@@ -150,4 +152,23 @@ export const setInputFiles = async (
     void handle.dispose().catch(constVoid);
   }
   return true;
+};
+
+/** Check all paths before any file input or picker can receive them. */
+export const validatePaths = async (paths: readonly string[]) => {
+  for (const path of paths) {
+    if (!NodePath.isAbsolute(path))
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        `Upload paths must be absolute: ${path}`,
+        { beforeInput: true },
+      );
+    await NodeFSP.access(path).catch(() => {
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        `Upload file not found or not readable: ${path}`,
+        { beforeInput: true },
+      );
+    });
+  }
 };

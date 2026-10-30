@@ -795,3 +795,4 @@ thread at a time drives a machine's real GUI, assigned by the epic's lead.
 - `tab.logs({ since? })` reads diagnostics from an inclusive ISO 8601 instant.
 - `tab.evaluate(expression)` uses the browser evaluation guard.
 - `tab.dialog(action, promptText?)` answers a pending browser dialog.
+- `tab.upload(target, files)` supplies absolute file paths to a file input.

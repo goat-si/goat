@@ -946,3 +946,30 @@ it.live("tab dialog reports no pending dialog as unsent", () => {
     ),
   );
 });
+
+it.live("tab upload sends files and target to preview", () => {
+  const requests: unknown[] = [];
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "upload") requests.push(request.input);
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab('form'); await tab.upload('#file', ['/tmp/example.txt']); return true;`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: true },
+      });
+      expect(requests).toEqual([{ locator: "#file", paths: ["/tmp/example.txt"] }]);
+    }),
+  );
+});
