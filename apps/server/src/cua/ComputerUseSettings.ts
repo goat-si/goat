@@ -64,12 +64,14 @@ export const setEnabled = Effect.fn("ComputerUseSettings.setEnabled")(function* 
   const settings = yield* ServerSettings.ServerSettingsService;
   if (enabled) yield* admitEnable();
   const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
-  if (Option.isNone(handoffs))
+  if (Option.isNone(handoffs)) {
+    if (!enabled) yield* settings.updateSettings({ enableCua: false }, authorizeAtCommit);
     return yield* new ServerSettingsError({
       settingsPath: "computer-use",
       operation: "normalize",
       reason: "Cannot clear previous computer use sessions.",
     });
+  }
   const stored = yield* applyPatch(
     handoffs.value,
     { enableCua: enabled },

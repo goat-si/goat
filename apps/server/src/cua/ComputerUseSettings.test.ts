@@ -58,6 +58,24 @@ it.effect("keeps computer use off and explains a failed driver installation", ()
   }).pipe(Effect.provide(base)),
 );
 
+it.effect("turns computer use off even when session cleanup is unavailable", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const result = yield* ComputerUseSettings.setEnabled(false).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    expect((yield* settings.getSettings).enableCua).toBe(false);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        ServerConfig.layerTest("/tmp/computer-use-settings", "/tmp/computer-use-settings").pipe(
+          Layer.provide(NodeServices.layer),
+        ),
+        ServerSettings.layerTest({ enableCua: true }),
+      ),
+    ),
+  ),
+);
+
 it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
