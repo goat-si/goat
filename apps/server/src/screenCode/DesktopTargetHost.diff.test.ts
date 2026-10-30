@@ -907,3 +907,37 @@ it.live("a full-read fallback after input does not attach observation evidence",
     ),
   );
 });
+
+it.live("rebinding retires the input target without attributing the new full read", () => {
+  const { host } = fixture({
+    click: { effect: "unverifiable" },
+    get_window_state: (args: Record<string, unknown>) => goat2WindowState(args),
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const a = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await a.observe(); await a.click(1); const b = await screen.app({bundle_id:'org.example.Editor', window_id:7}); return await b.observe();`,
+    });
+    expect(result.value).toMatchObject({ mode: "full" });
+    expect(result.value).not.toHaveProperty("effect");
+    expect(
+      result.journal.find((entry) => entry.receipt.method === "click")?.receipt.observedEffect,
+    ).toBeUndefined();
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
