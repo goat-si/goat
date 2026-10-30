@@ -1,9 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { refuseSshHostsScoped } from "@goat/ssh/hostAccess";
+import { allowSshHosts } from "@goat/ssh/hostAccess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 
+import { applyDevSshPolicy } from "../devSshPolicy.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import {
   git,
@@ -13,8 +14,24 @@ import {
   writeTextFile,
 } from "./testing/gitFixture.ts";
 
-it.layer(layerTest)("GitVcsDriver with SSH refused", (it) => {
-  it.effect("regression: a background upstream fetch spawns no ssh while SSH is refused", () =>
+// The policy writes the server's own environment, which every git child inherits.
+const refusedDevServer = Effect.acquireRelease(
+  Effect.sync(() => process.env.GIT_SSH_COMMAND).pipe(
+    Effect.tap(() => applyDevSshPolicy({ devUrl: new URL("http://localhost:5733") }, process.env)),
+  ),
+  (previous) =>
+    allowSshHosts.pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          if (previous === undefined) delete process.env.GIT_SSH_COMMAND;
+          else process.env.GIT_SSH_COMMAND = previous;
+        }),
+      ),
+    ),
+);
+
+it.layer(layerTest)("git on a dev server that refuses SSH", (it) => {
+  it.effect("regression: no git the server runs reaches an SSH remote", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
@@ -35,13 +52,19 @@ it.layer(layerTest)("GitVcsDriver with SSH refused", (it) => {
       const driver = yield* GitVcsDriver.GitVcsDriver;
       const sshLog = `${fakeSsh}.log`;
 
-      yield* Effect.scoped(
+      const refused = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* refuseSshHostsScoped();
-          yield* driver.statusDetails(yield* sshRemoteRepo);
+          yield* refusedDevServer;
+          const cwd = yield* sshRemoteRepo;
+          // Background status refresh, then an arbitrary remote command such as cleanup's ls-remote.
+          yield* driver.statusDetails(cwd);
+          return yield* driver
+            .execute({ operation: "test.lsRemote", cwd, args: ["ls-remote", "origin"] })
+            .pipe(Effect.flip);
         }),
       );
       assert.isFalse(yield* fileSystem.exists(sshLog));
+      assert.equal(refused.reason, "remote_unreachable");
 
       yield* driver.statusDetails(yield* sshRemoteRepo);
       assert.include(yield* fileSystem.readFileString(sshLog), "example.invalid");

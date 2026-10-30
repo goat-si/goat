@@ -2,11 +2,16 @@ import type * as ServerConfig from "./config.ts";
 import { DEV_SSH_REFUSAL, refuseSshHosts } from "@goat/ssh/hostAccess";
 import * as Effect from "effect/Effect";
 
+// Git runs this through sh with the host and command appended, which `false` ignores.
+const GIT_SSH_REFUSAL = `echo '${DEV_SSH_REFUSAL}' >&2; false`;
+
 /**
  * A dev server runs on a copy of the developer's data and their home directory, so it would reach
  * their real machines from copied hub nodes, OpenCodex links and SSH config. It refuses SSH for
  * the whole process unless GOAT_DEV_SSH=on. Every dev-runner mode and the desktop dev backend
  * (including WSL) pass a dev URL, so losing the variable on the way refuses rather than allows.
+ * Git starts ssh itself, so every git this process and its providers run inherits a refusing
+ * GIT_SSH_COMMAND; HTTPS remotes keep working.
  */
 export const applyDevSshPolicy = Effect.fn("applyDevSshPolicy")(function* (
   config: Pick<ServerConfig.ServerConfig["Service"], "devUrl">,
@@ -20,6 +25,7 @@ export const applyDevSshPolicy = Effect.fn("applyDevSshPolicy")(function* (
     return;
   }
   yield* refuseSshHosts(DEV_SSH_REFUSAL);
+  environment.GIT_SSH_COMMAND = GIT_SSH_REFUSAL;
   yield* Effect.logInfo(
     "This dev server does not SSH into other machines. Set GOAT_DEV_SSH=on to test remote features.",
   );

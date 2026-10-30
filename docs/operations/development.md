@@ -91,14 +91,13 @@ different preference when needed.
 
 A dev server runs on a copy of your data and reads your real home directory, so hub nodes,
 OpenCodex links and `~/.ssh/config` would point it at your real machines. It therefore refuses
-SSH to any other machine: hub connections, remote dispatch, host status and host setup fail with
-a message naming `GOAT_DEV_SSH`, the background `git fetch` skips SSH remotes, and automatic
-project pulls are off. To test
-remote features, start it with `GOAT_DEV_SSH=on vp run dev` (or `dev:desktop`); the server logs a
-warning and the web sidebar shows an "SSH on" badge. The rule applies to any server with a dev
-URL, which every `vp run dev*` mode and the desktop dev backend pass. It covers SSH only:
-linked HTTPS hosts and cloud machines need copied `secrets`, and person-started Git pushes and
-pulls still use the project's remotes.
+SSH to any other machine. Hub connections, remote dispatch, host status and host setup fail with
+a message naming `GOAT_DEV_SSH`. Git that the server or its agents run cannot use SSH remotes,
+HTTPS remotes still work, and automatic project pulls are off. To test remote features, start it
+with `GOAT_DEV_SSH=on vp run dev` (or `dev:desktop`); the server logs a warning and the web
+sidebar shows an "SSH on" badge. The rule applies to any server with a dev URL, which every
+`vp run dev*` mode and the desktop dev backend pass. It covers SSH only: linked HTTPS hosts and
+cloud machines need copied `secrets`, and an agent that runs `ssh` itself is not stopped.
 
 ### Replay provider
 
