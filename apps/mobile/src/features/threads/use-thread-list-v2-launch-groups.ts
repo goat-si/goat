@@ -68,10 +68,10 @@ export function useThreadListV2LaunchGroups(selectedThreadKey: string | null) {
   useEffect(() => {
     const list = Symbol("launch-group-list");
     selections.set(list, selectedThreadKey);
-    forgetUnselectedRoutes();
     return () => {
       selections.delete(list);
-      forgetUnselectedRoutes();
+      // After the whole commit, so a list taking over this thread registers before the check.
+      queueMicrotask(forgetUnselectedRoutes);
     };
   }, [selectedThreadKey]);
   const routeCollapsed =
