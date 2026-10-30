@@ -866,6 +866,8 @@ export const hover = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for hover.");
   // Hovering only shows things, so a selector naming several rows hovers the first of them.
   const locator = targetLocator(page, input)?.first() ?? null;
   await pointer(await targetPoint(page, locator, input, deadline, gate), "move");
@@ -873,14 +875,14 @@ export const hover = async (
     remaining(deadline);
     await gate();
     gate.signal?.throwIfAborted();
-    await page.mouse.move(input.x ?? 0, input.y ?? 0);
+    await channel.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
   await settled(locator, deadline, false, gate);
   remaining(deadline);
   await gate();
   gate.signal?.throwIfAborted();
-  await locator.hover(dispatched(deadline));
+  await channel.call(() => locator.hover(dispatched(deadline)));
 };
 
 export const select = async (

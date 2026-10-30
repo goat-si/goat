@@ -14,7 +14,7 @@ export const subsequentClick = async (
     await channel.mouse.up({ button, clickCount });
   } catch (cause) {
     if (cause instanceof BrowserControlInterrupted || gate.signal?.aborted)
-      await channel.releasePressedButton({ ...point, button });
+      await channel.resetPressedInput({ ...point, button });
     throw cause;
   }
 };

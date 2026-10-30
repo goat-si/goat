@@ -58,6 +58,7 @@ it.effect("a cut during the second press prevents an ungated mouse-up", () =>
       yield* Effect.promise(() => control.system(async () => {}));
       expect(result).toMatchObject({ reason: "blocked_url" });
       expect(up).not.toHaveBeenCalled();
+      expect(sent.mock.calls[0]?.[0]).toBe("Input.cancelDragging");
       expect(sent.mock.calls.filter(([method]) => method === "Input.dispatchMouseEvent")).toEqual([
         [
           "Input.dispatchMouseEvent",

@@ -6,6 +6,7 @@
 import type { Page } from "playwright-core";
 import { remaining, type ReadinessGate } from "./actionReadiness.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 type Point = { readonly x: number; readonly y: number };
 
@@ -30,26 +31,33 @@ export const dragBetween = async (
   gate: ReadinessGate,
   deadline: number,
 ) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for pointer input.");
   const steps = input.steps ?? 10;
-  const cdp = await page.context().newCDPSession(page);
+  const cdp = await channel.newCDPSession(page);
+  const send = channel.sendFor(cdp);
+  let cut = false;
   try {
     remaining(deadline);
     await gate();
     gate.signal?.throwIfAborted();
-    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...input.from });
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...input.from });
     await again(gate, deadline);
-    await cdp.send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      ...input.from,
-      button: "left",
-      buttons: 1,
-      clickCount: 1,
-    });
+    let held = false;
     try {
+      const pressing = send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        ...input.from,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      held = true;
+      await pressing;
       for (let step = 1; step <= steps; step++) {
         const along = (from: number, to: number) => from + ((to - from) * step) / steps;
         await again(gate, deadline);
-        await cdp.send("Input.dispatchMouseEvent", {
+        await send("Input.dispatchMouseEvent", {
           type: "mouseMoved",
           x: along(input.from.x, input.to.x),
           y: along(input.from.y, input.to.y),
@@ -58,47 +66,54 @@ export const dragBetween = async (
         });
       }
       await again(gate, deadline);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        ...input.to,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      held = false;
     } catch (cause) {
-      try {
-        await cdp.send("Input.cancelDragging");
-      } finally {
-        // One release at the starting point resets the pressed button after a cut.
-        await cdp.send("Input.dispatchMouseEvent", {
-          type: "mouseReleased",
-          ...input.from,
-          button: "left",
-          buttons: 0,
-          clickCount: 1,
-        });
+      if (held && (cause instanceof BrowserControlInterrupted || gate.signal?.aborted)) {
+        cut = true;
+        await channel.resetPressedInput(input.from, cdp);
+      } else if (held) {
+        try {
+          await send("Input.cancelDragging");
+        } finally {
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseReleased",
+            ...input.from,
+            button: "left",
+            buttons: 0,
+            clickCount: 1,
+          });
+        }
       }
       throw cause;
     }
-    await cdp.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      ...input.to,
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
-    });
   } finally {
-    await cdp.detach();
+    if (!cut && !gate.signal?.aborted) await channel.detach(cdp);
   }
 };
 
 /** A real wheel at a point goes to whatever is under it, which page script can zoom on. */
 export const wheelAt = async (
-  page: Page,
+  _page: Page,
   at: Point,
   delta: readonly [number, number],
   gate: ReadinessGate,
   deadline: number,
 ) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for pointer input.");
   remaining(deadline);
   await gate();
   gate.signal?.throwIfAborted();
-  await page.mouse.move(at.x, at.y);
+  await channel.mouse.move(at.x, at.y);
   await again(gate, deadline);
-  await page.mouse.wheel(delta[0], delta[1]);
+  await channel.mouse.wheel(delta[0], delta[1]);
 };
 
 type Box = Point & { readonly width: number; readonly height: number };

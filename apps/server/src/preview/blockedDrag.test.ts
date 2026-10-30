@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect } from "vite-plus/test";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage, testActionChannel } from "./actionChannel.testkit.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 import { dragBetween } from "./pointerInput.ts";
 
@@ -157,9 +157,17 @@ it.effect("a failed drag cancellation still sends the accepted start-point relea
       dragBetween(
         page,
         { from: { x: 2, y: 3 }, to: { x: 8, y: 9 } },
-        () => {
-          if (++gates === 3) throw new BrowserControlInterrupted("blocked", "blocked_url", false);
-        },
+        Object.assign(
+          () => {
+            if (++gates === 3) throw new BrowserControlInterrupted("blocked", "blocked_url", false);
+          },
+          {
+            channel: testActionChannel(
+              page,
+              session as unknown as import("playwright-core").CDPSession,
+            ),
+          },
+        ),
         Infinity,
       ).then(
         () => null,

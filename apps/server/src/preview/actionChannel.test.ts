@@ -106,14 +106,20 @@ it.effect("the explicit release bypass resets the pressed button after a cut", (
       blockedFrame: () => false,
     });
     controller.abort(new BrowserControlInterrupted("Blocked host", "blocked_url"));
-    yield* Effect.promise(() => channel.releasePressedButton({ x: 3, y: 4 }));
-    expect(send).toHaveBeenCalledExactlyOnceWith("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: 3,
-      y: 4,
-      button: "left",
-      buttons: 0,
-      clickCount: 1,
-    });
+    yield* Effect.promise(() => channel.resetPressedInput({ x: 3, y: 4 }));
+    expect(send.mock.calls).toEqual([
+      ["Input.cancelDragging"],
+      [
+        "Input.dispatchMouseEvent",
+        {
+          type: "mouseReleased",
+          x: 3,
+          y: 4,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        },
+      ],
+    ]);
   }),
 );

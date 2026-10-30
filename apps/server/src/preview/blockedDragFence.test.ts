@@ -11,7 +11,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import { makeBlockedTabFence } from "./blockedTabFence.ts";
 import { inputFence } from "./PreviewInputFence.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage, testActionChannel } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 it.effect("a newly blocked host cuts a drag with only its accepted start-point release", () =>
@@ -42,20 +42,23 @@ it.effect("a newly blocked host cuts a drag with only its accepted start-point r
       const reached = yield* Deferred.make<void>();
       const resume = Promise.withResolvers<void>();
       const tab = { threadId, tabId: "tab", closing: false, page, control };
-      const action = control.agent("agent", () => {
+      const action = control.agent("agent", (signal) => {
         const base = fence.gate(tab, "run", control.dispatchGate());
         let calls = 0;
         return ServerBrowserPage.drag(
           page,
           { from: { x: 40, y: 40 }, to: { x: 40, y: 120 }, steps: 2 },
           undefined,
-          async () => {
-            if (++calls === 5) {
-              Deferred.doneUnsafe(reached, Effect.void);
-              await resume.promise;
-            }
-            await base();
-          },
+          Object.assign(
+            async () => {
+              if (++calls === 5) {
+                Deferred.doneUnsafe(reached, Effect.void);
+                await resume.promise;
+              }
+              await base();
+            },
+            { signal, channel: testActionChannel(page, cdp, signal) },
+          ),
         );
       });
       void action.catch(() => undefined);

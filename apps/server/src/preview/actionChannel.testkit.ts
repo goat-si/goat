@@ -33,4 +33,32 @@ export const testActionPage = {
         channel: gate?.channel ?? testActionChannel(page, {} as CDPSession, gate?.signal),
       }),
     ),
+  hover: async (...[page, input, pointer, gate]: Parameters<typeof PageOperations.hover>) => {
+    const channel =
+      gate?.channel ??
+      testActionChannel(page, await page.context().newCDPSession(page), gate?.signal);
+    return PageOperations.hover(
+      page,
+      input,
+      pointer,
+      Object.assign(gate ?? (() => {}), { channel }),
+    );
+  },
+  drag: async (...[page, input, pointer, gate]: Parameters<typeof PageOperations.drag>) => {
+    const channel =
+      gate?.channel ??
+      testActionChannel(page, await page.context().newCDPSession(page), gate?.signal);
+    return PageOperations.drag(
+      page,
+      input,
+      pointer,
+      Object.assign(gate ?? (() => {}), { channel }),
+    );
+  },
+  scroll: async (...[page, input, gate]: Parameters<typeof PageOperations.scroll>) => {
+    const channel =
+      gate?.channel ??
+      testActionChannel(page, await page.context().newCDPSession(page), gate?.signal);
+    return PageOperations.scroll(page, input, Object.assign(gate ?? (() => {}), { channel }));
+  },
 };

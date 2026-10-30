@@ -90,16 +90,21 @@ export const makeActionChannel = ({
       check();
       return handle.setInputFiles(files);
     },
-    // A single release at the press point clears Chromium's held button after a cut.
-    releasePressedButton: (at: Point) =>
-      cdp.send("Input.dispatchMouseEvent", {
-        type: "mouseReleased",
-        x: at.x,
-        y: at.y,
-        button: at.button ?? "left",
-        buttons: 0,
-        clickCount: 1,
-      }),
+    // These two reset commands clear a button held by GOAT after a cut.
+    resetPressedInput: async (at: Point, session: CDPSession = cdp) => {
+      try {
+        await session.send("Input.cancelDragging");
+      } finally {
+        await session.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          x: at.x,
+          y: at.y,
+          button: at.button ?? "left",
+          buttons: 0,
+          clickCount: 1,
+        });
+      }
+    },
   };
 };
 
