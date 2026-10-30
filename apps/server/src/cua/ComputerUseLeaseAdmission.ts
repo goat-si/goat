@@ -8,6 +8,7 @@ import type {
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Semaphore from "effect/Semaphore";
 import type { ComputerUseControl, ComputerUseControlState } from "./ComputerUseControl.ts";
 import { type AppBusy, appNeed, makeAppLeases } from "./ComputerUseAppLeases.ts";
@@ -17,6 +18,7 @@ import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCal
 import { takesScreen } from "./ComputerUseScope.ts";
 import { ComputerUseCallApps } from "./ComputerUseCallApps.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
@@ -142,6 +144,12 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           need,
           DateTime.toEpochMillis(yield* DateTime.now),
         );
+        const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+        const currentSettings = Option.isSome(settings)
+          ? yield* settings.value.getSettings.pipe(Effect.option)
+          : Option.none();
+        if (Option.isSome(settings) && Option.isNone(currentSettings))
+          return { status: "refused", detail: "reconnecting" } as const;
         const state = yield* controlState(threadId, call.controlId);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
         reservations.reclaimStopped(canAct, now);
@@ -170,7 +178,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
         const denied = deniedCallApp(
           call,
-          [],
+          Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
           controls.get(threadId)?.nonPersonFullAccess === true,
         );
         if (denied !== undefined)
