@@ -1,6 +1,6 @@
 import { useNavigation, usePreventRemove, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, type NoteDocument, type NoteStatus } from "@goat/contracts";
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Alert, Platform, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +16,13 @@ import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { Button } from "../../components/ui/Button";
 import { applyNoteCheckboxEvent, type NoteCheckboxEvent } from "./note-markdown";
+import {
+  applyNoteEditorChange,
+  noteEditorFallback,
+  noteEditorFallbackMessage,
+  noteEditorView,
+  type NoteEditorFallback,
+} from "./note-source-text";
 import { NoteLinkedThread } from "./NoteLinkedThread";
 import { noteSyncLabel, noteSyncState } from "./notes-model";
 import { notesRpc } from "./rpc/notes";
@@ -30,7 +37,16 @@ import {
   useNoteDraftAccess,
 } from "./notes-state";
 
+// Kept out of startup work: its module, worklet runtime and native module start on first edit.
+const NoteLiveMarkdownEditor = lazy(() => import("./NoteLiveMarkdownEditor"));
+
 type NoteParams = { environmentId: string; path: string; create?: boolean };
+type EditorView = { readonly source: string; readonly text: string };
+
+function editorViewText(view: EditorView | null, source: string) {
+  return view?.source === source ? view.text : noteEditorView(source);
+}
+
 export function NoteRouteScreen({ route }: StaticScreenProps<NoteParams>) {
   return (
     <NoteContent
@@ -58,6 +74,11 @@ function NoteContent(props: NoteParams) {
   const [hasSnapshot, setHasSnapshot] = useState(Boolean(row) || Boolean(props.create));
   const [status, setStatus] = useState<NoteStatus>(row?.status ?? "idea");
   const [editing, setEditing] = useState(Boolean(props.create));
+  const [editorFallback, setEditorFallback] = useState<NoteEditorFallback | null>(null);
+  // The editor's LF text and the exact source it was derived from. The ref serves change events
+  // that arrive before a re-render, such as IME composition steps.
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -225,6 +246,11 @@ function NoteContent(props: NoteParams) {
   };
   const canDelete = canStart && restored && note !== null && !row && !editing && !dirty && !busy;
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
+  const editBody = (next: string) => {
+    setBody(next);
+    localBody.current = next;
+    setDirty(true);
+  };
   return (
     <View className="flex-1 bg-sheet">
       <AppBar
@@ -351,20 +377,43 @@ function NoteContent(props: NoteParams) {
             </View>
             {editing ? (
               <>
-                <TextInput
-                  accessibilityLabel="Note markdown"
-                  multiline
-                  autoFocus
-                  textAlignVertical="top"
-                  value={body}
-                  editable={canWrite && !saving && restored}
-                  onChangeText={(value) => {
-                    setBody(value);
-                    localBody.current = value;
-                    setDirty(true);
-                  }}
-                  className="min-h-[320px] rounded-xl border border-input-border bg-input p-4 text-base text-foreground"
-                />
+                {editorFallback ? (
+                  <>
+                    <Text className="text-sm text-foreground-muted">
+                      {noteEditorFallbackMessage(editorFallback)}
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="Note markdown"
+                      multiline
+                      autoFocus
+                      textAlignVertical="top"
+                      value={body}
+                      editable={canWrite && !saving && restored}
+                      onChangeText={editBody}
+                      className="min-h-[320px] rounded-xl border border-input-border bg-input p-4 text-base text-foreground"
+                    />
+                  </>
+                ) : (
+                  <Suspense fallback={<View className="min-h-[320px]" />}>
+                    <NoteLiveMarkdownEditor
+                      value={editorViewText(editorView, body)}
+                      editable={canWrite && !saving && restored}
+                      onChangeText={(text) => {
+                        const source = localBody.current;
+                        const previous = editorViewText(editorViewRef.current, source);
+                        const next = applyNoteEditorChange(source, previous, text);
+                        // Pasted CRLF stays out of the view so its offsets keep matching the source.
+                        const view = {
+                          source: next,
+                          text: text.includes("\r") ? noteEditorView(next) : text,
+                        };
+                        editorViewRef.current = view;
+                        setEditorView(view);
+                        editBody(next);
+                      }}
+                    />
+                  </Suspense>
+                )}
                 <Button
                   fullWidth
                   tone="primary"
@@ -395,6 +444,7 @@ function NoteContent(props: NoteParams) {
                   disabled={!canWrite || busy || row?.state === "conflict"}
                   onPress={() => {
                     editBase.current = row?.baseRevision ?? note?.revision ?? null;
+                    setEditorFallback(noteEditorFallback(localBody.current));
                     setEditing(true);
                   }}
                 />

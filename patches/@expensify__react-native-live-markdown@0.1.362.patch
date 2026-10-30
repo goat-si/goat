@@ -65,3 +65,21 @@ index 54c10d3e719e1109acb7407e13df0125db57f2ff..503f5b1ab861c70968c130eb7fdb2827
  
  - (void)liveMarkdown_insertAdaptiveImageGlyph:(id)glyph replacementRange:(NSRange)replacementRange {
    if (@available(iOS 18.0, *)) {
+diff --git a/src/MarkdownTextInput.tsx b/src/MarkdownTextInput.tsx
+index 935b05548b3a8fea79ad719d75551a4d73a1af5b..e45ba19f8548368defcc0b308a7bce425aa3cdf9 100644
+--- a/src/MarkdownTextInput.tsx
++++ b/src/MarkdownTextInput.tsx
+@@ -1,3 +1,4 @@
++// @ts-nocheck GOAT type-checks this source against newer React Native types than it targets.
+ import {StyleSheet, TextInput, processColor} from 'react-native';
+ import React from 'react';
+ import type {TextInputProps} from 'react-native';
+diff --git a/src/MarkdownTextInputDecoratorViewNativeComponent.ts b/src/MarkdownTextInputDecoratorViewNativeComponent.ts
+index 6b977626af9321e7c026d9816f3af5855cdadb5e..ad3513ae0ba47c481e4bfc9f4a81e55dc3795363 100644
+--- a/src/MarkdownTextInputDecoratorViewNativeComponent.ts
++++ b/src/MarkdownTextInputDecoratorViewNativeComponent.ts
+@@ -1,3 +1,4 @@
++// @ts-nocheck GOAT type-checks this source against newer React Native types than it targets.
+ import {codegenNativeComponent} from 'react-native';
+ import type {ColorValue, ViewProps} from 'react-native';
+ 

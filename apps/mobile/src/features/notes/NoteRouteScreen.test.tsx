@@ -100,6 +100,16 @@ vi.mock("../../components/ui/Button", () => ({
   ),
 }));
 vi.mock("./NoteLinkedThread", () => ({ NoteLinkedThread: () => null }));
+vi.mock("./NoteLiveMarkdownEditor", () => ({
+  default: (props: { value: string; onChangeText: (value: string) => void; editable: boolean }) => (
+    <textarea
+      data-testid="live-markdown"
+      value={props.value}
+      disabled={!props.editable}
+      onChange={(event) => props.onChangeText(event.target.value)}
+    />
+  ),
+}));
 vi.mock("./rpc/notes", () => ({
   notesRpc: { read: { label: "read" }, delete: { label: "delete" } },
 }));
@@ -298,7 +308,7 @@ describe("note editor snapshot", () => {
     const save = Promise.withResolvers<void>();
     mocks.enqueue.mockReturnValueOnce(save.promise);
     await act(async () => render());
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     act(() => type("keep this edit"));
     act(() => button("Save on phone").click());
     expect(button("Saving…").disabled).toBe(true);
@@ -350,7 +360,7 @@ describe("note editor snapshot", () => {
 
   it("keeps newer unsaved text visible and saveable after the pending version is acknowledged", async () => {
     await act(async () => render());
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     act(() => type("unsaved B"));
     expect(container.querySelector("textarea")?.value).toBe("unsaved B");
     expect(container.querySelector('[data-testid="note-scroll-content"]')?.textContent).toContain(
@@ -374,7 +384,7 @@ describe("note editor snapshot", () => {
       render();
     });
     expect(container.textContent).toContain("mine");
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     expect(container.querySelector("textarea")?.value).toBe("mine");
   });
 
@@ -395,7 +405,7 @@ describe("note editor snapshot", () => {
       render();
     });
     expect(mocks.read).toHaveBeenCalled();
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     expect(container.querySelector("textarea")?.value).toBe("mine");
   });
 
@@ -406,13 +416,13 @@ describe("note editor snapshot", () => {
       mocks.rows = [];
       render();
     });
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     expect(container.querySelector("textarea")?.value).toBe("theirs");
   });
 
   it("preserves dirty text when a conflict row is removed by Use theirs", async () => {
     await act(async () => render());
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     act(() => type("unsaved B"));
     await act(async () => {
       mocks.rows = [{ ...row(), state: "conflict", current: noteDocument("theirs") }];
@@ -443,7 +453,7 @@ it.each([
     expect(mocks.enqueue).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Use Edit markdown for this checkbox.");
     expect(button("Native checkbox unchecked")).toBeDefined();
-    act(() => button("Edit markdown").click());
+    await act(async () => button("Edit markdown").click());
     expect(container.querySelector("textarea")?.value).toBe(body);
   },
 );
@@ -455,4 +465,37 @@ it("enqueues a checkbox only when its native text and source slot agree", async 
   expect(mocks.enqueue).toHaveBeenCalledWith(
     expect.objectContaining({ body: "- [x] **task**\n- [ ] other" }),
   );
+});
+
+describe("formatted note editor", () => {
+  const editorFor = async (body: string) => {
+    mocks.rows = [{ ...row(), body }];
+    await act(async () => render());
+    await act(async () => button("Edit markdown").click());
+  };
+
+  it("saves the exact source bytes when a note is opened and saved without edits", async () => {
+    const body = "# Title\r\n- [ ] task\nmixed\r\n한글 😀";
+    await editorFor(body);
+    expect(container.querySelector('[data-testid="live-markdown"]')).not.toBeNull();
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe(body);
+  });
+
+  it("changes only the edited line of a CRLF note", async () => {
+    await editorFor("a\r\nb\r\nc\r\n");
+    expect(container.querySelector("textarea")?.value).toBe("a\nb\nc\n");
+    act(() => type("a\nB!\nnew\nc\n"));
+    act(() => type("a\nB!\nnew\nc\nend"));
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("a\r\nB!\r\nnew\r\nc\r\nend");
+  });
+
+  it("opens a note it cannot round-trip in the plain editor and says why", async () => {
+    await editorFor("old\rmac");
+    expect(container.querySelector('[data-testid="live-markdown"]')).toBeNull();
+    expect(container.textContent).toContain("old Mac line endings");
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("old\rmac");
+  });
 });
