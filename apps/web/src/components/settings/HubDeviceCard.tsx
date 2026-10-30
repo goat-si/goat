@@ -2,6 +2,7 @@ import { settlePromise } from "@goat/client-runtime/state/runtime";
 import {
   AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
+  AuthHubProxyScope,
   AuthStandardClientScopes,
   type AdvertisedEndpoint,
   type AuthEnvironmentScope,
@@ -45,6 +46,7 @@ import {
 import { searchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { useDeadlinePassed } from "../../hooks/useDeadline";
+import { heldOrGranted } from "./hubAccessScopes";
 
 type HubDeviceCardProps = {
   readonly primaryEnvironmentId: EnvironmentId | null;
@@ -66,6 +68,8 @@ type HubDeviceCardProps = {
 type IssuedPhoneQr = {
   readonly result: AuthPairingCredentialResult;
   readonly target: HubPhoneQrTarget;
+  /** Null where this computer cannot grant hub access, so the dialog says nothing about it. */
+  readonly hubAccess: boolean | null;
 };
 
 function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
@@ -92,6 +96,13 @@ function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
           title="Scan to pair the GOAT app"
         />
       </div>
+      {issued.hubAccess === null ? null : (
+        <p className="text-xs text-muted-foreground">
+          {issued.hubAccess
+            ? "This QR also opens the hub's devices."
+            : "This QR opens only this computer. To add hub devices later, pair again."}
+        </p>
+      )}
     </div>
   );
 }
@@ -118,6 +129,8 @@ export function HubDeviceCard({
   const [isCreating, setIsCreating] = useState(false);
   const [issued, setIssued] = useState<IssuedPhoneQr | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Shown before any QR exists; on by default because reaching the fleet is what a hub phone is for.
+  const [hubAccess, setHubAccess] = useState(true);
   const creatingRef = useRef(false);
   const mountedRef = useRef(false);
   useEffect(() => {
@@ -131,13 +144,18 @@ export function HubDeviceCard({
   const showTailscaleRow = isDesktop && canManageLocalBackend;
   const exposure = showTailscaleRow ? exposureState : null;
   const open = dialogOpen || resuming;
-  const scopes = AuthStandardClientScopes.filter((scope) => delegatableScopes.includes(scope));
+  const canGrantHubAccess = delegatableScopes.includes(AuthHubProxyScope);
+  const standardScopes = AuthStandardClientScopes.filter((scope) =>
+    delegatableScopes.includes(scope),
+  );
+  const scopes =
+    canGrantHubAccess && hubAccess ? [...standardScopes, AuthHubProxyScope] : standardScopes;
   const allowed =
     isDesktop &&
     canManageLocalBackend &&
     primaryEnvironmentId !== null &&
     canWriteAccess &&
-    scopes.length > 0;
+    standardScopes.length > 0;
   const unavailable = isNetworkAccessPending || networkAccessError !== null;
   const issuedTargetIsCurrent =
     issued !== null &&
@@ -153,7 +171,9 @@ export function HubDeviceCard({
       primaryEnvironmentId === null ||
       !readEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope) ||
       !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope) ||
-      !scopes.every((scope) => readEnvironmentScope(primaryEnvironmentId, scope))
+      !scopes.every((scope) =>
+        heldOrGranted(scope, (held) => readEnvironmentScope(primaryEnvironmentId, held)),
+      )
     )
       return;
     creatingRef.current = true;
@@ -175,7 +195,11 @@ export function HubDeviceCard({
     }
     onPairingLinkCreated(settled.value);
     finishConnectFlowResume("phone-qr");
-    setIssued({ result: settled.value, target: selected });
+    setIssued({
+      result: settled.value,
+      target: selected,
+      hubAccess: canGrantHubAccess ? scopes.includes(AuthHubProxyScope) : null,
+    });
   }
 
   function changeOpen(next: boolean) {
@@ -187,7 +211,10 @@ export function HubDeviceCard({
     }
     setIssued(null);
     setError(null);
-    if (next && target?.kind === "tailscale-https") void issueCredential(target);
+    if (next) setHubAccess(true);
+    // With a hub access choice to make, the QR waits for Create phone QR.
+    if (next && target?.kind === "tailscale-https" && !canGrantHubAccess)
+      void issueCredential(target);
   }
 
   // The saved setting drives the switch, so a Serve that stopped answering can still be turned off.
@@ -293,6 +320,24 @@ export function HubDeviceCard({
                     )
                   ) : (
                     <div className="space-y-3">
+                      {canGrantHubAccess ? (
+                        <label className="flex items-start justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-foreground">
+                              Also open hub devices
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
+                              This phone can open threads on the machines this hub lists, within
+                              what the hub allows. Revoke it anytime under Authorized clients.
+                            </span>
+                          </span>
+                          <Switch
+                            checked={hubAccess}
+                            onCheckedChange={(checked) => setHubAccess(checked)}
+                            aria-label="Also open hub devices"
+                          />
+                        </label>
+                      ) : null}
                       {target?.kind !== "tailscale-https" ? (
                         connectReachabilityStep(exposure, tailscaleHttpsEndpoint) !== null ? (
                           <ConnectReachabilityNotice
