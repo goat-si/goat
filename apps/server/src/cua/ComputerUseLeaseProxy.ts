@@ -43,7 +43,10 @@ import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
-import { refusesClaimedBrowserDesktopCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
+import {
+  refusesClaimedBrowserDesktopCall,
+  scopeBrowserCall,
+} from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
@@ -729,6 +732,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
+      if ("refused" in scopeBrowserCall(message.params?.name, message.params?.arguments, []))
+        return yield* sink.answer(
+          refusal(
+            id,
+            message.method,
+            "outside_manifest",
+            "This browser call has no approved claim.",
+          ),
+        );
       if (
         refusesClaimedBrowserDesktopCall(
           message.params?.name,

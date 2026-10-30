@@ -105,6 +105,20 @@ effectIt.effect("the proxy refuses a desktop call for a claimed browser pid", ()
   }),
 );
 
+effectIt.effect("the proxy does not send an unclaimed browser call", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* h.push(active());
+    yield* h.applied;
+    yield* h.send(call(2, "browser_click", { tab_id: "unclaimed" }));
+    const result = yield* Effect.raceFirst(
+      h.nextToProvider.pipe(Effect.map(() => "refused")),
+      h.nextToDriver.pipe(Effect.map(() => "sent")),
+    );
+    assert.equal(result, "refused");
+  }),
+);
+
 effectIt.effect("a newly claimed pid fences a desktop call held before dispatch", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
