@@ -1,9 +1,18 @@
-import { chromium, type Page } from "playwright-core";
+import { chromium, type CDPSession, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
-import { aimClick, watchClick } from "./clickEffect.ts";
+import { aimClick, watchClick as watchClickRaw } from "./clickEffect.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import { testActionGate } from "./actionChannel.testkit.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionChannel, testActionGate } from "./actionChannel.testkit.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
+
+const watchClick = (page: Page) =>
+  watchClickRaw(
+    page,
+    undefined,
+    Object.assign(() => {}, {
+      channel: testActionChannel(page, {} as CDPSession),
+    }),
+  );
 
 const fixture = async (run: (page: Page) => Promise<void>) => {
   expect(chromiumInstalled).toBe(true);

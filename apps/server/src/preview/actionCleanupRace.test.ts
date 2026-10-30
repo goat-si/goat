@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { chromium } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 import { watchClick } from "./clickEffect.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 it.effect("a blocked cut prevents click watcher cleanup from sending new commands", () =>
@@ -15,6 +16,7 @@ it.effect("a blocked cut prevents click watcher cleanup from sending new command
       );
       const page = yield* Effect.promise(() => browser.newPage());
       const frame = page.mainFrame();
+      const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
       const installing = vi.spyOn(frame, "evaluateHandle");
       const entered = yield* Deferred.make<void>();
       const resume = yield* Deferred.make<void>();
@@ -27,7 +29,10 @@ it.effect("a blocked cut prevents click watcher cleanup from sending new command
         const watch = await watchClick(
           page,
           frame,
-          Object.assign(control.dispatchGate(), { signal }),
+          Object.assign(control.dispatchGate(), {
+            signal,
+            channel: testActionChannel(page, cdp, signal),
+          }),
         );
         Deferred.doneUnsafe(entered, Effect.void);
         await latch.promise;

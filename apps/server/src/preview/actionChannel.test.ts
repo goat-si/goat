@@ -24,6 +24,7 @@ it.effect("an aborted action refuses every command before it reaches the browser
       blockedFrame: () => false,
     });
     controller.abort(new BrowserControlInterrupted("Blocked host", "blocked_url"));
+    expect(() => channel.call(calls)).toThrow();
     expect(() => channel.send("Runtime.evaluate", { expression: "1" })).toThrow();
     expect(() => channel.sendFor(cdp)("Runtime.evaluate", { expression: "1" })).toThrow();
     expect(() => channel.newCDPSession(page)).toThrow();

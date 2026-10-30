@@ -6,6 +6,7 @@
 import { constVoid } from "effect/Function";
 import type { ElementHandle, Frame, JSHandle, Locator, Page } from "playwright-core";
 import type { ReadinessGate } from "./actionReadiness.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 export type ClickEvidence =
   | "dom"
@@ -290,11 +291,17 @@ const bounded = async <A>(work: Promise<A> | undefined, ms = SETTLE_MS) => {
   }
 };
 
-const stopWatch = (watch: JSHandle<Watch>) =>
-  void watch
-    .evaluate((state) => state.stop())
+const stopWatch = (watch: JSHandle<Watch>, gate: ReadinessGate) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for click observation.");
+  if (gate.signal?.aborted) return;
+  void channel
+    .call(() => watch.evaluate((state) => state.stop()))
     .catch(constVoid)
-    .finally(() => void watch.dispose().catch(constVoid));
+    .finally(() => {
+      if (!gate.signal?.aborted) void channel.call(() => watch.dispose()).catch(constVoid);
+    });
+};
 
 type Point = { readonly x: number; readonly y: number };
 export type ClickAim =
@@ -366,6 +373,8 @@ export const watchClick = async (
 ) => {
   await gate();
   gate.signal?.throwIfAborted();
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for click observation.");
   const seen = new Set<ClickEvidence>();
   // The page says the click followed a link into a new window; the browser says one opened. A
   // popup counts only with both: a blocked one (a sandboxed frame) or an earlier click's does not.
@@ -380,16 +389,19 @@ export const watchClick = async (
   // A page that cannot run script, or that a dialog holds, still reports a dialog the press opened.
   let installing: Promise<JSHandle<Watch> | undefined>;
   try {
-    installing = (frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>).catch(() => undefined);
-  } catch {
+    installing = (
+      channel.call(() => frame.evaluateHandle(INSTALL)) as Promise<JSHandle<Watch>>
+    ).catch(() => undefined);
+  } catch (cause) {
+    if (gate.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
     installing = Promise.resolve(undefined);
   }
   const watch = await bounded(installing, INSTALL_MS);
-  if (watch === undefined) void installing.then((late) => late && stopWatch(late));
+  if (watch === undefined) void installing.then((late) => late && stopWatch(late, gate));
   const release = () => {
     page.off("popup", onPopup);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
-    if (watch) stopWatch(watch);
+    if (watch) stopWatch(watch, gate);
   };
   const record = (kinds: ReadonlyArray<string> | void | undefined) => {
     for (const kind of kinds ?? []) seen.add(kind as ClickEvidence);
@@ -402,13 +414,20 @@ export const watchClick = async (
     await gate();
     gate.signal?.throwIfAborted();
     const target: unknown = "element" in aim ? aim.element : aim.point;
-    await bounded(watch?.evaluate((state, at) => state.arm(at), target).catch(constVoid));
-    first = watch
-      ?.evaluate((state) => state.changed.then(() => [...state.seen]))
-      .then(record, constVoid);
-    navigated = watch
-      ?.evaluate((state) => state.navigated.then(() => [...state.seen]))
-      .then(record, constVoid);
+    await bounded(
+      watch &&
+        channel.call(() => watch.evaluate((state, at) => state.arm(at), target)).catch(constVoid),
+    );
+    first =
+      watch &&
+      channel
+        .call(() => watch.evaluate((state) => state.changed.then(() => [...state.seen])))
+        .then(record, constVoid);
+    navigated =
+      watch &&
+      channel
+        .call(() => watch.evaluate((state) => state.navigated.then(() => [...state.seen])))
+        .then(record, constVoid);
   };
   const settle = async (dialog = false): Promise<ClickEffect> => {
     try {
@@ -421,12 +440,15 @@ export const watchClick = async (
         // A failed read proves nothing.
         record(
           await bounded(
-            watch
-              ?.evaluate((state) => {
-                state.stop();
-                return [...state.seen];
-              })
-              .catch(() => undefined),
+            watch &&
+              channel
+                .call(() =>
+                  watch.evaluate((state) => {
+                    state.stop();
+                    return [...state.seen];
+                  }),
+                )
+                .catch(() => undefined),
           ),
         );
       }

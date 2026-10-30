@@ -17,7 +17,7 @@ import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { testActionChannel, testActionGate } from "./actionChannel.testkit.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.

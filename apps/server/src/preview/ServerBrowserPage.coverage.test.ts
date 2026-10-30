@@ -1,7 +1,7 @@
 import { chromium } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 
 const refOf = (tree: unknown, name: string) => {

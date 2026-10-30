@@ -14,6 +14,7 @@ export interface Readiness {
 export interface ReadinessGate {
   (): void | Promise<void>;
   readonly signal?: AbortSignal | undefined;
+  readonly channel?: import("./actionChannel.ts").ActionChannel | undefined;
 }
 // Cancellation stops continuation; a browser operation already issued cannot be recalled.
 export const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {

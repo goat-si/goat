@@ -2,7 +2,7 @@ import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import { testActionGate } from "./actionChannel.testkit.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 
 // These drive headless Chromium, as the CU Lab fixture (160_cu_benchmark cu_lab.html) found the bugs.
 const fixture = async (run: (page: Page) => Promise<void>) => {

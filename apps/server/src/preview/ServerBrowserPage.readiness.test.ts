@@ -1,7 +1,7 @@
 import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 
 const fixture = async (run: (page: Page) => Promise<void>, args: ReadonlyArray<string> = []) => {
   expect(chromiumInstalled).toBe(true);

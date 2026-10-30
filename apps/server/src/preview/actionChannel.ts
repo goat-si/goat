@@ -35,6 +35,10 @@ export const makeActionChannel = ({
       return Reflect.apply(session.send, session, args);
     }) as CDPSession["send"];
   return {
+    call: <T>(operation: () => T): T => {
+      check();
+      return operation();
+    },
     send: sendFor(cdp),
     sendFor,
     detach: (session: CDPSession) => {
