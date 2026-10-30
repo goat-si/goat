@@ -9,6 +9,11 @@ describe("computer use call safety", () => {
     expect(deniedCallApp({ name: "launch_app", args: { name: "Editor" } }, [], true)).toBe(
       "Editor",
     );
+    expect(
+      deniedCallApp({ name: "launch_app", args: { path: "/Applications/Editor.app" } }, [
+        "com.example.Blocked",
+      ]),
+    ).toBe("/Applications/Editor.app");
   });
   it("does not allow a batch whose scope cannot be checked against policy", () => {
     const call = {

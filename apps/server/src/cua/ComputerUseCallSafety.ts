@@ -26,10 +26,16 @@ export const deniedCallApp = (
           .map(([, value]) => String(value))
       : [];
   if (call.name === "launch_app" && (denied.length > 0 || nonPersonFullAccess)) {
-    const name = args.find(
-      ([key, value]) => (key === "name" || key === "app_name") && typeof value === "string",
+    const alternate = args.find(
+      ([key, value]) => key !== "bundle_id" && key !== "session" && typeof value === "string",
     );
-    if (name !== undefined) return String(name[1]);
+    if (alternate !== undefined) return String(alternate[1]);
+    if (
+      !args.some(
+        ([key, value]) => key === "bundle_id" && typeof value === "string" && value.length > 0,
+      )
+    )
+      return "unidentified app";
   }
   const scope = batchAppScope(call.name, call.args);
   if (scope !== undefined && (denied.length > 0 || nonPersonFullAccess)) return scope.apps[0];
