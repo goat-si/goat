@@ -8209,6 +8209,7 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
     "stop",
     "stop-before-arm",
     "stop-before-arm-mismatched-recovery",
+    "stop-before-failure",
   ] as const)("guards a scheduled usage-limit continuation against %s", (scenario) =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -8267,6 +8268,35 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         "Z",
         scenario === "wake" ? "+00:00" : "Z",
       );
+      // A Stop reached the running turn before its limit failure landed.
+      if (scenario === "stop-before-failure") {
+        const stopItem = { threadId, runId: run.id, nodeId: run.rootNodeId, ordinal: 1 } as const;
+        yield* events.write({
+          events: [
+            {
+              id: EventId.make("recovery-stop:interrupt:stop-before-failure"),
+              type: "turn-item.updated",
+              threadId,
+              occurredAt: now,
+              payload: {
+                ...stopItem,
+                id: TurnItemId.make("recovery-stop:interrupt:stop-before-failure"),
+                type: "run_interrupt_request",
+                providerThreadId: null,
+                providerTurnId: null,
+                nativeItemRef: null,
+                parentItemId: null,
+                status: "completed",
+                title: "Interrupt requested",
+                startedAt: now,
+                completedAt: now,
+                updatedAt: now,
+                message: "Stopped by user",
+              },
+            },
+          ],
+        });
+      }
       yield* events.write({
         commandId: CommandId.make(`recovery-stop:failure:${scenario}`),
         events: [
@@ -8346,6 +8376,18 @@ it.layer(layerTest)("usage-limit recovery", (it) => {
         threadId,
         limitRecovery: arm.limitRecovery,
       };
+      if (scenario === "stop-before-failure") {
+        yield* orchestrator.autoArmLimitRecovery(automaticArm);
+        assert.deepInclude(
+          (yield* orchestrator.getThreadProjection(threadId)).thread.limitRecovery,
+          {
+            runId: run.id,
+            autoResume: false,
+            snooze: false,
+          },
+        );
+        return;
+      }
       const stopBeforeArm =
         scenario === "stop-before-arm" || scenario === "stop-before-arm-mismatched-recovery";
       if (stopBeforeArm) {
