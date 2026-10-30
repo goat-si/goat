@@ -1,4 +1,6 @@
 import { expect, it } from "@effect/vitest";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import type { JsonSchemaType } from "@modelcontextprotocol/sdk/validation/types.js";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -433,71 +435,99 @@ it.live("an invalid selection and a guarded menu refuse their whole groups", () 
 it.live("app group inputs use the pinned driver schemas", () => {
   // Driver tag goat.16: platform-macos/tools/{press_key.rs:521,scroll.rs:79,click.rs:1090};
   // cua-driver-core/post_action_wait.rs:28-42 adds post_action_wait at dispatch.
-  const allowed: Record<string, ReadonlySet<string>> = {
-    press_key: new Set([
-      "session",
-      "pid",
-      "key",
-      "modifiers",
-      "window_id",
-      "element_token",
-      "x",
-      "y",
-      "scope",
-      "delivery_mode",
-      "target",
-      "post_action_wait",
-    ]),
-    scroll: new Set([
-      "session",
-      "pid",
-      "direction",
-      "by",
-      "amount",
-      "window_id",
-      "element_token",
-      "x",
-      "y",
-      "scope",
-      "coordinate_space",
-      "window_basis",
-      "delivery_mode",
-      "target",
-      "post_action_wait",
-    ]),
-    click: new Set([
-      "session",
-      "pid",
-      "window_id",
-      "element_token",
-      "capture_id",
-      "x",
-      "y",
-      "action",
-      "button",
-      "count",
-      "read_back",
-      "modifier",
-      "from_zoom",
-      "debug_image_out",
-      "coordinate_space",
-      "window_basis",
-      "delivery_mode",
-      "scope",
-      "target",
-      "post_action_wait",
-    ]),
+  const properties: Record<string, JsonSchemaType> = {
+    session: { type: "string" },
+    pid: { type: "integer" },
+    window_id: { type: "integer" },
+    key: { type: "string" },
+    modifiers: { type: "array", items: { type: "string" } },
+    element_token: { type: "string", pattern: "^s[0-9a-f]{8}:[0-9]+$" },
+    x: { type: "number" },
+    y: { type: "number" },
+    scope: { type: "string", enum: ["window", "desktop"] },
+    delivery_mode: { type: "string", enum: ["background", "foreground"] },
+    target: {
+      type: "object",
+      properties: {
+        kind: { enum: ["window", "desktop"] },
+        pid: { type: "integer", minimum: 0 },
+        window_id: { type: "integer", minimum: 0 },
+        display_id: { type: "string" },
+      },
+      required: ["kind"],
+      additionalProperties: true,
+    },
+    post_action_wait: { type: "string", enum: ["default", "none"] },
+    direction: { type: "string", enum: ["up", "down", "left", "right"] },
+    by: { type: "string", enum: ["line", "page"] },
+    amount: { type: "integer", minimum: 1, maximum: 50 },
+    coordinate_space: { type: "string", enum: ["screenshot", "window_points"] },
+    window_basis: {
+      type: "object",
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        w: { type: "number" },
+        h: { type: "number" },
+      },
+      required: ["x", "y", "w", "h"],
+      additionalProperties: false,
+    },
+    capture_id: { type: "string" },
+    action: { type: "string" },
+    button: { type: "string", enum: ["left", "right", "middle"] },
+    count: { type: "integer" },
+    read_back: { type: "boolean" },
+    modifier: { type: "array", items: { type: "string" } },
+    from_zoom: { type: "boolean" },
+    debug_image_out: { type: "string" },
   };
-  const rejected: string[] = [];
-  const checked = (tool: string) => (args: Record<string, unknown>) => {
-    const unknown = Object.keys(args).filter((key) => !allowed[tool]?.has(key));
-    rejected.push(...unknown.map((key) => `${tool}.${key}`));
-    return unknown.length
-      ? new DriverError(
-          { effect: "refused", code: "invalid_arguments" },
-          `Unsupported ${tool} arguments: ${unknown.join(", ")}`,
-        )
-      : { effect: "confirmed" };
+  const common = [
+    "session",
+    "pid",
+    "window_id",
+    "element_token",
+    "x",
+    "y",
+    "scope",
+    "delivery_mode",
+    "target",
+    "post_action_wait",
+  ];
+  const pointer = ["coordinate_space", "window_basis"];
+  const specs = {
+    press_key: { keys: [...common, "key", "modifiers"], required: ["key"] },
+    scroll: { keys: [...common, ...pointer, "direction", "by", "amount"], required: ["direction"] },
+    click: {
+      keys: [
+        ...common,
+        ...pointer,
+        "capture_id",
+        "action",
+        "button",
+        "count",
+        "read_back",
+        "modifier",
+        "from_zoom",
+        "debug_image_out",
+      ],
+      required: [],
+    },
+  };
+  const validator = new AjvJsonSchemaValidator();
+  const checked = (tool: keyof typeof specs) => {
+    const spec = specs[tool];
+    const check = validator.getValidator({
+      type: "object",
+      additionalProperties: false,
+      properties: Object.fromEntries(spec.keys.map((key) => [key, properties[key]])),
+      required: spec.required,
+    });
+    return (args: Record<string, unknown>) => {
+      const result = check(args);
+      if (result.valid) return { effect: "confirmed" };
+      return new DriverError({ effect: "refused", code: "invalid_arguments" }, result.errorMessage);
+    };
   };
   const { host } = fixture({
     list_windows: {
@@ -510,6 +540,14 @@ it.live("app group inputs use the pinned driver schemas", () => {
         },
       ],
     },
+    get_window_state: {
+      pid: 42,
+      window_id: 7,
+      snapshot_id: "s0000000a",
+      tree_markdown: "Apply",
+      elements_complete: true,
+      elements: [{ role: "button", label: "Apply", element_token: "s0000000a:1" }],
+    },
     press_key: checked("press_key"),
     scroll: checked("scroll"),
     click: checked("click"),
@@ -518,7 +556,6 @@ it.live("app group inputs use the pinned driver schemas", () => {
     const result = yield* runCell(
       `${BIND} const clicks = [app.press('a'), app.scroll(null, 'down'), app.click('Apply')]; ${SETTLED}`,
     );
-    expect(rejected).toEqual([]);
     expect(result.value).toEqual(["confirmed", "confirmed", "confirmed"]);
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
