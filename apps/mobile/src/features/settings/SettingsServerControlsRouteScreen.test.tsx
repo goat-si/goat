@@ -59,7 +59,27 @@ vi.mock("../../state/use-atom-command", () => ({
 }));
 vi.mock("../threads/thread-settings-options", () => ({ RUNTIME_MODE_CHOICES: [] }));
 vi.mock("../../components/ui/ScreenScrollView", () => ({ ScreenScrollView: Children }));
-vi.mock("../../components/ui/AppText", () => ({ AppText: Children }));
+vi.mock("../../components/ui/AppText", () => ({
+  AppText: Children,
+  AppTextInput: ({
+    value,
+    onChangeText,
+    editable,
+    accessibilityLabel,
+  }: {
+    value: string;
+    onChangeText: (value: string) => void;
+    editable: boolean;
+    accessibilityLabel: string;
+  }) => (
+    <input
+      aria-label={accessibilityLabel}
+      value={value}
+      disabled={!editable}
+      onChange={(event) => onChangeText(event.target.value)}
+    />
+  ),
+}));
 vi.mock("../../components/ui/Button", () => ({
   Button: ({
     label,
@@ -242,6 +262,43 @@ describe("maintenance automatic server updates", () => {
 });
 
 describe("SettingsServerControlsRouteScreen", () => {
+  it("validates and adds a browser host on the selected environment", async () => {
+    act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Host to block"]');
+    if (!input) throw new Error("Missing host input");
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (!setValue) throw new Error("Missing input value setter");
+    act(() => {
+      setValue.call(input, "https://example.com/path");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    act(() => button("Add host").click());
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    act(() => {
+      setValue.call(input, " Example.COM. ");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => button("Add host").click());
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "local",
+      input: { patch: { blockedBrowserHosts: ["example.com"] } },
+    });
+  });
+
+  it("removes a blocked host on the selected environment and disables project edits", async () => {
+    const target = mocks.targets[0]!;
+    target.serverConfig.settings.blockedBrowserHosts = ["example.com"];
+    act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    await act(async () => button("Remove").click());
+    expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
+      environmentId: "local",
+      input: { patch: { blockedBrowserHosts: [] } },
+    });
+    mocks.projectSelected = true;
+    act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+    expect(button("Remove").disabled).toBe(true);
+  });
+
   it("writes the GOAT tool listing to the environment and keeps it environment-wide", async () => {
     const shippedDefault = DEFAULT_SERVER_SETTINGS.agentToolListing;
     const other: AgentToolListing = shippedDefault === "core" ? "full" : "core";
