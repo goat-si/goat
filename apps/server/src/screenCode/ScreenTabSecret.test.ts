@@ -152,9 +152,13 @@ it.live("fillSecret sends only a reference and selector and returns no secret", 
   );
 });
 
-it.live.each(["index", "ref", "name"] as const)(
-  "an observed password %s is focused before the existing secret fill",
-  (key) => {
+it.live.each([
+  { label: "index", target: 0 },
+  { label: "name", target: "Password" },
+  { label: "role and name", target: { role: "textbox", name: "Password" } },
+] as const)(
+  "an observed password $label is focused before the existing secret fill",
+  ({ target }) => {
     const operations: string[] = [];
     const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
     const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
@@ -166,7 +170,7 @@ it.live.each(["index", "ref", "name"] as const)(
             url: formTab.url,
             title: "Form",
             loading: false,
-            accessibilityTree: "- textbox Password [ref=e1]",
+            accessibilityTree: '- textbox "Password" [ref=e1]',
             treeComplete: true,
             refGeneration: "test",
           } as A);
@@ -182,7 +186,7 @@ it.live.each(["index", "ref", "name"] as const)(
       },
     };
     return runCells(broker, [
-      `const tab = await screen.tab('form'); const seen = await tab.observe(); await tab.fillSecret(seen.elements[0][${JSON.stringify(key)}], 'ref'); return true;`,
+      `const tab = await screen.tab('form'); await tab.observe(); await tab.fillSecret(${JSON.stringify(target)}, 'ref'); return true;`,
     ]).pipe(
       Effect.map(([result]) => {
         expect(result).toMatchObject({
@@ -233,8 +237,8 @@ it.live.each(["non-password field", "different origin"] as const)(
       },
     };
     return runCells(broker, [
-      `const tab = await screen.tab('form'); const obs = await tab.observe();
-      try { await tab.fillSecret(obs.elements[0].index, 'ref'); } catch (e) { return [e.nothingSent, e.message, e.detail ?? null]; }`,
+      `const tab = await screen.tab('form'); await tab.observe();
+      try { await tab.fillSecret(0, 'ref'); } catch (e) { return [e.nothingSent, e.message, e.detail ?? null]; }`,
     ]).pipe(
       Effect.map(([result]) => {
         expect(result).toMatchObject({
