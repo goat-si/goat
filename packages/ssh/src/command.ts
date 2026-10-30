@@ -15,6 +15,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { buildSshChildEnvironment, type SshAuthOptions } from "./auth.ts";
 import { SshCommandError, SshInvalidTargetError } from "./errors.ts";
+import { sshHostsRefusal } from "./hostAccess.ts";
 import { isRemoteShellScript, withRemoteDeadline } from "./remoteDeadline.ts";
 
 const DEFAULT_SSH_COMMAND_TIMEOUT_MS = 60_000;
@@ -31,7 +32,18 @@ const MAX_SSH_DIAGNOSTIC_PREFIX_LENGTH = 512;
 const sshCommandForPlatform = (platform: NodeJS.Platform): string =>
   platform === "win32" ? "ssh.exe" : "ssh";
 
-export const resolveSshCommand = Effect.map(HostProcess.Platform, sshCommandForPlatform);
+/** Every ssh this package spawns resolves here, so a refused process never starts one. */
+export const resolveSshCommand = Effect.gen(function* () {
+  const refusal = yield* sshHostsRefusal;
+  if (refusal !== undefined)
+    return yield* new SshCommandError({
+      command: ["ssh"],
+      exitCode: null,
+      stderr: "",
+      message: refusal,
+    });
+  return sshCommandForPlatform(yield* HostProcess.Platform);
+});
 
 const encoder = new TextEncoder();
 

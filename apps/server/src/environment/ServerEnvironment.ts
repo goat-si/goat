@@ -6,6 +6,7 @@ import {
   type ExecutionEnvironmentDescriptor,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import {
   SSH_RUNTIME_PROTOCOL_VERSION,
   servedRuntimeProtocolRanges,
@@ -223,6 +224,8 @@ export const make = Effect.gen(function* () {
   const desktopAppUpdate =
     serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
   const appServerLive = yield* makeAppServerLive();
+  // The effective state, read after startup applied the dev SSH policy.
+  const devSshOn = serverConfig.devUrl !== undefined && (yield* sshHostsRefusal) === undefined;
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     connectAuthPolicyVersion: 1,
@@ -237,6 +240,7 @@ export const make = Effect.gen(function* () {
     instanceId,
     ...(machineId === null ? {} : { machineId }),
     ...(machineUserId === null ? {} : { machineUserId }),
+    ...(devSshOn ? { devSsh: "on" as const } : {}),
     protocol: servedRuntimeProtocolRanges(),
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
@@ -249,6 +253,7 @@ export const make = Effect.gen(function* () {
         retainedLocalSpace: true,
         generationHold: true,
         hubDiagnostics: true,
+        siteNotes: true,
         ...(importRuntime._tag === "Some"
           ? { importProvider: true, importTurnStartFit: true, asideImport: true }
           : {}),

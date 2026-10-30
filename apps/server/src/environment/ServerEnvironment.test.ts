@@ -138,6 +138,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         expect(descriptor.capabilities.memory?.protocolVersion).toBe(1);
         expect(descriptor.capabilities.memory?.refusedReverts).toBe(true);
         expect(descriptor.capabilities.memory?.hubDiagnostics).toBe(true);
+        expect(descriptor.capabilities.memory?.siteNotes).toBe(true);
         expect(supportsMemoryProtocol(descriptor.capabilities)).toBe(true);
         expect(descriptor.capabilities.memory?.importProvider).toBeUndefined();
         expect(descriptor.capabilities.memory?.importTurnStartFit).toBeUndefined();
@@ -174,6 +175,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         retainedLocalSpace: true,
         generationHold: true,
         hubDiagnostics: true,
+        siteNotes: true,
       });
       expect(descriptor.capabilities.memoryHubProtocolVersion).toBeUndefined();
     }),

@@ -185,6 +185,7 @@ vi.mock("../../state/entities", () => ({
 }));
 // Covered by its own controls; this page test exercises the memory browser and sharing flows.
 vi.mock("./MemoryGenerationSettings", () => ({ MemoryGenerationSettings: () => null }));
+vi.mock("./MemorySitesSettings", () => ({ MemorySitesSettings: () => null }));
 vi.mock("../../hooks/useSettings", () => ({
   useEnvironmentSettings: (_id: string, selector: (settings: unknown) => unknown) => {
     useFixtureVersion();
@@ -765,7 +766,6 @@ it("does not mount memory consumers for an unsupported explicit foreign deep lin
   expect(container.textContent).not.toContain("foreign-owner");
   expect(state.calls).not.toHaveBeenCalled();
 });
-
 it("keeps pending reenrollment when removing another owner permission and renders the committed policy", async () => {
   const pair = {
     memorySpaceId: id(1),

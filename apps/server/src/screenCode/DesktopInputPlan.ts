@@ -14,7 +14,10 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import { driverValue, fail } from "./DesktopDriverReplies.ts";
-import { spansLines } from "./DesktopTreeText.ts";
+import { selectTextArgs } from "./DesktopSelectionExtras.ts";
+import { actionName, spansLines } from "./DesktopTreeText.ts";
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
+import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import type { Rect } from "./DesktopFrames.ts";
 import {
   checkWindowReplyState,
@@ -27,6 +30,8 @@ import {
 import type { DesktopRow } from "./DesktopObserveRead.ts";
 import { applyDesktopPointerArgs, pointerStateFor } from "./DesktopTargetPoints.ts";
 
+const KEY_HOLD_DRIVER_VERSION: string | undefined = undefined;
+
 const ACTION_TO_AX: Readonly<Record<string, string>> = {
   press: "AXPress",
   show_menu: "AXShowMenu",
@@ -37,9 +42,8 @@ const ACTION_TO_AX: Readonly<Record<string, string>> = {
   show_alternate_ui: "AXShowAlternateUI",
   show_default_ui: "AXShowDefaultUI",
 };
-const AX_TO_ACTION: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.entries(ACTION_TO_AX).map(([k, v]) => [v.toLowerCase(), k]),
-);
+const actionKey = (action: string) => action.replace(/[_-]/g, "").toLowerCase().replace(/^ax/, "");
+const displayedAction = (action: string) => actionName(action).replace(/^AX/, "").toLowerCase();
 
 const string = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
@@ -86,22 +90,33 @@ const validateNamedAction = (
   row: DesktopRow | undefined,
 ): { readonly action?: string; readonly error?: ScreenRunError } => {
   if (requested === undefined) return {};
-  const name = typeof requested === "string" ? requested.trim() : "";
-  const ax = ACTION_TO_AX[name];
-  const offered = (row?.rawActions ?? row?.actions ?? []).flatMap((a) => {
-    const mapped = AX_TO_ACTION[a.toLowerCase()] ?? (ACTION_TO_AX[a] ? a : undefined);
-    return mapped === undefined ? [] : [mapped];
-  });
-  if (!ax || !offered.includes(name)) {
-    const list = offered.length > 0 ? offered.join(", ") : "none";
-    return {
-      error: fail(
-        "invalid_argument",
-        `Action ${JSON.stringify(requested)} is not offered by this element (mapped actions: ${list}).`,
-      ),
-    };
+  const name = typeof requested === "string" ? requested : "";
+  const offered = row?.rawActions ?? row?.actions ?? [];
+  const alias = Object.entries(ACTION_TO_AX).find(
+    ([key]) => actionKey(key) === actionKey(name),
+  )?.[1];
+  const levels = [
+    offered.filter((raw) => raw === name),
+    alias === undefined ? [] : offered.filter((raw) => raw.toLowerCase() === alias.toLowerCase()),
+    offered.filter((raw) => displayedAction(raw) === name.toLowerCase()),
+    offered.filter((raw) => actionKey(actionName(raw)) === actionKey(name)),
+  ];
+  const matches = levels.find((level) => level.length > 0) ?? [];
+  const match = matches[0];
+  if (matches.length === 1 && match !== undefined) {
+    const builtin = Object.entries(ACTION_TO_AX).find(
+      ([, ax]) => ax.toLowerCase() === match.toLowerCase(),
+    );
+    return { action: builtin?.[0] ?? match };
   }
-  return { action: name };
+  const candidates = matches.length > 1 ? matches : offered;
+  const list = candidates.map((action) => JSON.stringify(action)).join(", ") || "none";
+  return {
+    error: fail(
+      "invalid_argument",
+      `Action ${JSON.stringify(requested)} ${matches.length > 1 ? "is ambiguous" : "is not offered"} (available actions: ${list}).`,
+    ),
+  };
 };
 
 export const INPUT_METHODS: ReadonlySet<string> = new Set([
@@ -155,6 +170,22 @@ const buildForwardedInput = (
   delete forwarded.element_token;
   delete forwarded.pid;
   delete forwarded.window_id;
+  if ((method === "click" || method === "right_click") && Array.isArray(args.modifiers)) {
+    const names: Readonly<Record<string, string>> = {
+      cmd: "command",
+      shift: "shift",
+      alt: "option",
+      ctrl: "control",
+    };
+    forwarded.modifier = args.modifiers.map((modifier: unknown) =>
+      typeof modifier === "string" ? names[modifier] : undefined,
+    );
+    delete forwarded.modifiers;
+  }
+  if (method === "press_key" && args.holdMs !== undefined) {
+    forwarded.duration_ms = args.holdMs;
+    delete forwarded.holdMs;
+  }
   if (action !== undefined) forwarded.action = action;
   if (elementToken) forwarded.element_token = elementToken;
   if (method === "bring_to_front") {
@@ -250,6 +281,10 @@ export const prepareDesktopInput = (
   bound: BoundWindow,
   resolveToken: (el: Record<string, unknown>, bound: BoundWindow) => string | undefined,
   tracker?: CellWindowTracker,
+  driver: { readonly version: string; readonly minimumVersion: string | undefined } = {
+    version: CUA_DRIVER_VERSION,
+    minimumVersion: KEY_HOLD_DRIVER_VERSION,
+  },
 ): {
   readonly forwarded?: Record<string, unknown>;
   readonly elementToken?: string | undefined;
@@ -258,6 +293,36 @@ export const prepareDesktopInput = (
   readonly error?: ScreenRunError;
 } => {
   if (!INPUT_METHODS.has(method)) return { error: fail("unsupported") };
+  if (
+    (method === "click" || method === "right_click") &&
+    args.modifiers !== undefined &&
+    (!Array.isArray(args.modifiers) ||
+      !args.modifiers.every((m) => ["cmd", "shift", "alt", "ctrl"].includes(m)))
+  )
+    return {
+      error: fail("invalid_argument", "modifiers must contain only cmd, shift, alt or ctrl."),
+    };
+  if (method === "press_key" && args.holdMs !== undefined) {
+    if (
+      typeof args.holdMs !== "number" ||
+      !Number.isInteger(args.holdMs) ||
+      args.holdMs < 0 ||
+      args.holdMs > 30000
+    )
+      return { error: fail("invalid_argument", "holdMs must be an integer from 0 to 30000.") };
+    if (
+      driver.minimumVersion === undefined ||
+      parseSemver(driver.version) === null ||
+      parseSemver(driver.minimumVersion) === null ||
+      compareSemverVersions(driver.version, driver.minimumVersion) < 0
+    )
+      return {
+        error: fail(
+          "unsupported",
+          `Held keys require a driver with duration_ms support; the pinned driver is ${driver.version}.`,
+        ),
+      };
+  }
   const element =
     typeof args.elementRef === "object" &&
     args.elementRef !== null &&
@@ -318,6 +383,16 @@ export const inspectBatchMember = (
   resolveToken: (el: Record<string, unknown>, b: BoundWindow) => string | undefined,
 ) => {
   if (!bound) return { ok: false as const, error: fail("stale_reference") };
+  if (method === "invoke_menu") {
+    const checked = validateMenuInput(args, bound);
+    if (checked.error) return { ok: false as const, error: checked.error };
+  } else if (method === "select_text") {
+    const checked = selectTextArgs(args, bound, resolveToken);
+    if ("error" in checked) return { ok: false as const, error: checked.error };
+  } else if (INPUT_METHODS.has(method)) {
+    const checked = prepareDesktopInput(method, args, bound, resolveToken);
+    if (checked.error) return { ok: false as const, error: checked.error };
+  }
   const element =
     typeof args.elementRef === "object" &&
     args.elementRef !== null &&
@@ -476,7 +551,10 @@ type WindowRead = Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
 const listedWindows = (list: WindowRead, pid: number) =>
   list.pipe(
     Effect.map((reply) => parseWindowList(driverValue(reply), pid)),
-    Effect.orElseSucceed(() => undefined),
+    Effect.catchIf(
+      (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+      () => Effect.void,
+    ),
   );
 
 /**
@@ -627,7 +705,7 @@ export const resolveObservedSheet = Effect.fn("DesktopInputPlan.resolveObservedS
     retire();
     const probe = (windowId: number) =>
       read(windowId).pipe(
-        Effect.map((reply) => {
+        Effect.flatMap((reply) => {
           const checked = checkWindowReplyState(
             object(driverValue(reply)),
             bound.pid,
@@ -635,9 +713,14 @@ export const resolveObservedSheet = Effect.fn("DesktopInputPlan.resolveObservedS
             false,
             false,
           );
-          return checked.ok ? { reply, state: checked.state, windowId } : undefined;
+          if (!checked.ok && checked.error.code === "screen_locked")
+            return Effect.fail(checked.error);
+          return Effect.succeed(checked.ok ? { reply, state: checked.state, windowId } : undefined);
         }),
-        Effect.orElseSucceed(() => undefined),
+        Effect.catchIf(
+          (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+          () => Effect.void,
+        ),
       );
     let found = yield* probe(pick.window_id);
     const named = found && sheetParentId(found.state);

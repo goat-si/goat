@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -430,6 +431,7 @@ export const make = Effect.gen(function* () {
     policyCwds: ReadonlyArray<string>,
   ) {
     if ((yield* automationHold.current) !== null) return null;
+    if ((yield* sshHostsRefusal) !== undefined) return null;
     let pullAttempted = false;
     return yield* Effect.gen(function* () {
       const autoPullEnabled = (yield* Effect.forEach(policyCwds, autoPullPolicy.isEnabled, {

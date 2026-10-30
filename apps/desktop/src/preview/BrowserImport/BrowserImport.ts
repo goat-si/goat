@@ -5,6 +5,7 @@ import type {
   BrowserImportUnavailableReason,
 } from "@goat/contracts";
 import { BrowserImportFailureReason } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import type { Session } from "electron";
 import * as Effect from "effect/Effect";
@@ -147,6 +148,144 @@ export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
   return { imported, skipped, skippedDomains: [...skippedDomains].slice(0, 20) };
 });
 
+type RefreshCookie = {
+  readonly domain?: string;
+  readonly hostOnly?: boolean;
+  readonly name: string;
+  readonly path?: string;
+  readonly secure?: boolean;
+  readonly httpOnly?: boolean;
+  readonly sameSite: "unspecified" | "no_restriction" | "lax" | "strict";
+};
+
+type RefreshSession = {
+  readonly cookies: {
+    readonly get: (filter: Electron.CookiesGetFilter) => Promise<ReadonlyArray<RefreshCookie>>;
+    readonly set: Session["cookies"]["set"];
+    readonly flushStore: Session["cookies"]["flushStore"];
+  };
+};
+
+const matchesOrigin = (host: string, hostOnly: boolean, secure: boolean, origin: URL) => {
+  const domain = host.replace(/^\./, "").toLowerCase();
+  return (
+    (!secure || origin.protocol === "https:") &&
+    (origin.hostname === domain || (!hostOnly && origin.hostname.endsWith(`.${domain}`)))
+  );
+};
+
+/** Unreadable hosts are bare names, so a parent domain counts as a chosen site's cookie. */
+export const refreshHasUnreadableCookies = (
+  read: CookieReadResult,
+  origins: ReadonlyArray<string>,
+): boolean =>
+  read.undecryptableHosts.some((host) =>
+    origins.some((origin) => matchesOrigin(host, false, false, new URL(origin))),
+  );
+
+export const refreshCookies = Effect.fn("BrowserImport.refreshCookies")(function* (
+  session: RefreshSession,
+  read: CookieReadResult,
+  originStrings: ReadonlyArray<string>,
+) {
+  const origins = [...new Set(originStrings)].map((origin) => new URL(origin));
+  const nowSeconds = (yield* Clock.currentTimeMillis) / 1000;
+  const chosen = read.cookies.filter(
+    (cookie) =>
+      (cookie.expirationDate === undefined || cookie.expirationDate > nowSeconds) &&
+      origins.some((origin) =>
+        matchesOrigin(
+          cookie.domain ?? new URL(cookie.url).hostname,
+          cookie.domain === undefined,
+          cookie.secure,
+          origin,
+        ),
+      ),
+  );
+  const sharedDomains = new Set<string>();
+  const existing = yield* Effect.tryPromise(() => session.cookies.get({}));
+  for (const cookie of existing) {
+    const domain = cookie.domain;
+    if (!domain) continue;
+    if (
+      !origins.some((origin) =>
+        matchesOrigin(domain, cookie.hostOnly === true, cookie.secure === true, origin),
+      )
+    )
+      continue;
+    const host = domain.replace(/^\./, "");
+    const url = `${cookie.secure ? "https" : "http"}://${host}${cookie.path ?? "/"}`;
+    yield* Effect.tryPromise(() =>
+      session.cookies.set({
+        url,
+        name: cookie.name,
+        value: "",
+        path: cookie.path ?? "/",
+        expirationDate: 1,
+        ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
+        secure: cookie.secure === true,
+        httpOnly: cookie.httpOnly === true,
+        sameSite: cookie.sameSite,
+      }),
+    );
+    if (!cookie.hostOnly) sharedDomains.add(host);
+  }
+  const counts = origins.map((origin) => ({ origin: origin.origin, imported: 0, skipped: 0 }));
+  let imported = 0;
+  let skipped = 0;
+  const skippedDomains = new Set<string>();
+  for (const cookie of chosen) {
+    const matching = origins
+      .map((origin, index) => ({ origin, index }))
+      .filter(({ origin }) =>
+        matchesOrigin(
+          cookie.domain ?? new URL(cookie.url).hostname,
+          cookie.domain === undefined,
+          cookie.secure,
+          origin,
+        ),
+      );
+    const success = yield* Effect.tryPromise(() =>
+      session.cookies.set({
+        url: cookie.url,
+        name: cookie.name,
+        value: cookie.value,
+        path: cookie.path,
+        ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
+        secure: cookie.secure,
+        httpOnly: cookie.httpOnly,
+        sameSite: cookie.sameSite,
+        ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+      }),
+    ).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    if (success) imported++;
+    else {
+      skipped++;
+      skippedDomains.add(cookieHost(cookie.url));
+    }
+    for (const { index } of matching) {
+      const count = counts[index];
+      if (count) {
+        if (success) count.imported++;
+        else count.skipped++;
+      }
+    }
+    const domain = cookie.domain?.replace(/^\./, "");
+    if (success && domain) sharedDomains.add(domain);
+  }
+  yield* Effect.tryPromise(() => session.cookies.flushStore());
+  return {
+    imported,
+    skipped,
+    skippedDomains: [...skippedDomains],
+    origins: counts,
+    sharedDomains: [...sharedDomains],
+  };
+});
+
 /** @public */
 export const make = Effect.gen(function* BrowserImportMake() {
   const browserSession = yield* BrowserSession.BrowserSession;
@@ -164,6 +303,9 @@ export const make = Effect.gen(function* BrowserImportMake() {
       return {
         id: definition.id,
         name: definition.name,
+        ...(platform === "win32" && definition.engine === "chromium"
+          ? { refreshUnavailable: "appBoundEncryption" as const }
+          : {}),
         profiles:
           unavailable === undefined ? yield* listSourceProfiles(definition, pathContext) : [],
         ...(unavailable === undefined ? {} : { unavailable }),
@@ -187,6 +329,16 @@ export const make = Effect.gen(function* BrowserImportMake() {
       });
     }
 
+    if (
+      input.input.origins !== undefined &&
+      platform === "win32" &&
+      definition.engine === "chromium"
+    ) {
+      return yield* new BrowserImportFailedError({
+        sourceId: definition.id,
+        reason: "appBoundEncryption",
+      });
+    }
     const blocked = yield* unavailableReason(definition, pathContext).pipe(
       Effect.provide(platformServices),
     );
@@ -285,7 +437,19 @@ export const make = Effect.gen(function* BrowserImportMake() {
         ),
       );
 
-    // Chromium serializes writes; a rejected cookie should not prevent the others.
+    if (input.input.origins !== undefined) {
+      if (refreshHasUnreadableCookies(result, input.input.origins))
+        return yield* new BrowserImportFailedError({
+          sourceId: definition.id,
+          reason: "readFailed",
+        });
+      return yield* refreshCookies(session, result, input.input.origins).pipe(
+        Effect.mapError(
+          (cause) =>
+            new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed", cause }),
+        ),
+      );
+    }
     return yield* writeCookies(session, result);
   });
 

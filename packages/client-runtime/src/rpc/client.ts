@@ -244,7 +244,7 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
   const session = yield* currentSession();
   yield* authorizeRequest(tag, input);
   let dispatchInput = input;
-  if (tag.startsWith("memory.")) {
+  if (tag.startsWith("memory.") || tag.startsWith("siteNotes.")) {
     const config = yield* session.initialConfig.pipe(
       Effect.mapError(
         () =>
@@ -302,6 +302,11 @@ export const requestGuarded = Effect.fn("EnvironmentRpc.request")(function* <
         config.environment.capabilities.memory?.hubDiagnostics !== true) ||
       (tag === WS_METHODS.memoryImportProvider &&
         config.environment.capabilities.memory?.importProvider !== true) ||
+      ((tag === WS_METHODS.siteNotesList ||
+        tag === WS_METHODS.siteNotesWrite ||
+        tag === WS_METHODS.siteNotesDelete ||
+        tag === WS_METHODS.siteNotesRestoreSeed) &&
+        config.environment.capabilities.memory?.siteNotes !== true) ||
       typeof (session.client as Partial<EnvironmentProtocolClient>)[tag] !== "function"
     ) {
       return yield* new EnvironmentRpcUnavailableError({

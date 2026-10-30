@@ -120,7 +120,7 @@ it.live(
         source: `const app = await screen.app({bundle_id: 'com.kakao.KakaoTalkMac', window_id: 81407});
           await app.observe();
           const calls = [
-            app.click(2),
+            app.click(2, { modifiers: ['cmd'] }),
             app.press('Enter', 1),
             app.type('hi\\n', 1),
             app.menu(['Chat', 'Send']),
@@ -130,7 +130,7 @@ it.live(
             try { await p; results.push('ok'); }
             catch (e) { results.push(e.nothingSent); }
           }
-          const batch = await Promise.allSettled([app.type('draft', 1), app.click(2)]);
+          const batch = await Promise.allSettled([app.type('draft', 1), app.click(2, { modifiers: ['shift'] })]);
           return { results, batch: batch.map((b) => b.status === 'fulfilled' ? b.value.verdict : b.reason.code + ':' + b.reason.nothingSent) };`,
       });
       expect(refused.value).toEqual({

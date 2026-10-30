@@ -7,7 +7,7 @@ import { runMigrations } from "../Migrations.ts";
 it.effect("session approvals retain their event cutoff and legacy inserts fail closed", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 119 });
+    yield* runMigrations({ toMigrationInclusive: 120 });
     yield* sql`INSERT INTO computer_use_session_approvals (thread_id, app_key) VALUES ('t', 'legacy')`;
     yield* sql`INSERT INTO computer_use_session_approvals (thread_id, app_key, created_sequence, consent_sequence) VALUES ('t', 'new', 42, 17)`;
     const rows = yield* sql<{

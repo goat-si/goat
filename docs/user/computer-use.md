@@ -74,6 +74,15 @@ The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.
 
+## Site notes
+
+GOAT can remember short notes about a site's procedures and quirks for future browser work.
+Open **Settings → Memory → Sites** on the environment to view, edit, delete, or restore its
+default notes. Notes belong to an HTTP or HTTPS origin and are limited to 1024 UTF-8 bytes.
+Agents can save notes for sites they have visited; GOAT presents a site's note once per thread.
+Do not put passwords or other secrets in notes. GOAT rejects some recognizable credentials and
+password or token assignments, but that check cannot identify every secret.
+
 ## Sites you are signed in to
 
 A tab an agent opens starts with no saved sign-ins, so it cannot reach your accounts unless
