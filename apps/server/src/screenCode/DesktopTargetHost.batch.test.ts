@@ -15,9 +15,20 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 
-const cellService = (host: ReturnType<typeof fixture>["host"]) =>
+const cellService = (host: ReturnType<typeof fixture>["host"], groups?: string[][]) =>
   ScreenRunService.layerWithRuntime({
-    dispatcher: createScreenDispatchRouter({ app: host }),
+    dispatcher: createScreenDispatchRouter({
+      app:
+        groups === undefined
+          ? host
+          : {
+              ...host,
+              dispatchBatch: (calls, context, mark) => {
+                groups.push(calls.map((call) => call.method));
+                return host.dispatchBatch(calls, context, mark);
+              },
+            },
+    }),
     invocation: {
       command: process.execPath,
       entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
@@ -305,6 +316,7 @@ it.live(
 );
 
 it.live("concurrent app press, scroll and click are admitted as one ordered group", () => {
+  const groups: string[][] = [];
   const { host, sent } = fixture({
     list_windows: {
       windows: [
@@ -322,13 +334,14 @@ it.live("concurrent app press, scroll and click are admitted as one ordered grou
       `${BIND} const clicks = [app.press('a'), app.scroll(null, 'down'), app.click('Apply')]; ${SETTLED}`,
     );
     expect(result.value).toEqual(["confirmed", "confirmed", "confirmed"]);
+    expect(groups).toEqual([["press_key", "scroll", "click"]]);
     expect(
       sent
         .filter((entry) => ["press_key", "scroll", "click"].includes(entry.tool))
         .map((entry) => entry.tool),
     ).toEqual(["press_key", "scroll", "click"]);
     yield* finish;
-  }).pipe(Effect.provide(cellService(host)));
+  }).pipe(Effect.provide(cellService(host, groups)));
 });
 
 it.live(
@@ -392,6 +405,7 @@ it.live("a failed middle input leaves later group members not run", () => {
 });
 
 it.live("adjacent groups for separate windows keep each window's inputs together", () => {
+  const groups: string[][] = [];
   const { host, sent } = fixture({
     list_windows: {
       windows: [
@@ -406,6 +420,10 @@ it.live("adjacent groups for separate windows keep each window's inputs together
       const b = await screen.app({bundle_id: 'org.example.Editor', window_id: 8});
       const clicks = [a.press('a'), a.press('b'), b.press('c'), b.press('d')]; ${SETTLED}`);
     expect(result.value).toEqual(["confirmed", "confirmed", "confirmed", "confirmed"]);
+    expect(groups).toEqual([
+      ["press_key", "press_key"],
+      ["press_key", "press_key"],
+    ]);
     expect(
       sent
         .filter((entry) => entry.tool === "press_key")
@@ -415,7 +433,7 @@ it.live("adjacent groups for separate windows keep each window's inputs together
         ),
     ).toEqual(["a", "b", "c", "d"]);
     yield* finish;
-  }).pipe(Effect.provide(cellService(host)));
+  }).pipe(Effect.provide(cellService(host, groups)));
 });
 
 it.live("an invalid selection and a guarded menu refuse their whole groups", () => {
@@ -536,6 +554,9 @@ it.live("app group inputs use the pinned driver schemas", () => {
       return new DriverError({ effect: "refused", code: "invalid_arguments" }, result.errorMessage);
     };
   };
+  expect(checked("press_key")({ key: "a", duration_ms: 10 })).toBeInstanceOf(DriverError);
+  expect(checked("scroll")({ direction: "sideways" })).toBeInstanceOf(DriverError);
+  expect(checked("click")({ element_token: "stale" })).toBeInstanceOf(DriverError);
   const { host } = fixture({
     list_windows: {
       windows: [
