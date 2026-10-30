@@ -117,6 +117,41 @@ const PINNED_DRIVER_TOOLS = {
 } as const;
 
 describe("cuaDriverManifest", () => {
+  it("admits exact browser windows and claim tools only with capability and live claims", () => {
+    const browser = {
+      existingProfiles: [
+        { pid: 42, windowId: 7 },
+        { pid: 42, windowId: 8 },
+      ],
+      origins: ["https://example.test"],
+    };
+    const unavailable = cuaDriverCapabilityManifest({
+      applications: [],
+      browser,
+      browserClaimsSupported: false,
+    });
+    expect(unavailable).not.toContain("  browser:");
+    expect(unavailable).not.toContain('"browser_click"');
+    const empty = cuaDriverCapabilityManifest({
+      applications: [],
+      browser: { existingProfiles: [], origins: [] },
+      browserClaimsSupported: true,
+    });
+    expect(empty).not.toContain("  browser:");
+    const available = cuaDriverCapabilityManifest({
+      applications: [],
+      browser,
+      browserClaimsSupported: true,
+    });
+    expect(available).toContain(
+      "    existing_profiles:\n      - pid: 42\n        window_id: 7\n      - pid: 42\n        window_id: 8",
+    );
+    expect(available).toContain('    origins:\n      - "https://example.test"');
+    expect(available).toContain('    - "browser_click"');
+    expect(available).not.toContain("kind: existing_profile");
+    expect(available).not.toContain('"browser_download"');
+    expect(available).not.toContain('"browser_set_input_files"');
+  });
   it("records the tool set of the pinned driver version", () => {
     expect(PINNED_DRIVER_TOOLS.verified).toContain(CUA_DRIVER_VERSION);
   });

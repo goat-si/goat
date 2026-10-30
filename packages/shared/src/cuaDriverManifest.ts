@@ -59,6 +59,17 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "set_agent_cursor_theme",
 ] as const;
 
+export const CUA_DRIVER_CLAIM_TOOLS = [
+  "get_browser_state",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_pointer",
+  "browser_select",
+  "browser_dialog",
+  "browser_prepare",
+] as const;
+
 /**
  * Every other tool the pinned driver offers, with why agents never get it. Undeclared tools are
  * refused by the driver too; this list is the reviewed record, and a test keeps it disjoint
@@ -357,9 +368,24 @@ export function missingCuaDriverApplications(
 export function cuaDriverCapabilityManifest(input: {
   readonly applications: ReadonlyArray<CuaDriverAdmittedApp>;
   readonly tools?: ReadonlyArray<string>;
+  readonly browserClaimsSupported?: boolean;
+  readonly browser?: {
+    readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+    readonly origins: ReadonlyArray<string>;
+  };
 }): string {
   const q = (value: string) => JSON.stringify(value);
-  const tools: ReadonlyArray<string> = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
+  const browser =
+    input.browserClaimsSupported === true &&
+    input.browser !== undefined &&
+    input.browser.existingProfiles.length > 0 &&
+    input.browser.origins.length > 0
+      ? input.browser
+      : undefined;
+  const tools: ReadonlyArray<string> = [
+    ...(input.tools ?? CUA_DRIVER_ALLOWED_TOOLS),
+    ...(browser === undefined ? [] : CUA_DRIVER_CLAIM_TOOLS),
+  ];
   const terminate = tools.includes("kill_app") ? ['      terminate: "driver_launched"'] : [];
   const app = (entry: CuaDriverAdmittedApp) => [
     typeof entry === "string"
@@ -373,6 +399,18 @@ export function cuaDriverCapabilityManifest(input: {
     "resources:",
     "  desktop:",
     "    display: true",
+    ...(browser === undefined
+      ? []
+      : [
+          "  browser:",
+          "    existing_profiles:",
+          ...browser.existingProfiles.flatMap(({ pid, windowId }) => [
+            "      - pid: " + pid,
+            "        window_id: " + windowId,
+          ]),
+          "    origins:",
+          ...browser.origins.map((origin) => "      - " + q(origin)),
+        ]),
     ...(input.applications.length === 0
       ? ["  apps: []"]
       : ["  apps:", ...input.applications.flatMap(app)]),
