@@ -180,6 +180,23 @@ describe("tab observation elements", () => {
     );
   });
 
+  it("resets when the surface generation changes even if refs are reused", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- button "Save" [ref=e1]', {
+      documentGeneration: 1,
+    });
+    const second = observe(observations, '- button "Save" [ref=e1]', {
+      base: first,
+      documentGeneration: 1,
+      overrides: { refGeneration: "2" },
+    });
+    expect(second.surfaceGeneration).not.toBe(first.surfaceGeneration);
+    expect(second).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
+    expect(second.indexedText).toBe('- button "Save" [0]');
+    expect(observations.index.resolveElement(first.elements[0]!.ref)).toBeUndefined();
+    expect(observations.index.resolveElement(second.elements[0]!.ref)).toBe("aria-ref=e1");
+  });
+
   it("resets the diff after a document or completeness change", () => {
     const observations = new ScreenObservations();
     const first = observe(observations, calculator, { documentGeneration: 1 });
