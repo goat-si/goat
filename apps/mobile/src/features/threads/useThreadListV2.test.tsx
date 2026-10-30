@@ -18,11 +18,15 @@ vi.mock("../../state/threads", async () => {
         Atom.keepAlive,
       ),
     },
+    launchSubagentRowsAtom: Atom.make([]).pipe(Atom.keepAlive),
   };
 });
 vi.mock("../../state/preferences", async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
-  return { mobilePreferencesAtom: Atom.make(AsyncResult.success({})).pipe(Atom.keepAlive) };
+  return {
+    mobilePreferencesAtom: Atom.make(AsyncResult.success({})).pipe(Atom.keepAlive),
+    updateMobilePreferencesAtom: Atom.make(null).pipe(Atom.keepAlive),
+  };
 });
 // Older settled pages are network-backed; every loaded settled row is listed here.
 vi.mock("../../state/olderSettledShelf", () => ({
@@ -130,6 +134,7 @@ async function renderList(searchQuery = "") {
     if (result === undefined) throw new Error("the list did not render");
     return {
       ids: result.layout.items.map((item) => String(item.thread.id)).toSorted(),
+      launchGroups: (result.layout.launchMarkers ?? []).map((marker) => marker.entry.parentKey),
       snoozedCount: result.layout.snoozedCount,
       settledCount: result.layout.settledCount,
     };
@@ -148,6 +153,7 @@ describe("mobile thread list with GOAT Bot threads", () => {
     await using list = await renderList();
     expect(list.read()).toEqual({
       ids: ["coding", "mine", "settled-mine"],
+      launchGroups: [],
       snoozedCount: 0,
       settledCount: 1,
     });
@@ -158,12 +164,11 @@ describe("mobile thread list with GOAT Bot threads", () => {
     expect(list.read().ids).toEqual(["observer", "settled-observer"]);
   });
 
-  it("lists them again while this device shows GOAT Bot threads, and hides them when turned off", async () => {
+  it("lists them again while this device shows GOAT Bot threads, with the bot's work folded under its session", async () => {
     await using list = await renderList();
     await list.showBotThreads(true);
     expect(list.read()).toEqual({
       ids: [
-        "coding",
         "goat-bot-session:conversation",
         "goat-bot-session:snoozed",
         "mine",
@@ -171,6 +176,7 @@ describe("mobile thread list with GOAT Bot threads", () => {
         "settled-mine",
         "settled-observer",
       ],
+      launchGroups: [`${environmentId}:${SESSION}`],
       snoozedCount: 1,
       settledCount: 2,
     });

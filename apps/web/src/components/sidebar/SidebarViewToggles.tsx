@@ -22,7 +22,7 @@ import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { withoutBotThreads } from "./botVisibility";
 import { foldedPriorityMember } from "./foldedPriority";
-import { foldLaunchedThreads } from "./launchFold";
+import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
 import { useBotThreadKeys } from "./useBotThreadKeys";
 
 export function useSidebarActivityToggle() {

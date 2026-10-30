@@ -5,6 +5,7 @@ import { useMemo, useSyncExternalStore } from "react";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
+import { launchSubagentRowsAtom } from "../../state/threads";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { hiddenGoatBotThreadKeysAtom } from "./goatBotThreadVisibility";
 import {
@@ -13,7 +14,12 @@ import {
   getThreadListV2OrderedSection,
   threadListInboxReturns,
 } from "./threadListV2";
+import { threadListV2ReorderExcludedKeys } from "./threadListV2LaunchFold";
 import { computeThreadMoveAvailability } from "./threadOrder";
+import {
+  useRevealLaunchGroups,
+  useThreadListV2LaunchGroups,
+} from "./use-thread-list-v2-launch-groups";
 
 /**
  * Screens' select handlers read the content-only key set; a fresh one per list rebuild gave
@@ -59,6 +65,18 @@ export function useThreadListV2(input: {
 }) {
   const { threads, workingShelfEnabled } = input;
   const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
+  const launchOwners = useAtomValue(launchSubagentRowsAtom);
+  const launchGroups = useThreadListV2LaunchGroups(input.selectedThreadKey);
+  // Folded and lifted rows sit outside the ordered sections on every reorder path.
+  const reorderExcludedKeys = threadListV2ReorderExcludedKeys({
+    threads,
+    owners: launchOwners,
+    hiddenBotThreadKeys,
+    now: input.now,
+    settlementEnvironmentIds: input.settlementEnvironmentIds,
+    snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+    queuedThreadKeys: input.queuedThreadKeys,
+  });
   // A thread can stop working when the threads change, or when its exit grace expires.
   const inboxVersion = useSyncExternalStore(
     threadListInboxReturns.subscribe,
@@ -88,6 +106,7 @@ export function useThreadListV2(input: {
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
         hiddenBotThreadKeys,
+        excludedThreadKeys: reorderExcludedKeys,
       }),
     });
   const moveAvailability = new Map([
@@ -122,6 +141,9 @@ export function useThreadListV2(input: {
     settledShelfExpanded: input.settledShelfExpanded,
     selectedThreadKey: input.selectedThreadKey,
     hiddenBotThreadKeys,
+    launchOwners,
+    launchGroups: launchGroups.state,
+    reorderExcludedKeys,
     isListedSettled: olderSettledShelf.isListed,
     unloadedSettledCount: olderSettledShelf.unloadedCount(
       threads.filter(
@@ -136,6 +158,7 @@ export function useThreadListV2(input: {
     ),
   });
   useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);
+  useRevealLaunchGroups(launchGroups, layout.launchRevealKeys);
   const contentOnlyThreadKeys = useKeySet([...layout.contentOnlyThreadKeys].sort().join("\n"));
   const scopedProjectKeys =
     input.projectRefs == null
@@ -153,6 +176,7 @@ export function useThreadListV2(input: {
   );
   const items = buildThreadListV2ListItems({
     items: layout.items,
+    launchMarkers: layout.launchMarkers,
     pendingTasks,
     workingCount: layout.workingCount,
     workingShelfExpanded: input.workingShelfExpanded,
@@ -168,8 +192,20 @@ export function useThreadListV2(input: {
     queuedThreadKeys: input.queuedThreadKeys,
     moveAvailability,
     shelfPreferencesLoading: !input.shelfPreferencesLoaded,
+    launchGroupsLoading: !launchGroups.loaded,
   });
-  return { layout, items, contentOnlyThreadKeys, olderSettledShelf };
+  const routeAncestorKeys = layout.launchRouteAncestorKeys;
+  return {
+    layout,
+    items,
+    contentOnlyThreadKeys,
+    olderSettledShelf,
+    launchGroups: {
+      toggle: (parentKey: string, expanded: boolean) =>
+        launchGroups.toggle(parentKey, expanded, routeAncestorKeys.includes(parentKey)),
+      showAll: launchGroups.showAll,
+    },
+  };
 }
 
 /** The list's scope per environment: its projects there, or every project. */

@@ -60,10 +60,15 @@ import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
-  ThreadListV2ShowMoreRow,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
 } from "./thread-list-v2-items";
+import {
+  ThreadListV2LaunchGroupRow,
+  ThreadListV2LaunchMoreRow,
+  ThreadListV2Nested,
+  ThreadListV2ShowMoreRow,
+} from "./thread-list-v2-group-rows";
 import { useThreadRowProviderInstanceResolver } from "./thread-provider-instance";
 import type { ThreadPrPresentation } from "../../state/thread-pr-presentation";
 import {
@@ -298,6 +303,7 @@ function ThreadNavigationSidebarPane(
     items: threadListV2Items,
     contentOnlyThreadKeys,
     olderSettledShelf,
+    launchGroups,
   } = useThreadListV2({
     threads,
     pendingTasks,
@@ -555,80 +561,109 @@ function ThreadNavigationSidebarPane(
         const thread = item.item.thread;
         const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
         return (
-          <ThreadListV2Row
-            onNewThreadOnBranch={props.onNewThreadOnBranch}
-            thread={thread}
-            variant={item.item.variant}
-            hasQueuedMessages={item.hasQueuedMessages}
-            snoozed={item.item.snoozed}
-            pinned={item.item.pinned}
-            wokeAt={item.item.wokeAt}
-            snoozePresetMinute={item.snoozePresetMinute ?? ""}
-            snoozeWakeLabelText={item.snoozeWakeLabelText}
-            timeLabel={item.timeLabel}
-            project={projectByKey.get(scopeKey) ?? null}
-            providerInstance={resolveProviderInstance(thread)}
-            providers={providersByEnvironmentId.get(thread.environmentId)}
-            environmentLabel={
-              Object.keys(savedConnectionsById).length > 1
-                ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
-                : null
-            }
-            environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
-            searchMatch={
-              // Only rows listed for their messages show one and open at it.
-              contentOnlyThreadKeys.has(
-                threadSearchMatchKey({ environmentId: thread.environmentId, threadId: thread.id }),
-              )
-                ? threadSearchMatchByKey.get(
-                    threadSearchMatchKey({
-                      environmentId: thread.environmentId,
-                      threadId: thread.id,
-                    }),
-                  )
-                : undefined
-            }
-            searchQuery={threadSearch.query}
-            pane="sidebar"
-            selected={
-              !activeNewTask &&
-              scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
-            }
-            fullSwipeWidth={props.width - 20}
-            onSelectThread={handleSelectThread}
-            onOpenThreadPullRequests={handleOpenThreadPullRequests}
-            onDeleteThread={confirmDeleteThread}
-            onArchiveThread={archiveThread}
-            onRenameThread={renameThread}
-            onRegenerateThreadTitle={regenerateThreadTitle}
-            onMarkThreadUnread={markThreadUnread}
-            titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
-            settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
-            onSettleThread={settleThread}
-            snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
-            snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
-            pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
-            autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
-            reorderSupported={
-              item.item.pinned
-                ? pinReorderEnvironmentIds.has(thread.environmentId)
-                : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
-            }
-            canMoveUp={item.canMoveUp}
-            canMoveDown={item.canMoveDown}
-            onSnoozeThread={snoozeThread}
-            onUnsnoozeThread={unsnoozeThread}
-            onUnsettleThread={unsettleThread}
-            onPinThread={pinThread}
-            onUnpinThread={unpinThread}
-            onSetThreadAutoSettle={setThreadAutoSettle}
-            onMoveThread={moveThread}
-            onSwipeableClose={handleSwipeableClose}
-            onSwipeableWillOpen={handleSwipeableWillOpen}
-            simultaneousSwipeGesture={sidebarScrollGesture}
-          />
+          <ThreadListV2Nested depth={item.item.depth ?? 0}>
+            <ThreadListV2Row
+              onNewThreadOnBranch={props.onNewThreadOnBranch}
+              thread={thread}
+              variant={item.item.variant}
+              hasQueuedMessages={item.hasQueuedMessages}
+              snoozed={item.item.snoozed}
+              pinned={item.item.pinned}
+              wokeAt={item.item.wokeAt}
+              lift={item.item.lift}
+              snoozePresetMinute={item.snoozePresetMinute ?? ""}
+              snoozeWakeLabelText={item.snoozeWakeLabelText}
+              timeLabel={item.timeLabel}
+              project={projectByKey.get(scopeKey) ?? null}
+              providerInstance={resolveProviderInstance(thread)}
+              providers={providersByEnvironmentId.get(thread.environmentId)}
+              environmentLabel={
+                Object.keys(savedConnectionsById).length > 1
+                  ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
+                  : null
+              }
+              environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
+              searchMatch={
+                // Only rows listed for their messages show one and open at it.
+                contentOnlyThreadKeys.has(
+                  threadSearchMatchKey({
+                    environmentId: thread.environmentId,
+                    threadId: thread.id,
+                  }),
+                )
+                  ? threadSearchMatchByKey.get(
+                      threadSearchMatchKey({
+                        environmentId: thread.environmentId,
+                        threadId: thread.id,
+                      }),
+                    )
+                  : undefined
+              }
+              searchQuery={threadSearch.query}
+              pane="sidebar"
+              selected={
+                !activeNewTask &&
+                scopedThreadKey(thread.environmentId, thread.id) === props.selectedThreadKey
+              }
+              fullSwipeWidth={props.width - 20}
+              onSelectThread={handleSelectThread}
+              onOpenThreadPullRequests={handleOpenThreadPullRequests}
+              onDeleteThread={confirmDeleteThread}
+              onArchiveThread={archiveThread}
+              onRenameThread={renameThread}
+              onRegenerateThreadTitle={regenerateThreadTitle}
+              onMarkThreadUnread={markThreadUnread}
+              titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+              settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+              onSettleThread={settleThread}
+              snoozeSupported={snoozeEnvironmentIds.has(thread.environmentId)}
+              snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
+              pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
+              autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+              reorderSupported={
+                item.item.pinned
+                  ? pinReorderEnvironmentIds.has(thread.environmentId)
+                  : !workingShelfEnabled && activeReorderEnvironmentIds.has(thread.environmentId)
+              }
+              canMoveUp={item.canMoveUp}
+              canMoveDown={item.canMoveDown}
+              onSnoozeThread={snoozeThread}
+              onUnsnoozeThread={unsnoozeThread}
+              onUnsettleThread={unsettleThread}
+              onPinThread={pinThread}
+              onUnpinThread={unpinThread}
+              onSetThreadAutoSettle={setThreadAutoSettle}
+              onMoveThread={moveThread}
+              onSwipeableClose={handleSwipeableClose}
+              onSwipeableWillOpen={handleSwipeableWillOpen}
+              simultaneousSwipeGesture={sidebarScrollGesture}
+            />
+          </ThreadListV2Nested>
         );
       }
+      case "v2-launch-group":
+        return (
+          <ThreadListV2LaunchGroupRow
+            pane="sidebar"
+            parentKey={item.parentKey}
+            depth={item.depth}
+            label={item.label}
+            states={item.states}
+            expanded={item.expanded}
+            disabled={item.disabled}
+            onToggle={launchGroups.toggle}
+          />
+        );
+      case "v2-launch-more":
+        return (
+          <ThreadListV2LaunchMoreRow
+            pane="sidebar"
+            parentKey={item.parentKey}
+            depth={item.depth}
+            hidden={item.hidden}
+            onShowAll={launchGroups.showAll}
+          />
+        );
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader

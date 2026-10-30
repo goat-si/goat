@@ -13,7 +13,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { environmentServerConfigsAtom } from "../../state/server";
-import { environmentThreadShells } from "../../state/threads";
+import { environmentThreadShells, launchSubagentRowsAtom } from "../../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/olderSettledShelf";
 import {
   pendingThreadOrderAtom,
@@ -159,6 +159,7 @@ function DragHandle(props: {
 
 export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+  const launchOwners = useAtomValue(launchSubagentRowsAtom);
   const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
   const configs = useAtomValue(environmentServerConfigsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
@@ -200,6 +201,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
         pendingOrder,
         hiddenBotThreadKeys,
         workingShelfEnabled,
+        launchOwners,
         settlementEnvironmentIds: new Set(
           [...configs].flatMap(([id, config]) =>
             config.environment.capabilities.threadSettlement ? [id] : [],
@@ -219,6 +221,7 @@ export function ThreadArrangementSheet(props: { onClose: () => void }) {
       pendingOrder,
       workingShelfEnabled,
       hiddenBotThreadKeys,
+      launchOwners,
     ],
   );
   const listedSettled = sections.settled.filter(olderSettledShelf.isListed);

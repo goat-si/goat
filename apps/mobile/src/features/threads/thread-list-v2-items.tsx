@@ -53,7 +53,6 @@ import { useSwipeRowDormant } from "../home/swipe-row-activation";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
 import {
-  THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   resolveThreadListV2SnoozeGateExpiryMs,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozePresets,
@@ -72,6 +71,7 @@ import {
   SLIM_MENU_ACTIONS,
   SNOOZED_MENU_ACTIONS,
 } from "./thread-list-v2-menu-actions";
+import { liftedThreadListV2Status, type LaunchLift } from "./threadListV2LaunchFold";
 import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
@@ -278,45 +278,6 @@ export const ThreadListV2SettledShelfHeader = memo(function ThreadListV2SettledS
   props: ThreadListV2ShelfHeaderProps,
 ) {
   return <ThreadListV2ShelfHeader {...props} kind="settled" />;
-});
-
-export const ThreadListV2ShowMoreRow = memo(function ThreadListV2ShowMoreRow(props: {
-  readonly pane?: "screen" | "sidebar";
-  readonly hiddenCount: number;
-  /** Older settled threads are loading, or their last read failed. */
-  readonly state?: "loading" | "failed";
-  readonly onPress: () => void;
-}) {
-  const label =
-    props.state === "loading"
-      ? "Loading"
-      : props.state === "failed"
-        ? "Could not load older threads. Retry"
-        : `Show more (${props.hiddenCount} settled hidden)`;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={
-        props.state === undefined
-          ? `Show ${Math.min(props.hiddenCount, THREAD_LIST_V2_SETTLED_PAGE_COUNT)} more settled threads`
-          : label
-      }
-      disabled={props.state === "loading"}
-      onPress={props.onPress}
-      className="mx-4 mt-2 items-center rounded-lg border border-dashed border-border py-2.5"
-      style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })}
-    >
-      <Text
-        className={
-          props.pane === "sidebar"
-            ? "text-xs font-goat-medium text-drawer-foreground-muted"
-            : "text-xs font-goat-medium text-foreground-muted"
-        }
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
 });
 
 const PENDING_TASK_MENU_ACTIONS: MenuAction[] = [
@@ -543,6 +504,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly snoozed?: boolean;
   readonly pinned?: boolean;
   readonly wokeAt: string | null;
+  /** The most urgent state folded under this row: a request reads as the row's own. */
+  readonly lift?: LaunchLift | null;
   readonly snoozeWakeLabelText?: string;
   readonly timeLabel: string;
   readonly snoozePresetMinute: string;
@@ -643,8 +606,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const selected = props.selected === true;
   const rowAppearance = getThreadListV2RowAppearance(theme, sidebarPane, selected);
 
-  const status = resolveThreadListV2Status(thread);
-  const isUnread = status === "ready" && threadHasUnseenCompletion(thread);
+  const status = liftedThreadListV2Status(resolveThreadListV2Status(thread), props.lift);
+  const isUnread =
+    status === "ready" && (threadHasUnseenCompletion(thread) || props.lift === "unseen");
   const markableUnread = canMarkThreadUnread(thread);
   const workingLabel = STATUS_LABEL_BY_STATUS[status];
   const showsWoke = status === "ready" && props.wokeAt !== null;

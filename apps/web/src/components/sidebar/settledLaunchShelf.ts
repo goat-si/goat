@@ -1,6 +1,6 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
-import type { LaunchFold } from "./launchFold.ts";
+import type { LaunchFold } from "@goat/client-runtime/state/launch-fold";
 
 type ShelfThread = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const keyOf = (thread: ShelfThread) =>

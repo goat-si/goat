@@ -11,6 +11,7 @@ import {
   getThreadListV2OrderedSection,
   nextSnoozeWakeAfter,
 } from "../features/threads/threadListV2";
+import { threadListV2ReorderExcludedKeys } from "../features/threads/threadListV2LaunchFold";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentServerConfigsAtom } from "./server";
 import { environmentThreadShells } from "./threads";
@@ -67,9 +68,8 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
     const configs = appAtomRegistry.get(environmentServerConfigsAtom);
     const threads = appAtomRegistry.get(environmentThreadShells.threadShellsAtom);
     const nowMs = Date.now();
-    const ordered = getThreadListV2OrderedSection({
+    const placement = {
       threads,
-      section: current.section,
       now: new Date(nowMs).toISOString(),
       queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
       hiddenBotThreadKeys: appAtomRegistry.get(hiddenGoatBotThreadKeysAtom),
@@ -83,6 +83,11 @@ export function beginPendingThreadOrder(pending: PendingThreadOrder) {
           config.environment.capabilities.threadSnooze === true ? [id] : [],
         ),
       ),
+    };
+    const ordered = getThreadListV2OrderedSection({
+      ...placement,
+      section: current.section,
+      excludedThreadKeys: threadListV2ReorderExcludedKeys(placement),
     });
     const next = reconcilePendingThreadOrder(current, ordered);
     if (next === null) {

@@ -129,6 +129,8 @@ export interface Preferences {
   readonly threadListSettledShelfExpanded?: boolean;
   readonly threadListSnoozedShelfExpanded?: boolean;
   readonly threadListWorkingShelfExpanded?: boolean;
+  /** Launch groups this device shows expanded, by launcher thread key. */
+  readonly threadListLaunchGroupsExpanded?: Readonly<Record<string, boolean>>;
   readonly threadListFilters?: ThreadListFilters;
   readonly pullRequestListFilters?: PullRequestListPreferences;
   /** Whether the computer use readiness details and skill switch are shown. */
@@ -209,6 +211,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     threadListSettledShelfExpanded?: boolean;
     threadListSnoozedShelfExpanded?: boolean;
     threadListWorkingShelfExpanded?: boolean;
+    threadListLaunchGroupsExpanded?: Readonly<Record<string, boolean>>;
     threadListFilters?: ThreadListFilters;
     pullRequestListFilters?: PullRequestListPreferences;
     computerUseAdvancedExpanded?: boolean;
@@ -365,6 +368,17 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.threadListWorkingShelfExpanded === "boolean") {
     preferences.threadListWorkingShelfExpanded = parsed.threadListWorkingShelfExpanded;
+  }
+  if (
+    typeof parsed.threadListLaunchGroupsExpanded === "object" &&
+    parsed.threadListLaunchGroupsExpanded !== null &&
+    !Array.isArray(parsed.threadListLaunchGroupsExpanded)
+  ) {
+    preferences.threadListLaunchGroupsExpanded = Object.fromEntries(
+      Object.entries(parsed.threadListLaunchGroupsExpanded).filter(
+        (entry): entry is [string, true] => entry[1] === true,
+      ),
+    );
   }
   if (typeof parsed.computerUseAdvancedExpanded === "boolean") {
     preferences.computerUseAdvancedExpanded = parsed.computerUseAdvancedExpanded;

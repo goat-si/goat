@@ -2,8 +2,8 @@ import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environmen
 import { describe, expect, it } from "vite-plus/test";
 
 import { render } from "../../../test/render";
-import { foldLaunchedThreads, type LaunchFoldThread } from "./launchFold";
-import { NOW, key, thread } from "./launchFold.fixtures";
+import { foldLaunchedThreads, type LaunchFoldThread } from "@goat/client-runtime/state/launch-fold";
+import { NOW, key, thread } from "@goat/client-runtime/state/launch-fold-fixtures";
 import { SidebarLaunchGroup } from "./SidebarLaunchGroup";
 import { resetLaunchGroupSession, useLaunchGroups } from "./useLaunchGroups";
 

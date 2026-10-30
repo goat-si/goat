@@ -127,6 +127,7 @@ vi.mock("../../state/threads", async () => {
     decisionInbox: { itemsAtom: fixture.items, summaryAtom: fixture.summary },
     threadEnvironment: { respondToApproval: "approval", respondToUserInput: "userInput" },
     environmentThreads: { stateAtom },
+    launchSubagentRowsAtom: Atom.make([]),
   };
 });
 vi.mock("../../state/session", () => ({
@@ -997,6 +998,7 @@ vi.mock("../threads/use-thread-list-v2-shelf-preferences", () => ({
     toggleWorkingShelf: () => {},
   }),
 }));
+vi.mock("../threads/use-thread-list-v2-launch-groups", () => import("../../testing/launchGroups"));
 vi.mock("../threads/thread-list-v2-items", () => ({
   ThreadListV2Row: (props: { thread: EnvironmentThreadShell }) => <p>{props.thread.title}</p>,
   ThreadListV2PendingRow: () => null,

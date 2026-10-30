@@ -1,7 +1,7 @@
-import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 
-import type { LaunchFoldThread } from "./launchFold";
+import type { LaunchFoldThread } from "./launchFold.ts";
 
 export const HOME = EnvironmentId.make("environment-home");
 export const OTHER = EnvironmentId.make("environment-other");

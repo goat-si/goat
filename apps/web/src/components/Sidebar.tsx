@@ -140,7 +140,11 @@ import { useGlobalAgentStore } from "../globalAgentStore";
 import { useAtomCommand } from "../state/use-atom-command";
 import { SidebarOpenSubagent } from "./sidebar/SidebarOpenSubagent";
 import { useSidebarOpenSubagent, useSidebarSubagentIndex } from "./sidebar/subagentIndex";
-import { foldedKeysIn, foldedUnseenUnder, liftedChildAttention } from "./sidebar/launchFold";
+import {
+  foldedKeysIn,
+  foldedUnseenUnder,
+  liftedChildAttention,
+} from "@goat/client-runtime/state/launch-fold";
 import { SidebarLaunchGroup } from "./sidebar/SidebarLaunchGroup";
 import { SidebarNestedThreadRow } from "./sidebar/SidebarNestedThreadRow";
 import { useLaunchGroups } from "./sidebar/useLaunchGroups";

@@ -18,6 +18,10 @@ import { useEffect } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import {
+  projectLaunchSubagentRows,
+  type LaunchSubagentRow,
+} from "../features/threads/threadListV2LaunchFold";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
@@ -76,6 +80,16 @@ export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
 });
+
+let previousLaunchSubagentRows: ReadonlyArray<LaunchSubagentRow> = [];
+/** Subagents, for folding work they launched under the row that owns them. */
+export const launchSubagentRowsAtom = Atom.make((get) => {
+  previousLaunchSubagentRows = projectLaunchSubagentRows(
+    previousLaunchSubagentRows,
+    get(environmentThreadShells.threadShellsAtom),
+  );
+  return previousLaunchSubagentRows;
+}).pipe(Atom.withLabel("mobile-launch-subagent-rows"));
 
 export const decisionInbox = createDecisionInboxAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,

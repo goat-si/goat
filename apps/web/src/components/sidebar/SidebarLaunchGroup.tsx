@@ -3,7 +3,12 @@ import { ChevronRightIcon } from "~/components/solar";
 import type { ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
-import { summarizeLaunchGroup, type LaunchChildState, type LaunchFoldThread } from "./launchFold";
+import {
+  launchGroupSummaryText,
+  summarizeLaunchGroup,
+  type LaunchChildState,
+  type LaunchFoldThread,
+} from "@goat/client-runtime/state/launch-fold";
 
 const MAX_DOTS = 8;
 const DOT_CLASS: Record<LaunchChildState, string> = {
@@ -13,18 +18,6 @@ const DOT_CLASS: Record<LaunchChildState, string> = {
 };
 const LINE_CLASS =
   "flex h-5.5 w-full min-w-0 items-center gap-1 rounded-md text-left text-xs text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring";
-
-function launchGroupSummaryText(summary: ReturnType<typeof summarizeLaunchGroup>): string {
-  return [
-    `${summary.count} ${summary.count === 1 ? "thread" : "threads"}`,
-    summary.running > 0 ? `${summary.running} running` : null,
-    summary.attention > 0
-      ? `${summary.attention} ${summary.attention === 1 ? "needs" : "need"} you`
-      : null,
-  ]
-    .filter((part) => part !== null)
-    .join(" · ");
-}
 
 /**
  * Threads a row launched, folded to one thin line under it. Expanded, they are ordinary rows one
