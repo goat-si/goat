@@ -1,5 +1,4 @@
 import {
-  canSnooze,
   effectiveSnoozed,
   hasQueuedTurnStart,
   pickSnoozePreset,
@@ -32,7 +31,6 @@ import {
 import {
   sortActiveThreadsByOrderKey,
   sortByRankThenPrompt,
-  resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
   sortSettledThreads,
 } from "@goat/client-runtime/state/thread-sort";
@@ -40,10 +38,6 @@ import type { EnvironmentId, ProjectId, SnoozePresetSetting } from "@goat/contra
 import { isSideChatThread } from "@goat/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
-import type { ThreadMoveAvailability } from "./threadOrder";
-
-import { relativeTime } from "../../lib/time";
-import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 
 import {
   applyPendingThreadOrder,
@@ -53,7 +47,6 @@ import {
 import {
   appendWithLaunchChildren,
   foldThreadListV2,
-  liftedThreadListV2Status,
   resolveThreadListV2WokeAt,
   threadHasUnseenCompletion,
   threadListV2PriorityRank,
@@ -61,7 +54,6 @@ import {
   threadListV2Snoozed,
   type LaunchLift,
   type LaunchSubagentRow,
-  type ThreadListV2LaunchGroupEntry,
   type ThreadListV2LaunchGroupState,
   type ThreadListV2LaunchMarker,
 } from "./threadListV2LaunchFold";
