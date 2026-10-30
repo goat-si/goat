@@ -285,6 +285,42 @@ it.live("asset failure is retried and a successful load is cached", () => {
   );
 });
 
+it.live("a cell's end cancels its gave-up driver calls before the turn takes its next cell", () => {
+  const cancelling = Deferred.makeUnsafe<void>();
+  const gate = Deferred.makeUnsafe<void>();
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const request = {
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation,
+      source: "return 1;",
+    };
+    const first = yield* service.runCell(request).pipe(Effect.forkChild);
+    yield* Deferred.await(cancelling);
+    const next = yield* service.runCell(request).pipe(Effect.flip);
+    expect(next.code).toBe("pending_limit");
+    yield* Deferred.succeed(gate, undefined);
+    expect((yield* Fiber.join(first)).value).toBe(1);
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        primitiveChannel: {
+          cancel: () =>
+            Deferred.succeed(cancelling, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+        } as never,
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
 it.live("later cells may lower limits while preserving turn values", () =>
   Effect.gen(function* () {
     const service = yield* ScreenRunService;

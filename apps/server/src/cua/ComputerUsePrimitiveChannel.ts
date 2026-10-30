@@ -43,6 +43,8 @@ interface Pending {
   readonly request: ComputerUsePrimitiveRequest;
   readonly answer: Deferred.Deferred<ComputerUsePrimitiveReply>;
   sent: boolean;
+  /** When its answer reached the server; a loaded server may resume the caller later. */
+  answeredAt?: number;
 }
 
 /** How long a call waits for a restarting driver to bind, inside its own deadline. */
@@ -366,14 +368,10 @@ export const make = Effect.gen(function* () {
       }),
       // The grace is only for the proxy to say it never sent the call; an answer the driver
       // gave past the deadline is still a call that missed it.
-      Effect.flatMap((answered) =>
-        Clock.currentTimeMillis.pipe(
-          Effect.flatMap((at) =>
-            at > deadlineMillis && answered.status !== "not_started"
-              ? Effect.fail(deadlineFailure())
-              : Effect.succeed(answered),
-          ),
-        ),
+      Effect.filterOrFail(
+        (answered) =>
+          (pending.answeredAt ?? 0) <= deadlineMillis || answered.status === "not_started",
+        deadlineFailure,
       ),
       Effect.ensuring(
         Effect.sync(() => {
@@ -647,6 +645,7 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
+          pending.answeredAt = now;
           Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
           return true;
         }),
