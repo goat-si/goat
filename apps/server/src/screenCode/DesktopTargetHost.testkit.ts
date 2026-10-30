@@ -119,8 +119,8 @@ export class DriverError {
 /** A successful driver result with structured data and its text content. */
 export class DriverSuccess {
   readonly structuredContent: Record<string, unknown>;
-  readonly text: string;
-  constructor(structuredContent: Record<string, unknown>, text: string) {
+  readonly text: string | readonly string[];
+  constructor(structuredContent: Record<string, unknown>, text: string | readonly string[]) {
     this.structuredContent = structuredContent;
     this.text = text;
   }
@@ -207,7 +207,9 @@ export const fixture = (
                   : value instanceof DriverSuccess
                     ? {
                         structuredContent: value.structuredContent,
-                        content: [{ type: "text", text: value.text }],
+                        content: (typeof value.text === "string" ? [value.text] : value.text).map(
+                          (text) => ({ type: "text", text }),
+                        ),
                       }
                     : { structuredContent: value },
               ...(request.tool === "get_window_state" &&

@@ -67,6 +67,10 @@ provider (Codex, Claude, ...)
   baseline comes from its bind, or from one read for the first input on a process, and its end
   read compares against it. The next screenshot or tree read after an input waits only for what
   is left of the 60 ms settle time.
+- The first app diff of the same window after inputs in a cell is attached to those inputs as
+  `change_seen` or `no_change_seen` evidence (`ScreenObservedEffect.ts`). It never changes the
+  driver's verdict and never stops later inputs the way a driver `suspected_noop` does: one
+  window's diff cannot rule out an effect on another window, a sheet or the clipboard.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build

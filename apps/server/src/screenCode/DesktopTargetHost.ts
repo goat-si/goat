@@ -797,20 +797,47 @@ export const createDesktopTargetHost = (deps: {
       args.verify === true,
     );
   });
+  const withWindow = (
+    call: ScreenHostCall,
+    operation: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
+  ) =>
+    Effect.suspend(() => {
+      const before = call.targetRef && targets.get(call.targetRef.id);
+      const window = before && `${before.pid}:${before.windowId}`;
+      const baseline = before?.observationId;
+      return operation.pipe(
+        Effect.map((result) => {
+          const after = call.targetRef && targets.get(call.targetRef.id);
+          return window !== undefined && after && window === `${after.pid}:${after.windowId}`
+            ? {
+                ...result,
+                observedWindow: window,
+                ...(baseline === undefined ? {} : { observedBaseline: baseline }),
+              }
+            : result;
+        }),
+      );
+    });
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
-    call.method === "tab_status" || call.method === "read_page"
-      ? Effect.fail(fail("unsupported"))
-      : call.method === "list_menu_bar_extras"
-        ? menuBarExtras(call, callArgs(call.args), context)
-        : call.method === "bind_app"
-          ? bindApp(call, context)
-          : call.method === "list_apps" || call.method === "list_windows"
-            ? discover(call, context)
-            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                  call.method,
-                )
-              ? observe(call, context)
-              : invoke(call, context);
+    withWindow(
+      call,
+      call.method === "tab_status" || call.method === "read_page"
+        ? Effect.fail(fail("unsupported"))
+        : call.method === "list_menu_bar_extras"
+          ? menuBarExtras(call, callArgs(call.args), context)
+          : call.method === "bind_app"
+            ? bindApp(call, context)
+            : call.method === "list_apps" || call.method === "list_windows"
+              ? discover(call, context)
+              : [
+                    "get_window_state",
+                    "get_accessibility_tree",
+                    "verify_state",
+                    "screenshot",
+                  ].includes(call.method)
+                ? observe(call, context)
+                : invoke(call, context),
+    );
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
@@ -845,7 +872,7 @@ export const createDesktopTargetHost = (deps: {
         Effect.suspend(() => {
           markDispatched(index);
           return INPUT_METHODS.has(each.method)
-            ? invoke(each, context, true)
+            ? withWindow(each, invoke(each, context, true))
             : dispatch(each, context);
         }),
       BATCH_FAILED_CATEGORIES,

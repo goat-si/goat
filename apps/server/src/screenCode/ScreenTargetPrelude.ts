@@ -165,7 +165,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
     const args = { ...withRegion, targetRef: ref };
-    return __inputs.has(method) ? __reply(method, [args]).then((reply) => done(reply, args)) : __call(method, args);
+    if (__inputs.has(method)) return __reply(method, [args]).then((reply) => done(reply, args));
+    return __call(method, args).then((value) => {
+      if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
+      return value;
+    });
   };
   const act = async (name, method, arg, verify = false) => {
     if (tab && method !== 'click' && method !== 'right_click') retire();
@@ -319,6 +323,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     let observation;
     try {
       const value = (await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v;
+      if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
       observation = page ? value : remember(value);
       // A page's elements join the read it continues, so numbers and names from every page resolve.
       if (page && seen.observation && value && Array.isArray(value.elements))
@@ -588,7 +593,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   });
   return Object.freeze(surface);
 };
-const __tab = (bound) => __target(bound, __note('site', String((bound.tab && bound.tab.url) ?? '')), bound.tab ? bound.tab.owner : undefined);
+const __tab = (bound) => __target(bound, bound.siteNote ?? undefined, bound.tab ? bound.tab.owner : undefined);
 const __appTarget = (bound, key, launched, windowId) =>
   __target(bound, __note('app', String(key ?? '')), undefined, { launched, windowId });
 // list_windows with a pid answers every layer; menu bar items and slivers are not windows to bind.

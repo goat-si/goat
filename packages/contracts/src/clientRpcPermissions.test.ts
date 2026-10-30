@@ -28,6 +28,11 @@ it("a desktop window's live picture needs the same read grant as a browser tab's
   ]);
 });
 describe("memory client guards", () => {
+  it("requires memory grants for site note reads and changes", () => {
+    expect(clientRpcRequiredScopes("siteNotes.list", {})).toEqual(["memory:read"]);
+    for (const method of ["siteNotes.write", "siteNotes.delete", "siteNotes.restoreSeed"] as const)
+      expect(clientRpcRequiredScopes(method, {})).toEqual(["memory:write"]);
+  });
   it("guards all three memory mutations", () => {
     for (const method of [
       WS_METHODS.memoryUpsert,

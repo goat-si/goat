@@ -404,6 +404,7 @@ export async function runScreenChild(
     emit(result);
     cellId = "";
   };
+  emit({ t: "ready" });
   try {
     for await (const raw of { [Symbol.asyncIterator]: () => iterator }) {
       if (screenBytes(raw) > FRAME_MAX) throw new Error("Screen child frame exceeds cap");
@@ -455,9 +456,19 @@ export async function runScreenChild(
       vm.setProp(vm.global, "__screenResults", results);
       results.dispose();
       deadline = cell.deadlineMillis;
-      // Starting the child can use up a short cell's wall time; such a cell never runs.
+      // A delayed cell frame can arrive after its deadline without executing guest code.
       if (Date.now() >= deadline) {
-        finish({ t: "result", cellId, status: "deadline", console: linesOut, truncated });
+        finish({
+          t: "result",
+          cellId,
+          status: "deadline",
+          error: {
+            name: "Error",
+            message: "The cell had no time left when it started; nothing ran. Retry the cell.",
+          },
+          console: linesOut,
+          truncated,
+        });
         continue;
       }
       admitted = true;
