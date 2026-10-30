@@ -1,6 +1,6 @@
 import { useNavigation, usePreventRemove, type StaticScreenProps } from "@react-navigation/native";
 import { EnvironmentId, type NoteDocument, type NoteStatus } from "@goat/contracts";
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { Alert, Platform, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -17,6 +17,7 @@ import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { Button } from "../../components/ui/Button";
 import { applyNoteCheckboxEvent, type NoteCheckboxEvent } from "./note-markdown";
 import { NoteLinkedThread } from "./NoteLinkedThread";
+import type { NoteVisualEditorHandle } from "./NoteVisualEditor";
 import { noteSyncLabel, noteSyncState } from "./notes-model";
 import { notesRpc } from "./rpc/notes";
 import { noteConflictCurrent } from "./rpc/delivery";
@@ -31,6 +32,9 @@ import {
 } from "./notes-state";
 
 type NoteParams = { environmentId: string; path: string; create?: boolean };
+// The rich input loads on the first edit, never at app start.
+const NoteVisualEditor = lazy(() => import("./NoteVisualEditor"));
+
 export function NoteRouteScreen({ route }: StaticScreenProps<NoteParams>) {
   return (
     <NoteContent
@@ -58,6 +62,9 @@ function NoteContent(props: NoteParams) {
   const [hasSnapshot, setHasSnapshot] = useState(Boolean(row) || Boolean(props.create));
   const [status, setStatus] = useState<NoteStatus>(row?.status ?? "idea");
   const [editing, setEditing] = useState(Boolean(props.create));
+  const [visual, setVisual] = useState(true);
+  const [fallback, setFallback] = useState<string | null>(null);
+  const visualEditor = useRef<NoteVisualEditorHandle>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -225,6 +232,15 @@ function NoteContent(props: NoteParams) {
   };
   const canDelete = canStart && restored && note !== null && !row && !editing && !dirty && !busy;
   const bodyAvailable = hasSnapshot || note !== null || row !== undefined || props.create;
+  const editorBody = async () =>
+    visual && visualEditor.current ? visualEditor.current.body() : localBody.current;
+  const showMarkdown = async () => {
+    const next = await editorBody();
+    setBody(next);
+    localBody.current = next;
+    setFallback(null);
+    setVisual(false);
+  };
   return (
     <View className="flex-1 bg-sheet">
       <AppBar
@@ -351,26 +367,59 @@ function NoteContent(props: NoteParams) {
             </View>
             {editing ? (
               <>
-                <TextInput
-                  accessibilityLabel="Note markdown"
-                  multiline
-                  autoFocus
-                  textAlignVertical="top"
-                  value={body}
-                  editable={canWrite && !saving && restored}
-                  onChangeText={(value) => {
-                    setBody(value);
-                    localBody.current = value;
-                    setDirty(true);
+                {visual ? (
+                  <Suspense
+                    fallback={
+                      <Text className="text-xs text-foreground-muted">Opening editor…</Text>
+                    }
+                  >
+                    <NoteVisualEditor
+                      body={localBody.current}
+                      editable={canWrite && !saving && restored}
+                      handleRef={visualEditor}
+                      onChange={() => setDirty(true)}
+                      onFallback={(reason) => {
+                        setFallback(reason);
+                        setVisual(false);
+                      }}
+                    />
+                  </Suspense>
+                ) : (
+                  <>
+                    {fallback ? (
+                      <Text className="text-sm text-foreground-muted">{fallback}</Text>
+                    ) : null}
+                    <TextInput
+                      accessibilityLabel="Note markdown"
+                      multiline
+                      autoFocus
+                      textAlignVertical="top"
+                      value={body}
+                      editable={canWrite && !saving && restored}
+                      onChangeText={(value) => {
+                        setBody(value);
+                        localBody.current = value;
+                        setDirty(true);
+                      }}
+                      className="min-h-[320px] rounded-xl border border-input-border bg-input p-4 text-base text-foreground"
+                    />
+                  </>
+                )}
+                <Button
+                  label={visual ? "Edit as markdown" : "Edit visually"}
+                  tone="text"
+                  disabled={saving || !restored}
+                  onPress={() => {
+                    if (visual) void showMarkdown();
+                    else setVisual(true);
                   }}
-                  className="min-h-[320px] rounded-xl border border-input-border bg-input p-4 text-base text-foreground"
                 />
                 <Button
                   fullWidth
                   tone="primary"
                   label={saving ? "Saving…" : "Save on phone"}
                   disabled={!canWrite || saving || !restored}
-                  onPress={() => void save(localBody.current, localStatus.current)}
+                  onPress={() => void editorBody().then((next) => save(next, localStatus.current))}
                 />
               </>
             ) : (
@@ -382,7 +431,7 @@ function NoteContent(props: NoteParams) {
                   onCheckbox={(event) => {
                     const next = applyNoteCheckboxEvent(localBody.current, event);
                     if (next === null) {
-                      setError("Use Edit markdown for this checkbox.");
+                      setError("Edit the note to change this checkbox.");
                       // Native toggles optimistically before emitting the event.
                       setCheckboxRender((value) => value + 1);
                     } else if (next !== localBody.current) void save(next, localStatus.current);
@@ -390,11 +439,13 @@ function NoteContent(props: NoteParams) {
                 />
                 <Button
                   fullWidth
-                  label="Edit markdown"
+                  label="Edit"
                   tone="secondary"
                   disabled={!canWrite || busy || row?.state === "conflict"}
                   onPress={() => {
                     editBase.current = row?.baseRevision ?? note?.revision ?? null;
+                    setVisual(true);
+                    setFallback(null);
                     setEditing(true);
                   }}
                 />

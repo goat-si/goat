@@ -28,7 +28,7 @@ The notes folder is a git repository. GOAT commits every change a couple of seco
 
 ## Editing
 
-On web and desktop, notes open in a rich editor with headings, lists, checklists, quotes, and code blocks, and save as you type. Markdown that the editor cannot show exactly, such as HTML or tables, stays as an editable source block so it is never rewritten. On mobile, a note shows its checklists as checkboxes you can tap; use **Edit markdown** to change the text.
+On web and desktop, notes open in a rich editor with headings, lists, checklists, quotes, and code blocks, and save as you type. Markdown that the editor cannot show exactly, such as HTML or tables, stays as an editable source block so it is never rewritten. On mobile, a note shows its checklists as checkboxes you can tap. Tap **Edit** to change it: a note made of headings, paragraphs, lists, bold, italic, strikethrough and links opens in a visual editor with a formatting bar, and typing `# `, `- ` or `1. ` at the start of a line starts a heading or list. A note with anything else, such as checklists, code, quotes or tables, or one the visual editor would rewrite, opens as markdown with a short note saying why, so its text is never changed behind your back. **Edit as markdown** switches to the markdown text at any time.
 
 To delete a note, choose **Delete…** from its **⋯** menu on web and desktop, or **Delete note** on mobile. Deleting needs a connection to the hub, and a phone holding unsent edits for the note must sync or discard them first. If the note changed since you opened it, GOAT keeps it and shows the current version so you can decide again.
 

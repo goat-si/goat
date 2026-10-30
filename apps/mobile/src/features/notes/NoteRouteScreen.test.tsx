@@ -1,5 +1,12 @@
 import type { ComponentProps, ReactNode } from "react";
-import { act, useState, useSyncExternalStore } from "react";
+import {
+  act,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { AsyncResult } from "effect/reactivity";
@@ -24,10 +31,17 @@ const { mocks, Children } = vi.hoisted(() => ({
     enqueue: vi.fn(),
     restore: vi.fn(),
     flush: vi.fn(),
+    serialize: (markdown: string) => markdown,
   },
 }));
 vi.mock("react-native", () => ({
   View: Children,
+  Pressable: (props: { children?: ReactNode; disabled?: boolean; onPress?: () => void }) => (
+    <button disabled={props.disabled} onClick={props.onPress}>
+      {props.children}
+    </button>
+  ),
+  useWindowDimensions: () => ({ width: 400, height: 800 }),
   Alert: { alert: mocks.alert },
   Platform: { OS: "ios" },
 }));
@@ -91,7 +105,39 @@ vi.mock("../../native/SelectableMarkdownText", () => ({
   },
 }));
 vi.mock("../../lib/openExternalUrl", () => ({ tryOpenExternalUrl: vi.fn() }));
-vi.mock("../files/FileMarkdownPreview", () => ({ useMarkdownPreviewStyles: () => ({}) }));
+vi.mock("../files/FileMarkdownPreview", () => ({
+  useMarkdownPreviewStyles: () => ({ nativeTextStyle: {} }),
+}));
+vi.mock("react-native-enriched-markdown", () => ({
+  // Uncontrolled like the native input; getMarkdown runs the stand-in serializer.
+  EnrichedMarkdownTextInput: (props: {
+    ref: { current: unknown };
+    defaultValue: string;
+    editable: boolean;
+    onChangeText: (text: string) => void;
+  }) => {
+    const element = useRef<HTMLTextAreaElement>(null);
+    const [initial] = useState(props.defaultValue);
+    // The native input reads defaultValue once; a DOM defaultValue would reset typed text.
+    useLayoutEffect(() => {
+      if (element.current) element.current.value = initial;
+    }, [initial]);
+    useImperativeHandle(props.ref, () => ({
+      getMarkdown: async () => mocks.serialize(element.current?.value ?? ""),
+      setValue: (markdown: string) => {
+        if (element.current) element.current.value = markdown;
+      },
+    }));
+    return (
+      <textarea
+        ref={element}
+        aria-label="Visual note"
+        disabled={!props.editable}
+        onChange={(event) => props.onChangeText(event.target.value)}
+      />
+    );
+  },
+}));
 vi.mock("../../components/ui/Button", () => ({
   Button: (props: { label: string; disabled?: boolean; onPress: () => void }) => (
     <button disabled={props.disabled} onClick={props.onPress}>
@@ -132,6 +178,8 @@ vi.mock("./notes-state", () => ({
 }));
 
 import { NoteRouteScreen } from "./NoteRouteScreen";
+// Load the lazy editor once up front so each test waits only for its own render.
+await import("./NoteVisualEditor");
 
 let root: Root;
 let container: HTMLDivElement;
@@ -149,6 +197,17 @@ function button(label: string) {
   );
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
+}
+/** Opens the editor and waits for the lazy visual editor to load and check the note. */
+async function edit() {
+  await act(async () => button("Edit").click());
+  await act(() =>
+    vi.waitFor(() => {
+      const text = container.textContent ?? "";
+      if (text.includes("Opening editor") || text.includes("Checking this note"))
+        throw new Error("Editor still opening");
+    }),
+  );
 }
 function type(body: string) {
   const input = container.querySelector("textarea");
@@ -172,6 +231,7 @@ beforeEach(() => {
   mocks.enqueue.mockReset().mockResolvedValue(undefined);
   mocks.restore.mockReset().mockResolvedValue(undefined);
   mocks.flush.mockReset().mockResolvedValue(undefined);
+  mocks.serialize = (markdown) => markdown;
 });
 afterEach(() => act(() => root.unmount()));
 
@@ -283,7 +343,7 @@ describe("note delete", () => {
     });
     expect(mocks.remove).toHaveBeenCalledOnce();
     expect(button("Deleting…").disabled).toBe(true);
-    expect(button("Edit markdown").disabled).toBe(true);
+    expect(button("Edit").disabled).toBe(true);
     await act(async () =>
       pending.resolve(AsyncResult.failure(Cause.fail(new Error("connection lost")))),
     );
@@ -298,9 +358,9 @@ describe("note editor snapshot", () => {
     const save = Promise.withResolvers<void>();
     mocks.enqueue.mockReturnValueOnce(save.promise);
     await act(async () => render());
-    act(() => button("Edit markdown").click());
+    await edit();
     act(() => type("keep this edit"));
-    act(() => button("Save on phone").click());
+    await act(async () => button("Save on phone").click());
     expect(button("Saving…").disabled).toBe(true);
     expect(container.querySelector("textarea")?.disabled).toBe(true);
 
@@ -350,7 +410,7 @@ describe("note editor snapshot", () => {
 
   it("keeps newer unsaved text visible and saveable after the pending version is acknowledged", async () => {
     await act(async () => render());
-    act(() => button("Edit markdown").click());
+    await edit();
     act(() => type("unsaved B"));
     expect(container.querySelector("textarea")?.value).toBe("unsaved B");
     expect(container.querySelector('[data-testid="note-scroll-content"]')?.textContent).toContain(
@@ -374,7 +434,7 @@ describe("note editor snapshot", () => {
       render();
     });
     expect(container.textContent).toContain("mine");
-    act(() => button("Edit markdown").click());
+    await edit();
     expect(container.querySelector("textarea")?.value).toBe("mine");
   });
 
@@ -395,7 +455,7 @@ describe("note editor snapshot", () => {
       render();
     });
     expect(mocks.read).toHaveBeenCalled();
-    act(() => button("Edit markdown").click());
+    await edit();
     expect(container.querySelector("textarea")?.value).toBe("mine");
   });
 
@@ -406,13 +466,13 @@ describe("note editor snapshot", () => {
       mocks.rows = [];
       render();
     });
-    act(() => button("Edit markdown").click());
+    await edit();
     expect(container.querySelector("textarea")?.value).toBe("theirs");
   });
 
   it("preserves dirty text when a conflict row is removed by Use theirs", async () => {
     await act(async () => render());
-    act(() => button("Edit markdown").click());
+    await edit();
     act(() => type("unsaved B"));
     await act(async () => {
       mocks.rows = [{ ...row(), state: "conflict", current: noteDocument("theirs") }];
@@ -441,9 +501,9 @@ it.each([
     await act(async () => render());
     await act(async () => button("Native checkbox unchecked").click());
     expect(mocks.enqueue).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Use Edit markdown for this checkbox.");
+    expect(container.textContent).toContain("Edit the note to change this checkbox.");
     expect(button("Native checkbox unchecked")).toBeDefined();
-    act(() => button("Edit markdown").click());
+    await edit();
     expect(container.querySelector("textarea")?.value).toBe(body);
   },
 );
@@ -455,4 +515,55 @@ it("enqueues a checkbox only when its native text and source slot agree", async 
   expect(mocks.enqueue).toHaveBeenCalledWith(
     expect.objectContaining({ body: "- [x] **task**\n- [ ] other" }),
   );
+});
+
+describe("visual note editor", () => {
+  it("saves a CRLF note's original bytes when it is opened and saved without edits", async () => {
+    const body = "# Title\r\n\r\nSome **bold** text\r\n";
+    mocks.rows = [{ ...row(), body }];
+    await act(async () => render());
+    await edit();
+    expect(container.querySelector('[aria-label="Visual note"]')).not.toBeNull();
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body }));
+  });
+
+  it("opens a note with a code block as markdown and says why", async () => {
+    const body = "Intro\n\n```ts\nconst x = 1;\n```\n";
+    mocks.rows = [{ ...row(), body }];
+    await act(async () => render());
+    await edit();
+    expect(container.textContent).toContain(
+      "Opened as markdown because this note has a code block.",
+    );
+    expect(container.querySelector('[aria-label="Visual note"]')).toBeNull();
+    expect(container.querySelector("textarea")?.value).toBe(body);
+  });
+
+  it("falls back to markdown when the native serializer would rewrite untouched text", async () => {
+    mocks.serialize = (markdown) => markdown.replace("\n  - ", "\n   - ");
+    mocks.rows = [{ ...row(), body: "- a\n  - b\n" }];
+    await act(async () => render());
+    await edit();
+    expect(container.textContent).toContain("the visual editor would rewrite parts of this note");
+    expect(container.querySelector("textarea")?.value).toBe("- a\n  - b\n");
+  });
+
+  it("carries visual edits into the markdown editor and back", async () => {
+    await act(async () => render());
+    await edit();
+    act(() => type("**changed**"));
+    await act(async () => button("Edit as markdown").click());
+    expect(container.querySelector('[aria-label="Visual note"]')).toBeNull();
+    expect(container.querySelector("textarea")?.value).toBe("**changed**");
+    await act(async () => button("Edit visually").click());
+    await act(() =>
+      vi.waitFor(() =>
+        expect(container.querySelector('[aria-label="Visual note"]')).not.toBeNull(),
+      ),
+    );
+    expect(container.querySelector("textarea")?.value).toBe("**changed**");
+    await act(async () => button("Save on phone").click());
+    expect(mocks.enqueue).toHaveBeenCalledWith(expect.objectContaining({ body: "**changed**" }));
+  });
 });
