@@ -34,6 +34,7 @@ describe("learnApps", () => {
         bundleIds: true,
       });
       assert.equal(result._tag, "refuse", id);
+      if (result._tag === "refuse") assert.equal(result.reason, "app_not_allowed", id);
     }
   });
 

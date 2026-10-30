@@ -65,7 +65,7 @@ export type ScopeVerdict =
   | { readonly _tag: "resolve"; readonly pid: number }
   | {
       readonly _tag: "refuse";
-      readonly reason: "app_not_approved" | "desktop_not_approved";
+      readonly reason: "app_not_approved" | "app_not_allowed" | "desktop_not_approved";
       readonly app?: string;
       readonly opaque?: boolean;
       /**
@@ -131,7 +131,7 @@ export function scopeVerdict(input: {
     (value) => value !== undefined && isExcludedCuaApplication(value),
   );
   if (protectedApp !== undefined)
-    return { _tag: "refuse", reason: "app_not_approved", app: protectedApp };
+    return { _tag: "refuse", reason: "app_not_allowed", app: protectedApp };
   if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name) && approved === undefined) {
     const scope = batchAppScope(input.name, input.args);
     return scope !== undefined && !scope.apps.some(isExcludedCuaApplication)

@@ -637,6 +637,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "invalid_target",
   "control_idle",
   "app_not_approved",
+  "app_not_allowed",
   "desktop_not_approved",
   "foreground_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
@@ -705,6 +706,7 @@ export const computerUseRefusalReason = (
     case "automation_pending":
       return "permissionsPending";
     case "app_not_approved":
+    case "app_not_allowed":
       return "appNotAllowed";
     case "helper_restarted":
     case "helper_refused":
