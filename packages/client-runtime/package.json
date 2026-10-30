@@ -311,6 +311,10 @@
       "types": "./src/state/deviceHubAccess.ts",
       "default": "./src/state/deviceHubAccess.ts"
     },
+    "./state/computer-use-history": {
+      "types": "./src/state/computerUseHistory.ts",
+      "default": "./src/state/computerUseHistory.ts"
+    },
     "./state/preview": {
       "types": "./src/state/preview.ts",
       "default": "./src/state/preview.ts"
