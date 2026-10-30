@@ -103,6 +103,7 @@ export type {
 
 /** How long a control without a grant lasts after the turn that last used it. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
+const RECENT_CONTROL_LIMIT = 128;
 /**
  * Rounded down to the minute: never past an hour from the last use, and the many calls of a turn
  * move it once a minute, every move announced, so a following proxy holds the server's expiry.
@@ -446,13 +447,17 @@ const make = Effect.gen(function* () {
           uses: 0,
         };
         if (existing !== undefined) {
+          controlOwners.set(existing.controlId, threadId);
+          if (controlOwners.size > RECENT_CONTROL_LIMIT) {
+            const oldest = controlOwners.keys().next();
+            if (!oldest.done) controlOwners.delete(oldest.value);
+          }
           reservations.forgetClosed(threadId, existing.controlId);
           reservations.markStopped(threadId, existing.controlId, DateTime.toEpochMillis(now));
           foreground.revokeControl(threadId, existing.controlId);
           stoppedCards.replaced(existing);
         }
         controls.set(threadId, next);
-        controlOwners.set(next.controlId, threadId);
         foreground.bindPending(
           threadId,
           next.controlId,
@@ -718,7 +723,11 @@ const make = Effect.gen(function* () {
       PER_SIGNAL_READ,
     )((threadId) => Effect.sync(() => Option.fromNullishOr(controls.get(threadId)))),
     ownsControl: (threadId, controlId) =>
-      Effect.sync(() => controlOwners.get(controlId) === threadId),
+      Effect.sync(
+        () =>
+          controls.get(threadId)?.controlId === controlId ||
+          controlOwners.get(controlId) === threadId,
+      ),
     controlState,
     ...makeForegroundAuthority({
       foreground,

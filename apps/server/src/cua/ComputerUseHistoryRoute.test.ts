@@ -87,3 +87,25 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
     ),
   ),
 );
+
+it.effect("bounds ended control ownership while retaining recent controls for their thread", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      const controls = yield* Effect.forEach(Array.from({ length: 130 }), () =>
+        Effect.gen(function* () {
+          yield* f.leases.stop(f.a);
+          return yield* f.leases.control(f.a, Option.none());
+        }),
+      );
+      assert.isFalse(yield* f.leases.ownsControl(f.a, f.first.controlId));
+      const recent = controls.at(-2);
+      const current = controls.at(-1);
+      if (recent === undefined || current === undefined) return assert.fail("missing controls");
+      assert.isTrue(yield* f.leases.ownsControl(f.a, recent.controlId));
+      assert.isTrue(yield* f.leases.ownsControl(f.a, current.controlId));
+      assert.isFalse(yield* f.leases.ownsControl(f.b, recent.controlId));
+      assert.isTrue(yield* f.leases.ownsControl(f.b, f.second.controlId));
+    }),
+  ).pipe(Effect.provide(Layer.merge(database, serviceLayer))),
+);
