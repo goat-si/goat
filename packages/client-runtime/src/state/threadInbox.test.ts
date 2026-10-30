@@ -15,6 +15,7 @@ function thread(id: string, working: boolean) {
     id: ThreadId.make(id),
     environmentId,
     createdAt: "2026-06-01T00:00:00.000Z",
+    latestUserMessageAt: null,
     unsettledAt: null,
     latestRun: null,
     hasActionableProposedPlan: false,
@@ -239,5 +240,31 @@ describe("sortWorkingThreadsBySend", () => {
     expect(
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
     ).toEqual(["sent-last", "sent-first", "launched"]);
+  });
+
+  it("orders threads from servers without the authored time by their latest user message", () => {
+    const run = (requestedAt: string) => ({
+      runId: RunId.make(`run:${requestedAt}`),
+      status: "running" as const,
+      requestedAt,
+      startedAt: requestedAt,
+      completedAt: null,
+      assistantMessageId: null,
+    });
+    const messagedLast = {
+      ...thread("messaged-last", true),
+      latestUserMessageAt: "2026-06-01T03:00:00.000Z",
+      latestRun: run("2026-06-01T03:00:00.000Z"),
+    };
+    // A continuation run starts later without a new message.
+    const continued = {
+      ...thread("continued", true),
+      latestUserMessageAt: "2026-06-01T02:00:00.000Z",
+      latestRun: run("2026-06-01T05:00:00.000Z"),
+    };
+    expect(sortWorkingThreadsBySend([continued, messagedLast]).map((thread) => thread.id)).toEqual([
+      "messaged-last",
+      "continued",
+    ]);
   });
 });

@@ -18,6 +18,49 @@ export function toSortableTimestamp(iso: string | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
+export type ThreadLastPromptInput = Pick<
+  EnvironmentThreadShell,
+  "createdAt" | "latestUserMessageAt" | "latestUserAuthoredMessageAt"
+>;
+
+/**
+ * When the user last sent the thread a prompt, else when it was created. Wakes and agent
+ * messages also move latestUserMessageAt, so it stands in only for servers without the authored time.
+ */
+export function threadLastPromptAt(thread: ThreadLastPromptInput): number {
+  const prompted =
+    thread.latestUserAuthoredMessageAt === undefined
+      ? thread.latestUserMessageAt
+      : thread.latestUserAuthoredMessageAt;
+  return Math.max(
+    toSortableTimestamp(thread.createdAt) ?? 0,
+    toSortableTimestamp(prompted ?? undefined) ?? 0,
+  );
+}
+
+/**
+ * Lowest rank first, then the thread the user prompted last, then key. Streamed events move
+ * updatedAt, never the prompt time, so rows hold their places while threads run.
+ */
+export function sortByRankThenPrompt<T extends ThreadLastPromptInput>(
+  threads: readonly T[],
+  rankOf: (thread: T) => number,
+  keyOf: (thread: T) => string,
+): T[] {
+  return threads
+    .map((thread) => ({
+      thread,
+      rank: rankOf(thread),
+      at: threadLastPromptAt(thread),
+      key: keyOf(thread),
+    }))
+    .sort(
+      (left, right) =>
+        left.rank - right.rank || right.at - left.at || left.key.localeCompare(right.key),
+    )
+    .map((entry) => entry.thread);
+}
+
 export type SettledThreadTimestampInput = Pick<
   EnvironmentThreadShell,
   "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"

@@ -485,7 +485,7 @@
   "apps/web/src/components/RightPanelTabs.tsx": { "lines": 1071 },
   "apps/web/src/components/Sidebar.drag.ts": { "nonNull": 1 },
   "apps/web/src/components/Sidebar.logic.test.ts": { "lines": 2382 },
-  "apps/web/src/components/Sidebar.logic.ts": { "lines": 1897, "nonNull": 7 },
+  "apps/web/src/components/Sidebar.logic.ts": { "lines": 1888, "nonNull": 7 },
   "apps/web/src/components/Sidebar.motion.ts": { "nonNull": 6 },
   "apps/web/src/components/Sidebar.tsx": { "lines": 3734, "nonNull": 2 },
   "apps/web/src/components/ThreadStatusIndicators.tsx": { "lines": 1092 },

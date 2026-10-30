@@ -25,6 +25,8 @@ export function thread(
     readonly snoozedUntil?: string;
     readonly settled?: boolean;
     readonly createdAt?: string;
+    /** When the user last sent this thread a prompt. */
+    readonly promptedAt?: string;
   } = {},
 ): LaunchFoldThread {
   const status = options.status ?? "completed";
@@ -37,6 +39,8 @@ export function thread(
       relationshipToParent: options.subagentOf ? "subagent" : null,
     },
     createdAt: options.createdAt ?? "2026-10-27T10:00:00.000Z",
+    latestUserMessageAt: options.promptedAt ?? null,
+    latestUserAuthoredMessageAt: options.promptedAt ?? null,
     pinnedAt: options.pinned ? "2026-10-27T10:00:00.000Z" : null,
     settledOverride: options.settled ? "settled" : null,
     snoozedUntil: options.snoozedUntil ?? null,

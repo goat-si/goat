@@ -1941,7 +1941,7 @@ describe("Activity Priority", () => {
     expect(visible).toEqual([candidate]);
   });
 
-  it("sorts attention, work and unread by creation time with stable scoped-key ties", () => {
+  it("sorts attention, work and unread with stable scoped-key ties while rows stream", () => {
     const thread = (id: string, createdAt: string, overrides: ThreadFixtureOverrides = {}) =>
       makeThread({ id: ThreadId.make(id), createdAt, updatedAt: createdAt, ...overrides });
     const attention = thread("attention", before, { hasPendingApprovals: true });
