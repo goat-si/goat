@@ -43,4 +43,11 @@ export const layer = Access.toLayer(NoteToolkit, {
       return yield* (yield* Notes.NotesService).move(input, "agent").pipe(Effect.mapError(failure));
     }),
   ),
+  goat_note_delete: Access.destructive(
+    Access.writes((input) =>
+      Effect.gen(function* () {
+        return yield* (yield* Notes.NotesService).delete(input).pipe(Effect.mapError(failure));
+      }),
+    ),
+  ),
 });

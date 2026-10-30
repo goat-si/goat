@@ -30,6 +30,8 @@ The notes folder is a git repository. GOAT commits every change a couple of seco
 
 On web and desktop, notes open in a rich editor with headings, lists, checklists, quotes, and code blocks, and save as you type. Markdown that the editor cannot show exactly, such as HTML or tables, stays as an editable source block so it is never rewritten. On mobile, a note shows its checklists as checkboxes you can tap; use **Edit markdown** to change the text.
 
+To delete a note, choose **Delete…** from its **⋯** menu on web and desktop, or **Delete note** on mobile. Deleting needs a connection to the hub, and a phone holding unsent edits for the note must sync or discard them first. If the note changed since you opened it, GOAT keeps it and shows the current version so you can decide again.
+
 ## When someone else changed the note
 
 Every save names the version it started from. If the note's text or status changed in the meantime, GOAT does not overwrite it; a pin or link made elsewhere only changes the header, so your edit carries on. You see **This note changed** with both versions and the lines that differ. Choose **Use theirs** to take the current file and drop your draft, or **Keep mine** to save your version over it. If it changes again before you decide, GOAT asks again.
@@ -54,4 +56,4 @@ On web and desktop, the notes button in a thread's header shows how many notes a
 
 ## For agents
 
-Agents call the `note.list`, `note.read`, `note.write`, `note.update`, and `note.move` paths through `goat_call`. A write needs the revision from the last read; a refused write means the note changed, so the agent reads it again and retries. `note.update` pins a note or links a thread without touching its text.
+Agents call the `note.list`, `note.read`, `note.write`, `note.update`, `note.move`, and `note.delete` paths through `goat_call`. A write, move, or delete needs the revision from the last read; a refused one means the note changed, so the agent reads it again and decides again. `note.update` pins a note or links a thread without touching its text.

@@ -85,7 +85,7 @@ older hubs; a hub that accepts `notes.update` always sends `pinned`, and clients
 controls without it. `CLIENT_GUARDED_RPC_SCOPES` gates list, read,
 subscribe, and target reads on orchestration read, and every mutation and `startWork` on
 orchestration operate. The MCP toolkit `apps/server/src/mcp/toolkits/note/` exposes
-`goat_note_list`, `goat_note_read`, `goat_note_write`, `goat_note_update`, and `goat_note_move` on the
+`goat_note_list`, `goat_note_read`, `goat_note_write`, `goat_note_update`, `goat_note_move`, and `goat_note_delete` on the
 same service, with their metadata in `packages/contracts/src/agentSurface/notes.ts`; a conflict
 returns a failure that tells the agent to read and retry.
 
