@@ -67,11 +67,9 @@ export function makeLeaseFences(controlId: string) {
       for (const grant of [...takenForeground, ...appliedForeground])
         if (!nextForeground.some((next) => next.handoffId === grant.handoffId))
           removedForeground.add(grant.handoffId);
+      // The latest taken word on each grant: a full access grant's expiry moves with its control.
       for (const grant of nextForeground)
-        foregroundLimits.set(
-          grant.handoffId,
-          Math.min(foregroundLimits.get(grant.handoffId) ?? Infinity, grant.expiresAtMillis),
-        );
+        foregroundLimits.set(grant.handoffId, grant.expiresAtMillis);
       takenForeground = nextForeground;
       const next = approvedApps(update.apps);
       const drops = (from: ReadonlySet<string> | undefined) =>

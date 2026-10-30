@@ -101,8 +101,18 @@ export type {
   Interruptions,
 } from "./ComputerUseControl.ts";
 
-/** How long an interactive control lasts before the thread's next turn mints another. */
+/** How long a control without a grant lasts after the turn that last used it. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
+/**
+ * Rounded down to the minute: never past an hour from the last use, and the many calls of a turn
+ * move it once a minute, every move announced, so a following proxy holds the server's expiry.
+ */
+const controlExpiry = (now: DateTime.Utc) =>
+  DateTime.makeUnsafe(
+    Math.floor(
+      DateTime.toEpochMillis(DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES })) / 60_000,
+    ) * 60_000,
+  );
 /** Separates a control id from a call id in an input log key; a control id never contains it. */
 const CALL_KEY = "\u0000";
 /** How far a proxy's input report time may be from this server's clock. */
@@ -410,18 +420,21 @@ const make = Effect.gen(function* () {
           const reused: ControlRecord = {
             ...nextTurn(existing),
             uses: existing.uses + 1,
+            // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
+            ...(Option.isSome(lease) ? {} : { expiresAt: controlExpiry(now) }),
             ...(runId === undefined ? {} : { runId }),
           };
           controls.set(threadId, reused);
-          const notice = implyFocus(reused) || existing.idle === true ? changed : Effect.void;
+          const moved =
+            DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
+          const notice =
+            implyFocus(reused) || existing.idle === true || moved ? changed : Effect.void;
           return Effect.as(notice, reused as ComputerUseControl);
         }
         const next: ControlRecord = {
           controlId: `control:${NodeCrypto.randomUUID()}`,
           threadId,
-          expiresAt: Option.isSome(lease)
-            ? lease.value.expiresAt
-            : DateTime.add(now, { minutes: INTERACTIVE_CONTROL_MINUTES }),
+          expiresAt: Option.isSome(lease) ? lease.value.expiresAt : controlExpiry(now),
           ...(handoffId === undefined ? {} : { handoffId }),
           ...(everyApp === undefined ? {} : { everyApp }),
           ...(runId === undefined ? {} : { runId }),
@@ -478,11 +491,12 @@ const make = Effect.gen(function* () {
     threadId: ThreadId,
     controlId: string,
   ): Effect.fn.Return<ComputerUseControlState, ComputerUseLeaseError> {
+    // Time before the record: a record read after it can only be as new as that time.
+    const now = yield* DateTime.now;
     const record = controls.get(threadId);
     if (record === undefined) return { _tag: "ended", reason: "revoked" };
     if (record.controlId !== controlId) return { _tag: "ended", reason: "replaced" };
     if (record.ended !== undefined) return { _tag: "ended", reason: record.ended };
-    const now = yield* DateTime.now;
     if (DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now))
       return { _tag: "ended", reason: "expired" };
     if (record.everyApp !== undefined && !(yield* fullAccessAdmitted(threadId))) {

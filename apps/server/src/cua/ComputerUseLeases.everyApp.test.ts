@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Statement from "effect/sql/Statement";
@@ -10,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
+import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -73,6 +75,94 @@ it.effect.each(["replacement", "approval after Stop"] as const)(
         assert.equal((yield* leases.controlState(owner, second.controlId))._tag, "active");
       else assert.isTrue(yield* leases.foregroundAvailable(owner, "Check the build status"));
     }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect.each([
+  { reused: true, at: "70 minutes", state: "active" },
+  { reused: false, at: "60 minutes", state: "ended" },
+] as const)(
+  "a full access control lasts an hour from its last use (reused $reused, $at: $state)",
+  ({ reused, at, state }) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make(`thread-control-hour-${String(reused)}`);
+      yield* threadIn(owner, "full-access");
+      const first = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+      if (reused) {
+        yield* TestClock.adjust("50 minutes");
+        const next = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+        assert.equal(next.controlId, first.controlId);
+        yield* TestClock.adjust("20 minutes");
+      } else yield* TestClock.adjust(at);
+      assert.equal((yield* leases.controlState(owner, first.controlId))._tag, state);
+      if (!reused) return;
+      // Not unbounded: an hour after that last use it ends.
+      yield* TestClock.adjust("40 minutes");
+      assert.deepEqual(yield* leases.controlState(owner, first.controlId), {
+        _tag: "ended",
+        reason: "expired",
+      });
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("reusing a full access control tells the proxies following it its new expiry", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-control-hour-notice");
+    yield* threadIn(owner, "full-access");
+    Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    const proxies = yield* leases.subscribe;
+    yield* TestClock.adjust("50 minutes");
+    const before = yield* PubSub.remaining(proxies);
+    Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    assert.isAbove(yield* PubSub.remaining(proxies), before);
+  }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "calls every 30 s announce each move of the control's expiry, never leaving it unsaid",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-control-hour-frequent");
+      yield* threadIn(owner, "full-access");
+      Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+      const proxies = yield* leases.subscribe;
+      let expiry = 60 * 60_000;
+      for (let step = 1; step <= 6; step++) {
+        yield* TestClock.adjust("30 seconds");
+        const before = yield* PubSub.remaining(proxies);
+        const reused = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+        const next = DateTime.toEpochMillis(reused.expiresAt);
+        // Within the minute before an hour from this use, never past it.
+        assert.isAtMost(next, step * 30_000 + 60 * 60_000);
+        assert.isAbove(next, step * 30_000 + 59 * 60_000);
+        assert.equal((yield* PubSub.remaining(proxies)) > before, next !== expiry);
+        expiry = next;
+      }
+      assert.equal(expiry, 63 * 60_000);
+    }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
+it.effect("a control minted between minutes never outlasts an hour from that use", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-control-hour-between");
+    yield* threadIn(owner, "full-access");
+    yield* TestClock.adjust("30 seconds");
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    yield* TestClock.adjust(59 * 60_000 + 29_999);
+    assert.equal((yield* leases.controlState(owner, control.controlId))._tag, "active");
+    yield* TestClock.adjust(1);
+    assert.deepEqual(yield* leases.controlState(owner, control.controlId), {
+      _tag: "ended",
+      reason: "expired",
+    });
+  }).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("gives a full access thread every app until it leaves full access", () =>
