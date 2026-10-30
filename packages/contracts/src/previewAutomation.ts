@@ -689,6 +689,8 @@ export const PreviewAutomationRequest = Schema.Struct({
   screenExpectation: Schema.optional(Screen.PreviewAutomationScreenExpectation),
   /** Supplied by the broker from authenticated scope, never from tool input. */
   agentSessionId: Schema.optional(Schema.String),
+  /** The caller's active run, supplied by the server. */
+  runId: Schema.optional(Schema.String),
   operation: PreviewAutomationOperation,
   input: Schema.Unknown,
   timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),

@@ -49,6 +49,7 @@ const HOST_RESPONSE_GRACE_MS = 1_000;
 
 export interface PreviewAutomationInvokeInput {
   readonly scope: McpInvocationContext.McpThreadInvocationScope;
+  readonly runId?: string;
   readonly operation: PreviewAutomationOperation;
   readonly input: unknown;
   readonly tabId?: PreviewTabId;
@@ -746,6 +747,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             tabIdExplicit: input.tabId !== undefined || input.exact !== undefined,
             ...BoundPreviewTabs.screenExpectationOf(input.exact),
             agentSessionId: hostAssignmentKey(input.scope),
+            ...(input.runId === undefined ? {} : { runId: input.runId }),
             operation: input.operation,
             input: input.input,
             timeoutMs,
