@@ -21,7 +21,7 @@ const listing = (executable: string | undefined) => ({
 /** A click on the pid's window, judged as the proxy judges one before it forwards it. */
 const click = (input: {
   readonly listed: Map<number, ListedApp>;
-  readonly approved: ReadonlyArray<string>;
+  readonly approved: ReadonlyArray<string> | undefined;
   readonly executableOf?: (pid: number) => string | undefined;
   readonly listApps: Effect.Effect<void>;
 }) =>
@@ -45,6 +45,29 @@ const click = (input: {
   });
 
 describe("an app approved by its executable path", () => {
+  it.effect("never forwards a full access call to a protected app", () =>
+    Effect.gen(function* () {
+      for (const app of [
+        "com.apple.systempreferences",
+        "com.apple.loginwindow",
+        "com.apple.SecurityAgent",
+        "com.apple.coreauthd",
+        "com.apple.LocalAuthentication.UIAgent",
+        "com.apple.keychainaccess",
+        "com.apple.ScreenTimeAgent",
+        "com.apple.ScreenTimeWidgetApplication",
+        "com.apple.ScreenTimeViewService",
+      ]) {
+        const listed = new Map<number, ListedApp>([[PID, { id: app, name: "System app" }]]);
+        const refused = yield* click({
+          listed,
+          approved: undefined,
+          listApps: Effect.die("already listed"),
+        });
+        assert.include(JSON.stringify(refused), "app_not_allowed");
+      }
+    }),
+  );
   it.effect("is refused when the same pid now runs another binary of the same name", () =>
     Effect.gen(function* () {
       const listed = new Map<number, ListedApp>();
