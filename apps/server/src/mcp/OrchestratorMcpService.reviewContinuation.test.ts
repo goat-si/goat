@@ -28,6 +28,7 @@ import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ChannelChildWork from "../channels/ChannelChildWork.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
 import * as ProviderSessionManager from "../orchestration-v2/ProviderSessionManager.ts";
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
@@ -944,4 +945,27 @@ it.effect(
         2,
       );
     }).pipe(Effect.provide(layerTestWithSql)),
+);
+
+it.effect("a channel-owned caller is refused and its child-work reservation returns", () =>
+  Effect.gen(function* () {
+    const fixture = yield* makeFixture;
+    const released: Array<unknown> = [];
+    const record = { id: "child-work-1" } as unknown as Parameters<
+      ChannelChildWork.ChannelChildWork["Service"]["releaseReserved"]
+    >[0];
+    const refused = yield* continued(fixture).pipe(
+      Effect.provide(
+        Layer.mock(ChannelChildWork.ChannelChildWork)({
+          admit: () => Effect.succeed({ _tag: "admitted", record, requestKey: "round-2" }),
+          releaseReserved: (reserved) => Effect.sync(() => void released.push(reserved)),
+        }),
+      ),
+      Effect.flip,
+    );
+    assert.include(refused.message, "channel-owned");
+    assert.deepEqual(released, [record]);
+    assert.lengthOf((yield* fixture.store.getThreadRecords(parentId, ["subagents"])).subagents, 1);
+    assert.lengthOf(yield* childRuns(fixture.childThreadId), 1);
+  }).pipe(Effect.provide(layerTest)),
 );
