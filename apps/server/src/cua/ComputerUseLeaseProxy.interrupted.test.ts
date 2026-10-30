@@ -52,7 +52,7 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
         assert.deepEqual(answer.result.structuredContent, {
           effect: "unverifiable",
           safety: unknownWriteSafety,
-          code: "interrupted",
+          code: "stopped_by_person",
           detail: "stopped",
         });
         const text = answer.result.content[0]?.text ?? "";
