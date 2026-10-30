@@ -89,6 +89,47 @@ it.effect("a new organization denial refuses a pending ticket on validation", ()
   }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect("a denial committed during admission prevents the call", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const owner = ThreadId.make("thread-denial-race");
+    yield* threadIn(owner, "full-access");
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    const reading = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const pending = yield* leases
+      .callReservation(owner, {
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "connection",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7 },
+        app: "com.example.Editor",
+      })
+      .pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) =>
+          Deferred.succeed(reading, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(statement),
+          ),
+        ),
+        Effect.forkChild,
+      );
+    yield* Deferred.await(reading);
+    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Editor"] });
+    yield* Deferred.succeed(release, undefined);
+    assert.deepInclude(yield* Fiber.join(pending), {
+      status: "refused",
+      detail: "app_not_allowed",
+    });
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect.each([true, false])(
   "checks terminal calls for full access origin (nonPerson %s)",
   (nonPerson) =>
