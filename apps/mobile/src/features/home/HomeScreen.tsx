@@ -130,6 +130,7 @@ interface HomeScreenProps {
   ) => Promise<boolean>;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly onMarkThreadUnread: (thread: EnvironmentThreadShell) => void;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
@@ -618,6 +619,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onArchiveThread={props.onArchiveThread}
         onRenameThread={handleRenameThread}
         onRegenerateThreadTitle={handleRegenerateThreadTitle}
+        onMarkThreadUnread={props.onMarkThreadUnread}
         titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
         settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
         onSettleThread={handleSettleThread}

@@ -183,6 +183,20 @@ export function threadHasUnseenCompletion(
   return Number.isNaN(visited) || Math.max(...times) > visited;
 }
 
+/** The server marks unread only after a completed run, and only a recorded visit makes a thread read. */
+export function canMarkThreadUnread(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "latestRun" | "lastVisitedAt" | "notificationCompletedAt" | "markedUnreadCompletionAt"
+  >,
+): boolean {
+  return (
+    Boolean(thread.lastVisitedAt) &&
+    thread.latestRun?.completedAt != null &&
+    !threadHasUnseenCompletion(thread)
+  );
+}
+
 export function resolveThreadListV2WokeAt(
   thread: EnvironmentThreadShell,
   options: { readonly now: string },
