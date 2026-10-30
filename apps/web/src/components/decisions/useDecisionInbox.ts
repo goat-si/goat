@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  durableDecisionAnswer,
   isDecisionItemRemoved,
   orderDecisionQueue,
   type DecisionItem,
@@ -92,7 +93,7 @@ export function useDecisionInbox() {
     if (!live || inFlight.current.has(id)) return;
     if (live.kind === "decision") {
       if (typeof response === "string" || typeof response.optionId !== "string") return;
-      return submitDecision(live, { optionId: response.optionId, reason: String(response.reason) });
+      return submitDecision(live, { optionId: response.optionId });
     }
     const sameRef = (ref: ScopedThreadRef) =>
       ref.environmentId === live.ref.environmentId && ref.threadId === live.ref.threadId;
@@ -149,6 +150,8 @@ export function useDecisionInbox() {
     live: Extract<DecisionItem, { kind: "decision" }>,
     answer: DecisionAnswer,
   ) {
+    const input = durableDecisionAnswer(live.decision, answer.optionId);
+    if (input === null) return;
     // Durable decisions come from the environment's feed, not the thread's detail.
     if (
       !appAtomRegistry
@@ -167,7 +170,7 @@ export function useDecisionInbox() {
     setSubmissions((previous) => ({ ...previous, [live.id]: { phase: "submitting" } }));
     const result = await answerDecision({
       environmentId: live.ref.environmentId,
-      input: { id: live.decision.id, optionId: answer.optionId, reason: answer.reason },
+      input,
     });
     if (result._tag === "Failure") {
       const error = squashAtomCommandFailure(result);

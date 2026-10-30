@@ -34,6 +34,22 @@ export type DecisionItem = {
 );
 
 const PERSON: DecisionRouting = { routedTo: "person" };
+
+/**
+ * The reason sent with a person's answer. The server requires one: a projected request passes it
+ * to its asking thread's response, a durable decision drops it. A blank reason names the choice.
+ */
+export function decisionAnswerReason(reason: string, choice: string) {
+  const typed = reason.trim();
+  return typed.length > 0 ? typed : `Chose ${choice}.`.slice(0, 2000);
+}
+
+/** A durable decision delivers only the chosen option, so clients ask for no reason. */
+export function durableDecisionAnswer(decision: DurableDecision, optionId: string) {
+  const option = decision.options.find((entry) => entry.id === optionId);
+  if (option === undefined) return null;
+  return { id: decision.id, optionId, reason: decisionAnswerReason("", option.label) };
+}
 const compareStrings = (left: string, right: string) => (left < right ? -1 : left > right ? 1 : 0);
 const pendingKey = (environmentId: string, threadId: string, requestId: string) =>
   JSON.stringify([environmentId, threadId, requestId]);
