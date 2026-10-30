@@ -56,6 +56,33 @@ it.effect("updates the origin policy when a full access control is reused", () =
   }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect.each([true, false])(
+  "checks terminal calls for full access origin (nonPerson %s)",
+  (nonPerson) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make(`thread-terminal-${nonPerson}`);
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false, { nonPerson }));
+      for (const app of ["com.apple.Terminal", "com.googlecode.iterm2"]) {
+        const result = yield* leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "connection",
+          callId: app,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "click",
+          args: { pid: 42, window_id: 7 },
+          app,
+        });
+        assert.equal(result.status, nonPerson ? "refused" : "admitted");
+        if (result.status === "refused") assert.equal(result.detail, "app_not_allowed");
+      }
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect.each(["replacement", "approval after Stop"] as const)(
   "a suspended full access read cannot revoke a newer %s",
   (transition) =>
