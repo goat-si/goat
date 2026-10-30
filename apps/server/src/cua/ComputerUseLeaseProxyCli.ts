@@ -15,7 +15,6 @@ import * as NodeStream from "node:stream";
 import {
   CuaDriverMcpConfiguration,
   type ComputerUseLeaseReport,
-  ComputerUseCallAdmission,
   type ComputerUseCallReservation,
   ComputerUseLeaseUpdate,
   ComputerUseLeaseThreadUpdate,
@@ -40,6 +39,7 @@ import { LEASE_PROXY_ENV } from "./ComputerUseAttachment.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { makeAppGuide } from "./ComputerUseGuide.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { postReservation } from "./ComputerUseLeaseProxyReservation.ts";
 import { linuxScreenshotPolicy, proxyCaptureRoute } from "./ComputerUseLinuxScreenshots.ts";
 import { parseLeaseProxyArguments } from "./ComputerUseLeaseProxyArguments.ts";
 import { runThreadLeaseProxy } from "./ComputerUseLeaseProxyThread.ts";
@@ -58,7 +58,6 @@ import { withoutDriverTools } from "./ComputerUseDriverListing.ts";
 import { makeX11WindowPlacement } from "./x11WindowPlacement.ts";
 
 const decodeDriver = Schema.decodeUnknownOption(Schema.fromJsonString(CuaDriverMcpConfiguration));
-const decodeAdmission = Schema.decodeUnknownOption(ComputerUseCallAdmission);
 /** A window report waits this long at most; the call it rides on goes ahead either way. */
 const TARGET_REPORT_TIMEOUT_MS = 2_000;
 /** How long a killed driver may take to close its pipes before the proxy moves on. */
@@ -105,28 +104,6 @@ async function report(
   } catch {
     return false;
   }
-}
-
-async function reserveCall(
-  url: string,
-  authorization: string,
-  call: ComputerUseCallReservation,
-): Promise<ComputerUseCallAdmission> {
-  try {
-    const response = await fetch(`${url}/calls`, {
-      method: "POST",
-      headers: { authorization, "content-type": "application/json" },
-      body: JSON.stringify(call),
-      signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
-    });
-    if (response.ok) {
-      const decision = decodeAdmission(await response.json());
-      if (Option.isSome(decision)) return decision.value;
-    }
-  } catch {
-    // Lost admission or release acknowledgement grants no authority; server tickets stay held.
-  }
-  return { status: "refused", detail: "unauthorized" };
 }
 
 type DriverReport = {
@@ -718,7 +695,16 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
               ).pipe(Effect.asVoid),
           }),
       reservation: (call: ComputerUseCallReservation) =>
-        Effect.promise(() => reserveCall(url, authorization, call)),
+        postReservation(
+          (body, signal) =>
+            fetch(`${url}/calls`, {
+              method: "POST",
+              headers: { authorization, "content-type": "application/json" },
+              body,
+              signal,
+            }),
+          call,
+        ),
       bundleIds: platform === "darwin",
       input: Stream.fromAsyncIterable(
         NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
