@@ -26,7 +26,11 @@ vi.mock("~/environments/primary", () => ({
   createServerPairingCredential: mocks.createCredential,
   isLoopbackHostname: (host: string) => host === "localhost" || host.startsWith("127."),
 }));
-vi.mock("~/state/session", () => ({ readEnvironmentScope: () => true }));
+// Other settings modules in this import graph read the real session atoms.
+vi.mock("~/state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/session")>()),
+  readEnvironmentScope: () => true,
+}));
 vi.mock("~/state/environments", () => ({
   usePrimaryEnvironmentId: () => EnvironmentId.make("primary"),
 }));
