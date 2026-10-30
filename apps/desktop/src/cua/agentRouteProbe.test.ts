@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Writes stand-in helper scripts for a real subprocess probe.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -59,6 +60,34 @@ describe("agent route probe (real subprocesses)", () => {
         kind: "failed",
         reason: "exited before answering (code 134)",
       });
+    }),
+  );
+  it.live("a stopped probe ends the helper it started and says so", () =>
+    Effect.promise(async () => {
+      // It records its pid and never answers, as a helper stuck before its handshake.
+      using helper = standIn(
+        `const fs = require("node:fs"); const path = require("node:path");
+const file = path.join(path.dirname(process.argv[1]), "pid");
+fs.writeFileSync(file + ".tmp", String(process.pid)); fs.renameSync(file + ".tmp", file);
+setInterval(() => {}, 1000);`,
+      );
+      const pidFile = NodePath.join(NodePath.dirname(helper.target.args[0] ?? ""), "pid");
+      const started = new Promise<void>((resolve) => {
+        const watcher = NodeFS.watch(NodePath.dirname(pidFile), () => {
+          if (!NodeFS.existsSync(pidFile)) return;
+          watcher.close();
+          resolve();
+        });
+      });
+      const cancel = new AbortController();
+      const outcome = probeAgentRoute(helper.target, cancel.signal);
+      await started;
+      const pid = Number(NodeFS.readFileSync(pidFile, "utf8"));
+      cancel.abort();
+      assert.deepEqual(await outcome, { kind: "failed", reason: "stopped" });
+      // Gone, or a zombie its new parent has yet to reap: either way it runs no more.
+      const state = NodeChildProcess.spawnSync("ps", ["-o", "stat=", "-p", String(pid)]);
+      assert.match(String(state.stdout).trim(), /^(Z.*)?$/);
     }),
   );
 });

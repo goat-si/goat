@@ -37,8 +37,9 @@ import {
   type HelperProof,
   type HelperReadinessState,
 } from "./helperReadiness.ts";
-import { ComputerUseHelperError, helperBundle, type HelperBundle } from "./ComputerUseHelper.ts";
-import type { HelperServiceManager } from "./ComputerUseHelperService.ts";
+import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
+import { managerPerChannel } from "./ComputerUseHelperService.ts";
+import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -129,16 +130,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const mutex = yield* Semaphore.make(1);
   const crashes = yield* Queue.unbounded<OwnedHost>();
   let owned: OwnedHost | undefined;
-  /** This environment's helper service per channel; generations of the host claim it in turn. */
-  const helperServices = new Map<string, HelperServiceManager>();
-  const helperServiceOf = (bundle: HelperBundle) => {
-    let service = helperServices.get(bundle.bundleId);
-    if (service === undefined) {
-      service = native.helperService(bundle);
-      helperServices.set(bundle.bundleId, service);
-    }
-    return service;
-  };
+  const helperServiceOf = managerPerChannel(native.helperService);
+  const requests = makeStopFirstRequests();
   let currentRequest: DesktopCuaDriverRequest | undefined;
   let closed = false;
   // The server learns the helper's readiness from these reports; only a helper build sends them.
@@ -160,16 +153,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
    * What a helper said it can do when it started, read from its hello: an agent turn's start and a
    * readiness check's both start one (#1532), and either is the build that runs next.
    */
-  const learnHelper = (
-    session:
-      | {
-          readonly canWatch?: boolean;
-          readonly reportsInput?: boolean;
-          readonly canFrame?: boolean;
-          readonly canCheckCapture?: boolean;
-        }
-      | undefined,
-  ) => {
+  const learnHelper = (session: Partial<HelperFeatures> | undefined) => {
     helperCanWatch = session?.canWatch === true;
     // Only macOS agents run through a connection helper that sees a person's input.
     helperReportsInput = environment.platform === "darwin" && session?.reportsInput === true;
@@ -234,14 +218,14 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
     });
 
-  // UniFFI calls can outlive cancellation. Retain the host until every native
-  // promise settles, even after the public shutdown deadline has elapsed.
+  // A helper host's stop cancels its start; an uncancellable UniFFI start settles first.
   const retire = (entry: OwnedHost): Promise<void> => {
     if (!entry.cleanup) {
       entry.cleanup = (async () => {
-        await settle(entry.started);
+        if (!entry.helper) await settle(entry.started);
         entry.abort.abort();
         await settle(Promise.resolve().then(() => entry.host.stop()));
+        await settle(entry.started);
         if (entry.monitor) await entry.monitor;
         entry.host.uniffiDestroy();
         if (owned === entry) owned = undefined;
@@ -327,9 +311,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   /** The bundle id the driver must report as its parent application. */
   const engineBundleId = (engine: Engine) =>
     engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId;
-  const engineGrants = (engine: Engine, prompt: boolean): Promise<Grants> =>
+  const engineGrants = (engine: Engine, prompt: boolean, signal?: AbortSignal): Promise<Grants> =>
     engine.kind === "helper"
-      ? native.helperGrants(engine.bundle, prompt, environment.platform)
+      ? native.helperGrants(engine.bundle, prompt, environment.platform, signal)
       : prompt
         ? native.loadElectron().then((electron) => {
             const granted = electron.hasRequiredMacOSPermissions(
@@ -349,10 +333,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   ];
 
   // Both request-time listings and manifest refreshes must stay inside the helper's seal check.
-  const helperListing = (engine: Engine) =>
+  const helperListing = (engine: Engine, signal?: AbortSignal) =>
     engine.kind === "helper" &&
     (environment.platform === "darwin" || environment.platform === "win32")
-      ? () => native.helperApps(engine.bundle, environment.platform)
+      ? () => native.helperApps(engine.bundle, environment.platform, signal)
       : undefined;
 
   const handleAppsRequest = makeAppsRequestHandler({
@@ -373,7 +357,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       scope,
       principal: engine.kind === "helper" ? engine.bundle.bundleId : environment.appUserModelId,
     });
-    const listApplications = helperListing(engine);
+    // A Stop of the start being handled cancels its listing.
+    const listApplications = helperListing(engine, requests.signal());
     const manifestInput = {
       binaryPath: enginePath(engine),
       scope,
@@ -506,7 +491,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const grants =
       known ??
       (yield* Effect.tryPromise(() =>
-        selected ? engineGrants(selected, false) : native.checkGrants(),
+        selected ? engineGrants(selected, false, requests.signal()) : native.checkGrants(),
       ).pipe(
         Effect.orElseSucceed((): Grants => ({ accessibility: false, screenRecording: false })),
       ));
@@ -571,7 +556,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const agentRoute =
       selected.kind === "helper" && environment.platform === "darwin"
         ? agentRouteFailure(
-            yield* Effect.promise(() => native.agentRoute(connection.value.mcp)),
+            yield* Effect.promise(() => native.agentRoute(connection.value.mcp, requests.signal())),
             COMPUTER_USE_HELPER_NAME,
           )
         : undefined;
@@ -684,10 +669,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       captured && selected.kind === "helper" && helperCanCheckCapture
         ? captureCheckFailure(
             yield* Effect.promise(() =>
-              native.captureCheck(selected.bundle, {
-                pid: native.processId,
-                windowId: windowId.value,
-              }),
+              native.captureCheck(
+                selected.bundle,
+                { pid: native.processId, windowId: windowId.value },
+                requests.signal(),
+              ),
             ),
             COMPUTER_USE_HELPER_NAME,
           )
@@ -778,6 +764,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     request: DesktopCuaDriverRequest,
   ) {
     if (closed) return;
+    // A late Stop of an earlier start leaves the newer start's host running.
+    if (!request.enabled && requests.late(request.requestId))
+      return yield* report(request.requestId, "stopped");
     currentRequest = request;
     if (!request.enabled) {
       const stopped = yield* stop;
@@ -809,7 +798,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         if (selected.kind === "helper") learnHelper(undefined);
         if (environment.platform === "darwin") {
           // Prompts as whoever owns the grants: the helper when it ships, else GOAT itself.
-          const grants = yield* Effect.tryPromise(() => engineGrants(selected, true));
+          const grants = yield* Effect.tryPromise(() =>
+            engineGrants(selected, true, requests.signal()),
+          );
           if (selected.kind === "helper") {
             helperSeen = true;
             yield* noteHelper((state) => withGrants(state, grants, true));
@@ -825,13 +816,16 @@ export const make = Effect.fn("desktop.cua.make")(function* (
           // Unproven, or proven for a generation an update has since replaced.
           if (
             selected.kind === "helper" &&
+            !requests.stopped(request.requestId) &&
             (!helperState.confirmed ||
               (provenBundle !== undefined && provenBundle !== selected.bundle.bundlePath))
           )
             yield* reprove(request, grants);
         } else if (selected.kind === "helper") {
           // Windows has no grant to prompt for; a desktop the helper cannot use says why.
-          const ready = yield* Effect.tryPromise(() => engineGrants(selected, false));
+          const ready = yield* Effect.tryPromise(() =>
+            engineGrants(selected, false, requests.signal()),
+          );
           helperSeen = true;
           yield* noteHelper((state) => withGrants(state, ready, false));
           if (ready.detail !== undefined || !ready.accessibility || !ready.screenRecording) {
@@ -843,8 +837,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             return;
           }
         }
-        if (!(yield* spawn(selected, "agents"))) return;
+        if (!requests.stopped(request.requestId) && !(yield* spawn(selected, "agents"))) return;
       }
+      if (requests.stopped(request.requestId)) return yield* unavailable(request.requestId);
       const entry = owned!;
       const connection = yield* Effect.tryPromise(() => entry.started).pipe(
         Effect.timeout("20 seconds"),
@@ -859,21 +854,22 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         yield* noteHelper((state) => withRunning(state, true));
       }
       if (session) yield* followers.attach(session);
-      if (!closed)
-        yield* publisher.publishCuaReport({
-          version: 1,
-          type: "cuaDriverReport",
-          requestId: request.requestId,
-          status: "ready",
-          mcp,
-        });
+      if (closed) return;
+      if (entry.cleanup) return yield* unavailable(request.requestId);
+      yield* publisher.publishCuaReport({
+        version: 1,
+        type: "cuaDriverReport",
+        requestId: request.requestId,
+        status: "ready",
+        mcp,
+      });
     }).pipe(
       Effect.catch((error) =>
         stop.pipe(
           // A helper that could not start, such as one whose identity no longer matches, is
           // not the one an earlier check confirmed.
           Effect.andThen(
-            selected.kind === "helper"
+            selected.kind === "helper" && !requests.stopped(request.requestId)
               ? noteHelper((state) =>
                   withoutProof(
                     state,
@@ -903,7 +899,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         ),
       ),
     );
-  }, mutex.withPermits(1));
+  });
 
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
@@ -938,7 +934,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* Stream.runForEach(publisher.cuaAppsRequests, handleAppsRequest).pipe(
         Effect.forkScoped,
       );
-      yield* Stream.runForEach(publisher.cuaRequests, handleRequest).pipe(Effect.forkScoped);
+      yield* requests
+        .handle(publisher.cuaRequests, handleRequest, mutex.withPermits(1), () => {
+          if (owned && !owned.cleanup) void retire(owned).catch(() => undefined);
+        })
+        .pipe(Effect.forkScoped);
       yield* publisher.cuaWatchApps.pipe(
         Stream.runForEach((apps) =>
           mutex.withPermits(1)(

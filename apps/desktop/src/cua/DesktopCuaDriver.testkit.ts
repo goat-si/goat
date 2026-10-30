@@ -105,7 +105,21 @@ export const fixture = Effect.fn(function* (
     development?: { readonly appUserModelId: string };
     denyPermissions?: boolean;
     failFirstStart?: boolean;
-    hold?: "start" | "stop" | "monitor";
+    /**
+     * helperStart holds the first agent helper's start, checkStart the first readiness check
+     * helper's, until release or that host's stop.
+     */
+    hold?:
+      | "start"
+      | "stop"
+      | "monitor"
+      | "helperStart"
+      | "checkStart"
+      | "agentManifest"
+      | "manifestOnly"
+      | "listing"
+      | "capture"
+      | "grants";
     tools?: Record<string, ToolResult>;
     /** After this tool answers, the helper's service identity is withdrawn (a second hello). */
     withdrawIdentityAfter?: string;
@@ -154,6 +168,17 @@ export const fixture = Effect.fn(function* (
   const helperWatches = yield* Queue.unbounded<"watch" | "unwatch">();
   let raise: ((active: boolean, windowId: number) => void) | undefined;
   const starting = yield* Deferred.make<void>();
+  const helperStarting = yield* Deferred.make<void>();
+  let helperStartHeld = false;
+  const manifestPreparing = yield* Deferred.make<void>();
+  let manifestHeld = false;
+  const stopSeen = yield* Deferred.make<void>();
+  const listing = yield* Deferred.make<void>();
+  let listingCancelled = false;
+  const capturing = yield* Deferred.make<void>();
+  let captureCancelled = false;
+  const askingGrants = yield* Deferred.make<void>();
+  let grantsCancelled = false;
   const stopping = yield* Deferred.make<void>();
   const destroyed = yield* Queue.unbounded<void>();
   const agentMonitors = yield* Queue.unbounded<Effect.Effect<void>>();
@@ -224,8 +249,18 @@ export const fixture = Effect.fn(function* (
       return createClient();
     },
     checkGrants: async () => ({ accessibility: allowed, screenRecording: allowed }),
-    helperGrants: async (bundle, prompt) => {
+    helperGrants: async (bundle, prompt, _platform, signal) => {
       helperProbes.push({ bundleId: bundle.bundleId, prompt });
+      // grants holds the first prompt until the start it serves is stopped.
+      if (options.hold === "grants" && prompt && signal && !grantsCancelled) {
+        Deferred.doneUnsafe(askingGrants, Exit.void);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        grantsCancelled = true;
+        throw signal.reason;
+      }
       if (helperAnswer?.fails) throw helperAnswer.fails;
       const granted = helperAnswer?.granted ?? false;
       return {
@@ -242,8 +277,18 @@ export const fixture = Effect.fn(function* (
         ...(helperAnswer?.blocker === undefined ? {} : { blocker: helperAnswer.blocker }),
       };
     },
-    captureCheck: async (bundle, target) => {
+    captureCheck: async (bundle, target, signal) => {
       captureChecks.push({ bundleId: bundle.bundleId, ...target });
+      // capture holds the first capture check until the start it serves is stopped.
+      if (options.hold === "capture" && signal && !captureCancelled) {
+        Deferred.doneUnsafe(capturing, Exit.void);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        captureCancelled = true;
+        return { kind: "failed", reason: "stopped" };
+      }
       const outcome = options.captureCheck ?? "pictured";
       if (outcome === "pictured") return { kind: "pictured", width: 64, height: 40 };
       if (outcome === "crashed") return { kind: "failed", reason: "exited (code 134)" };
@@ -285,6 +330,7 @@ export const fixture = Effect.fn(function* (
         approved: true,
       });
       const exit = Promise.withResolvers<void>();
+      const stopped = Promise.withResolvers<boolean>();
       let running = false;
       let readinessClient: ReturnType<typeof createClient> | undefined;
       let listener: ((event: HelperEvent["event"]) => void) | undefined;
@@ -336,6 +382,20 @@ export const fixture = Effect.fn(function* (
             };
           }
           Deferred.doneUnsafe(starting, Exit.void);
+          // agentManifest also holds that agent's start, until its host stops.
+          const held =
+            options.hold === (helper.verify ? "checkStart" : "helperStart") ||
+            (options.hold === "agentManifest" && !helper.verify);
+          if (held && !helperStartHeld) {
+            helperStartHeld = true;
+            Deferred.doneUnsafe(helperStarting, Exit.void);
+            // As makeHelperHost: a stop during the start cancels it.
+            const until =
+              options.hold === "agentManifest"
+                ? stopped.promise
+                : Promise.race([gate.promise.then(() => false), stopped.promise]);
+            if (await until) throw new Error("Computer use stopped while the helper was starting.");
+          }
           // As makeHelperHost: an agent connection gets the helper's own command, no socket.
           if (helper.direct)
             return {
@@ -368,6 +428,7 @@ export const fixture = Effect.fn(function* (
         stop: async () => {
           stops++;
           running = false;
+          stopped.resolve(true);
           readinessClient?.uniffiDestroy?.();
           readinessClient = undefined;
           exit.resolve();
@@ -391,6 +452,16 @@ export const fixture = Effect.fn(function* (
     },
     imageHasContent: async () => !options.blankCapture,
     prepareManifest: async (input) => {
+      // agentManifest and manifestOnly hold the first agent manifest until release.
+      if (
+        (options.hold === "agentManifest" || options.hold === "manifestOnly") &&
+        input.scope === "agents" &&
+        !manifestHeld
+      ) {
+        manifestHeld = true;
+        Deferred.doneUnsafe(manifestPreparing, Exit.void);
+        await gate.promise;
+      }
       const path = `${input.directory}/${input.scope}.yaml`;
       prepared.set(path, { scope: input.scope, hostBundleIds: input.hostBundleIds });
       const apps =
@@ -421,9 +492,19 @@ export const fixture = Effect.fn(function* (
       if (text === undefined) throw new Error("missing manifest");
       return text;
     },
-    helperApps: async (bundle) => {
+    helperApps: async (bundle, _platform, signal) => {
       helperAppListings.push(bundle.bundleId);
       if (appListingFails) throw new Error("driver_untrusted");
+      // listing holds the first listing until the start it serves is stopped.
+      if (options.hold === "listing" && signal && !listingCancelled) {
+        Deferred.doneUnsafe(listing, Exit.void);
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        listingCancelled = true;
+        throw signal.reason;
+      }
       return options.appListing ? options.appListing() : listedApps;
     },
     processId: HOST_PID,
@@ -522,7 +603,12 @@ export const fixture = Effect.fn(function* (
           Queue.offer(appReports, report).pipe(Effect.asVoid),
       };
     }),
-    cuaRequests: Stream.fromQueue(requests),
+    // A Stop passes here just before the driver notes it, in the same fiber.
+    cuaRequests: Stream.fromQueue(requests).pipe(
+      Stream.tap((request) =>
+        request.enabled ? Effect.void : Deferred.succeed(stopSeen, undefined),
+      ),
+    ),
     cuaWatch: Stream.fromQueue(watching),
     cuaWatchApps: Stream.fromQueue(approvals).pipe(
       Stream.flatMap(({ apps, done }) =>
@@ -622,6 +708,19 @@ export const fixture = Effect.fn(function* (
     next: Queue.take(reports),
     pendingReports: Queue.size(reports),
     starting: Deferred.await(starting),
+    helperStarting: Deferred.await(helperStarting),
+    manifestPreparing: Deferred.await(manifestPreparing),
+    /** The driver has seen the first Stop sent to it. */
+    stopSeen: Deferred.await(stopSeen),
+    /** The agent manifest's app listing has started. */
+    listing: Deferred.await(listing),
+    listingCancelled: () => listingCancelled,
+    /** The readiness check's capture check has started. */
+    capturing: Deferred.await(capturing),
+    captureCancelled: () => captureCancelled,
+    /** The agent start's grant prompt is showing. */
+    askingGrants: Deferred.await(askingGrants),
+    grantsCancelled: () => grantsCancelled,
     stopping: Deferred.await(stopping),
     destroyed: Queue.take(destroyed),
     nextAgentCrash: Queue.take(agentMonitors),

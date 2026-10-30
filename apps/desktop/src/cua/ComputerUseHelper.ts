@@ -214,8 +214,11 @@ export interface HelperSession {
    */
   readonly frames: (framesId: number, targets: DesktopCuaFrames["targets"]) => Promise<void>;
   readonly onFrame: (listener: (frame: HelperFrame) => void) => () => void;
-  /** Ends stdin, the helper's ownership signal, and waits for exit; kills it after a deadline. */
-  readonly close: () => Promise<void>;
+  /**
+   * Ends stdin, the helper's ownership signal, and waits for exit; kills it after a deadline, or
+   * at once when forced (a start cancelled before it served anyone).
+   */
+  readonly close: (options?: { readonly force?: boolean }) => Promise<void>;
   /** Settles when the driver exits on its own or the helper goes away. */
   readonly ended: Promise<void>;
 }
@@ -227,9 +230,28 @@ const CLOSE_TIMEOUT_MS = 8_000;
 const timeout = (ms: number) =>
   new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), ms).unref?.());
 
+/** Settles as the signal aborts; never, without one. */
+const abortedBy = (signal: AbortSignal | undefined) =>
+  new Promise<"aborted">((resolve) => {
+    if (signal?.aborted) resolve("aborted");
+    else signal?.addEventListener("abort", () => resolve("aborted"), { once: true });
+  });
+
+/** The promise, unless the signal aborts first: then its reason. */
+export const unlessAborted = async <A>(promise: Promise<A>, signal: AbortSignal): Promise<A> => {
+  const result = await Promise.race([promise.then((value) => ({ value })), abortedBy(signal)]);
+  if (result === "aborted") throw signal.reason;
+  return result.value;
+};
+
+/**
+ * Opens a session once the helper greets. An abort before the greeting kills the helper's
+ * process group (it has started no driver yet) and rejects with the signal's reason.
+ */
 export async function openHelperSession(
   process: HelperProcess,
   expectedBundleId: string,
+  signal?: AbortSignal,
 ): Promise<HelperSession> {
   const pending = new Map<string, (reply: typeof Reply.Type) => void>();
   // Which watch each in-flight watch/unwatch request puts in force once answered.
@@ -279,9 +301,10 @@ export async function openHelperSession(
   });
   lines.on("close", finish);
 
-  const close = async () => {
+  const close = async (options?: { readonly force?: boolean }) => {
     process.stdin.end();
     if (
+      options?.force === true ||
       (await Promise.race([
         process.exited.then(() => "exited" as const),
         timeout(CLOSE_TIMEOUT_MS),
@@ -291,7 +314,13 @@ export async function openHelperSession(
     await process.exited;
   };
 
-  const hello = await Promise.race([greeting, timeout(HELLO_TIMEOUT_MS)]);
+  const hello = await Promise.race([greeting, timeout(HELLO_TIMEOUT_MS), abortedBy(signal)]);
+  if (hello === "aborted") {
+    process.stdin.end();
+    process.kill("SIGKILL");
+    await process.exited;
+    throw signal?.reason;
+  }
   const refuse = async (code: string, message: string): Promise<never> => {
     await close();
     throw new ComputerUseHelperError(code, message);
@@ -383,12 +412,15 @@ export async function openHelperSession(
 export async function listHelperApplications(
   process: HelperProcess,
   expectedBundleId: string,
+  signal?: AbortSignal,
 ): Promise<ReadonlyArray<CuaDriverListedApp>> {
-  const session = await openHelperSession(process, expectedBundleId);
+  const session = await openHelperSession(process, expectedBundleId, signal);
   try {
-    return decodeListedApps(await session.request("listApps")).apps;
+    const listed = session.request("listApps");
+    return decodeListedApps(await (signal ? unlessAborted(listed, signal) : listed)).apps;
   } finally {
-    await session.close();
+    // Cancelled, it is killed with the driver it runs: nothing waits for its apps any more.
+    await session.close({ force: signal?.aborted === true });
   }
 }
 
@@ -396,12 +428,17 @@ export async function probeHelperGrants(
   process: HelperProcess,
   expectedBundleId: string,
   prompt: boolean,
+  signal?: AbortSignal,
 ): Promise<typeof HelperGrants.Type & { readonly features: HelperFeatures }> {
-  const session = await openHelperSession(process, expectedBundleId);
+  const session = await openHelperSession(process, expectedBundleId, signal);
   try {
-    return { ...(await session.permissions(prompt)), features: helperFeatures(session) };
+    const granted = session.permissions(prompt);
+    return {
+      ...(await (signal ? unlessAborted(granted, signal) : granted)),
+      features: helperFeatures(session),
+    };
   } finally {
-    await session.close();
+    await session.close({ force: signal?.aborted === true });
   }
 }
 
@@ -433,15 +470,17 @@ export async function checkHelperCapture(
   process: HelperProcess,
   expectedBundleId: string,
   target: { readonly pid: number; readonly windowId: number },
+  signal?: AbortSignal,
 ): Promise<CaptureCheckOutcome> {
   let session: HelperSession;
   try {
-    session = await openHelperSession(process, expectedBundleId);
+    session = await openHelperSession(process, expectedBundleId, signal);
   } catch (error) {
     return { kind: "failed", reason: helperFailure(error) };
   }
   try {
-    const size = decodeCaptureSize(await session.request("captureCheck", target));
+    const captured = session.request("captureCheck", target);
+    const size = decodeCaptureSize(await (signal ? unlessAborted(captured, signal) : captured));
     return size._tag === "Some"
       ? { kind: "pictured", ...size.value }
       : { kind: "failed", reason: "it answered without a picture" };
@@ -459,7 +498,8 @@ export async function checkHelperCapture(
           : helperFailure(error),
     };
   } finally {
-    await session.close();
+    // Cancelled, it is killed with the driver it runs.
+    await session.close({ force: signal?.aborted === true });
   }
 }
 
@@ -603,44 +643,60 @@ export const makeHelperService = (
   spawn: (executable: string) => HelperProcess,
 ): HelperServiceManager =>
   makeHelperServiceManager({
-    open: (executable) => openHelperSession(spawn(executable), bundleId),
+    open: (executable, signal) => openHelperSession(spawn(executable), bundleId, signal),
   });
 
+/** One start of a host and everything it opened, released together. */
+interface HelperRun {
+  readonly abort: AbortController;
+  starting?: Promise<EmbeddedDriverConnection>;
+  connection?: EmbeddedDriverConnection | undefined;
+  session?: HelperSession | undefined;
+  claim?: HelperServiceClaim | undefined;
+  releaseSocket?: (() => Promise<void>) | undefined;
+}
+
 export function makeHelperHost(options: HelperHostOptions) {
-  let session: HelperSession | undefined;
-  let claim: HelperServiceClaim | undefined;
-  let starting: Promise<EmbeddedDriverConnection> | undefined;
-  let releaseSocket: (() => Promise<void>) | undefined;
-  let connection: EmbeddedDriverConnection | undefined;
+  let run: HelperRun | undefined;
   let generation = 0;
   const service = options.direct
     ? (options.service ?? makeHelperService(options.bundle.bundleId, options.spawn))
     : undefined;
 
-  const release = async () => {
-    const current = session;
-    const held = claim;
-    session = undefined;
-    claim = undefined;
-    connection = undefined;
-    if (held) await held.release();
-    else if (current) {
-      await current.stop().catch(() => undefined);
-      await current.close();
+  /**
+   * Idempotent: what a run opened is taken from it before it is released. A run stopped before it
+   * started is killed outright, as is one whose release a stop overtakes: its helper may be busy
+   * starting and unable to answer a stop request.
+   */
+  const release = async (current: HelperRun) => {
+    const { session, claim, releaseSocket } = current;
+    const signal = current.abort.signal;
+    const cancelled = signal.aborted && current.connection === undefined;
+    current.session = undefined;
+    current.claim = undefined;
+    current.releaseSocket = undefined;
+    current.connection = undefined;
+    if (claim) await claim.release();
+    else if (session) {
+      if (!cancelled) await unlessAborted(session.stop(), signal).catch(() => undefined);
+      await session.close({ force: signal.aborted });
     }
     await releaseSocket?.();
-    releaseSocket = undefined;
   };
 
-  const begin = async (): Promise<EmbeddedDriverConnection> => {
+  const begin = async (current: HelperRun): Promise<EmbeddedDriverConnection> => {
+    const signal = current.abort.signal;
     if (service) {
-      const held = await service.claim(options.bundle.executable, "desktop", { observe: true });
-      claim = held;
-      session = held.service.session;
-      connection = {
+      const held = await service.claim(options.bundle.executable, "desktop", {
+        observe: true,
+        signal,
+      });
+      current.claim = held;
+      current.session = held.service.session;
+      return {
         socketPath: "",
-        pid: claim.service.pid,
-        generation: String(claim.service.generation),
+        pid: held.service.pid,
+        generation: String(held.service.generation),
         driverVersion: options.driverVersion,
         contractVersion: "",
         mcpProtocolVersion: "",
@@ -650,78 +706,94 @@ export function makeHelperHost(options: HelperHostOptions) {
           environment: [...options.environment],
         },
       };
-      return connection;
     }
     const opened = await openHelperSession(
       options.spawn(options.bundle.executable),
       options.bundle.bundleId,
+      signal,
     );
-    session = opened;
-    try {
-      if (!options.socket)
-        throw new ComputerUseHelperError("missing_pipe", "The Windows helper needs a named pipe.");
-      const socket = await options.socket();
-      releaseSocket = socket.release;
-      const started = await opened.start({
+    current.session = opened;
+    if (!options.socket)
+      throw new ComputerUseHelperError("missing_pipe", "The Windows helper needs a named pipe.");
+    const socket = await unlessAborted(options.socket(), signal);
+    current.releaseSocket = socket.release;
+    const started = await unlessAborted(
+      opened.start({
         socketPath: socket.path,
         capabilityManifestPath: options.capabilityManifestPath,
         environment: options.environment,
         noOverlay: false,
-      });
-      const metadata = await options.readMetadata(started.socketPath);
-      const mismatch = daemonMismatch(metadata, {
-        pid: started.driverPid,
-        bundleId: options.bundle.bundleId,
-        driverVersion: options.driverVersion,
-      });
-      if (mismatch) throw new ComputerUseHelperError("incompatible_daemon", mismatch);
-      connection = {
-        socketPath: started.socketPath,
-        pid: started.driverPid,
-        generation: String(++generation),
-        driverVersion: metadata.driverVersion,
-        contractVersion: metadata.contractVersion,
-        mcpProtocolVersion: metadata.mcpProtocolVersion,
-        // The same proxy invocation the SDK host hands out: arguments carry the whole route.
-        mcp: {
-          command: options.mcpThroughHelper ? options.bundle.executable : options.bundle.driverPath,
-          args: [
-            "mcp",
-            "--embedded",
-            "--socket",
-            started.socketPath,
-            "--host-bundle-id",
-            options.bundle.bundleId,
-          ],
-          environment: [],
-        },
-      };
-      return connection;
-    } catch (error) {
-      await release();
-      throw error;
-    }
+      }),
+      signal,
+    );
+    const metadata = await unlessAborted(options.readMetadata(started.socketPath), signal);
+    const mismatch = daemonMismatch(metadata, {
+      pid: started.driverPid,
+      bundleId: options.bundle.bundleId,
+      driverVersion: options.driverVersion,
+    });
+    if (mismatch) throw new ComputerUseHelperError("incompatible_daemon", mismatch);
+    return {
+      socketPath: started.socketPath,
+      pid: started.driverPid,
+      generation: String(++generation),
+      driverVersion: metadata.driverVersion,
+      contractVersion: metadata.contractVersion,
+      mcpProtocolVersion: metadata.mcpProtocolVersion,
+      // The same proxy invocation the SDK host hands out: arguments carry the whole route.
+      mcp: {
+        command: options.mcpThroughHelper ? options.bundle.executable : options.bundle.driverPath,
+        args: [
+          "mcp",
+          "--embedded",
+          "--socket",
+          started.socketPath,
+          "--host-bundle-id",
+          options.bundle.bundleId,
+        ],
+        environment: [],
+      },
+    };
   };
 
   return {
-    servicePid: () => session?.pid,
+    servicePid: () => run?.session?.pid,
     /** The running generation's helper session, for its watch; undefined between generations. */
-    session: () => session,
+    session: () => run?.session,
     start: (): Promise<EmbeddedDriverConnection> => {
-      if (connection) return Promise.resolve(connection);
+      if (run?.connection) return Promise.resolve(run.connection);
       // Racing starts share one launch.
-      starting ??= begin().finally(() => {
-        starting = undefined;
-      });
-      return starting;
+      if (run?.starting) return run.starting;
+      const current: HelperRun = { abort: new AbortController() };
+      run = current;
+      current.starting = begin(current).then(
+        (connection) => (current.connection = connection),
+        async (error: unknown) => {
+          // Still the run while it is released, so a stop can overtake that release.
+          await release(current);
+          if (run === current) run = undefined;
+          throw error;
+        },
+      );
+      return current.starting;
     },
-    // A stop during a start ends what that start opens, so no claim outlives its host.
+    /**
+     * Cancels a start still running or failing, so a stop never waits out its deadlines, and
+     * releases what it opened. A later start launches its own run.
+     */
     stop: async () => {
-      await starting?.catch(() => undefined);
-      await release();
+      const current = run;
+      run = undefined;
+      if (!current) return;
+      if (!current.connection)
+        current.abort.abort(
+          new ComputerUseHelperError("aborted", "Computer use stopped while it was starting."),
+        );
+      await current.starting?.catch(() => undefined);
+      await release(current);
     },
     waitForExit: async (_generation: string, opts?: { readonly signal?: AbortSignal }) => {
-      const ended = session?.ended ?? Promise.resolve();
+      const ended = run?.session?.ended ?? Promise.resolve();
       await new Promise<void>((resolve, reject) => {
         const abort = () => reject(new ComputerUseHelperError("aborted", "Stopped waiting."));
         if (opts?.signal?.aborted) return abort();

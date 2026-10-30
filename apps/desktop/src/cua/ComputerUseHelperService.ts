@@ -44,7 +44,8 @@ const processAlive = (pid: number) => {
  * it serves its claims and stops with the last. One manager serves one bundle id.
  */
 export function makeHelperServiceManager<S extends ServiceSession = HelperSession>(options: {
-  readonly open: (executable: string) => Promise<S>;
+  /** Opens a service; an aborted signal should end a launch that has not answered yet. */
+  readonly open: (executable: string, signal?: AbortSignal) => Promise<S>;
   readonly alive?: (pid: number) => boolean;
 }) {
   interface Running {
@@ -72,8 +73,8 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
     running.stopping ??= running.service.session.close();
     await running.stopping;
   };
-  const start = async (executable: string): Promise<Running> => {
-    const session = await options.open(executable);
+  const start = async (executable: string, signal?: AbortSignal): Promise<Running> => {
+    const session = await options.open(executable, signal);
     let ended = false;
     void session.ended.then(() => {
       ended = true;
@@ -92,9 +93,22 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
     return running;
   };
   return {
-    /** An observing claim gets a service no other observer holds. */
-    claim: (executable: string, owner: string, claimOptions: { readonly observe?: boolean } = {}) =>
-      serialized(async (): Promise<HelperServiceClaim<S>> => {
+    /**
+     * An observing claim gets a service no other observer holds. A claim whose signal aborts
+     * first rejects with its reason and holds nothing. Waiting for its turn, it rejects at once
+     * and its turn does nothing; once its turn began, the cancelled open and the close of a
+     * service it started finish first.
+     */
+    claim: (
+      executable: string,
+      owner: string,
+      claimOptions: { readonly observe?: boolean; readonly signal?: AbortSignal } = {},
+    ) => {
+      const signal = claimOptions.signal;
+      let begun = false;
+      const claimed = serialized(async (): Promise<HelperServiceClaim<S>> => {
+        begun = true;
+        signal?.throwIfAborted();
         let running = current;
         if (
           running &&
@@ -107,33 +121,77 @@ export function makeHelperServiceManager<S extends ServiceSession = HelperSessio
           await stopIfUnclaimed(running);
           running = undefined;
         }
-        running ??= await start(executable);
+        running ??= await start(executable, signal);
+        if (signal?.aborted) {
+          await stopIfUnclaimed(running);
+          signal.throwIfAborted();
+        }
         const owned = running;
         const token = NodeCrypto.randomBytes(32).toString("base64url");
         const claim: HelperServiceClaim<S> = {
           service: owned.service,
           owner,
           token,
-          release: () =>
-            serialized(async () => {
-              if (!owned.claims.delete(claim)) return;
-              sessions.delete(token);
-              if (owned.observer === claim) {
-                owned.observer = undefined;
-                // What it watched and captured may still run, so no later claim inherits it.
-                if (current === owned) current = undefined;
-              }
-              await stopIfUnclaimed(owned);
-            }),
+          // Not queued behind claims: a stop never waits for another service's start. A claim
+          // decides on reuse and adds itself with no await between, so this cannot split it.
+          release: async () => {
+            if (!owned.claims.delete(claim)) return;
+            sessions.delete(token);
+            if (owned.observer === claim) {
+              owned.observer = undefined;
+              // What it watched and captured may still run, so no later claim inherits it.
+              if (current === owned) current = undefined;
+            }
+            await stopIfUnclaimed(owned);
+          },
         };
         owned.claims.add(claim);
         if (claimOptions.observe) owned.observer = claim;
         sessions.set(token, claim);
         return claim;
-      }),
+      });
+      if (!signal) return claimed;
+      return new Promise<HelperServiceClaim<S>>((resolve, reject) => {
+        let settled = false;
+        const cancel = () => {
+          if (settled || begun) return;
+          settled = true;
+          reject(signal.reason);
+        };
+        if (signal.aborted) cancel();
+        else signal.addEventListener("abort", cancel, { once: true });
+        claimed.then(
+          (claim) => {
+            signal.removeEventListener("abort", cancel);
+            settled = true;
+            resolve(claim);
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", cancel);
+            if (settled) return;
+            settled = true;
+            reject(error);
+          },
+        );
+      });
+    },
     /** The live claim a token names, or undefined. */
     sessionFor: (token: string) => sessions.get(token),
   };
 }
 
 export type HelperServiceManager = ReturnType<typeof makeHelperServiceManager<HelperSession>>;
+
+/** One manager per channel (bundle id), made on its first claim and kept for the next. */
+export const managerPerChannel = <B extends { readonly bundleId: string }>(
+  make: (bundle: B) => HelperServiceManager,
+) => {
+  const managers = new Map<string, HelperServiceManager>();
+  return (bundle: B) => {
+    const known = managers.get(bundle.bundleId);
+    if (known) return known;
+    const made = make(bundle);
+    managers.set(bundle.bundleId, made);
+    return made;
+  };
+};

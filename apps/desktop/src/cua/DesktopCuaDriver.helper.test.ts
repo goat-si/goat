@@ -465,6 +465,228 @@ describe("DesktopCuaDriver with the GOAT Computer Use helper", () => {
       }),
     ),
   );
+
+  it.effect("a Stop sent while the agent helper is still starting ends that start and stops", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          hold: "helperStart",
+        });
+        yield* test.request("agent");
+        yield* test.helperStarting;
+        // No clock moves: the Stop must not wait out the start's deadline behind it. The server
+        // stops a start under that start's request id.
+        yield* test.request("agent", false);
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.equal((yield* test.next).status, "stopped");
+        const { starts, stops } = test.counts();
+        // The readiness check's helper and the agent's both started, and both were stopped.
+        assert.deepEqual({ starts, stops }, { starts: 2, stops: 2 });
+        yield* test.request("again");
+        assert.equal((yield* test.next).status, "ready");
+      }),
+    ),
+  );
+
+  it.effect(
+    "a Stop sent while the agent's manifest is prepared never reports that start ready",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "agentManifest",
+          });
+          yield* test.request("agent");
+          yield* test.manifestPreparing;
+          // Nothing runs for this start yet, so its Stop can only be noted. The helper it then
+          // starts never answers: only that Stop can end it.
+          yield* test.request("agent", false);
+          yield* test.stopSeen;
+          yield* test.release;
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          const { starts, stops } = test.counts();
+          assert.equal(stops, starts);
+        }),
+      ),
+  );
+
+  it.effect("a late Stop of an earlier start leaves the host a newer start reuses running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("a");
+        assert.equal((yield* test.next).status, "ready");
+        // The server let a newer session start before the earlier one's Stop got here.
+        yield* test.request("b");
+        assert.equal((yield* test.next).status, "ready");
+        const before = test.counts();
+        yield* test.request("a", false);
+        const late = yield* test.next;
+        assert.deepEqual([late.requestId, late.status], ["a", "stopped"]);
+        assert.deepEqual(test.counts(), before);
+        yield* test.request("b", false);
+        const own = yield* test.next;
+        assert.deepEqual([own.requestId, own.status], ["b", "stopped"]);
+        assert.equal(test.counts().stops, before.stops + 1);
+      }),
+    ),
+  );
+
+  it.effect("a Stop of a start cut short leaves the newer start that reuses its host running", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          hold: "manifestOnly",
+        });
+        yield* test.request("a");
+        yield* test.manifestPreparing;
+        // The server let b start before a's Stop got here.
+        yield* test.request("b");
+        yield* test.request("a", false);
+        yield* test.stopSeen;
+        yield* test.release;
+        const cut = yield* test.next;
+        assert.deepEqual([cut.requestId, cut.status], ["a", "unavailable"]);
+        const newer = yield* test.next;
+        assert.deepEqual([newer.requestId, newer.status], ["b", "ready"]);
+        const before = test.counts();
+        const late = yield* test.next;
+        assert.deepEqual([late.requestId, late.status], ["a", "stopped"]);
+        assert.deepEqual(test.counts(), before);
+        yield* test.request("b", false);
+        assert.equal((yield* test.next).status, "stopped");
+        assert.equal(test.counts().stops, before.stops + 1);
+      }),
+    ),
+  );
+
+  it.effect(
+    "a Stop of a start that never got a host leaves the newer start's own host running",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "checkStart",
+          });
+          yield* test.request("a");
+          yield* test.helperStarting;
+          // The server let b start before a's Stop got here; that Stop ends a's readiness check.
+          yield* test.request("b");
+          yield* test.request("a", false);
+          const cut = yield* test.next;
+          assert.deepEqual([cut.requestId, cut.status], ["a", "unavailable"]);
+          const newer = yield* test.next;
+          assert.deepEqual([newer.requestId, newer.status], ["b", "ready"]);
+          const before = test.counts();
+          const late = yield* test.next;
+          assert.deepEqual([late.requestId, late.status], ["a", "stopped"]);
+          assert.deepEqual(test.counts(), before);
+        }),
+      ),
+  );
+
+  it.effect(
+    "a Stop sent while the agent's apps are listed cancels that listing and starts nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "listing",
+          });
+          yield* test.request("agent");
+          yield* test.listing;
+          yield* test.request("agent", false);
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          assert.isTrue(test.listingCancelled());
+          assert.deepEqual(
+            test.helperLaunches.map(({ verify }) => verify),
+            [true],
+          );
+        }),
+      ),
+  );
+
+  it.effect(
+    "a Stop sent during the readiness check's capture check cancels it and starts nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            tools: helperTools({ bundle: HELPER_ID, parent: HELPER_PID }),
+            captureCheck: "pictured",
+            hold: "capture",
+          });
+          yield* test.request("agent");
+          yield* test.capturing;
+          yield* test.request("agent", false);
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          assert.isTrue(test.captureCancelled());
+          assert.deepEqual(
+            test.helperLaunches.map(({ verify }) => verify),
+            [true],
+          );
+        }),
+      ),
+  );
+
+  it.effect(
+    "a Stop sent while the agent start asks for grants cancels the prompt and starts nothing",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const test = yield* fixture({
+            platform: "darwin",
+            helper: { granted: true },
+            hold: "grants",
+          });
+          yield* test.request("agent");
+          yield* test.askingGrants;
+          yield* test.request("agent", false);
+          assert.equal((yield* test.next).status, "unavailable");
+          assert.equal((yield* test.next).status, "stopped");
+          assert.isTrue(test.grantsCancelled());
+          assert.isEmpty(test.helperLaunches);
+        }),
+      ),
+  );
+
+  it.effect("a Stop sent during the start's readiness check starts no agent helper", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({
+          platform: "darwin",
+          helper: { granted: true },
+          hold: "checkStart",
+        });
+        yield* test.request("agent");
+        yield* test.helperStarting;
+        yield* test.request("agent", false);
+        assert.equal((yield* test.next).status, "unavailable");
+        assert.equal((yield* test.next).status, "stopped");
+        // Only the check's helper ever ran, and it was stopped.
+        assert.deepEqual(
+          test.helperLaunches.map(({ verify }) => verify),
+          [true],
+        );
+        assert.deepEqual(test.counts(), { starts: 1, stops: 1, destroys: 1 });
+      }),
+    ),
+  );
 });
 
 describe("DesktopCuaDriver readiness on Windows", () => {

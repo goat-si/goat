@@ -124,6 +124,7 @@ export interface DesktopCuaDriverDependencies {
     bundle: HelperBundle,
     prompt: boolean,
     platform: NodeJS.Platform,
+    signal?: AbortSignal,
   ) => Promise<Grants>;
   /**
    * One capture of GOAT's own window by a fresh helper, the way live pictures capture (macOS);
@@ -132,6 +133,7 @@ export interface DesktopCuaDriverDependencies {
   readonly captureCheck: (
     bundle: HelperBundle,
     target: { readonly pid: number; readonly windowId: number },
+    signal?: AbortSignal,
   ) => Promise<CaptureCheckOutcome>;
   /**
    * The helper bundle this build ships. absent: packaged macOS stays off; other builds may run
@@ -140,7 +142,7 @@ export interface DesktopCuaDriverDependencies {
    */
   readonly helperBundlePath: typeof resolveHelperBundle;
   /** Starts the helper as agents do, from GOAT's own Node runtime, and runs its MCP handshake. */
-  readonly agentRoute: (mcp: AgentRouteCommand) => Promise<AgentRouteOutcome>;
+  readonly agentRoute: (mcp: AgentRouteCommand, signal?: AbortSignal) => Promise<AgentRouteOutcome>;
   /** A new manager for one channel's macOS helper service; the driver keeps one per bundle id. */
   readonly helperService: (bundle: HelperBundle) => HelperServiceManager;
   readonly helperHost: (
@@ -174,6 +176,7 @@ export interface DesktopCuaDriverDependencies {
   readonly helperApps: (
     bundle: HelperBundle,
     platform: NodeJS.Platform,
+    signal?: AbortSignal,
   ) => Promise<ReadonlyArray<CuaDriverListedApp>>;
   readonly processId: number;
   /** Windows manifests name apps by executable path, so GOAT's own is how they name GOAT. */
@@ -219,12 +222,26 @@ export const dependencies: DesktopCuaDriverDependencies = {
       screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
     };
   },
-  helperGrants: (bundle, prompt, platform) =>
+  helperGrants: (bundle, prompt, platform, signal) =>
     platform === "win32"
-      ? probeWindowsReadiness(spawnHelperProcess(bundle.executable, platform), bundle.bundleId)
-      : probeHelperGrants(spawnHelperProcess(bundle.executable, platform), bundle.bundleId, prompt),
-  captureCheck: (bundle, target) =>
-    checkHelperCapture(spawnHelperProcess(bundle.executable, "darwin"), bundle.bundleId, target),
+      ? probeWindowsReadiness(
+          spawnHelperProcess(bundle.executable, platform),
+          bundle.bundleId,
+          signal,
+        )
+      : probeHelperGrants(
+          spawnHelperProcess(bundle.executable, platform),
+          bundle.bundleId,
+          prompt,
+          signal,
+        ),
+  captureCheck: (bundle, target, signal) =>
+    checkHelperCapture(
+      spawnHelperProcess(bundle.executable, "darwin"),
+      bundle.bundleId,
+      target,
+      signal,
+    ),
   helperBundlePath: resolveHelperBundle,
   agentRoute: probeAgentRoute,
   helperService: (bundle) =>
@@ -271,8 +288,12 @@ export const dependencies: DesktopCuaDriverDependencies = {
     return settings.enableCua === true;
   },
   readManifest: async (path) => (await import("node:fs/promises")).readFile(path, "utf8"),
-  helperApps: (bundle, platform) =>
-    listHelperApplications(spawnHelperProcess(bundle.executable, platform), bundle.bundleId),
+  helperApps: (bundle, platform, signal) =>
+    listHelperApplications(
+      spawnHelperProcess(bundle.executable, platform),
+      bundle.bundleId,
+      signal,
+    ),
   processId: process.pid,
   executablePath: process.execPath,
 };

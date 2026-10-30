@@ -126,7 +126,11 @@
     from the same executable, and replaces it otherwise. A replaced service is never killed; it stops with
     its last claim, as every service does, and stable, nightly and development never share one.
     A desktop host owns its service's watch and captures, so two hosts never share one,
-    and no later claim gets a service whose host has left. Each agent connection's proxy
+    and no later claim gets a service whose host has left. A Stop cancels the start it names
+    instead of waiting it out: it does not queue behind that start, every helper the start
+    launched (its host, grant, listing, capture and agent-route probes) ends with it, a
+    cancelled claim holds nothing, and a late Stop of a session a newer one followed leaves the
+    newer one running. Each agent connection's proxy
     still starts its own helper with `--mcp` for its driver and Stop ends the pair (D3 amendment
     2); the desktop's readiness check starts its own helper with `--mcp` the same way. Staged
     for b and c: agent sessions claim the shared service, which runs a driver per session as its

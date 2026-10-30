@@ -22,7 +22,11 @@ function fakeServices(
     readonly exit: () => void;
   }> = [];
   const dead = new Set<number>();
+  const opening = Promise.withResolvers<void>();
+  // A launch finishes even when its claim was cancelled meanwhile, as a helper whose hello
+  // crosses the stop does: the manager has to close it.
   const open = async (executable: string) => {
+    opening.resolve();
     if (options.gate && launched.length >= (options.gatedFrom ?? 0)) await options.gate;
     const pid = 500 + launched.length;
     const ended = Promise.withResolvers<void>();
@@ -45,8 +49,20 @@ function fakeServices(
       },
     };
   };
-  return { launched, dead, open, alive: (pid: number) => !dead.has(pid) };
+  return {
+    launched,
+    dead,
+    open,
+    opening: opening.promise,
+    alive: (pid: number) => !dead.has(pid),
+  };
 }
+
+const rejection = (promise: Promise<unknown>) =>
+  promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
 
 describe("computer use helper service", () => {
   it.effect("starts one service for a channel however many sessions race to claim it", () =>
@@ -196,4 +212,54 @@ describe("computer use helper service", () => {
         assert.isFalse(services.launched[2]?.closed());
       }),
   );
+
+  it("a release never waits for another service still opening", async () => {
+    const gate = Promise.withResolvers<void>();
+    const services = fakeServices({ gate: gate.promise, gatedFrom: 1 });
+    const manager = makeHelperServiceManager(services);
+    const first = await manager.claim(HELPER, "desktop", { observe: true });
+    // A second observer's service is stuck before its hello.
+    const second = manager.claim(HELPER, "desktop", { observe: true });
+    await first.release();
+    assert.isTrue(services.launched[0]?.closed());
+    assert.isUndefined(manager.sessionFor(first.token));
+    gate.resolve();
+    assert.equal((await second).service.pid, 501);
+  });
+
+  it("a claim cancelled while it waits its turn rejects at once and never holds the service", async () => {
+    const gate = Promise.withResolvers<void>();
+    const services = fakeServices({ gate: gate.promise });
+    const manager = makeHelperServiceManager(services);
+    const first = manager.claim(HELPER, "thread-a");
+    const cancel = new AbortController();
+    const queued = manager.claim(HELPER, "desktop", { observe: true, signal: cancel.signal });
+    const stopped = new Error("stopped");
+    cancel.abort(stopped);
+    // The claim ahead of it is still opening; the cancelled one does not wait for it.
+    assert.strictEqual(await rejection(queued), stopped);
+    gate.resolve();
+    const a = await first;
+    assert.lengthOf(services.launched, 1);
+    // The other session's claim was never touched, and its release is the last one.
+    assert.isFalse(services.launched[0]?.closed());
+    await a.release();
+    assert.isTrue(services.launched[0]?.closed());
+  });
+
+  it("a claim cancelled while its service opens closes that service and holds nothing", async () => {
+    const gate = Promise.withResolvers<void>();
+    const services = fakeServices({ gate: gate.promise });
+    const manager = makeHelperServiceManager(services);
+    const cancel = new AbortController();
+    const claiming = manager.claim(HELPER, "desktop", { observe: true, signal: cancel.signal });
+    await services.opening;
+    const stopped = new Error("stopped");
+    cancel.abort(stopped);
+    gate.resolve();
+    assert.strictEqual(await rejection(claiming), stopped);
+    assert.isTrue(services.launched[0]?.closed());
+    const next = await manager.claim(HELPER, "desktop", { observe: true });
+    assert.equal(next.service.pid, 501);
+  });
 });
