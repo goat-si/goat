@@ -6,6 +6,7 @@ import {
   EnvironmentId,
   PreviewTabId,
   ProviderInstanceId,
+  RunId,
   ThreadId,
   type AgentCursorSnapshot,
   type PreviewAutomationStatus,
@@ -114,8 +115,10 @@ function makeContext() {
     },
     goto: vi.fn(async (next: string) => {
       url = next;
+      events.emit("framenavigated", page);
       events.emit("load");
     }),
+    keyboard: { press: vi.fn(async (_key: string) => {}) },
     emulateMedia: async () => {},
     waitForLoadState: async () => {},
     evaluate: async () => ({
@@ -148,6 +151,7 @@ const scope = {
     threadId: ThreadId.make("browser-screen-test-thread"),
     providerSessionId: "agent-a",
     providerInstanceId: ProviderInstanceId.make("codex"),
+    runId: RunId.make("browser-run"),
   },
   client: undefined,
   requestNamespace: "browser-screen-test",
@@ -212,6 +216,13 @@ it.effect("refuses a blocked navigation before sending it to the page", () =>
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
       expect(page.goto).not.toHaveBeenCalled();
+      const retry = yield* broker
+        .invoke({ scope, tabId, operation: "navigate", input: { url: "https://safe.example/" } })
+        .pipe(Effect.result);
+      expect(retry._tag).toBe("Failure");
+      if (retry._tag === "Failure")
+        expect(retry.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(page.goto).not.toHaveBeenCalled();
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -258,6 +269,146 @@ it.effect("refuses input when the tab currently shows a blocked host", () =>
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
       expect(page.locator).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("keeps a tab blocked after the person leaves the blocked host in the same turn", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      const input = { scope, tabId, operation: "click" as const, input: { locator: "button" } };
+      const first = yield* broker.invoke(input).pipe(Effect.result);
+      expect(first._tag).toBe("Failure");
+      if (first._tag === "Failure") expect(first.failure).toMatchObject({ reason: "blocked_url" });
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      const second = yield* broker.invoke(input).pipe(Effect.result);
+      expect(second._tag).toBe("Failure");
+      if (second._tag === "Failure")
+        expect(second.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(page.locator).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("remembers a blocked host the person left before the next agent input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      const result = yield* broker
+        .invoke({ scope, tabId, operation: "click", input: { locator: "button" } })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(page.locator).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses the next input after navigation during an input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      page.keyboard.press.mockImplementationOnce(async () => {
+        await page.goto("https://example.com/");
+      });
+      const input = { scope, tabId, operation: "press" as const, input: { key: "Enter" } };
+      expect((yield* broker.invoke(input).pipe(Effect.result))._tag).toBe("Success");
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      const next = yield* broker.invoke(input).pipe(Effect.result);
+      expect(next._tag).toBe("Failure");
+      if (next._tag === "Failure")
+        expect(next.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(page.keyboard.press).toHaveBeenCalledTimes(1);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses claim on a blocked tab and permits it in a later run after leaving", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      const claim = { scope, tabId, operation: "claim" as const, input: {} };
+      const blocked = yield* broker.invoke(claim).pipe(Effect.result);
+      expect(blocked._tag).toBe("Failure");
+      if (blocked._tag === "Failure")
+        expect(blocked.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      const sameRun = yield* broker.invoke(claim).pipe(Effect.result);
+      expect(sameRun._tag).toBe("Failure");
+      if (sameRun._tag === "Failure")
+        expect(sameRun.failure).toMatchObject({ reason: "blocked_url" });
+      expect((yield* broker.invoke({ ...claim, runId: "next-run" }).pipe(Effect.result))._tag).toBe(
+        "Success",
+      );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("records a person's blocked visit in the active run before its first browser call", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const end = yield* activity.begin(scope.thread.threadId, "next-run");
+      const page = contexts.at(-1)!.page;
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      yield* Effect.promise(() => page.goto("https://safe.example/"));
+      const result = yield* broker
+        .invoke({
+          scope,
+          tabId,
+          runId: "next-run",
+          operation: "claim",
+          input: {},
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      yield* end;
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("refuses reuse of a tab currently at a blocked host", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
+      const page = contexts.at(-1)!.page;
+      yield* Effect.promise(() => page.goto("https://example.com/"));
+      const result = yield* broker
+        .invoke({
+          scope,
+          tabId,
+          operation: "open",
+          input: { reuseExistingTab: true, show: false },
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
     }),
   ).pipe(Effect.provide(layer)),
 );

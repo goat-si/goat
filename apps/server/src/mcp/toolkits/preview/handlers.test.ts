@@ -48,6 +48,7 @@ it.effect(
   "opens one preview tab on a keyed retry and rechecks browser access before replay",
   () => {
     const opened: Array<unknown> = [];
+    const runIds: Array<string | undefined> = [];
     const scope: McpInvocationContext.McpInvocationScope = {
       environmentId: EnvironmentId.make("preview-retry-environment"),
       requestNamespace: "preview-retry-session",
@@ -89,6 +90,7 @@ it.effect(
         ) =>
           Effect.sync(() => {
             opened.push(request.input);
+            runIds.push(request.runId);
             return {
               available: true,
               visible: true,
@@ -105,6 +107,7 @@ it.effect(
       expect(first.isError, JSON.stringify(first)).not.toBe(true);
       expect(yield* open("preview-1")).toEqual(first);
       expect(opened).toHaveLength(1);
+      expect(runIds).toEqual(["run:mcp-test"]);
       expect(opened[0]).not.toHaveProperty("clientRequestId");
       expect((yield* open("preview-1", "https://example.org")).isError).toBe(true);
       expect(

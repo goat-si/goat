@@ -196,7 +196,8 @@ const supportsOperation = (
 ): boolean =>
   connection.supportedOperations.has(operation) &&
   // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
-  ((operation !== "fillSecret" && operation !== "open") || connection.inProcess);
+  ((operation !== "fillSecret" && operation !== "open" && operation !== "claim") ||
+    connection.inProcess);
 
 const supportsRequest = (
   connection: ClientConnection,
@@ -729,6 +730,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       return { ...next, pending };
     });
     const awaitResponse = Effect.fn("PreviewAutomationBroker.awaitResponse")(function* () {
+      const runId = input.runId ?? input.scope.thread.runId;
       const offered = yield* SynchronizedRef.modifyEffect(state, (current) => {
         // Serialize generation checks and offers with queue closure; routes can outlive eviction.
         if (
@@ -747,7 +749,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             tabIdExplicit: input.tabId !== undefined || input.exact !== undefined,
             ...BoundPreviewTabs.screenExpectationOf(input.exact),
             agentSessionId: hostAssignmentKey(input.scope),
-            ...(input.runId === undefined ? {} : { runId: input.runId }),
+            ...(runId === undefined ? {} : { runId }),
             operation: input.operation,
             input: input.input,
             timeoutMs,

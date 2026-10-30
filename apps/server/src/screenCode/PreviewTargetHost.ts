@@ -160,6 +160,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     const current = yield* broker
       .invoke<PreviewAutomationStatus>({
         scope: context.invocation,
+        runId: context.runId,
         operation: "status",
         input: {},
         exact: exact(bound.tab, false),
@@ -193,6 +194,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     broker
       .invoke({
         scope: context.invocation,
+        runId: context.runId,
         operation,
         input,
         exact: {
@@ -291,6 +293,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             const opened = yield* broker
               .invoke<PreviewAutomationStatus>({
                 scope: context.invocation,
+                runId: context.runId,
                 operation: "open",
                 serverHostOnly: true,
                 input: {
@@ -369,6 +372,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const bound = lookup(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference", "Bind the tab again."));
+      if (call.method === "claim_tab") {
+        yield* broker
+          .invoke({
+            scope: context.invocation,
+            runId: context.runId,
+            operation: "claim",
+            input: {},
+            exact: exact(bound.tab, false),
+            updateCurrentTab: false,
+          })
+          .pipe(Effect.mapError((error) => previewTargetFailure(error, "claim")));
+      }
       if (call.method === "tab_status") {
         const rawArg =
           Array.isArray(call.args) && call.args.length === 1 ? call.args[0] : undefined;

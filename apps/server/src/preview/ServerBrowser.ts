@@ -44,7 +44,7 @@ import {
   type PreviewViewportSetting,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { isBlockedBrowserUrl, normalizePreviewUrl } from "@goat/shared/preview";
+import { normalizePreviewUrl } from "@goat/shared/preview";
 import { resolvePreviewViewport } from "@goat/shared/previewViewport";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -75,7 +75,6 @@ import type {
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
-import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
@@ -120,6 +119,7 @@ import {
   type RequestedSession,
 } from "./sessionMode.ts";
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
+import { makeBlockedTabFence } from "./blockedTabFence.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
@@ -341,7 +341,6 @@ const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
 
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
-  const settings = yield* ServerSettings.ServerSettingsService;
   const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
   const manager = yield* PreviewManager.PreviewManager;
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
@@ -349,14 +348,11 @@ const make = Effect.gen(function* () {
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const secretFill = yield* ServerBrowserSecretFill.make;
-  const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
+  const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+  const agentTurns = yield* activity.changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
-  const assertAllowedUrl = async (url: string) => {
-    const current = await runPromise(settings.getSettings);
-    if (isBlockedBrowserUrl(url, current.blockedBrowserHosts))
-      throw new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
-  };
+  const blockedTabs = yield* makeBlockedTabFence();
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
@@ -560,10 +556,11 @@ const make = Effect.gen(function* () {
   const dropTab = (tab: ServerTab, closeSession: boolean) => {
     const key = tabKey(tab.threadId, tab.tabId);
     if (tabs.get(key) !== tab) return;
+    tab.closing = true;
+    blockedTabs.drop(tab.threadId, tab.tabId);
     screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
     tabs.delete(key);
     if (tab.openerTabId) closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
-    tab.closing = true;
     tab.diagnostics.dispose();
     clearAbortedNavigation(tab);
     // A desktop page outlives the connection unless its session closed with it.
@@ -726,6 +723,7 @@ const make = Effect.gen(function* () {
       void reportLoaded(tab);
     });
     page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) blockedTabs.observe(tab, page.url());
       if (frame === page.mainFrame()) tab.documentGeneration++;
       // Same-document navigations (SPA routes) fire no load event.
       if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
@@ -1225,7 +1223,11 @@ const make = Effect.gen(function* () {
 
   /** A new agent tab in exactly the requested session, closing idle tabs first. */
   const openSessionTab = (
-    request: { readonly threadId: string; readonly agentSessionId: string },
+    request: {
+      readonly threadId: string;
+      readonly agentSessionId: string;
+      readonly runId?: string | undefined;
+    },
     url: string | undefined,
     session: RequestedSession,
   ) => {
@@ -1246,11 +1248,15 @@ const make = Effect.gen(function* () {
               automationOwner: request.agentSessionId,
               ...fields,
             }),
-          ),
+          ).then((snapshot) => {
+            if (request.runId) blockedTabs.setRun(snapshot.threadId, snapshot.tabId, request.runId);
+            return snapshot;
+          }),
         ensureTab,
         hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
         discard: async (snapshot, tab) => {
           if (tab) return dropTab(tab, true);
+          blockedTabs.drop(snapshot.threadId, snapshot.tabId);
           const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
           await runPromise(manager.close(key)).catch(constVoid);
         },
@@ -1594,12 +1600,6 @@ const make = Effect.gen(function* () {
             findTab(request.threadId, request.tabId).pipe(Effect.orElseSucceed(constVoid)),
           );
     if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
-    ServerBrowserScreen.assertScreenExpectation(tab, request);
-    if (!READ_OPERATIONS.has(request.operation) && !tab.control.agentMayAct(request.agentSessionId))
-      throw new BrowserControlInterrupted(
-        "This tab belongs to another agent session. You can read it, but open your own tab to act.",
-        "agentMismatch",
-      );
     return tab;
   };
 
@@ -1632,7 +1632,6 @@ const make = Effect.gen(function* () {
         SessionControl.requireAgentSession(request);
         const open = input as PreviewAutomationOpenInput;
         const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
-        if (url) await assertAllowedUrl(url);
         const reuse = open.reuseExistingTab ?? true;
         if (
           reuse &&
@@ -1676,9 +1675,12 @@ const make = Effect.gen(function* () {
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
             : undefined;
+        if (existing) await blockedTabs.assertTab(existing, request.runId, url);
+        else if (url) await blockedTabs.assertUrl(url);
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
         if (existing) assertReusable(existing.session, open, profiles);
         const tab = existing ?? (await openSessionTab(request, url, profiles.resolve(open)));
+        if (request.runId) blockedTabs.setRun(tab.threadId, tab.tabId, request.runId);
         if (existing?.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1687,6 +1689,7 @@ const make = Effect.gen(function* () {
         return tab.control.agent(
           request.agentSessionId,
           async () => {
+            await blockedTabs.assertTab(tab, request.runId, url);
             if (tab.dialog)
               throw new BrowserControlInterrupted(
                 'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1755,8 +1758,28 @@ const make = Effect.gen(function* () {
         return tab.control.agent(request.agentSessionId ?? "", stop);
       }
     }
+    if (request.operation === "claim") {
+      SessionControl.requireAgentSession(request);
+      const tab =
+        request.tabId === undefined
+          ? undefined
+          : await runPromise(findTab(request.threadId, request.tabId));
+      if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
+      await blockedTabs.assertTab(tab, request.runId);
+      return {};
+    }
     const tab = await requireTab(request);
-    if (!READ_OPERATIONS.has(request.operation)) await assertAllowedUrl(tab.page.url());
+    if (!READ_OPERATIONS.has(request.operation) && request.operation !== "close")
+      await blockedTabs.assertTab(tab, request.runId);
+    ServerBrowserScreen.assertScreenExpectation(tab, request);
+    if (
+      !READ_OPERATIONS.has(request.operation) &&
+      !tab.control.agentMayAct(request.agentSessionId ?? "")
+    )
+      throw new BrowserControlInterrupted(
+        "This tab belongs to another agent session. You can read it, but open your own tab to act.",
+        "agentMismatch",
+      );
     if (request.operation === "fillSecret")
       return secretFill.fill(tab, request, deadlineMs, recordAction);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
@@ -1796,6 +1819,8 @@ const make = Effect.gen(function* () {
     return tab.control.agent(
       agentSessionId,
       async (signal) => {
+        if (!READ_OPERATIONS.has(request.operation))
+          await blockedTabs.assertTab(tab, request.runId);
         if (tab.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1847,7 +1872,7 @@ const make = Effect.gen(function* () {
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
-        await assertAllowedUrl(resolveNavigationUrl(navigateInput));
+        await blockedTabs.assertTab(tab, request.runId, resolveNavigationUrl(navigateInput));
         await recordAction(tab, "navigate", () =>
           navigate(
             tab,

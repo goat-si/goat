@@ -126,6 +126,7 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
         } as A);
       }
       if (state.failure) return Effect.fail(state.failure);
+      if (request.operation === "claim") return Effect.succeed({} as A);
       if (request.operation === "waitFor")
         return state.clicked &&
           [undefined, "Cancel"].includes((request.input as { text?: string }).text)

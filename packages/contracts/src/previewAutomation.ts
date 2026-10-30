@@ -6,7 +6,6 @@ import {
   PreviewAutomationTabOwner,
   previewControlMessage,
 } from "./previewAutomationControl.ts";
-
 import {
   EnvironmentId,
   ForwardCompatibleOptional,
@@ -35,7 +34,6 @@ import {
 import { PreviewAutomationReadError } from "./previewAutomationRead.ts";
 export * from "./previewAutomationSnapshot.ts";
 export * from "./previewAutomationRead.ts";
-
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
   .check(Schema.isMaxLength(2048));
@@ -43,7 +41,6 @@ const URL_GUIDANCE = "Absolute http(s) URL, or a bare host (https; http for loop
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(60_000)),
 ).annotate({ description: "Default 15000." });
-
 export const PREVIEW_AUTOMATION_V1_OPERATIONS = [
   "status",
   "open",
@@ -67,6 +64,7 @@ const PREVIEW_AUTOMATION_OPERATIONS = [
 
 export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   ...PREVIEW_AUTOMATION_OPERATIONS,
+  "claim",
   "dialog",
   "close",
   "upload",
