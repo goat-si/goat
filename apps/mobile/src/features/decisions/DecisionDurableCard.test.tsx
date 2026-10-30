@@ -75,7 +75,13 @@ async function renderCard(recommended: string | null) {
   const submit = [...container.querySelectorAll("button")].find(
     (button) => button.textContent === "Submit decision",
   )!;
-  return { onSubmit, submit, [Symbol.asyncDispose]: () => act(() => root.unmount()) };
+  return {
+    onSubmit,
+    submit,
+    [Symbol.asyncDispose]: async () => {
+      await act(() => root.unmount());
+    },
+  };
 }
 
 it("submits the recommended option without a typed reason", async () => {
