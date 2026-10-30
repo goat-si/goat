@@ -4,7 +4,7 @@ import type { ComputerUseApp, OrchestrationV2ConversationMessage } from "@goat/c
 const mentions = (text: string, name: string) => {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(
-    `(?<![\\p{L}\\p{N}_])(?<![\\p{L}\\p{N}][.-])${escaped}(?![\\p{L}\\p{N}_]|[.-][\\p{L}\\p{N}_])`,
+    `(?<![\\p{L}\\p{M}\\p{N}_])(?<![\\p{L}\\p{M}\\p{N}][.-])${escaped}(?![\\p{L}\\p{M}\\p{N}_]|[.-][\\p{L}\\p{M}\\p{N}_])`,
     "iu",
   ).test(text);
 };

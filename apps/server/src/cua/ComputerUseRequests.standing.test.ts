@@ -49,6 +49,7 @@ for (const scenario of [
   { title: "display name", text: "Please use Fancy Editor", expected: "available" },
   { title: "case insensitive bundle id", text: "use COM.EXAMPLE.EDITOR", expected: "available" },
   { title: "substring", text: "Use Fancy Editors", expected: "needs_human" },
+  { title: "combining mark", text: "Use Fancy Editor\u0301", expected: "needs_human" },
   { title: "bundle id prefix", text: "Use com.example.Editor.extra", expected: "needs_human" },
   { title: "bundle id punctuation", text: "Use comXexampleXEditor", expected: "needs_human" },
   {
