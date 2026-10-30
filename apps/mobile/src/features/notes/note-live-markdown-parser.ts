@@ -81,12 +81,6 @@ function closingBackticks(text: string, from: number, end: number, length: numbe
   return -1;
 }
 
-/** Whether `code` occurs in [from, end); indexOf would search past the line. */
-function lineHas(text: string, from: number, end: number, code: number) {
-  for (let index = from; index < end; index++) if (text.charCodeAt(index) === code) return true;
-  return false;
-}
-
 /** Closing delimiter of `width` repeated `code` after non-space, skipping escapes and code. */
 function closingDelimiter(text: string, from: number, end: number, code: number, width: number) {
   let index = from;
@@ -148,6 +142,11 @@ function isInlineTrigger(code: number) {
   );
 }
 
+interface InlineScan {
+  readonly regex: RegExp;
+  next: number;
+}
+
 function isUrlTrailingPunctuation(code: number) {
   // . , ; : ! ? ' " ) ] * _ ~
   return (
@@ -173,7 +172,7 @@ function parseInline(
   lineEnd: number,
   ranges: NoteMarkdownRange[],
   table: boolean,
-  special: RegExp,
+  scan: InlineScan,
 ) {
   if (lineEnd - start > MAX_INLINE_LINE) return;
   // Open spans as [closer start, closer end] pairs, innermost last. Inner spans cannot cross the
@@ -193,9 +192,12 @@ function parseInline(
     let code = text.charCodeAt(index);
     if (!isInlineTrigger(code)) {
       // Jump over plain text with the native regex search; a JS loop per character is slow on Hermes.
-      special.lastIndex = index;
-      const found = special.exec(text);
-      index = found === null || found.index > end ? end : found.index;
+      // The next trigger can lie lines ahead; keep it so a plain note is not searched per line.
+      if (scan.next < index) {
+        scan.regex.lastIndex = index;
+        scan.next = scan.regex.exec(text)?.index ?? text.length;
+      }
+      index = scan.next > end ? end : scan.next;
       if (index >= end) {
         if (closers.length === 0) return;
         continue;
@@ -323,12 +325,13 @@ function isTableDelimiterRow(line: string) {
 export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
   const ranges: NoteMarkdownRange[] = [];
   const length = text.length;
-  const special = /[\\|`<![:*_~]/g;
+  const scan: InlineScan = { regex: /[\\|`<![:*_~]/g, next: -1 };
   let position = 0;
   let fenceCode = 0;
   let fenceLength = 0;
-  let fenceBody = 0;
   let inTable = false;
+  // Next "|" in the note, kept across lines like the inline trigger search.
+  let nextPipe = -1;
 
   if (text.startsWith("---")) {
     const firstEnd = text.indexOf("\n");
@@ -350,23 +353,6 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
 
     let first = position;
     while (first < end && (text.charCodeAt(first) === 32 || text.charCodeAt(first) === 9)) first++;
-
-    if (fenceCode !== 0) {
-      if (text.charCodeAt(first) === fenceCode) {
-        const close = /^(`{3,}|~{3,})[ \t]*$/.exec(text.slice(first, end));
-        const marker = close?.[1] ?? "";
-        if (marker.charCodeAt(0) === fenceCode && marker.length >= fenceLength) {
-          push(ranges, "pre", fenceBody, position > fenceBody ? position - 1 : position);
-          push(ranges, "syntax", position, end);
-          fenceCode = 0;
-          position = next;
-          continue;
-        }
-      }
-      if (newline === -1) push(ranges, "pre", fenceBody, length);
-      position = next;
-      continue;
-    }
 
     // Blockquote markers, possibly nested ("> > text" or ">>text"): count, then emit in order.
     let restStart = position;
@@ -392,6 +378,23 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
         first++;
     }
 
+    // Code lines are styled one by one, so quote markers inside a fence keep their order.
+    if (fenceCode !== 0) {
+      if (text.charCodeAt(first) === fenceCode) {
+        const close = /^(`{3,}|~{3,})[ 	]*$/.exec(text.slice(first, end));
+        const marker = close?.[1] ?? "";
+        if (marker.charCodeAt(0) === fenceCode && marker.length >= fenceLength) {
+          push(ranges, "syntax", restStart, end);
+          fenceCode = 0;
+          position = next;
+          continue;
+        }
+      }
+      push(ranges, "pre", restStart, end);
+      position = next;
+      continue;
+    }
+
     if (first >= end) {
       inTable = false;
       position = next;
@@ -406,7 +409,6 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
         push(ranges, "syntax", restStart, end);
         fenceCode = lead;
         fenceLength = (fence[1] ?? "").length;
-        fenceBody = next;
         inTable = false;
         position = next;
         continue;
@@ -431,7 +433,7 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
         if (closing) contentEnd = contentStart + closing.index;
         push(ranges, "syntax", restStart, contentStart);
         push(ranges, "h1", contentStart, contentEnd);
-        parseInline(text, contentStart, contentEnd, ranges, false, special);
+        parseInline(text, contentStart, contentEnd, ranges, false, scan);
         push(ranges, "syntax", contentEnd, end);
         inTable = false;
         position = next;
@@ -460,14 +462,18 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
       if (definition) {
         if (definition[1]) {
           push(ranges, "syntax", restStart, first + definition[0].length);
-          parseInline(text, first + definition[0].length, end, ranges, false, special);
+          parseInline(text, first + definition[0].length, end, ranges, false, scan);
         } else push(ranges, "syntax", restStart, end);
         position = next;
         continue;
       }
     }
 
-    if (inTable || (newline !== -1 && lineHas(text, first, end, 124))) {
+    if (nextPipe < first) {
+      nextPipe = text.indexOf("|", first);
+      if (nextPipe === -1) nextPipe = length;
+    }
+    if (inTable || (newline !== -1 && nextPipe < end)) {
       if (!inTable) {
         const followingEnd = text.indexOf("\n", next);
         const following = text.slice(next, followingEnd === -1 ? length : followingEnd);
@@ -475,7 +481,7 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
       }
       if (inTable) {
         if (isTableDelimiterRow(text.slice(restStart, end))) push(ranges, "syntax", restStart, end);
-        else parseInline(text, restStart, end, ranges, true, special);
+        else parseInline(text, restStart, end, ranges, true, scan);
         position = next;
         continue;
       }
@@ -499,13 +505,13 @@ export function parseNoteMarkdown(text: string): NoteMarkdownRange[] {
           contentStart += 3;
           if (checked) push(ranges, "strikethrough", contentStart, end);
         }
-        parseInline(text, contentStart, end, ranges, false, special);
+        parseInline(text, contentStart, end, ranges, false, scan);
         position = next;
         continue;
       }
     }
 
-    parseInline(text, restStart, end, ranges, false, special);
+    parseInline(text, restStart, end, ranges, false, scan);
     position = next;
   }
 

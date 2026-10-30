@@ -491,6 +491,26 @@ describe("formatted note editor", () => {
     expect(mocks.enqueue.mock.calls[0]?.[0].body).toBe("a\r\nB!\r\nnew\r\nc\r\nend");
   });
 
+  it("checks a draft restored into a new note's open editor", async () => {
+    const restored = Promise.withResolvers<void>();
+    mocks.rows = [];
+    mocks.restore.mockReturnValue(restored.promise);
+    await act(async () =>
+      root.render(
+        <NoteRouteScreen
+          route={{ params: { environmentId: "hub", path: "note.md", create: true } }}
+        />,
+      ),
+    );
+    expect(container.querySelector('[data-testid="live-markdown"]')).not.toBeNull();
+    await act(async () => {
+      mocks.rows = [{ ...row(), body: "old\rmac" }];
+      restored.resolve();
+    });
+    expect(container.querySelector('[data-testid="live-markdown"]')).toBeNull();
+    expect(container.textContent).toContain("old Mac line endings");
+  });
+
   it("opens a note it cannot round-trip in the plain editor and says why", async () => {
     await editorFor("old\rmac");
     expect(container.querySelector('[data-testid="live-markdown"]')).toBeNull();

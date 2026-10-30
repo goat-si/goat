@@ -80,6 +80,12 @@ describe("note live markdown parser", () => {
     expect(styled(text, "pre").join("")).not.toContain("unclosed?");
   });
 
+  it("closes a fence inside a quote and formats what follows", () => {
+    const text = "> ```\n> code\n> ```\nafter **bold**\n";
+    expect(styled(text, "pre")).toEqual(["code"]);
+    expect(styled(text, "bold")).toEqual(["bold"]);
+  });
+
   it("dims table pipes outside code and the delimiter row", () => {
     const text = noteSourceFixtures.table!;
     const pipes = styled(text, "syntax").filter((part) => part === "|");

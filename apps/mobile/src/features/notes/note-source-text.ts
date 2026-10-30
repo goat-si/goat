@@ -32,13 +32,57 @@ export function noteEditorView(source: string): string {
 }
 
 function sourceOffset(source: string, viewOffset: number): number {
-  let view = 0;
-  let index = 0;
-  while (view < viewOffset) {
-    index += source.charCodeAt(index) === 13 && source.charCodeAt(index + 1) === 10 ? 2 : 1;
-    view++;
+  // Each CRLF before the view offset adds its CR; jump between them with the native search.
+  let carriageReturns = 0;
+  let at = source.indexOf("\r\n");
+  while (at !== -1 && at - carriageReturns < viewOffset) {
+    carriageReturns++;
+    at = source.indexOf("\r\n", at + 2);
   }
-  return index;
+  return viewOffset + carriageReturns;
+}
+
+export interface NoteEditorSelection {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Where the edit is, as [from, to) in the previous view and its end in the next view. */
+function editSpan(previous: string, next: string, selection: NoteEditorSelection | null) {
+  const delta = next.length - previous.length;
+  if (selection) {
+    const { start, end } = selection;
+    // The selection may be reported before or after the change, so try the edit at both sides of
+    // the cursor; only a placement that explains the change is used. Equal neighbors, such as two
+    // line breaks with different source endings, then resolve to the one at the cursor.
+    const candidates: Array<readonly [number, number]> = [];
+    if (end > start) candidates.push([start, end]);
+    if (delta < 0) candidates.push([start + delta, start], [start, start - delta]);
+    else candidates.push([start, start], [start - delta, start - delta]);
+    for (const [from, to] of candidates) {
+      const nextEnd = to + delta;
+      if (from < 0 || to > previous.length || nextEnd < from) continue;
+      if (
+        previous.slice(0, from) === next.slice(0, from) &&
+        previous.slice(to) === next.slice(nextEnd)
+      )
+        return { from, to, nextEnd };
+    }
+  }
+  const shortest = Math.min(previous.length, next.length);
+  // Skip the text far from the cursor with native comparisons; a character loop is slow on Hermes.
+  let from = selection ? Math.max(0, Math.min(selection.start, shortest) - 64) : 0;
+  if (previous.slice(0, from) !== next.slice(0, from)) from = 0;
+  while (from < shortest && previous.charCodeAt(from) === next.charCodeAt(from)) from++;
+  let suffix = selection ? Math.max(0, previous.length - selection.end - 64) : 0;
+  suffix = Math.min(suffix, shortest - from);
+  if (previous.slice(previous.length - suffix) !== next.slice(next.length - suffix)) suffix = 0;
+  while (
+    suffix < shortest - from &&
+    previous.charCodeAt(previous.length - 1 - suffix) === next.charCodeAt(next.length - 1 - suffix)
+  )
+    suffix++;
+  return { from, to: previous.length - suffix, nextEnd: next.length - suffix };
 }
 
 /** Applies the edit that turned `previousView` into `nextView` to the source text. */
@@ -46,26 +90,18 @@ export function applyNoteEditorChange(
   source: string,
   previousView: string,
   nextView: string,
+  selection: NoteEditorSelection | null = null,
 ): string {
   if (previousView === nextView) return source;
-  let start = 0;
-  const shortest = Math.min(previousView.length, nextView.length);
-  while (start < shortest && previousView.charCodeAt(start) === nextView.charCodeAt(start)) start++;
-  let suffix = 0;
-  while (
-    suffix < shortest - start &&
-    previousView.charCodeAt(previousView.length - 1 - suffix) ===
-      nextView.charCodeAt(nextView.length - 1 - suffix)
-  )
-    suffix++;
-  let inserted = nextView.slice(start, nextView.length - suffix).replaceAll("\r\n", "\n");
+  const span = editSpan(previousView, nextView, selection);
+  let inserted = nextView.slice(span.from, span.nextEnd).replaceAll("\r\n", "\n");
   if (source.includes("\r\n") && inserted.includes("\n")) {
     const crlf = source.split("\r\n").length - 1;
     const lf = source.split("\n").length - 1 - crlf;
     // Typed or pasted line breaks follow the file's majority line ending.
     if (crlf >= lf) inserted = inserted.replaceAll("\n", "\r\n");
   }
-  const from = sourceOffset(source, start);
-  const to = sourceOffset(source, previousView.length - suffix);
+  const from = sourceOffset(source, span.from);
+  const to = sourceOffset(source, span.to);
   return source.slice(0, from) + inserted + source.slice(to);
 }

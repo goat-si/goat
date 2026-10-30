@@ -4,6 +4,7 @@ import { resolveMarkdownFontSizes } from "../../lib/appearancePreferences";
 import { FONT_FAMILIES } from "../../lib/fontFamilies";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { parseNoteMarkdown } from "./note-live-markdown-parser";
+import type { NoteEditorSelection } from "./note-source-text";
 
 const MONOSPACE = Platform.select({ ios: "Menlo", default: "monospace" });
 
@@ -12,6 +13,7 @@ export default function NoteLiveMarkdownEditor(props: {
   readonly value: string;
   readonly editable: boolean;
   readonly onChangeText: (value: string) => void;
+  readonly onSelectionChange: (selection: NoteEditorSelection) => void;
 }) {
   const { appearance, themeVariables: theme } = useAppearancePreferences();
   // Formatted runs get absolute sizes natively, so scale them with the system text size too.
@@ -32,6 +34,7 @@ export default function NoteLiveMarkdownEditor(props: {
       value={props.value}
       editable={props.editable}
       onChangeText={props.onChangeText}
+      onSelectionChange={(event) => props.onSelectionChange(event.nativeEvent.selection)}
       parser={parseNoteMarkdown}
       markdownStyle={{
         syntax: { color: theme["--color-foreground-muted"] },

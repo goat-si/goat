@@ -27,11 +27,18 @@ function commonSuffix(a: string, b: string) {
 }
 
 /** Edits the editor view at a source position, as the native input would report it. */
-function editAt(source: string, sourceOffset: number, deleted: number, inserted: string) {
+function editAt(
+  source: string,
+  sourceOffset: number,
+  deleted: number,
+  inserted: string,
+  withSelection: boolean,
+) {
   const view = noteEditorView(source);
   const viewOffset = noteEditorView(source.slice(0, sourceOffset)).length;
   const next = view.slice(0, viewOffset) + inserted + view.slice(viewOffset + deleted);
-  return { next, result: applyNoteEditorChange(source, view, next) };
+  const selection = withSelection ? { start: viewOffset, end: viewOffset + deleted } : null;
+  return { next, result: applyNoteEditorChange(source, view, next, selection) };
 }
 
 /** Offsets inside each line's text, never between a CR and its LF. */
@@ -65,13 +72,15 @@ describe("note source text", () => {
         [Math.min(1, deletable), ""],
         [Math.min(2, deletable), "한글"],
       ] as const) {
-        const { next, result } = editAt(source, offset, deleted, inserted);
-        expect(noteEditorView(result)).toBe(next);
-        expect(commonPrefix(source, result)).toBeGreaterThanOrEqual(offset);
-        expect(commonSuffix(source, result)).toBeGreaterThanOrEqual(
-          source.length - offset - deleted,
-        );
-        expect(result.length).toBe(source.length - deleted + inserted.length);
+        for (const withSelection of [false, true]) {
+          const { next, result } = editAt(source, offset, deleted, inserted, withSelection);
+          expect(noteEditorView(result)).toBe(next);
+          expect(commonPrefix(source, result)).toBeGreaterThanOrEqual(offset);
+          expect(commonSuffix(source, result)).toBeGreaterThanOrEqual(
+            source.length - offset - deleted,
+          );
+          expect(result.length).toBe(source.length - deleted + inserted.length);
+        }
       }
     }
   });
@@ -98,6 +107,19 @@ describe("note source text", () => {
     expect(applyNoteEditorChange(crlf, "a\nb\n", "a\nx\r\ny\nb\n")).toBe("a\r\nx\r\ny\r\nb\r\n");
     const mixed = "a\r\nb\nc\n";
     expect(applyNoteEditorChange(mixed, "a\nb\nc\n", "a\nb\nx\nc\n")).toBe("a\r\nb\nx\nc\n");
+  });
+
+  it("uses the cursor to tell apart equal neighbors with different line endings", () => {
+    const source = "a\r\n\nb";
+    // Deleting the first break, with the selection reported before or after the change.
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 2, end: 2 })).toBe("a\nb");
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 1, end: 1 })).toBe("a\nb");
+    // Deleting the second break keeps the first one's CRLF.
+    expect(applyNoteEditorChange(source, "a\n\nb", "a\nb", { start: 3, end: 3 })).toBe("a\r\nb");
+    // A replaced selection changes only the selected text.
+    expect(applyNoteEditorChange("x\r\nx\r\nx", "x\nx\nx", "x\ny\nx", { start: 2, end: 3 })).toBe(
+      "x\r\ny\r\nx",
+    );
   });
 
   it("joins lines by removing the whole CRLF", () => {

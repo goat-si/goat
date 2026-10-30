@@ -22,6 +22,7 @@ import {
   noteEditorFallbackMessage,
   noteEditorView,
   type NoteEditorFallback,
+  type NoteEditorSelection,
 } from "./note-source-text";
 import { NoteLinkedThread } from "./NoteLinkedThread";
 import { noteSyncLabel, noteSyncState } from "./notes-model";
@@ -79,6 +80,7 @@ function NoteContent(props: NoteParams) {
   // that arrive before a re-render, such as IME composition steps.
   const [editorView, setEditorView] = useState<EditorView | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
+  const editorSelection = useRef<NoteEditorSelection | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -126,6 +128,8 @@ function NoteContent(props: NoteParams) {
           setHasSnapshot(true);
           setBody(restored.body);
           localBody.current = restored.body;
+          // A draft restored into an open editor needs the same check as one opened by hand.
+          setEditorFallback(noteEditorFallback(restored.body));
           setStatus(restored.status ?? "idea");
           localStatus.current = restored.status ?? "idea";
           editBase.current = restored.baseRevision;
@@ -401,7 +405,12 @@ function NoteContent(props: NoteParams) {
                       onChangeText={(text) => {
                         const source = localBody.current;
                         const previous = editorViewText(editorViewRef.current, source);
-                        const next = applyNoteEditorChange(source, previous, text);
+                        const next = applyNoteEditorChange(
+                          source,
+                          previous,
+                          text,
+                          editorSelection.current,
+                        );
                         // Pasted CRLF stays out of the view so its offsets keep matching the source.
                         const view = {
                           source: next,
@@ -410,6 +419,9 @@ function NoteContent(props: NoteParams) {
                         editorViewRef.current = view;
                         setEditorView(view);
                         editBody(next);
+                      }}
+                      onSelectionChange={(selection) => {
+                        editorSelection.current = selection;
                       }}
                     />
                   </Suspense>
