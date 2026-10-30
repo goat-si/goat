@@ -59,12 +59,24 @@ export const makeComputerUseHistory = Effect.gen(function* () {
         ${entry.target.kind === "app" ? (entry.target.name ?? null) : null}, ${entry.target.kind === "tab" ? entry.target.host : null},
         ${entry.method}, ${entry.targetLabel ?? null}, ${entry.verdict}, ${entry.refusalCode ?? null}, ${typedLength}, ${typedText})`;
   });
-  const listForThread = Effect.fn("ComputerUseHistory.listForThread")(function* (threadId: string) {
+  const listForThread = Effect.fn("ComputerUseHistory.listForThread")(function* (
+    threadId: string,
+    options?: {
+      readonly limit?: number;
+      readonly before?: { readonly recordedAt: number; readonly id: number };
+    },
+  ) {
+    const limit = Math.max(1, Math.min(100, Math.trunc(options?.limit ?? 100)));
+    const beforeTime = options?.before?.recordedAt ?? 0;
+    const beforeId = options?.before?.id ?? 0;
+    const firstPage = options?.before === undefined ? 1 : 0;
     return yield* sql<HistoryEntry>`SELECT id, thread_id AS threadId, recorded_at AS recordedAt,
       target_kind AS targetKind, app_id AS appId, app_name AS appName, tab_host AS tabHost,
       method, target_label AS targetLabel, verdict, refusal_code AS refusalCode,
       typed_length AS typedLength, typed_text AS typedText
-      FROM computer_use_input_history WHERE thread_id = ${threadId} ORDER BY recorded_at DESC, id DESC`;
+      FROM computer_use_input_history WHERE thread_id = ${threadId}
+      AND (${firstPage} = 1 OR recorded_at < ${beforeTime} OR (recorded_at = ${beforeTime} AND id < ${beforeId}))
+      ORDER BY recorded_at DESC, id DESC LIMIT ${limit}`;
   });
   const prune = Effect.fn("ComputerUseHistory.prune")(function* () {
     const now = yield* Clock.currentTimeMillis;

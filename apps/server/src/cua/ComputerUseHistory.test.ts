@@ -62,6 +62,36 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history
       assert.isNull(entries[0]?.typedText);
     }),
   );
+  it.effect("pages equal-time entries newest first within one thread", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const history = yield* makeComputerUseHistory;
+      const base = {
+        threadId: "thread:paging",
+        target: { kind: "tab", host: "example.test" },
+        verdict: "sent",
+      } as const;
+      yield* history.record({ ...base, method: "first" });
+      yield* history.record({ ...base, method: "second" });
+      yield* history.record({ ...base, threadId: "thread:other-paging", method: "other" });
+      yield* history.record({ ...base, method: "third" });
+      const first = yield* history.listForThread("thread:paging", { limit: 2 });
+      assert.deepEqual(
+        first.map((entry) => entry.method),
+        ["third", "second"],
+      );
+      const last = first[1];
+      if (last === undefined) return assert.fail("missing cursor");
+      const second = yield* history.listForThread("thread:paging", {
+        limit: 2,
+        before: { recordedAt: last.recordedAt, id: last.id },
+      });
+      assert.deepEqual(
+        second.map((entry) => entry.method),
+        ["first"],
+      );
+    }),
+  );
   it.effect("prunes entries older than 30 days without deleting newer entries", () =>
     Effect.gen(function* () {
       yield* runMigrations();
