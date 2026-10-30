@@ -168,6 +168,7 @@ export const createDesktopTargetHost = (deps: {
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
   const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
+  const isLinux = (deps.platform ?? HostProcess.Platform.defaultValue()) === "linux";
   const targets = new Map<string, BoundWindow>();
   const cellTrackers = new Map<
     string,
@@ -366,42 +367,27 @@ export const createDesktopTargetHost = (deps: {
       // A name list_apps does not know may still be the app_name discover lists for the window.
       if (bundleId && Array.isArray(listed) && pids.size === 0)
         return yield* Effect.fail(fail("target_missing"));
-      const [onlyPid] = pids.size === 1 ? pids : [];
-      // Linux lists every process and launcher, which can pass the lease proxy's reply cap; the
-      // driver's `app` filter (bundle id equal, or name contained) then narrows the windows. With
-      // the list in hand the window is found by its id among all of them: that filter reads only a
-      // window's app_name, never the process (python3) a script's window runs in.
+      // The window is found by its id among every window, so a duplicate id or another owner
+      // shows. Linux lists every process and launcher, which can pass the lease proxy's reply
+      // cap; then the driver's `app` filter narrows the windows by bundle id. It reads only a
+      // window's app_name on Linux, never the process (python3) a script's window runs in.
       const windowsReply = yield* request(
         "list_windows",
-        onlyPid ? { pid: onlyPid } : appId && !Array.isArray(listed) ? { app: appId } : {},
+        bundleId && !Array.isArray(listed) ? { app: bundleId } : {},
         call,
         context,
         appsReply.connectionGeneration,
       );
       if (windowsReply.connectionGeneration !== appsReply.connectionGeneration)
         return yield* Effect.fail(fail("stale_reference"));
-      const match = (reply: typeof windowsReply) =>
-        matchBindWindow({
-          listedApps: listed,
-          listedWindows: object(driverValue(reply))?.windows,
-          bundleId,
-          name,
-          requestedWindow,
-        });
-      let matched = match(windowsReply);
-      // Not among the one app's windows: whose it is, if anyone's, says what to bind instead.
-      if (onlyPid && matched.error?.detail === "window_gone") {
-        const everyWindow = yield* request(
-          "list_windows",
-          {},
-          call,
-          context,
-          appsReply.connectionGeneration,
-        );
-        if (everyWindow.connectionGeneration !== appsReply.connectionGeneration)
-          return yield* Effect.fail(fail("stale_reference"));
-        matched = match(everyWindow);
-      }
+      const matched = matchBindWindow({
+        listedApps: listed,
+        listedWindows: object(driverValue(windowsReply))?.windows,
+        bundleId,
+        name,
+        requestedWindow,
+        filterReadsAppName: isLinux,
+      });
       if (matched.error || !matched.pid || !matched.window)
         return yield* Effect.fail(matched.error ?? fail("target_missing"));
       const { pid, app, window: foundWin } = matched;

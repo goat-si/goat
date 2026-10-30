@@ -333,7 +333,8 @@ it.live("a launch the cell cannot wait out stops the cell's later input", () => 
   const { host, sent } = fixture({
     list_apps: { apps: [installed, other] },
     list_windows: (args: { pid?: number }) => ({
-      windows: args.pid === 50 ? [{ pid: 50, window_id: 11, layer: 0 }] : [],
+      windows:
+        args.pid === undefined || args.pid === 50 ? [{ pid: 50, window_id: 11, layer: 0 }] : [],
     }),
     launch_app: launched([]),
   });

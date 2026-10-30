@@ -6,7 +6,7 @@ import * as NodeURL from "node:url";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-import { context, fixture, state } from "./DesktopTargetHost.testkit.ts";
+import { call, context, fixture, state } from "./DesktopTargetHost.testkit.ts";
 
 // Shapes cua-driver-rs 0.38.0-goat.14 lists on X11 (goat-si/goat#2248): a Tk script's window
 // carries its WM_CLASS as app_name, while list_apps has only /proc rows for the interpreter,
@@ -160,4 +160,74 @@ it.live(
       });
     });
   },
+);
+
+const cut = { message: "Driver reply exceeded the primitive channel limit." };
+const bindCall = (args: Record<string, string | number>) => call("bind_app", args);
+const bindResult = (
+  host: ReturnType<typeof fixture>["host"],
+  args: Record<string, string | number>,
+) => host.bindApp(bindCall(args), context).pipe(Effect.result);
+
+it.live("a name no app row carries launches nothing when the window list comes back cut", () => {
+  const { host, sent } = fixture(
+    { list_apps: { apps: appRows }, list_windows: cut, launch_app: { pid: 1 } },
+    undefined,
+    undefined,
+    undefined,
+    "linux",
+  );
+  return Effect.gen(function* () {
+    const result = yield* cell(host, caught("await screen.app('Scratch-cu-window.py');"));
+    expect(result.value).toMatchObject({ code: "target_missing" });
+    expect(tools(sent)).not.toContain("launch_app");
+  });
+});
+
+it.effect("a cut app list binds a window only by its own app_name or its id", () =>
+  Effect.gen(function* () {
+    // Linux's app filter matches a substring of app_name: "code" also finds "Xcode-helper".
+    const helper = { ...script, pid: 2000, window_id: 4194500, app_name: "Xcode-helper" };
+    const { host } = fixture(
+      {
+        list_apps: cut,
+        list_windows: listWindows([script, thunarWindow, helper]),
+        get_window_state: { ...state, pid: 1555, window_id: 4194307 },
+      },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
+    const substring = yield* bindResult(host, { bundle_id: "code", window_id: 4194500 });
+    expect(substring._tag === "Failure" && substring.failure.code).toBe("target_missing");
+    const thunar = yield* bindResult(host, { bundle_id: "thunar", window_id: 4194311 });
+    expect(thunar._tag).toBe("Success");
+    const byProcess = yield* bindResult(host, { name: "python3", window_id: 4194307 });
+    expect(byProcess._tag === "Failure" && byProcess.failure.nextStep).toContain(
+      "app list came back incomplete",
+    );
+    for (const args of [
+      { name: "Scratch-cu-window.py", window_id: 4194307 },
+      { window_id: 4194307 },
+    ])
+      expect((yield* bindResult(host, args))._tag).toBe("Success");
+  }),
+);
+
+it.effect("a window id listed for two processes is ambiguous even when one matches the name", () =>
+  Effect.gen(function* () {
+    const { host } = fixture(
+      {
+        list_apps: { apps: appRows },
+        list_windows: listWindows([script, { ...script, pid: 900, app_name: "Thunar" }]),
+      },
+      undefined,
+      undefined,
+      undefined,
+      "linux",
+    );
+    const result = yield* bindResult(host, { name: "python3", window_id: 4194307 });
+    expect(result._tag === "Failure" && result.failure.code).toBe("target_ambiguous");
+  }),
 );

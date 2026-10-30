@@ -465,13 +465,15 @@ export const matchBindWindow = (input: {
   readonly bundleId: string | undefined;
   readonly name: string | undefined;
   readonly requestedWindow: number;
+  /** Linux's list_windows `app` filter matches a substring of app_name, never a bundle id. */
+  readonly filterReadsAppName?: boolean;
 }): {
   readonly pid?: number;
   readonly app?: Record<string, unknown> | undefined;
   readonly window?: Record<string, unknown>;
   readonly error?: ScreenRunError;
 } => {
-  const { listedApps, listedWindows, bundleId, name, requestedWindow } = input;
+  const { listedApps, listedWindows, bundleId, name, requestedWindow, filterReadsAppName } = input;
   if (!Array.isArray(listedWindows)) return { error: fail("downstream_failure") };
   const rows = Array.isArray(listedApps)
     ? listedApps.map(object).filter((app): app is Record<string, unknown> => app !== undefined)
@@ -490,17 +492,6 @@ export const matchBindWindow = (input: {
         detail: "window_gone",
       },
     };
-  const owned = found.filter((window) => {
-    if (bundleId === undefined && name === undefined) return true;
-    const pid = natural(window.pid);
-    if (rows !== undefined)
-      return (
-        (pid !== undefined && pid > 0 && askedPids.has(pid)) ||
-        (bundleId === undefined && window.app_name === name)
-      );
-    // A capped app list: the driver's app filter chose these windows, so only an exact name holds.
-    return bundleId !== undefined || window.app_name === undefined || window.app_name === name;
-  });
   const describe = (window: Record<string, unknown>) =>
     (typeof window.app_name === "string" && window.app_name.length > 0
       ? window.app_name + " "
@@ -508,34 +499,52 @@ export const matchBindWindow = (input: {
     "(pid " +
     String(window.pid ?? "unknown") +
     ")";
-  const [first] = owned;
-  if (!first)
-    return {
-      error: fail(
-        "target_missing",
-        "Window " +
-          requestedWindow +
-          " belongs to " +
-          found.map(describe).join(", ") +
-          ", not " +
-          (bundleId ?? name) +
-          ". Pass window_id alone, or with the name screen.discover() lists for it.",
-      ),
-    };
-  if (owned.length > 1)
+  // Window ids are unique on a display; one listed twice cannot be told apart, whatever the name.
+  if (found.length > 1)
     return {
       error: fail(
         "target_ambiguous",
         "The driver lists window " +
           requestedWindow +
           " " +
-          owned.length +
+          found.length +
           " times (" +
-          owned.map(describe).join(", ") +
+          found.map(describe).join(", ") +
           "); call screen.discover() and bind again.",
       ),
     };
+  const [first] = found;
+  if (!first) return { error: fail("target_missing") };
   const pid = natural(first.pid);
+  const lower = (value: unknown) => (typeof value === "string" ? value.toLowerCase() : undefined);
+  const agrees =
+    (bundleId === undefined && name === undefined) ||
+    (rows !== undefined
+      ? (pid !== undefined && pid > 0 && askedPids.has(pid)) ||
+        (bundleId === undefined && first.app_name === name)
+      : // A cut app list: macOS and Windows filter by the exact bundle id; Linux's filter
+        // matched a substring of app_name, so only the window's own id or app_name proves it.
+        bundleId !== undefined
+        ? !filterReadsAppName ||
+          first.bundle_id === bundleId ||
+          lower(first.app_name) === bundleId.toLowerCase()
+        : first.app_name === name);
+  if (!agrees)
+    return {
+      error: fail(
+        "target_missing",
+        "Window " +
+          requestedWindow +
+          " belongs to " +
+          describe(first) +
+          ", not " +
+          (bundleId ?? name) +
+          (rows === undefined
+            ? " as far as the window itself says; the app list came back incomplete"
+            : "") +
+          ". Pass window_id alone, or with the name screen.discover() lists for it.",
+      ),
+    };
   if (!pid)
     return {
       error: fail(

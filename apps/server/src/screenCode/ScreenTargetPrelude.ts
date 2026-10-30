@@ -622,7 +622,10 @@ const __app = async (rawQuery) => {
   // lists as app_name while the row is its interpreter (python3). One window on screen binds.
   if (mine.length === 0 && id === undefined && path === undefined) {
     const listedWindows = await __call('list_windows', {});
-    const all = (listedWindows && Array.isArray(listedWindows.windows) ? listedWindows.windows : []).filter((item) =>
+    // A list cut at the channel cap cannot show the window is not open, so nothing launches.
+    if (!listedWindows || !Array.isArray(listedWindows.windows))
+      throw new ScreenError('target_missing', 'The window list came back incomplete, so whether ' + name + ' has a window is unknown and nothing was launched. Pass window_id from screen.discover().', true);
+    const all = listedWindows.windows.filter((item) =>
       item.app_name === name && item.pid > 0 && (item.layer === undefined || item.layer === 0) &&
       !(item.bounds && (item.bounds.width <= 1 || item.bounds.height <= 1)));
     const shown = all.filter((item) => item.is_on_screen !== false);
