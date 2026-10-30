@@ -10,6 +10,61 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import { sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
 
+it.effect.each([
+  { expired: false, title: "preserves newer named-app consent" },
+  { expired: true, title: "retires newer named-app consent when the card expires" },
+])("opening an older pending card $title", ({ expired }) =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const prior = yield* request({ apps: ["com.example.Other"] });
+        if (prior.kind !== "needs_human") return assert.fail("expected prior approval");
+        yield* handoffs.respond(
+          { threadId, handoffId: prior.handoff.handoffId, action: "completed" },
+          sessionId,
+        );
+        const pending = yield* request({ apps: ["com.example.Editor"] });
+        if (pending.kind !== "needs_human") return assert.fail("expected pending card");
+        if (expired) yield* TestClock.adjust("10 minutes");
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("open-card-named"),
+          threadId,
+          messageId: MessageId.make("message:open-card-named"),
+          text: "Use com.example.Editor",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+        const automatic = records.turnItems.find(
+          (item) => item.type === "human_handoff" && item.handoff.computerUseScope === "standing",
+        );
+        if (automatic?.type !== "human_handoff") return assert.fail("expected automatic grant");
+        const address = { threadId, handoffId: pending.handoff.handoffId };
+        if (expired) {
+          yield* TestClock.adjust("21 minutes");
+          const error = yield* handoffs.open(address, sessionId).pipe(Effect.flip);
+          if (error._tag !== "HandoffError") return assert.fail("expected handoff error");
+          assert.equal(error.reason, "expired");
+          assert.equal((yield* leases.state(threadId, automatic.handoff.handoffId))._tag, "ended");
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        } else {
+          const opened = yield* handoffs.open(address, sessionId);
+          assert.equal(opened.handoff.state, "opened");
+          assert.notEqual(
+            (yield* leases.state(threadId, automatic.handoff.handoffId))._tag,
+            "ended",
+          );
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        }
+      }),
+    ),
+  ),
+);
+
 it.effect("a later automatic grant cannot outlive Stop of its earlier naming consent", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {

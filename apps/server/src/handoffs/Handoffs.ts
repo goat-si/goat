@@ -433,10 +433,11 @@ const make = Effect.gen(function* () {
     ) {
       const label = yield* clientLabel(input, sessionId);
       const record = yield* read(input);
-      const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+      const isGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+      const pendingGrant = isGrant && isHandoffPending(record.state);
       yield* standing.validate(input, record);
       // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
-      if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
+      if (pendingGrant && input.action === "completed") {
         const held = Option.isNone(computerUseLeases)
           ? Option.none()
           : yield* computerUseLeases.value
@@ -472,9 +473,8 @@ const make = Effect.gen(function* () {
           true,
         );
       }
-      const endsApproved =
-        isComputerUseGrant && input.action === "cancelled" && record.state === "completed";
-      if (endsApproved || (isComputerUseGrant && isHandoffPending(record.state)))
+      const endsApproved = isGrant && input.action === "cancelled" && record.state === "completed";
+      if (endsApproved || (pendingGrant && input.action !== "opened"))
         yield* standing.end(input.threadId, input.handoffId, endsApproved);
       // Record the end before the transition so the wake reactor sees it.
       if (endsApproved)
@@ -484,22 +484,22 @@ const make = Effect.gen(function* () {
         input.action,
         { type: "client", label },
         // A resolved grant's payload is already settled: it may record how it ended.
-        isComputerUseGrant && !isHandoffPending(record.state),
+        isGrant && !isHandoffPending(record.state),
         input.computerUseScope,
       );
+      if (pendingGrant && input.action === "opened" && result.state === "expired")
+        yield* standing.end(input.threadId, input.handoffId, false);
       yield* standing.record(input, result);
       if (
         foregroundEpoch !== undefined &&
-        isComputerUseGrant &&
-        isHandoffPending(record.state) &&
+        pendingGrant &&
         record.computerUseForeground !== undefined &&
         result.state === "completed" &&
         Option.isSome(computerUseLeases)
       )
         yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
-      if (isComputerUseGrant && Option.isSome(computerUseLeases))
-        yield* computerUseLeases.value.changed;
-      if (isComputerUseGrant) yield* continuations.answered(input.handoffId);
+      if (isGrant && Option.isSome(computerUseLeases)) yield* computerUseLeases.value.changed;
+      if (isGrant) yield* continuations.answered(input.handoffId);
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
       if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
       return result;
