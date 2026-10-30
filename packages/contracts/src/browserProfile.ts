@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { BrowserImportSourceId } from "./browserImportSourceId.ts";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const BROWSER_PROFILE_NAME_MAX_LENGTH = 48;
@@ -22,6 +23,12 @@ export const BrowserProfile = Schema.Struct({
   id: BrowserProfileId,
   name: BrowserProfileName,
   kind: BrowserProfileKind,
+  importSource: Schema.optional(
+    Schema.Struct({
+      sourceId: BrowserImportSourceId,
+      sourceProfileDirectory: TrimmedNonEmptyString,
+    }),
+  ),
 });
 export type BrowserProfile = typeof BrowserProfile.Type;
 
@@ -42,7 +49,12 @@ export function resolveBrowserProfiles(
   userProfiles: ReadonlyArray<BrowserProfile>,
 ): ReadonlyArray<BrowserProfile> {
   const seen = new Set(BUILT_IN_BROWSER_PROFILES.map((profile) => profile.id));
-  const resolved = [...BUILT_IN_BROWSER_PROFILES];
+  const resolved = BUILT_IN_BROWSER_PROFILES.map((profile) => {
+    const saved = userProfiles.find((candidate) => candidate.id === profile.id);
+    return saved?.importSource && profile.kind === "persistent"
+      ? { ...profile, importSource: saved.importSource }
+      : profile;
+  });
   for (const profile of userProfiles) {
     if (seen.has(profile.id)) continue;
     seen.add(profile.id);
