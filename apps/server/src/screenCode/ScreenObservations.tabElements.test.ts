@@ -157,25 +157,46 @@ describe("tab observation elements", () => {
 
   it("reports one changed row across snapshot generations and resolves current refs", () => {
     const observations = new ScreenObservations();
-    const first = observe(observations, '- textbox "Name" [ref=t3-abcd1234-1-e1]: A\n- button "Save" [ref=t3-abcd1234-1-e2]', { documentGeneration: 1 });
-    const second = observe(observations, '- textbox "Name" [ref=t3-abcd1234-2-e1]: AB\n- button "Save" [ref=t3-abcd1234-2-e2]', {
-      base: first, documentGeneration: 1, overrides: { refGeneration: "2" },
-    });
+    const first = observe(
+      observations,
+      '- textbox "Name" [ref=t3-abcd1234-1-e1]: A\n- button "Save" [ref=t3-abcd1234-1-e2]',
+      { documentGeneration: 1 },
+    );
+    const second = observe(
+      observations,
+      '- textbox "Name" [ref=t3-abcd1234-2-e1]: AB\n- button "Save" [ref=t3-abcd1234-2-e2]',
+      {
+        base: first,
+        documentGeneration: 1,
+        overrides: { refGeneration: "2" },
+      },
+    );
     expect(second.mode).toBe("diff");
     expect(second.indexedText).toBe('~ - textbox "Name" [0]: AB');
-    expect(observations.index.resolveElement(second.elements.find((e) => e.index === 0)!.ref)).toBe("aria-ref=t3-abcd1234-2-e1");
-    expect(observations.index.resolveElement(second.elements.find((e) => e.index === 1)!.ref)).toBe("aria-ref=t3-abcd1234-2-e2");
+    expect(observations.index.resolveElement(second.elements.find((e) => e.index === 0)!.ref)).toBe(
+      "aria-ref=t3-abcd1234-2-e1",
+    );
+    expect(observations.index.resolveElement(second.elements.find((e) => e.index === 1)!.ref)).toBe(
+      "aria-ref=t3-abcd1234-2-e2",
+    );
     expect(observations.index.resolveElement(first.elements[0]!.ref)).toBeUndefined();
   });
 
   it("reports a renamed element with a new native ref as removed and added", () => {
     const observations = new ScreenObservations();
-    const first = observe(observations, '- button "Old" [ref=t3-abcd1234-1-e1]', { documentGeneration: 1 });
+    const first = observe(observations, '- button "Old" [ref=t3-abcd1234-1-e1]', {
+      documentGeneration: 1,
+    });
     const second = observe(observations, '- button "New" [ref=t3-abcd1234-2-e2]', {
-      base: first, documentGeneration: 1, overrides: { refGeneration: "2" },
+      base: first,
+      documentGeneration: 1,
+      overrides: { refGeneration: "2" },
     });
     expect(second.mode).toBe("diff");
-    expect(second.indexedText.split("\n")).toEqual(['- - button "Old" [0]', '+ - button "New" [1]']);
+    expect(second.indexedText.split("\n")).toEqual([
+      '- - button "Old" [0]',
+      '+ - button "New" [1]',
+    ]);
   });
 
   it.each([
@@ -184,7 +205,11 @@ describe("tab observation elements", () => {
   ])("resets when either snapshot has a frame ref", (before, after) => {
     const observations = new ScreenObservations();
     const first = observe(observations, before, { documentGeneration: 1 });
-    const second = observe(observations, after, { base: first, documentGeneration: 1, overrides: { refGeneration: "2" } });
+    const second = observe(observations, after, {
+      base: first,
+      documentGeneration: 1,
+      overrides: { refGeneration: "2" },
+    });
     expect(second).toMatchObject({ mode: "full", resetReason: "frame_refs" });
   });
 
@@ -203,15 +228,21 @@ describe("tab observation elements", () => {
 
   it("diffs across surface generations while retiring old refs", () => {
     const observations = new ScreenObservations();
-    const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]', { documentGeneration: 1 });
+    const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]', {
+      documentGeneration: 1,
+    });
     const second = observe(observations, '- button "Save" [ref=t3-abcd1234-2-e1]', {
-      base: first, documentGeneration: 1, overrides: { refGeneration: "2" },
+      base: first,
+      documentGeneration: 1,
+      overrides: { refGeneration: "2" },
     });
     expect(second.surfaceGeneration).not.toBe(first.surfaceGeneration);
     expect(second.mode).toBe("diff");
     expect(second.indexedText).toBe(`no change since ${first.observationId}`);
     expect(observations.index.resolveElement(first.elements[0]!.ref)).toBeUndefined();
-    expect(observations.index.resolveElement(second.elements[0]!.ref)).toBe("aria-ref=t3-abcd1234-2-e1");
+    expect(observations.index.resolveElement(second.elements[0]!.ref)).toBe(
+      "aria-ref=t3-abcd1234-2-e1",
+    );
   });
 
   it("resets the diff after a document or completeness change", () => {
@@ -245,26 +276,39 @@ describe("tab observation elements", () => {
     const observations = new ScreenObservations();
     const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]');
     const second = observe(observations, '- button "Save" [ref=t3-abcd1234-2-e1]', {
-      base: first, overrides: { refGeneration: "2" },
+      base: first,
+      overrides: { refGeneration: "2" },
     });
     expect(second).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
   });
 
   it("returns a full read when the URL changes and native refs are reused", () => {
     const observations = new ScreenObservations();
-    const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]', { documentGeneration: 1 });
+    const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]', {
+      documentGeneration: 1,
+    });
     const second = observe(observations, '- button "Save" [ref=t3-abcd1234-2-e1]', {
-      base: first, documentGeneration: 1, overrides: { refGeneration: "2", url: "https://example.test/other" },
+      base: first,
+      documentGeneration: 1,
+      overrides: { refGeneration: "2", url: "https://example.test/other" },
     });
     expect(second).toMatchObject({ mode: "full", resetReason: "lineage_or_completeness_changed" });
   });
 
   it("returns a full read for duplicate or unpairable rows", () => {
     const observations = new ScreenObservations();
-    const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]', { documentGeneration: 1 });
-    const second = observe(observations, '- button "Save" [ref=t3-abcd1234-2-e1]\n- button "Save" [ref=t3-abcd1234-2-e1]', {
-      base: first, documentGeneration: 1, overrides: { refGeneration: "2" },
+    const first = observe(observations, '- button "Save" [ref=t3-abcd1234-1-e1]', {
+      documentGeneration: 1,
     });
+    const second = observe(
+      observations,
+      '- button "Save" [ref=t3-abcd1234-2-e1]\n- button "Save" [ref=t3-abcd1234-2-e1]',
+      {
+        base: first,
+        documentGeneration: 1,
+        overrides: { refGeneration: "2" },
+      },
+    );
     expect(second).toMatchObject({ mode: "full", resetReason: "ambiguous_rows" });
   });
 

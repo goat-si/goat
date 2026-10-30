@@ -2,7 +2,8 @@ import type { ScreenObservationDraft } from "./ScreenObservations.ts";
 
 type Element = ScreenObservationDraft["elements"][number];
 
-const nativeRef = (token: string) => token.replace(/^aria-ref=t3-.+-((?:f\d+)?e\d+)$/, "aria-ref=$1");
+const nativeRef = (token: string) =>
+  token.replace(/^aria-ref=t3-.+-((?:f\d+)?e\d+)$/, "aria-ref=$1");
 
 export const hasFrameRefs = (draft: ScreenObservationDraft) =>
   draft.elements.some((element) => /^aria-ref=f\d+e\d+$/.test(nativeRef(element.driverToken)));
@@ -17,7 +18,14 @@ const rows = (draft: ScreenObservationDraft) => {
   if (elements.size !== draft.elements.length) return undefined;
   const nativeRefs = new Set(draft.elements.map((element) => nativeRef(element.driverToken)));
   if (nativeRefs.size !== draft.elements.length) return undefined;
-  if (draft.elements.some((element) => element.driverToken.startsWith("aria-ref=t3-") && nativeRef(element.driverToken) === element.driverToken)) return undefined;
+  if (
+    draft.elements.some(
+      (element) =>
+        element.driverToken.startsWith("aria-ref=t3-") &&
+        nativeRef(element.driverToken) === element.driverToken,
+    )
+  )
+    return undefined;
   const found = new Set<string>();
   const byIdentity = new Map<string, { line: string; element: Element; index: number }>();
   const plain: string[] = [];
