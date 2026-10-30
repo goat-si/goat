@@ -60,6 +60,8 @@ export async function loadMcpBridge(
     /** The per-turn computer use gate file the adapter writes. */
     readonly cuaGate?: string;
     readonly screenSkillGate?: string;
+    /** The per-turn native subagent gate file the adapter writes. */
+    readonly subagentGate?: string;
     readonly browser?: boolean;
     readonly inputSchema?: Record<string, unknown>;
     /** False starts the extension without GOAT MCP credentials, as a thread without GOAT MCP does. */
@@ -149,6 +151,9 @@ export async function loadMcpBridge(
           ...(options.screenSkillGate === undefined
             ? {}
             : { GOAT_SCREEN_CODE_SKILL_GATE: options.screenSkillGate }),
+          ...(options.subagentGate === undefined
+            ? {}
+            : { GOAT_SUBAGENT_GATE: options.subagentGate }),
         },
       },
       AbortSignal,

@@ -9,7 +9,11 @@ import { openPiScreenSkillGate, writePiScreenSkillGate } from "./screenSkillGate
 export interface PiTurnGates {
   readonly cua: PiCuaGate | undefined;
   readonly screenSkillPath: string | undefined;
+  readonly subagentsPath: string | undefined;
 }
+
+const subagentGateValue = (session: McpProviderSession.McpProviderSessionConfig | undefined) =>
+  session?.nativeSubagentLimit === 0 ? "off" : "on";
 
 export const openPiTurnGates = Effect.fn("PiTurnGates.open")(function* (
   fileSystem: FileSystem.FileSystem,
@@ -24,7 +28,13 @@ export const openPiTurnGates = Effect.fn("PiTurnGates.open")(function* (
         };
   const screenSkillPath =
     mcpSession === undefined ? undefined : yield* openPiScreenSkillGate(fileSystem);
-  return { cua, screenSkillPath } satisfies PiTurnGates;
+  const subagentsPath =
+    mcpSession === undefined
+      ? undefined
+      : yield* fileSystem.makeTempFileScoped({ prefix: "goat-pi-subagents-" });
+  if (subagentsPath !== undefined)
+    yield* fileSystem.writeFileString(subagentsPath, subagentGateValue(mcpSession));
+  return { cua, screenSkillPath, subagentsPath } satisfies PiTurnGates;
 });
 
 /** Fails with the name of the gate it could not write, for the turn's protocol error. */
@@ -33,7 +43,12 @@ export const writePiTurnGates = Effect.fn("PiTurnGates.write")(function* (
   gates: PiTurnGates,
   readAttached: Effect.Effect<McpProviderSession.McpProviderSessionConfig | undefined>,
 ) {
-  if (gates.screenSkillPath === undefined && gates.cua === undefined) return;
+  if (
+    gates.screenSkillPath === undefined &&
+    gates.cua === undefined &&
+    gates.subagentsPath === undefined
+  )
+    return;
   const attached = yield* readAttached;
   if (gates.screenSkillPath !== undefined)
     yield* writePiScreenSkillGate(fileSystem, gates.screenSkillPath, attached).pipe(
@@ -43,4 +58,8 @@ export const writePiTurnGates = Effect.fn("PiTurnGates.write")(function* (
     yield* writePiCuaGate(fileSystem, gates.cua, attached).pipe(
       Effect.mapError(() => "computer use access"),
     );
+  if (gates.subagentsPath !== undefined)
+    yield* fileSystem
+      .writeFileString(gates.subagentsPath, subagentGateValue(attached))
+      .pipe(Effect.mapError(() => "native subagent limit"));
 });
