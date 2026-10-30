@@ -131,14 +131,14 @@ const noteFor = (items: number, responses: number, stoppedBecause: ScrollCollect
 export const collectWhileScrolling = (
   page: CollectorPage,
   control: Pick<SessionControl, "observe" | "isPrivate">,
-  gate: () => void,
+  gate: () => void | Promise<void>,
   options: ScrollCollectOptions = {},
 ) => control.observe(() => collect(page, control, gate, options));
 
 const collect = async (
   page: CollectorPage,
   control: Pick<SessionControl, "isPrivate">,
-  gate: () => void,
+  gate: () => void | Promise<void>,
   options: ScrollCollectOptions,
 ): Promise<ScrollCollectResult> => {
   const minItems =
@@ -152,9 +152,9 @@ const collect = async (
   const settleMs = bounded(options.settleMs, 800, 0, 10_000);
   const bodyTimeoutMs = bounded(options.bodyTimeoutMs, 5_000, 0, 30_000);
   const extract = options.extract ?? itemsOf;
-  const dispatch = () => {
+  const dispatch = async () => {
     if (control.isPrivate) throw wentPrivate();
-    gate();
+    await gate();
   };
 
   const items: Array<unknown> = [];
@@ -246,9 +246,9 @@ const collect = async (
       if (unchanged >= 2) return done("noGrowth", rounds);
       const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
       const next = arm();
-      dispatch();
+      await dispatch();
       await page.mouse.move(Math.floor(viewport.width / 2), Math.floor(viewport.height / 2));
-      dispatch();
+      await dispatch();
       await page.mouse.wheel(0, Math.floor(viewport.height * 0.9));
       rounds += 1;
       await settle(next);

@@ -193,7 +193,7 @@ export const screenActionGate = (
   return Object.assign(
     () => {
       assertScreenExpectation(tab, request);
-      base();
+      return base();
     },
     base.linger ? { linger: base.linger } : {},
     // The same checks without dispatching, for a pointer drawn before the input.
@@ -201,7 +201,7 @@ export const screenActionGate = (
       ? {
           check: () => {
             assertScreenExpectation(tab, request);
-            check();
+            return check();
           },
         }
       : {},

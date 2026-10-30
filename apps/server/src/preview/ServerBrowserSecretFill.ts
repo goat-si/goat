@@ -678,6 +678,7 @@ export const make = Effect.gen(function* () {
     request: PreviewAutomationRequest,
     deadlineMs: number,
     record: RecordAction<T>,
+    checkBlocked: () => Promise<void>,
   ): Promise<PreviewAutomationFillSecretResult> => {
     const input = Option.getOrUndefined(decodeInput(request.input));
     if (input === undefined) throw refused("Pass a secretRef and at most a CSS selector.");
@@ -707,6 +708,7 @@ export const make = Effect.gen(function* () {
               const identifier = await identifierOf(target);
               const identifierName = identifier === null ? null : await identifierNameOf(target);
               fence.hold();
+              await checkBlocked();
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
               const consumed = await consume({
@@ -742,6 +744,7 @@ export const make = Effect.gen(function* () {
                 identifierAbsent: identifier === null,
               });
               watchSignIn(tab, request.threadId);
+              await checkBlocked();
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
               // Fenced before dispatch: a lost reply may still have typed the value.
@@ -779,6 +782,8 @@ export const make = Effect.gen(function* () {
               }
               return { destination, verified: input.expectedAccount !== undefined };
             } catch (cause) {
+              if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
+                throw cause;
               if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
                 throw cause;
               throw refused(

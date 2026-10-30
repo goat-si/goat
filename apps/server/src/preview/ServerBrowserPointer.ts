@@ -41,7 +41,7 @@ export const pointBefore = async <Input extends TargetInput>(
   const viewport = page.viewportSize();
   const point = box && { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   // A Stop and resume during the wait leave this action's control behind; its pointer stays.
-  gate.check?.();
+  await gate.check?.();
   if (
     point &&
     left() > 0 &&

@@ -961,14 +961,17 @@ const make = Effect.gen(function* () {
     if (tab.fileChooser === open) closeFileChooser(tab);
     return true;
   };
-  const uploadFiles = async (tab: ServerTab, input: PreviewAutomationUploadInput) => {
+  const uploadFiles = async (
+    tab: ServerTab,
+    input: PreviewAutomationUploadInput,
+    gate: ServerBrowserPage.DispatchGate,
+  ) => {
     const relative = input.paths.find((path) => !NodePath.isAbsolute(path));
     if (relative !== undefined)
       throw new ServerBrowserPage.ServerBrowserOperationError(
         "PreviewAutomationExecutionError",
         `Upload paths must be absolute: ${relative}`,
       );
-    const gate = gateFor(tab);
     // Checked before the gate, so a missing file fails before anything reaches the page.
     for (const path of input.paths)
       await NodeFSP.access(path).catch(() => {
@@ -996,7 +999,7 @@ const make = Effect.gen(function* () {
       } finally {
         void element.dispose().catch(constVoid);
       }
-    } else gate();
+    } else await gate();
     if (tab.fileChooser === open) closeFileChooser(tab);
     return undefined;
   };
@@ -1541,9 +1544,6 @@ const make = Effect.gen(function* () {
       };
     });
 
-  /** Call when the action starts: its gate stays shut once control changes, even if it changes back. */
-  const gateFor = (tab: ServerTab): ServerBrowserPage.DispatchGate => tab.control.dispatchGate();
-
   const pointerFor =
     (tab: ServerTab): ServerBrowserPage.PointerReporter =>
     async ({ x, y }, phase) => {
@@ -1781,7 +1781,9 @@ const make = Effect.gen(function* () {
         "agentMismatch",
       );
     if (request.operation === "fillSecret")
-      return secretFill.fill(tab, request, deadlineMs, recordAction);
+      return secretFill.fill(tab, request, deadlineMs, recordAction, () =>
+        blockedTabs.assertTab(tab, request.runId),
+      );
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
       if (tab.control.agentId !== request.agentSessionId)
@@ -1856,7 +1858,10 @@ const make = Effect.gen(function* () {
     await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = () =>
-      Object.assign(ServerBrowserScreen.screenActionGate(tab, request), { deadline: deadlineMs });
+      Object.assign(
+        blockedTabs.gate(tab, request.runId, ServerBrowserScreen.screenActionGate(tab, request)),
+        { deadline: deadlineMs },
+      );
     switch (request.operation) {
       case "back":
       case "forward":
@@ -1941,7 +1946,7 @@ const make = Effect.gen(function* () {
           collectWhileScrolling(
             tab.page,
             tab.control,
-            gateFor(tab),
+            actionGate(),
             input as PreviewAutomationScrollCollectInput,
           ),
         );
@@ -1984,7 +1989,7 @@ const make = Effect.gen(function* () {
         );
       case "upload":
         return recordAction(tab, "upload", () =>
-          uploadFiles(tab, input as PreviewAutomationUploadInput),
+          uploadFiles(tab, input as PreviewAutomationUploadInput, actionGate()),
         );
       case "type":
         return recordAction(tab, "type", async () => {

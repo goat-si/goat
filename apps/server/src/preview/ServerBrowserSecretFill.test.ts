@@ -102,6 +102,7 @@ const request = (operation: PreviewAutomationRequest["operation"], input: unknow
 
 const fillRequest = request("fillSecret", { secretRef: ref, selector: "#pw" });
 const record = <T, A>(_tab: T, _action: string, run: () => Promise<A>) => run();
+const checkBlocked = async () => {};
 
 /** A one-use ref whose consumption can run a hook first, as a person's Stop would land. */
 const withFill = <A>(
@@ -143,7 +144,9 @@ const expired = 0;
 it.live("keeps the fence when the fill's reply is lost after the page may have typed it", () => {
   const { tab, field } = makeTab({ fillReply: true });
   return withFill(async (fill) => {
-    const uncertain = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    const uncertain = await fill
+      .fill(tab, fillRequest, later(), record, checkBlocked)
+      .catch((cause) => cause);
     expect(String(uncertain.message)).toContain("could not confirm whether the password was typed");
     // It may have typed, so it does not say nothing was sent.
     expect(uncertain.detail).toBeUndefined();
@@ -157,7 +160,7 @@ it.live("keeps the fence when the fill's reply is lost after the page may have t
 it.live("keeps the pixels of a tab off after a lost fill reply, once its field lets go", () => {
   const { tab, closeSession } = makeTab({ fillReply: true });
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record).catch(() => undefined);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked).catch(() => undefined);
     closeSession();
     await fill.guard(tab, request("evaluate", { expression: "1" }));
     await expect(fill.guard(tab, request("snapshot", { captureImage: true }))).rejects.toThrow(
@@ -174,7 +177,9 @@ it.live("fills nothing while another tab sharing its sign-ins is recording", () 
     // The recording tab was acted on, as starting its recording is.
     await fill.guard(recorder, request("status", {}));
     recorder.recording = {};
-    const refused = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    const refused = await fill
+      .fill(tab, fillRequest, later(), record, checkBlocked)
+      .catch((cause) => cause);
     expect(String(refused.message)).toContain("is recording");
     expect(field.value).toBe("");
   });
@@ -185,7 +190,7 @@ it.live("keeps the pixels of another thread's tab of the same profile off on a f
   const { tab } = makeTab({}, shared);
   const { tab: other } = makeTab({}, shared);
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     const elsewhere = { ...request("snapshot", { captureImage: true }), threadId: otherThread };
     await expect(fill.guard(other, elsewhere)).rejects.toThrow("stay off");
   });
@@ -198,7 +203,7 @@ it.live(
     const { tab } = makeTab({}, shared);
     const { tab: other } = makeTab({}, shared);
     return withFill(async (fill) => {
-      await fill.fill(tab, fillRequest, later(), record);
+      await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       // The site copied the password into storage the other thread's tab reads back.
       const read = { ...request("read", {}), threadId: otherThread };
       await fill.guard(other, read);
@@ -216,7 +221,7 @@ it.live(
     const { tab } = makeTab({}, shared);
     const { tab: other } = makeTab({}, shared);
     return withFill(async (fill) => {
-      await fill.fill(tab, fillRequest, later(), record);
+      await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       const script = { ...request("evaluate", { expression: "1" }), threadId: otherThread };
       await expect(fill.guard(other, script)).rejects.toThrow("shares this tab's sign-ins holds");
     });
@@ -246,7 +251,7 @@ it.live(
             pixels = cause;
           }
         };
-        await fill.fill(tab, fillRequest, later(), record);
+        await fill.fill(tab, fillRequest, later(), record, checkBlocked);
         expect(String((pixels as Error | undefined)?.message)).toContain("is filling a password");
         await expect(starting).rejects.toThrow("shares this tab's sign-ins");
       },
@@ -258,7 +263,7 @@ it.live(
 it.live("lifts the fence of a field whose frame session closed with its document", () => {
   const { tab, closeSession } = makeTab();
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
     );
@@ -270,7 +275,9 @@ it.live("lifts the fence of a field whose frame session closed with its document
 it.live("an exception after the value was set may have typed it, so the fence stays", () => {
   const { tab, field } = makeTab({ fillThrew: true });
   return withFill(async (fill) => {
-    const uncertain = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    const uncertain = await fill
+      .fill(tab, fillRequest, later(), record, checkBlocked)
+      .catch((cause) => cause);
     expect(String(uncertain.message)).toContain("could not confirm whether the password was typed");
     expect(uncertain.detail).toBeUndefined();
     expect(field.value).toBe(PASSWORD);
@@ -283,7 +290,9 @@ it.live("an exception after the value was set may have typed it, so the fence st
 it.live("a field the fill refused before setting it says nothing was typed", () => {
   const { tab, field } = makeTab({ fillRefused: true });
   return withFill(async (fill) => {
-    const usedUp = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+    const usedUp = await fill
+      .fill(tab, fillRequest, later(), record, checkBlocked)
+      .catch((cause) => cause);
     expect(String(usedUp.message)).toContain("Nothing was filled");
     expect(usedUp.detail).toEqual({ beforeInput: true });
     expect(field.value).toBe("");
@@ -294,7 +303,7 @@ it.live("a field the fill refused before setting it says nothing was typed", () 
 it.live("keeps the fence when GOAT cannot check the filled field", () => {
   const { tab } = makeTab({ stillFilled: true });
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     await expect(fill.guard(tab, request("recordingStart", {}))).rejects.toThrow(
       "cannot confirm the password it filled is gone",
     );
@@ -308,7 +317,7 @@ it.live("keeps the fence when GOAT cannot check the filled field", () => {
 it.live("lifts the fence once the filled field no longer holds the value", () => {
   const { tab, field } = makeTab();
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     await expect(fill.guard(tab, request("snapshot", {}))).rejects.toThrow("holds a password");
     await fill.guard(tab, request("snapshot", { captureImage: false }));
     field.value = "";
@@ -320,7 +329,9 @@ it.live("a Stop that lands while the ref is consumed leaves the field empty", ()
   const { tab, field } = makeTab();
   return withFill(
     async (fill, state) => {
-      const usedUp = await fill.fill(tab, fillRequest, later(), record).catch((cause) => cause);
+      const usedUp = await fill
+        .fill(tab, fillRequest, later(), record, checkBlocked)
+        .catch((cause) => cause);
       expect(String(usedUp.message)).toContain("used up");
       expect(usedUp.detail).toEqual({ beforeInput: true });
       expect(state.consumed).toBe(1);
@@ -333,9 +344,11 @@ it.live("a Stop that lands while the ref is consumed leaves the field empty", ()
 it.live("an expired deadline or a starting recording refuses before the ref is used", () => {
   const { tab, field } = makeTab();
   return withFill(async (fill, state) => {
-    await expect(fill.fill(tab, fillRequest, expired, record)).rejects.toThrow();
+    await expect(fill.fill(tab, fillRequest, expired, record, checkBlocked)).rejects.toThrow();
     tab.recordingStart = Promise.withResolvers<void>().promise;
-    await expect(fill.fill(tab, fillRequest, later(), record)).rejects.toThrow("recording");
+    await expect(fill.fill(tab, fillRequest, later(), record, checkBlocked)).rejects.toThrow(
+      "recording",
+    );
     expect(state.consumed).toBe(0);
     expect(field.value).toBe("");
   });
@@ -344,7 +357,7 @@ it.live("an expired deadline or a starting recording refuses before the ref is u
 it.live("masks filled values in every answer, keys included only for page-made JSON", () => {
   const { tab } = makeTab();
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     const outcome = (operation: PreviewAutomationRequest["operation"], result: unknown) =>
       fill.mask(request(operation, {}))({ ok: true, result });
     expect(outcome("evaluate", { [PASSWORD]: PASSWORD })).toEqual({
@@ -382,7 +395,7 @@ it.live("masks a filled value in the escaped and URL-encoded forms a page echoes
   const password = 'p@ss "w0rd"\\ ä&+=';
   return withFill(
     async (fill) => {
-      await fill.fill(tab, fillRequest, later(), record);
+      await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       const echoed = [
         JSON.stringify({ password }),
         `password=${encodeURIComponent(password)}`,
@@ -417,7 +430,7 @@ it.live("masks lowercase percent escapes, overlapping values and a value no URL 
   const fetchSpaced = "alpha  beta\u200bgamma";
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 8; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 8; i++) await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       const text = [
         `${first}6cdefghijklmnopqrstuvwxyz`,
         encodeURIComponent(second).toLowerCase(),
@@ -445,7 +458,7 @@ it.live("masks the start of a filled value that a cut fetch answer ends on", () 
   const { tab } = makeTab();
   return withFill(
     async (fill) => {
-      await fill.fill(tab, fillRequest, later(), record);
+      await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       const fetched = (text: string, truncated: boolean) =>
         fill.mask(request("fetch", {}))({ ok: true, result: { text, truncated } });
       expect(fetched("echo alpha ", true)).toEqual({
@@ -467,7 +480,7 @@ it.live("masks a filled value a fetch rendered without its brackets, end spaces 
   const { tab } = makeTab();
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 3; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 3; i++) await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       // A link label loses its brackets, a pre block its end spaces, an href is URL-encoded.
       const text = ["link alphabetagamma", "alt alpha  beta", "href /p/alpha%28beta%29%20gamma"];
       const outcome = fill.mask(request("fetch", {}))({
@@ -488,7 +501,7 @@ it.live("masks a link label whose dropped brackets join escapes, symbols or a cu
   const { tab } = makeTab();
   return withFill(
     async (fill) => {
-      for (let i = 0; i < 5; i++) await fill.fill(tab, fillRequest, later(), record);
+      for (let i = 0; i < 5; i++) await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       const fetched = (text: string, truncated: boolean) =>
         fill.mask(request("fetch", {}))({ ok: true, result: { text, truncated } });
       const labels = [
@@ -527,7 +540,8 @@ it.live(
     const { tab } = makeTab();
     return withFill(
       async (fill) => {
-        for (let i = 0; i < 2; i++) await fill.fill(tab, fillRequest, later(), record);
+        for (let i = 0; i < 2; i++)
+          await fill.fill(tab, fillRequest, later(), record, checkBlocked);
         // "[ ] / e1" drops to "e1", too short to compare that way: refs stay.
         const tree = '- button "Go" [ref=e1]';
         expect(
@@ -552,7 +566,7 @@ it.live(
 it.live("masks a long page text only up to a little past the caller's cut", () => {
   const { tab } = makeTab();
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     // The value straddles the cut at 100, in a text far longer than anything scanned.
     const text = `${"a ".repeat(45)}${PASSWORD}${"z".repeat(1_000_000)}`;
     const masked = fill.maskText(threadId)(text, 100);
@@ -566,7 +580,7 @@ it.live("masks a very long filled value without failing the answer", () => {
   const long = "a".repeat(40_000);
   return withFill(
     async (fill) => {
-      await fill.fill(tab, fillRequest, later(), record);
+      await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       const text = `${"a".repeat(100_000)} tail`;
       expect(fill.mask(request("fetch", {}))({ ok: true, result: { text } })).toEqual({
         ok: true,
@@ -581,7 +595,7 @@ it.live("masks a very long filled value without failing the answer", () => {
 it.live("keeps the fence while an edited filled field still holds part of the value", () => {
   const { tab, field } = makeTab();
   return withFill(async (fill) => {
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     field.value = PASSWORD.slice(0, -1);
     await expect(fill.guard(tab, request("evaluate", { expression: "1" }))).rejects.toThrow(
       "holds a password GOAT filled",
@@ -625,7 +639,7 @@ it.live("masks a password filled after another thread's read began, in that read
   return withFill(async (fill) => {
     const read = { ...request("signInState", {}), threadId: otherThread };
     await fill.guard(other, read);
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     const answer = fill.mask(read)({ ok: true, result: { validation: ["shown " + PASSWORD] } });
     expect(JSON.stringify(answer)).not.toContain(PASSWORD);
   });
@@ -639,7 +653,7 @@ it.live(
     const { tab: other } = makeTab({}, shared);
     return withFill(async (fill) => {
       const records = fill.maskText(otherThread, other.page);
-      await fill.fill(tab, fillRequest, later(), record);
+      await fill.fill(tab, fillRequest, later(), record, checkBlocked);
       // The console cut sits right inside the password.
       const logged = records("x".repeat(1990) + PASSWORD, 2000).slice(0, 2000);
       expect(logged).not.toContain(PASSWORD.slice(0, 4));
@@ -654,7 +668,7 @@ it.live("drops an image a tab sharing sign-ins took while a password was filled"
   return withFill(async (fill) => {
     const picture = { ...request("snapshot", { captureImage: true }), threadId: otherThread };
     await fill.guard(other, picture);
-    await fill.fill(tab, fillRequest, later(), record);
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
     const answer = fill.mask(picture)({ ok: true, result: { screenshot: { data: "image" } } });
     expect(answer.ok).toBe(false);
   });

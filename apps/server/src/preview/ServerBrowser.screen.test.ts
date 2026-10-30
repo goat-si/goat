@@ -130,7 +130,7 @@ function makeContext() {
       interactiveElements: [],
     }),
     ariaSnapshot: async () => "",
-    locator: vi.fn(() => {
+    locator: vi.fn((): unknown => {
       throw new Error("Unexpected locator action");
     }),
     isClosed: () => false,
@@ -347,6 +347,8 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
       const page = contexts.at(-1)!.page;
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      const context = yield* Effect.context<never>();
+      const run = Effect.runPromiseWith(context);
       const handle = {
         ownerFrame: async () => null,
         dispose: async () => {},
@@ -356,14 +358,14 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
       const locator = {
         first: () => locator,
         elementHandle: async () => {
-          await Effect.runPromise(Deferred.succeed(entered, undefined));
-          await Effect.runPromise(Deferred.await(release));
+          await run(Deferred.succeed(entered, undefined));
+          await run(Deferred.await(release));
           return handle;
         },
         boundingBox: async () => ({ x: 1, y: 1, width: 20, height: 20 }),
         hover,
       };
-      page.locator.mockImplementation(() => locator as never);
+      page.locator.mockImplementation(() => locator);
       const fiber = yield* broker
         .invoke({ scope, tabId, operation: "hover", input: { locator: "button" } })
         .pipe(Effect.result, Effect.forkChild);

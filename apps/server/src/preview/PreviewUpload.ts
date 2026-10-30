@@ -103,7 +103,7 @@ export const uploadInto = async (
     const objectId = found.result.subtype === "node" ? found.result.objectId : undefined;
     if (objectId !== undefined) {
       const { node } = await cdp.send("DOM.describeNode", { objectId });
-      gate();
+      await gate();
       await cdp.send("DOM.setFileInputFiles", {
         files: [...paths],
         backendNodeId: node.backendNodeId,
@@ -117,7 +117,7 @@ export const uploadInto = async (
         "GOAT could not reach this file input's frame, so nothing was uploaded.",
       );
     try {
-      gate();
+      await gate();
       await framed.session.send("DOM.setFileInputFiles", {
         files: [...paths],
         backendNodeId: framed.backendNodeId,
