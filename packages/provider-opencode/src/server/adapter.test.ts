@@ -8,20 +8,17 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
-  ProviderTurnId,
   RunAttemptId,
   RunId,
   MessageId,
   ThreadId,
   type OrchestrationV2ProviderThread,
-  type OrchestrationV2ProviderTurn,
   type AuthEnvironmentScope,
   MemoryId,
   MemoryRevisionId,
   MemorySpaceId,
   EnvironmentId,
 } from "@goat/contracts";
-import { OpenCodeSettings } from "../settings.ts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -50,8 +47,17 @@ import {
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./adapter.ts";
-import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { packMemoryContext, memoryContextText } from "@goat/provider-core/server/memoryContext";
+import {
+  OPEN_CODE_TEST_SETTINGS,
+  promiseGate,
+  asyncEventStream,
+  OPENCODE_TEST_SETTINGS,
+  runtimePolicy,
+  permissionAction,
+  providerTurn,
+  makeOpenCodeRuntimeHarness,
+} from "./adapter.harness.testkit.ts";
 
 const wp4Snapshot = () =>
   packMemoryContext({
@@ -70,207 +76,6 @@ const wp4Snapshot = () =>
   })!;
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
-
-const OPEN_CODE_TEST_SETTINGS = Schema.decodeSync(OpenCodeSettings)({
-  serverUrl: "http://test.invalid",
-});
-
-function promiseGate<A>() {
-  let resolve!: (value: A) => void;
-  const promise = new Promise<A>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-function asyncEventStream() {
-  const values: Array<{ value: unknown; handled: ReturnType<typeof promiseGate<void>> }> = [];
-  const waiters: Array<(value: IteratorResult<unknown>) => void> = [];
-  let previousHandled: ReturnType<typeof promiseGate<void>> | undefined;
-  let closed = false;
-  return {
-    close() {
-      closed = true;
-      for (const waiter of waiters.splice(0)) waiter({ done: true, value: undefined });
-    },
-    push(value: unknown) {
-      const handled = promiseGate<void>();
-      const waiter = waiters.shift();
-      if (waiter) {
-        previousHandled = handled;
-        waiter({ done: false, value });
-      } else values.push({ value, handled });
-      return handled.promise;
-    },
-    stream: {
-      [Symbol.asyncIterator]() {
-        return {
-          next: () => {
-            previousHandled?.resolve();
-            if (closed) return Promise.resolve({ done: true as const, value: undefined });
-            const entry = values.shift();
-            if (entry !== undefined) {
-              previousHandled = entry.handled;
-              return Promise.resolve({ done: false as const, value: entry.value });
-            }
-            return new Promise<IteratorResult<unknown>>((resolve) => waiters.push(resolve));
-          },
-        };
-      },
-    },
-  };
-}
-
-const OPENCODE_TEST_SETTINGS = Schema.decodeSync(OpenCodeSettings)({});
-
-function runtimePolicy(
-  runtimeMode: ProviderAdapter.ProviderAdapterV2RuntimePolicy["runtimeMode"],
-  override: Partial<ProviderAdapter.ProviderAdapterV2RuntimePolicy> = {},
-): ProviderAdapter.ProviderAdapterV2RuntimePolicy {
-  return ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
-    runtimeMode,
-    interactionMode: "default",
-    cwd: null,
-    ...override,
-  });
-}
-
-function permissionAction(rules: ReturnType<typeof openCodePermissionRules>, permission: string) {
-  return rules.findLast((rule) => rule.permission === "*" || rule.permission === permission)
-    ?.action;
-}
-
-function providerTurn(input: {
-  readonly id: string;
-  readonly ordinal: number;
-  readonly nativeId: string | null;
-}): OrchestrationV2ProviderTurn {
-  return {
-    id: ProviderTurnId.make(input.id),
-    providerThreadId: ProviderThreadId.make("provider-thread:opencode-test"),
-    nodeId: NodeId.make(`node:${input.id}`),
-    runAttemptId: null,
-    nativeTurnRef:
-      input.nativeId === null
-        ? null
-        : { driver: OPENCODE_PROVIDER, nativeId: input.nativeId, strength: "weak" },
-    ordinal: input.ordinal,
-    status: "completed",
-    startedAt: null,
-    completedAt: null,
-  };
-}
-
-const makeOpenCodeRuntimeHarness = Effect.fn("makeOpenCodeRuntimeHarness")(function* (
-  suffix: string,
-  nativeSessionId: string,
-  client: object,
-  options: {
-    readonly external?: boolean;
-    readonly memory?: Pick<
-      ProviderAdapter.ProviderAdapterV2TurnInput,
-      "memoryContext" | "refreshMemoryContext"
-    >;
-  } = {},
-  host: Partial<ProviderHost.ProviderHost["Service"]> = {},
-) {
-  const instanceId = ProviderInstanceId.make(`opencode-${suffix}`);
-  const threadId = ThreadId.make(`thread-opencode-${suffix}`);
-  const modelSelection = {
-    instanceId,
-    model: "anthropic/claude-sonnet",
-    options: [],
-  };
-  const policy = runtimePolicy("full-access", { cwd: "/workspace" });
-  const adapter = yield* makeOpenCodeAdapterV2({
-    instanceId,
-    settings: OPEN_CODE_TEST_SETTINGS,
-    environment: {},
-  }).pipe(
-    Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, {
-      connectToOpenCodeServer: () =>
-        Effect.succeed({
-          url: "http://test.invalid",
-          external: options.external ?? true,
-          exitCode: null,
-        }),
-      createOpenCodeSdkClient: () => client,
-    } as unknown as OpenCodeRuntime.OpenCodeRuntime["Service"]),
-    Effect.provideService(ProviderHost.ProviderHost, {
-      paths: { cwd: "/workspace" },
-      resolveAttachmentPath: () => null,
-      ...host,
-    } as unknown as ProviderHost.ProviderHost["Service"]),
-  );
-  const runtime = yield* adapter.openSession({
-    threadId,
-    providerSessionId: ProviderSessionId.make(`session-opencode-${suffix}`),
-    modelSelection,
-    runtimePolicy: policy,
-  });
-  const providerThread = yield* runtime.ensureThread({
-    threadId,
-    modelSelection,
-    runtimePolicy: policy,
-  });
-  const now = yield* DateTime.now;
-  const startTurn = (
-    text = "hello",
-    startProviderThread: OrchestrationV2ProviderThread = providerThread,
-  ) =>
-    runtime.startTurn({
-      ...options.memory,
-      appThread: {
-        id: threadId,
-        projectId: ProjectId.make(`project-opencode-${suffix}`),
-        title: suffix,
-        providerInstanceId: modelSelection.instanceId,
-        modelSelection,
-        runtimeMode: "full-access",
-        interactionMode: "default",
-        branch: null,
-        worktreePath: null,
-        activeProviderThreadId: providerThread.id,
-        lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-        forkedFrom: null,
-        createdBy: "user",
-        creationSource: "web",
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-        settledOverride: null,
-        settledAt: null,
-        lastVisitedAt: null,
-        deletedAt: null,
-      },
-      threadId,
-      runId: RunId.make(`run-opencode-${suffix}`),
-      runOrdinal: 1,
-      providerTurnOrdinal: 1,
-      attemptId: RunAttemptId.make(`attempt-opencode-${suffix}`),
-      rootNodeId: NodeId.make(`node-opencode-${suffix}`),
-      providerThread: startProviderThread,
-      message: {
-        createdBy: "user",
-        creationSource: "web",
-        messageId: MessageId.make(`message-opencode-${suffix}`),
-        text,
-        attachments: [],
-      },
-      modelSelection,
-      runtimePolicy: policy,
-    });
-  return {
-    nativeSessionId,
-    now,
-    policy,
-    providerThread,
-    runId: RunId.make(`run-opencode-${suffix}`),
-    runtime,
-    startTurn,
-    threadId,
-  };
-});
 
 describe("OpenCodeAdapterV2", () => {
   it.effect.each(["completed", "failed", "unavailable"] as const)(
@@ -2566,185 +2371,6 @@ describe("OpenCodeAdapterV2", () => {
         Effect.scoped,
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       ),
-  );
-
-  it.effect("denies OpenCode's task tool to the session while the goatclaw limit is zero", () =>
-    Effect.gen(function* () {
-      const suffix = "subagent-limit";
-      const sessions = yield* McpProviderSessions.McpProviderSessions;
-      const nativeEvents = asyncEventStream();
-      type Rule = { permission: string; pattern: string; action: string };
-      const payloads: Array<{ messageID: string }> = [];
-      const updates: Array<ReadonlyArray<Rule>> = [];
-      const created: Array<ReadonlyArray<Rule>> = [];
-      const config = {
-        environmentId: EnvironmentId.make("fixture"),
-        threadId: ThreadId.make(`thread-opencode-${suffix}`),
-        providerSessionId: `session-opencode-${suffix}`,
-        providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-        endpoint: "http://fixture.invalid/mcp",
-        authorizationHeader: "Bearer limit-fixture",
-        browserToolsAvailable: false,
-      };
-      yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
-      const harness = yield* makeOpenCodeRuntimeHarness(suffix, "limit-root", {
-        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-        session: {
-          create: async (input: { permission: ReadonlyArray<Rule> }) => {
-            created.push(input.permission);
-            return {
-              data: {
-                id: "limit-root",
-                permission: input.permission,
-                time: { created: 1, updated: 1 },
-              },
-            };
-          },
-          update: async (input: { permission: ReadonlyArray<Rule> }) => {
-            updates.push(input.permission);
-            return { data: { id: "limit-root", time: { created: 1, updated: 1 } } };
-          },
-          promptAsync: async (input: { messageID: string }) => {
-            payloads.push(input);
-            return { data: true };
-          },
-          abort: async () => ({ data: true }),
-        },
-      });
-      const turn = Effect.gen(function* () {
-        yield* harness.startTurn("work");
-        const terminal = yield* harness.runtime.events.pipe(
-          Stream.takeUntil((event) => event.type === "turn.terminal"),
-          Stream.runDrain,
-          Effect.forkScoped,
-        );
-        const messageID = payloads.at(-1)!.messageID;
-        for (const event of [
-          {
-            type: "message.updated",
-            properties: {
-              sessionID: "limit-root",
-              info: { id: messageID, role: "user", time: { created: 1 } },
-            },
-          },
-          {
-            type: "session.status",
-            properties: { sessionID: "limit-root", status: { type: "busy" } },
-          },
-          {
-            type: "session.status",
-            properties: { sessionID: "limit-root", status: { type: "idle" } },
-          },
-        ])
-          yield* Effect.promise(() => nativeEvents.push(event));
-        yield* Fiber.join(terminal);
-      });
-      const deniesTask = (rules: ReadonlyArray<Rule> | undefined) =>
-        permissionAction(rules as ReturnType<typeof openCodePermissionRules>, "task") === "deny";
-      assert.isTrue(deniesTask(created[0]));
-      yield* turn;
-      assert.deepEqual(updates, []);
-      yield* sessions.set(config);
-      yield* turn;
-      yield* sessions.set({ ...config, nativeSubagentLimit: 3 });
-      yield* turn;
-      yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
-      yield* turn;
-      // OpenCode has no concurrency cap: only zero denies, and a positive limit leaves the rules alone.
-      assert.deepEqual(updates.map(deniesTask), [false, true]);
-      assert.deepEqual(updates[0], openCodePermissionRules(harness.policy));
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
-  );
-
-  it.effect("refuses a native command that would run as a subtask while the limit is zero", () =>
-    Effect.gen(function* () {
-      const suffix = "subtask-limit";
-      const sessions = yield* McpProviderSessions.McpProviderSessions;
-      const nativeEvents = asyncEventStream();
-      const calls = yield* Queue.unbounded<{ messageID: string; command: string }>();
-      let agentsFail = false;
-      yield* sessions.set({
-        environmentId: EnvironmentId.make("fixture"),
-        threadId: ThreadId.make(`thread-opencode-${suffix}`),
-        providerSessionId: `session-opencode-${suffix}`,
-        providerInstanceId: ProviderInstanceId.make(`opencode-${suffix}`),
-        endpoint: "http://fixture.invalid/mcp",
-        authorizationHeader: "Bearer subtask-fixture",
-        browserToolsAvailable: false,
-        nativeSubagentLimit: 0,
-      });
-      const harness = yield* makeOpenCodeRuntimeHarness(suffix, "subtask-root", {
-        event: {
-          subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
-            options.signal?.addEventListener("abort", () => nativeEvents.close(), { once: true });
-            return { stream: nativeEvents.stream };
-          },
-        },
-        command: {
-          list: async () => ({
-            data: [
-              { name: "background", template: "", hints: [], subtask: true },
-              { name: "scout", template: "", hints: [], agent: "explore" },
-              { name: "docs", template: "", hints: [], agent: "build" },
-            ],
-          }),
-        },
-        app: {
-          agents: async () => {
-            if (agentsFail) throw new Error("agents unavailable");
-            return {
-              data: [
-                { name: "build", mode: "primary", permission: [] },
-                { name: "explore", mode: "subagent", permission: [] },
-              ],
-            };
-          },
-        },
-        session: {
-          create: async () => ({
-            data: { id: "subtask-root", time: { created: 1, updated: 1 } },
-          }),
-          update: async () => ({ data: { id: "subtask-root", time: { created: 1, updated: 1 } } }),
-          command: async (input: { messageID: string; command: string }) => {
-            Queue.offerUnsafe(calls, input);
-            return { data: true };
-          },
-          promptAsync: async () => ({ data: true }),
-          abort: async () => ({ data: true }),
-        },
-      });
-      for (const text of ["/background now", "/scout the repo"]) {
-        assert.isTrue(Exit.isFailure(yield* Effect.exit(harness.startTurn(text))));
-      }
-      agentsFail = true;
-      assert.isTrue(Exit.isFailure(yield* Effect.exit(harness.startTurn("/docs build"))));
-      assert.isTrue(Option.isNone(yield* Queue.poll(calls)));
-      agentsFail = false;
-      const start = yield* harness.startTurn("/docs build").pipe(Effect.forkScoped);
-      const call = yield* Queue.take(calls);
-      assert.equal(call.command, "docs");
-      yield* Effect.promise(() =>
-        nativeEvents.push({
-          type: "message.updated",
-          properties: {
-            sessionID: "subtask-root",
-            info: {
-              id: call.messageID,
-              sessionID: "subtask-root",
-              role: "user",
-              time: { created: DateTime.toEpochMillis(harness.now) },
-            },
-          },
-        }),
-      );
-      yield* Fiber.join(start);
-    }).pipe(
-      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-      Effect.scoped,
-    ),
   );
 
   it.effect("adds the Cua Driver for the turns that have it and disconnects it after", () =>

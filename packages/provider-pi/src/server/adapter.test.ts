@@ -1627,60 +1627,6 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect("closes Pi's subagent tool for each turn whose goatclaw limit is zero", () =>
-    Effect.gen(function* () {
-      const sessions = yield* McpProviderSessions.McpProviderSessions;
-      const attachment = {
-        environmentId: EnvironmentId.make("environment-pi-subagents"),
-        threadId: THREAD_ID,
-        providerSessionId: "mcp-session-pi-subagents",
-        providerInstanceId: PI_INSTANCE_ID,
-        endpoint: "http://127.0.0.1:43123/mcp",
-        authorizationHeader: "Bearer secret-pi-token",
-        browserToolsAvailable: false,
-      };
-      yield* sessions.set(attachment);
-      const fake = yield* makeFakePi;
-      const { runtime, takeEvent } = yield* openRuntime(fake);
-      const gatePath = fake.lastSpawn().env.GOAT_SUBAGENT_GATE;
-      assert.isString(gatePath);
-      const fileSystem = yield* FileSystem.FileSystem;
-      const gate = () => fileSystem.readFileString(gatePath!);
-      assert.equal(yield* gate(), "on");
-      const providerThread = yield* runtime.ensureThread({
-        threadId: THREAD_ID,
-        modelSelection: modelSelection("default"),
-        runtimePolicy,
-      });
-      const finish = Effect.gen(function* () {
-        yield* fake.emit({ type: "agent_start" });
-        yield* fake.emit({
-          type: "message_end",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "ok" }],
-            stopReason: "stop",
-          },
-        });
-        fake.queueState({ isStreaming: false });
-        yield* fake.emit({ type: "agent_settled" });
-        yield* takeEvent((event) => event.type === "turn.terminal");
-      });
-
-      yield* sessions.set({ ...attachment, nativeSubagentLimit: 0 });
-      yield* startTurn(runtime, providerThread);
-      yield* fake.takeRequest("prompt");
-      assert.equal(yield* gate(), "off");
-      yield* finish;
-
-      // Pi has no concurrency cap, so a positive limit leaves the tool open.
-      yield* sessions.set({ ...attachment, nativeSubagentLimit: 2 });
-      yield* startTurn(runtime, providerThread, "default", [], "Again", undefined, 2);
-      yield* fake.takeRequest("prompt");
-      assert.equal(yield* gate(), "on");
-    }).pipe(Effect.scoped, Effect.provide(layerTest)),
-  );
-
   it.effect("rejects a resume while a turn is active", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;

@@ -60,6 +60,13 @@ import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import {
+  deniesSubagents,
+  sameRules,
+  sessionRules,
+  type Rule,
+  type RulesPolicy,
+} from "./sessionRules.ts";
 import { buildRuntimeInstructions } from "@goat/provider-core/server/runtimeInstructions";
 import { goatOrchestrationSystemPrompt } from "@goat/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
@@ -327,11 +334,6 @@ type TurnTerminal =
   | { readonly status: "completed" | "interrupted" }
   | { readonly status: "failed"; readonly failure: ReturnType<typeof makeProviderFailure> };
 
-type Rule = Permission.Rule;
-type RulesPolicy = Pick<
-  ProviderAdapter.ProviderAdapterV2RuntimePolicy,
-  "runtimeMode" | "interactionMode"
->;
 type NativeForm = EventOf<"form.created">["data"]["form"];
 
 interface PendingRequest {
@@ -352,8 +354,6 @@ interface PendingRequest {
       }
     | { readonly type: "form"; readonly id: string; readonly form: NativeForm };
 }
-
-const rule = (action: string, effect: Rule["effect"]): Rule => ({ action, resource: "*", effect });
 
 /**
  * OpenCode skips every tool of a server whose name is over 64 characters (its
@@ -386,64 +386,6 @@ export const cuaMcpServerName = Effect.fn("cuaMcpServerName")(function* (threadI
     .pipe(Effect.orDie);
   return `${McpProviderSession.CUA_MCP_SERVER_NAME}-${Hex.encode(digest).slice(0, 16)}`;
 });
-
-/**
- * The rules that keep GOAT's MCP servers to their own thread, after the mode's:
- * the last matching rule wins, so every thread's GOAT server is denied and then
- * this thread's own is allowed again, in every mode. Cua Drivers are registered
- * per directory, so every turn denies all of them, including a turn excluded from
- * computer use (Plan, read-only) that would otherwise inherit full access's
- * `* allow`, and only a turn with the driver allows its own exact server.
- */
-const mcpRules = (
-  names: { readonly goat: string; readonly cua: string | null } | null,
-): ReadonlyArray<Rule> =>
-  names === null
-    ? [rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny")]
-    : [
-        // A reused daemon can still carry registrations from before the rename.
-        { action: "t3-code-*", resource: "*", effect: "deny" },
-        { action: "goat-*", resource: "*", effect: "deny" },
-        { action: `${names.goat}_*`, resource: "*", effect: "allow" },
-        rule(`${McpProviderSession.CUA_MCP_SERVER_NAME}-*`, "deny"),
-        ...(names.cua === null ? [] : [rule(`${names.cua}_*`, "allow")]),
-      ];
-
-const sessionRules = (
-  policy: RulesPolicy,
-  paths: ReadonlyArray<Rule>,
-  grants: ReadonlyArray<Rule>,
-  mcpServerNames: { readonly goat: string; readonly cua: string | null } | null,
-  subagentsOff: boolean,
-): ReadonlyArray<Rule> => [
-  ...(policy.runtimeMode === "full-access"
-    ? [rule("*", "allow")]
-    : [
-        rule("shell", "ask"),
-        rule("edit", policy.runtimeMode === "auto-accept-edits" ? "allow" : "ask"),
-        rule("external_directory", "ask"),
-      ]),
-  ...grants,
-  // Plan edits are re-allowed only for plan paths; free-tier sessions refuse denied shell/read.
-  ...(policy.interactionMode === "plan" ? [rule("edit", "deny")] : []),
-  ...paths,
-  ...mcpRules(mcpServerNames),
-  // OpenCode checks this before every launch but has no concurrency cap: a goatclaw limit of
-  // zero denies subagents last so no grant can reopen them, and other limits leave them uncapped.
-  ...(subagentsOff ? [rule("subagent", "deny")] : []),
-];
-
-const deniesSubagents = (rules: ReadonlyArray<Rule> | undefined) =>
-  rules?.some((entry) => entry.action === "subagent" && entry.effect === "deny") === true;
-
-const sameRules = (left: ReadonlyArray<Rule> | undefined, right: ReadonlyArray<Rule>) =>
-  left?.length === right.length &&
-  left.every(
-    (entry, index) =>
-      entry.action === right[index]?.action &&
-      entry.resource === right[index]?.resource &&
-      entry.effect === right[index]?.effect,
-  );
 
 // Rejection without a message stops the whole execution, meaning Cancel.
 const DECLINED = "The user declined this request.";
