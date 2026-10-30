@@ -14,6 +14,12 @@ describe("computer use call safety", () => {
     );
     expect(
       deniedCallApp(
+        { name: "click", args: {}, app: "/example/editor", safetyApps: ["com.example.Blocked"] },
+        denied,
+      ),
+    ).toBe("com.example.Blocked");
+    expect(
+      deniedCallApp(
         {
           name: "run_script",
           args: { app_scope: { apps: ["com.example.Blocked"], delivery: "background" } },
