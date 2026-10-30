@@ -175,3 +175,27 @@ effectIt.effect("a newly claimed pid fences a desktop call held before dispatch"
     assert.equal(yield* h.driverQueued, 0);
   }),
 );
+
+effectIt.effect("a revoked claim fences a browser call held before dispatch", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness({ onTarget: () => true, targetGate: gate });
+    const claim = {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+    };
+    yield* h.push({ ...active(), browserClaims: [claim] });
+    yield* h.applied;
+    yield* h.send(call(1, "browser_click", { tab_id: "tab-1", pid: 42, window_id: 7 }));
+    yield* h.reported;
+    yield* h.push({ ...active(), browserClaims: [] });
+    yield* h.applied;
+    yield* Deferred.succeed(gate, undefined);
+    assert.equal((yield* h.nextToProvider).id, 1);
+    assert.equal(yield* h.driverQueued, 0);
+  }),
+);
