@@ -128,7 +128,10 @@ it.effect("the host retains bounded images and guest replies contain metadata on
           scale: 1,
           mimeType: "image/png",
         };
-        const image: ScreenImage = { ...metadata, bytes: Buffer.from("1234").toString("base64") };
+        const image: ScreenImage = {
+          ...metadata,
+          bytes: Buffer.from(`123${request.callId}`).toString("base64"),
+        };
         return Effect.succeed({
           value: { observationId: "o", tree: "button Save", image },
           image,
@@ -980,4 +983,45 @@ it.effect(
         { targetId: "win-a", generation: 3, phase: "resting" },
       ]);
     }),
+);
+
+it.effect("identical images in a cell are emitted once while each capture keeps its region", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+      dispatch: (request) => {
+        const metadata: ScreenImageMetadata = {
+          imageRef: `i${request.callId}`,
+          callId: request.callId,
+          targetId: "target",
+          observationId: `o${request.callId}`,
+          regionId: `g${request.callId}`,
+          region: { kind: "viewport", x: 0, y: 0, width: 1, height: 1 },
+          pixelWidth: 1,
+          pixelHeight: 1,
+          scale: 1,
+          mimeType: "image/png",
+        };
+        const image: ScreenImage = { ...metadata, bytes: Buffer.from("same").toString("base64") };
+        return Effect.succeed({
+          value: metadata,
+          image,
+          imageMetadata: metadata,
+          category: "unverifiable" as const,
+        });
+      },
+    });
+    yield* bridge.handle(
+      { ...call(1), method: "screenshot" },
+      { ...context(() => Effect.void), limits: screenRunLimits({ imageBytes: 100 }) },
+    );
+    const second = yield* bridge.handle(
+      { ...call(2), method: "screenshot" },
+      { ...context(() => Effect.void), limits: screenRunLimits({ imageBytes: 100 }) },
+    );
+    const collected = yield* bridge.takeCellImages("r", "t", "c");
+    expect(collected.images).toHaveLength(1);
+    expect(second?.value).toMatchObject({ imageRef: "i1", regionId: "g2", observationId: "o2" });
+  }),
 );
