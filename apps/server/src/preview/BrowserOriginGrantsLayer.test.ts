@@ -8,6 +8,8 @@ import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 
+const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+
 it.effect("reports unsupported capability as unavailable and removes claims from snapshots", () =>
   Effect.gen(function* () {
     const service = yield* Grants.BrowserOriginGrants;
@@ -36,7 +38,7 @@ it.effect("reports unsupported capability as unavailable and removes claims from
           Layer.mergeAll(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
               getDescriptor: Effect.succeed(
-                Schema.decodeSync(ExecutionEnvironmentDescriptor)({
+                decodeDescriptor({
                   environmentId: EnvironmentId.make("environment:test"),
                   label: "Test",
                   platform: { os: "linux", arch: "x64" },
@@ -86,7 +88,7 @@ it.effect("refuses an approved claim as unavailable when the bind service is abs
           Layer.merge(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
               getDescriptor: Effect.succeed(
-                Schema.decodeSync(ExecutionEnvironmentDescriptor)({
+                decodeDescriptor({
                   environmentId: EnvironmentId.make("environment:test"),
                   label: "Test",
                   platform: { os: "linux", arch: "x64" },
@@ -126,7 +128,7 @@ it.effect(
           Layer.provide(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
               getDescriptor: Effect.succeed(
-                Schema.decodeSync(ExecutionEnvironmentDescriptor)({
+                decodeDescriptor({
                   environmentId: EnvironmentId.make("environment:test"),
                   label: "Test",
                   platform: { os: "linux", arch: "x64" },

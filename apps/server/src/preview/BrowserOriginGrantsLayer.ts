@@ -2,10 +2,16 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+
+class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUnavailable>()(
+  "BrowserClaimBindUnavailable",
+  { cause: Schema.Defect() },
+) {}
 
 const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
@@ -21,7 +27,9 @@ const make = Effect.gen(function* () {
     bind: (request) =>
       Option.isSome(bind)
         ? bind.value.bind(request)
-        : Effect.fail(new Error("Browser claim binding is unavailable.")),
+        : Effect.fail(
+            new BrowserClaimBindUnavailable({ cause: "Browser claim binding is unavailable." }),
+          ),
   });
   const reportDriverCapability = Effect.fn("BrowserOriginGrants.reportDriverCapability")(function* (
     value: boolean,
@@ -36,5 +44,5 @@ const make = Effect.gen(function* () {
 export class BrowserOriginGrants extends Context.Service<
   BrowserOriginGrants,
   Effect.Success<typeof make>
->()("goat/preview/BrowserOriginGrants") {}
+>()("goat/preview/BrowserOriginGrantsLayer/BrowserOriginGrants") {}
 export const layer = Layer.effect(BrowserOriginGrants, make);
