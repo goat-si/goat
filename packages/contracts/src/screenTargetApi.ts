@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/12";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/13";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -27,6 +27,8 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
 // after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
 // later input, but observe, read, status, waitFor and verify still run.
+// nothingSent speaks for its own call only: a cell that ends on it after an earlier input went out keeps
+// that input's safety, and its nextStep names the input; read again in a new cell and never resend it.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 interface Observation extends ReadTime { text: string; observationId: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
