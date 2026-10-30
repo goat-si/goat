@@ -171,12 +171,18 @@ const driverWarnings = (reply: ComputerUsePrimitiveReply, value: unknown): reado
       : focus?.status === "restored"
         ? `focus restored to the prior app${pid ? ` (pid ${pid})` : ""}`
         : undefined;
-  const text = array(object(reply.result)?.content)
+  const texts = array(object(reply.result)?.content)
     .map(object)
-    .map((part) => (part?.type === "text" ? string(part.text) : undefined))
-    .find((part) => part?.includes("Its effect is unverified."));
-  const after = text?.split("Its effect is unverified.", 2)[1];
-  const disabled = after?.split(/(?<=[.!?])\s+/u).find((sentence) => /disabled/i.test(sentence));
+    .map((part) => (part?.type === "text" ? string(part.text) : undefined));
+  const marked = texts.find((part) => part?.includes("Its effect is unverified."));
+  const after = marked?.split("Its effect is unverified.", 2)[1];
+  const fallback =
+    fields?.effect === "suspected_noop"
+      ? texts.find((part) => part?.includes("disabled"))
+      : undefined;
+  const disabled = (after ?? fallback)
+    ?.split(/(?<=[.!?])\s+/u)
+    .find((sentence) => /disabled/i.test(sentence));
   return [focusWarning, disabled, string(fields?.note), string(fields?.warning)]
     .filter((item): item is string => item !== undefined)
     .map((item) => item.replace(/\s+/gu, " ").trim().slice(0, 200))
