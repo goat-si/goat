@@ -43,8 +43,9 @@ export const dragBetween = async (
     }
     await again(gate, deadline);
   } catch (cause) {
-    // A drag cut short still lets go of the button it pressed, where the pointer stopped.
-    await page.mouse.up().catch(() => undefined);
+    await page.keyboard.press("Escape");
+    await page.mouse.move(input.from.x, input.from.y);
+    await page.mouse.up();
     throw cause;
   }
   await page.mouse.up();
