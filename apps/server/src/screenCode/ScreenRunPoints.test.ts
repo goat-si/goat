@@ -186,7 +186,7 @@ it.live(
           status: "completed",
           value: [
             "stale_reference",
-            "The page scrolled or changed since that screenshot. Observe({screenshot:true}) again.",
+            "An input or read since that screenshot ended its points. Take tab.screenshot() again.",
             true,
             "stale_reference",
           ],
@@ -251,15 +251,19 @@ it.live(
                     accessibilityTree: "- img [ref=e1]",
                     treeComplete: true,
                     refGeneration: "1",
-                    // A 2x capture of a 300 x 200 viewport.
-                    screenshot: {
-                      mimeType: "image/png",
-                      data: "AQID",
-                      width: 600,
-                      height: 400,
-                      region: { kind: "viewport", x: 0, y: 0, width: 300, height: 200 },
-                      scale: 2,
-                    },
+                    // A 2x capture of a 300 x 200 viewport, taken only when the read asks for it.
+                    ...((request.input as { captureImage?: boolean }).captureImage
+                      ? {
+                          screenshot: {
+                            mimeType: "image/png",
+                            data: "AQID",
+                            width: 600,
+                            height: 400,
+                            region: { kind: "viewport", x: 0, y: 0, width: 300, height: 200 },
+                            scale: 2,
+                          },
+                        }
+                      : {}),
                   }
                 : {}
           ) as A;
@@ -279,11 +283,22 @@ it.live(
           await tab.claim();
           const shot = await tab.screenshot();
           await tab.click([60, 40]);
-          return { imageRef: shot.imageRef, size: [shot.pixelWidth, shot.pixelHeight], capabilities: tab.capabilities };`,
+          const codeOf = async (run) => { try { await run(); } catch (error) { return error.code; } };
+          // The screenshot's own element list never reached the cell, so numbers wait for observe().
+          const number = await codeOf(() => tab.click(0));
+          const option = await codeOf(() => tab.screenshot({ fullPage: true }));
+          await tab.observe();
+          const afterRead = await codeOf(() => tab.click([60, 40]));
+          return { imageRef: shot.imageRef, size: [shot.pixelWidth, shot.pixelHeight], capabilities: tab.capabilities, number, option, afterRead };`,
         });
         expect(result).toMatchObject({
           status: "completed",
-          value: { size: [600, 400] },
+          value: {
+            size: [600, 400],
+            number: "stale_reference",
+            option: "invalid_argument",
+            afterRead: "stale_reference",
+          },
         });
         const value = result.value as { imageRef: string; capabilities: string[] };
         expect(value.capabilities).toEqual(expect.arrayContaining(["points", "screenshot"]));

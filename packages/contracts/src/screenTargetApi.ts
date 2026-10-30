@@ -13,7 +13,7 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
-// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input or a new page; Linux and Windows app actions use element numbers from observe().
+// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page; Linux and Windows app actions use element numbers from observe().
 type Done = { verdict: "confirmed" | "unverifiable"; observed?: string[]; point?: { x: number; y: number; unit: "window_points" }; hit?: { role?: string; name?: string; id?: string } | null; ms?: number; phases?: { preMs?: number; driverMs: number; settleMs?: number; postMs?: number }; result?: { windows?: { opened: object[]; notListed: object[]; bound: "present" | "offscreen" | "not_listed" | "closed" | "unverified"; truncated?: boolean }; windowsTruncated?: boolean; [k: string]: unknown } };
 // ms and phases: host time of this call (pre-reads, the driver or browser call, settle wait, post-reads); absent for steps sent as one batch.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
@@ -45,7 +45,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // tabs: a diff after the first; apps: always full
-  screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), which also refreshes element numbers
+  screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
   click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action is apps only
   type(text: string, t?: Target, o?: { send?: boolean }): Promise<Done>;
   press(key: string, t?: Target, o?: { send?: boolean }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first

@@ -229,7 +229,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     if (!seen.image && seen.replaced)
       throw new ScreenError('stale_reference', 'The window this screenshot showed was replaced; take a new screenshot.', true);
     if (!seen.image && seen.retired)
-      throw new ScreenError('stale_reference', 'The page scrolled or changed since that screenshot. Observe({screenshot:true}) again.', true);
+      throw new ScreenError('stale_reference', 'An input or read since that screenshot ended its points. Take tab.screenshot() again.', true);
     if (!seen.image)
       throw new ScreenError(
         'invalid_argument',
@@ -299,6 +299,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
       catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
     }
     __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query']);
+    // The host drops a tab's screenshot points on every read.
+    if (tab) retire();
     if (!tab && arg.query !== undefined) __only('observe query', arg.query, ['role', 'name', 'text', 'id']);
     const diff = arg.diff !== false && seen.observation !== undefined;
     const page = !tab && arg.after !== undefined;
@@ -519,9 +521,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
     forward: () => act('forward', 'forward_tab', {}),
     close: () => call('close_tab'),
     select: (arg = {}) => call('select', arg),
-    // The same read as observe({screenshot:true}), so element numbers and [x, y] points share it.
-    screenshot: async () => {
+    // The same read as observe({screenshot:true}). Its element list never reaches the caller,
+    // so numbers wait for the next observe() instead of silently meaning other elements.
+    screenshot: async (arg) => {
+      if (arg !== undefined && (arg === null || typeof arg !== 'object' || Object.keys(arg).length > 0))
+        throw new ScreenError('invalid_argument', 'tab.screenshot() takes no options; nothing was sent.', true);
       const { image, ms, phases } = await observe({ screenshot: true });
+      seen.observation = undefined;
       return { ...(ms === undefined ? {} : { ms, phases }), ...image };
     },
   } : {
