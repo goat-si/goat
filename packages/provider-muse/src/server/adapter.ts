@@ -155,6 +155,8 @@ const MuseProviderCapabilitiesV2 = {
     supportsStructuredQuestions: true,
     planDeltasHaveItemIds: false,
   },
+  // goatclaw's native subagent limit is not enforced: Muse reports subagents only once
+  // they run and exposes no setting GOAT can pass to switch them off or cap them.
   subagents: {
     supportsSubagents: true,
     exposesSubagentThreadIds: false,

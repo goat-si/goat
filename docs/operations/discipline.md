@@ -106,8 +106,10 @@ A subagent, delegated task, or launched thread may not see your conversation, so
 - acceptance criteria and the commands that prove them;
 - the research expected: current practice from a research tool such as Aside when one is
   available, otherwise web search, with sources cited;
-- which native subagents it may use (gpt-6.1-sol, for example), counted against the same
-  `maxLanes` limit as dispatched lanes;
+- which native subagents it may use (gpt-6.1-sol, for example). Dispatched lanes count the native
+  subagents GOAT has seen running against `maxLanes`. Codex and Claude also cap their own native
+  subagents at it; Cursor, OpenCode and Pi only switch them off at 0, and Grok, Antigravity, Fx
+  and Muse cannot be limited;
 - delivery and the finish line, as far as the task authorizes: one request per pull request to
   `dev`, merged under [merging](merging.md) only by a lane that holds merge authority, and done
   when the pull request has merged or `goat-ci-result` is green on its exact head. A codexclaw

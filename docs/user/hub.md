@@ -139,6 +139,11 @@ start one for a thread that cannot merge, unless the limits that thread was star
 with, such as ones forwarded from another machine, leave merging out. Turn it on in
 **Settings → Hub**.
 
+A profile's lane limit (`maxLanes`) also covers the subagents a coding agent
+starts by itself. Codex and Claude run no more of them at once than the limit.
+Cursor, OpenCode and Pi can only turn them off, which GOAT does when the limit is 0. Grok, Antigravity, Fx and Muse cannot be limited. A changed limit applies from
+the agent's next message; subagents already running keep going.
+
 The switch covers your whole fleet. Turning it on or off on one machine does the
 same on every host connected to it, and the most recent change wins wherever you
 made it. The row lists each host as **applied**, **waiting** (not reached yet) or

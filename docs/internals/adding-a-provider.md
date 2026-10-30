@@ -92,6 +92,11 @@ produce catches them.
 - **Subagents outlive the run that launched them.** A child can report after its parent's turn
   settled, or resume during a later run. Route its updates by the subagent, not by whichever run
   is currently active.
+- **goatclaw limits native subagents.** `McpProviderSessionConfig.nativeSubagentLimit` is the
+  thread's `maxLanes` (0 for GOAT Bot sessions), reread for every new prompt turn. Enforce it with
+  the harness's own cap where one exists (Codex, Claude Code); otherwise switch the subagent tool
+  off at 0 (Cursor, OpenCode, Pi), or say at the capability declaration why the harness offers
+  neither (Grok, Antigravity, Fx, Muse). Undefined means goatclaw is off: change nothing.
 - **A failed or stopped turn leaves nothing open.** Settle the turn's tool calls, subagents, and
   pending approvals and questions. Each terminal path needs its own replay: completion, Stop,
   provider failure, and process exit.

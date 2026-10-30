@@ -99,6 +99,8 @@ const GrokProviderCapabilitiesV2 = {
     canForkThread: false,
     canForkFromTurn: false,
   },
+  // goatclaw's native subagent limit is not enforced: Grok has no verified switch, cap,
+  // or per-launch permission request for its Task tool.
   subagents: {
     ...AcpProviderCapabilitiesV2.subagents,
     supportsSubagents: true,

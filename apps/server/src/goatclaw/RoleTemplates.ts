@@ -67,7 +67,7 @@ export const GOATCLAW_LANE_DEFAULTS = [
   "Lane defaults (put them in every brief you write, and follow them yourself):",
   "- Brief: the problem, the base branch, the class (C0-C5) with its verification floor, and acceptance criteria with the commands that prove them.",
   "- Research: look up current practice with GOAT's browser (goat_preview_read) or web search, and cite the sources.",
-  "- Subagents: native subagents (gpt-6.1-sol, for example) may research and review; they count against the same maxLanes as dispatched lanes.",
+  "- Subagents: native subagents (gpt-6.1-sol, for example) may research and review. Dispatched lanes count the ones GOAT has seen running against maxLanes; the provider holds its own native subagents to maxLanes only where it can.",
   "- Finish line: an implementation lane is done when its pull request has merged, or goat-ci-result is SUCCESS on its exact head, under docs/operations/merging.md; a codexclaw loop records it with cxc loop pr-record --session <id> --pr <url>. Check a lane's claim against its diff and a fresh run, not its report.",
 ].join("\n");
 
