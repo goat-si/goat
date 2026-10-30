@@ -41,6 +41,7 @@ export type HandBackNotice = "unsaved" | "expired" | "answered";
 
 /** What a secret fill may do from inside its queued turn. */
 export interface SecretFence {
+  readonly signal: AbortSignal;
   /** Throws once a person took control or stopped agents since the fill was requested. */
   readonly assertMayDispatch: () => void;
   /** Keeps the tab private, for observers and recordings, until the fill ends. */
@@ -76,6 +77,7 @@ export class SessionControl {
   private activeAgentAction: AbortController | undefined;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
+  private activeSecretAction: AbortController | undefined;
   /** The running agent action's work, and whether its input already passed the gate. */
   private activeAgentWork: Promise<unknown> | undefined;
   private activeAgentDispatching = false;
@@ -224,6 +226,7 @@ export class SessionControl {
     for (const work of held) for (const listener of this.dispatchCutListeners) listener(work);
     this.activeAgentAction?.abort(reason);
     this.activeAgentCut?.abort(reason);
+    if (reason.reason !== "privateMode") this.activeSecretAction?.abort(reason);
   }
 
   /** Calls back when Stop or a secret cuts an action whose input already passed its gate. */
@@ -329,12 +332,12 @@ export class SessionControl {
     this.authority++;
     this.epoch++;
     this.onGenerationChange();
-    this.activeAgentAction?.abort(
-      new BrowserControlInterrupted(
-        this.closed ? "This browser tab is closed." : "Browser control changed during the wait.",
-        this.closed ? "closed" : owner !== null ? "humanControl" : "interrupted",
-      ),
+    const interrupted = new BrowserControlInterrupted(
+      this.closed ? "This browser tab is closed." : "Browser control changed during the wait.",
+      this.closed ? "closed" : owner !== null ? "humanControl" : "interrupted",
     );
+    this.activeAgentAction?.abort(interrupted);
+    this.activeSecretAction?.abort(interrupted);
     this.changed();
   }
 
@@ -438,7 +441,9 @@ export class SessionControl {
     if (this.agentStopped) return Promise.reject(refused(STOPPED_MESSAGE, "stopped"));
     if (this.requested !== null) return Promise.reject(refused(HANDOFF_MESSAGE, "humanControl"));
     const authority = this.authority;
+    const cut = new AbortController();
     const assertMayDispatch = () => {
+      cut.signal.throwIfAborted();
       this.assertOpen();
       if (this.agentStopped) throw new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped");
       if (this.owner !== null || this.authority !== authority)
@@ -454,6 +459,7 @@ export class SessionControl {
         !this.agentStopped &&
         this.requested === null,
       async () => {
+        this.activeSecretAction = cut;
         let held = false;
         const hold = () => {
           if (held) return;
@@ -463,8 +469,9 @@ export class SessionControl {
         };
         try {
           assertMayDispatch();
-          return await run({ assertMayDispatch, hold });
+          return await run({ assertMayDispatch, hold, signal: cut.signal });
         } finally {
+          this.activeSecretAction = undefined;
           if (held) {
             this.privateHolds--;
             this.applyPrivate();
