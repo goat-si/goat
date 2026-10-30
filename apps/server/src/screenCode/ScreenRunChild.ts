@@ -76,6 +76,7 @@ const methods = [
   "fetch_tab",
   "tab_logs",
   "tab_evaluate",
+  "tab_dialog",
 ] as const;
 
 type ChildResult = Pick<

@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   PreviewAutomationTimeoutError,
   PreviewAutomationExecutionError,
+  PreviewAutomationControlInterruptedError,
   SCREEN_TARGET_CONTRACT_VERSION,
   PreviewTabId,
   type EnvironmentId,
@@ -878,6 +879,64 @@ it.live("tab evaluate reports the browser guard's unsent refusal", () => {
   };
   return runCells(broker, [
     `const tab = await screen.tab('form'); try { await tab.evaluate('1'); } catch (e) { return e.nothingSent; }`,
+  ]).pipe(
+    Effect.map(([result]) =>
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: true },
+      }),
+    ),
+  );
+});
+
+it.live("tab dialog answers the pending prompt through preview", () => {
+  const requests: unknown[] = [];
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "dialog") requests.push(request.input);
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab('form'); await tab.dialog('accept', 'answer'); return true;`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: true },
+      });
+      expect(requests).toEqual([{ accept: true, promptText: "answer" }]);
+    }),
+  );
+});
+
+it.live("tab dialog reports no pending dialog as unsent", () => {
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      request.operation === "dialog"
+        ? Effect.fail(
+            new PreviewAutomationControlInterruptedError({
+              ...actionErrorContext,
+              operation: "dialog",
+              reason: "dialogPending",
+            }),
+          )
+        : Effect.succeed({
+            tabId: formTab.tabId,
+            url: formTab.url,
+            control: { owner: "agent", ownedByCaller: true, generation: 0 },
+          } as A),
+  };
+  return runCells(broker, [
+    `const tab = await screen.tab('form'); try { await tab.dialog('dismiss'); } catch (e) { return e.nothingSent; }`,
   ]).pipe(
     Effect.map(([result]) =>
       expect(result).toMatchObject({

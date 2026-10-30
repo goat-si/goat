@@ -1,5 +1,9 @@
 export const screenTabExtrasPrelude = String.raw`
 const __tabExtras = (tab, call) => ({
+  dialog: (action, promptText) => {
+    if (!tab) throw new ScreenError('unsupported', 'Dialogs are only available on tabs.', true);
+    return call('tab_dialog', { action, ...(promptText === undefined ? {} : { promptText }) });
+  },
   evaluate: (expression) => {
     if (!tab) throw new ScreenError('unsupported', 'Evaluation is only available on tabs.', true);
     return call('tab_evaluate', { expression });

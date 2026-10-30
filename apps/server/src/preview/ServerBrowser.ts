@@ -424,14 +424,13 @@ const make = Effect.gen(function* () {
 
   const resolveDialog = async (tab: ServerTab, input: PreviewAutomationDialogInput) => {
     const dialog = tab.dialog;
-    if (!dialog) throw new Error("No dialog is pending.");
+    if (!dialog) throw new BrowserControlInterrupted("No dialog is pending.", "dialogPending");
     if (input.accept) await dialog.accept(input.promptText);
     else await dialog.dismiss();
     if (tab.dialog === dialog) tab.dialog = null;
     ServerBrowserPage.invalidateRefs(tab.page);
     broadcastControl(tab);
   };
-
   const report = (tab: ServerTab, navStatus: PreviewNavStatus) => {
     void tab.cdp
       .send("Page.getNavigationHistory")
@@ -1767,6 +1766,7 @@ const make = Effect.gen(function* () {
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
+      ServerBrowserScreen.assertScreenExpectation(tab, request);
       await resolveDialog(tab, input as PreviewAutomationDialogInput);
       return statusWithTitle(tab, request.agentSessionId);
     }

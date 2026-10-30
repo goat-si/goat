@@ -24,7 +24,7 @@ import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
-import { evaluateTab, readTabLogs } from "./PreviewTabExtras.ts";
+import { answerDialog, evaluateTab, readTabLogs } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
@@ -516,6 +516,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
         tab_evaluate: "evaluate",
+        tab_dialog: "dialog",
         click: "click",
         right_click: "click",
         hover: "hover",
@@ -553,6 +554,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ),
         );
       }
+      if (call.method === "tab_dialog")
+        return yield* answerDialog(arg, (input) => invoke(bound, context, "dialog", input));
       if (call.method === "tab_evaluate")
         return yield* evaluateTab(arg, (input) => invoke(bound, context, "evaluate", input));
       // A Playwright selector string, or a snapshot ref in it, targets like an observed element.

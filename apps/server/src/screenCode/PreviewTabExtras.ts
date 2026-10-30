@@ -42,3 +42,24 @@ export const evaluateTab = Effect.fn("PreviewTargetHost.evaluate")(function* (
     evidence: ["Evaluation completed"],
   };
 });
+
+export const answerDialog = Effect.fn("PreviewTargetHost.dialog")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  if (
+    (arg.action !== "accept" && arg.action !== "dismiss") ||
+    (arg.promptText !== undefined && typeof arg.promptText !== "string")
+  )
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Use accept or dismiss and optional prompt text.",
+    });
+  const input = {
+    accept: arg.action === "accept",
+    ...(arg.promptText === undefined ? {} : { promptText: arg.promptText }),
+  };
+  const value = yield* invoke(input);
+  return { value, category: "unverifiable" as const, evidence: ["Dialog answered"] };
+});
