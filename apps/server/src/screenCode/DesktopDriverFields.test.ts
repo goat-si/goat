@@ -83,6 +83,38 @@ it.live.each([
   }),
 );
 
+it.live("structured focus restoration wins over text and malformed blocks are ignored", () =>
+  Effect.gen(function* () {
+    const blocks = [
+      "Action completed.",
+      "focus_restoration: {invalid}",
+      'prefix focus_restoration: {"status":"restored"}',
+      'focus_restoration: {"status":"abandoned","reason":"panic"}',
+    ];
+    const { host } = fixture({
+      get_window_state: new DriverSuccess(state, blocks.slice(0, 3)),
+      click: new DriverSuccess(
+        { effect: "unverifiable", focus_restoration: { status: "restored", prior_pid: 123 } },
+        blocks,
+      ),
+    });
+    const result = yield* runCell(
+      host,
+      "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
+        "const observation = await app.observe(); const done = await app.click(1); " +
+        "return { hasWarnings: 'warnings' in observation, done };",
+    );
+    expect(result.value).toEqual({
+      hasWarnings: false,
+      done: {
+        ok: true,
+        verdict: "unverifiable",
+        warnings: ["focus restored to the prior app (pid 123)"],
+      },
+    });
+  }),
+);
+
 it.live("app clicks return a compact Done and expose details only on request", () =>
   Effect.gen(function* () {
     const { host } = fixture({
