@@ -182,6 +182,66 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("SiteNotes", (it) => 
       }).pipe(Effect.provide(SiteNotes.layer));
     }),
   );
+  it.effect("evicts the least recently used thread and requires a new touch", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        const origin = "https://github.com";
+        for (let i = 0; i < 512; i++) assert.isDefined(notes.deliverOnce(`thread-${i}`, origin));
+        assert.isTrue(notes.hasTouched("thread-0", origin));
+        assert.isDefined(notes.deliverOnce("thread-512", origin));
+        assert.isFalse(notes.hasTouched("thread-1", origin));
+        const result = yield* Effect.result(
+          notes.writeAgent("thread-1", { origin, text: "guide" }),
+        );
+        assert.strictEqual(
+          result._tag === "Failure" && result.failure._tag === "SiteNoteError"
+            ? result.failure.reason
+            : undefined,
+          "untouched",
+        );
+        assert.isTrue(notes.hasTouched("thread-0", origin));
+        assert.isTrue(notes.hasTouched("thread-512", origin));
+        assert.strictEqual(
+          Array.from({ length: 513 }, (_, i) => notes.hasTouched(`thread-${i}`, origin)).filter(
+            Boolean,
+          ).length,
+          512,
+        );
+        assert.isDefined(notes.deliverOnce("thread-1", origin));
+        assert.isTrue(notes.hasTouched("thread-1", origin));
+        yield* notes.writeAgent("thread-1", { origin, text: "guide" });
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
+  it.effect("evicts least recently used origins and permits redelivery", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      yield* Effect.gen(function* () {
+        const notes = yield* SiteNotes.SiteNotes;
+        const thread = "origin-thread";
+        const seeded = "https://github.com";
+        assert.isDefined(notes.deliverOnce(thread, seeded));
+        for (let i = 0; i < 255; i++) notes.deliverOnce(thread, `https://site-${i}.example`);
+        assert.isTrue(notes.hasTouched(thread, seeded));
+        notes.deliverOnce(thread, "https://site-255.example");
+        assert.isFalse(notes.hasTouched(thread, "https://site-0.example"));
+        assert.isTrue(notes.hasTouched(thread, seeded));
+        assert.isTrue(notes.hasTouched(thread, "https://site-255.example"));
+        assert.strictEqual(
+          [seeded, ...Array.from({ length: 256 }, (_, i) => `https://site-${i}.example`)].filter(
+            (origin) => notes.hasTouched(thread, origin),
+          ).length,
+          256,
+        );
+        for (let i = 256; i < 512; i++) notes.deliverOnce(thread, `https://site-${i}.example`);
+        assert.isFalse(notes.hasTouched(thread, seeded));
+        assert.isDefined(notes.deliverOnce(thread, seeded));
+        assert.isUndefined(notes.deliverOnce(thread, seeded));
+      }).pipe(Effect.provide(SiteNotes.layer));
+    }),
+  );
   it.effect("bounds delivery of oversized stored UTF-8 text without splitting a character", () =>
     Effect.gen(function* () {
       yield* runMigrations();
