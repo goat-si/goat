@@ -369,7 +369,9 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
       getItemType={(item) => item.kind}
       itemLayoutAnimation={THREAD_SETTINGS_CATALOG_LAYOUT_TRANSITION}
       keyExtractor={(item) => item.key}
-      keyboardDismissMode="on-drag"
+      // iOS keeps the keyboard up while scrolling so the footer inset can reach the last rows;
+      // the search field's cancel button closes it.
+      keyboardDismissMode={Platform.OS === "ios" ? "none" : "on-drag"}
       keyboardShouldPersistTaps="handled"
       maintainVisibleContentPosition={THREAD_SETTINGS_MAINTAIN_VISIBLE_CONTENT_POSITION}
       ListFooterComponent={
