@@ -61,9 +61,16 @@ it.effect("Stop and Stop all end claims even without an active desktop lease", (
       windowTitle: "Browser",
     });
     assert.equal(rebound.agentResult.status, "attached");
+    yield* proxy.push({ ...active(), browserClaims: yield* grants.claimsFor(b) });
+    yield* proxy.applied;
     yield* stopAllComputerUse(Option.none(), handoffs, session, Option.some(service));
     assert.lengthOf(yield* grants.claimsFor(a), 0);
     assert.lengthOf(yield* grants.claimsFor(b), 0);
     assert.deepEqual(published.at(-1), { existingProfiles: [], origins: [] });
+    yield* proxy.push({ ...active(), browserClaims: yield* grants.claimsFor(b) });
+    yield* proxy.applied;
+    yield* proxy.send(call(2, "browser_click", { tab_id: "tab-8" }));
+    assert.equal((yield* proxy.nextToProvider).id, 2);
+    assert.equal(yield* proxy.driverQueued, 0);
   }).pipe(Effect.provide(Layer.mock(Handoffs.Handoffs)({}))),
 );
