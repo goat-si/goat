@@ -173,7 +173,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const value = reply.v;
     const isObj = value !== null && typeof value === 'object' && !Array.isArray(value);
     const observed = [...(isObj && Array.isArray(value._observed) ? value._observed : []), ...(reply.e ?? [])];
-    const opened = [...new Set(observed.filter((line) => /^observed:window_opened:\d+$/.test(line)).map((line) => line.split(':')[2]))];
+    const opened = [...new Set(observed.filter((line) => /^observed:window_opened:\d{1,16}$/.test(line)).map((line) => line.split(':')[2]))];
     const closed = observed.includes('observed:window_closed') && currentWindowId !== undefined ? [String(currentWindowId)] : [];
     const note = [opened.length ? 'windows opened [' + opened.slice(0, 4).join(', ') + ']' : '', closed.length ? 'closed [' + closed.join(', ') + ']' : ''].filter(Boolean).join(' / ');
     const debug = __debug || arg.verify === true || verify;
@@ -431,7 +431,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
         !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
-      const actualOpts = __only('press options', targetIsSendOpts ? target : options, tab ? ['send', 'verify', 'holdMs'] : ['send', 'verify', 'holdMs']);
+      const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs']);
       if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))
         throw new ScreenError('invalid_argument', 'holdMs must be an integer from 0 to 30000; nothing was sent.', true);
       if (tab && actualOpts.holdMs !== undefined)

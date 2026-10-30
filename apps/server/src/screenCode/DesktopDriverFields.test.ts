@@ -63,11 +63,15 @@ it.live("app clicks return a compact Done and expose details only on request", (
     const res = yield* runCell(
       host,
       "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.observe(); " +
-        "const plain = await app.click(1); const verified = await app.click(1, {verify: true}); " +
-        "screen.debug = true; const debug = await app.click(1); return {plain, verified, debug};",
+        "const plain = await app.click(1); const batch = await Promise.all([app.click(1), app.click(1)]); const verified = await app.click(1, {verify: true}); " +
+        "screen.debug = true; const debug = await app.click(1); return {plain, batch, verified, debug};",
     );
     expect(res.value).toMatchObject({
       plain: { ok: true, verdict: "confirmed" },
+      batch: [
+        { ok: true, verdict: "confirmed" },
+        { ok: true, verdict: "confirmed" },
+      ],
       verified: {
         result: { debug: { evidence: expect.arrayContaining(["driver:effect=confirmed"]) } },
       },

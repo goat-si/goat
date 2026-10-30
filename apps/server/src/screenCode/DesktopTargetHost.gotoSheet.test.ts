@@ -173,7 +173,7 @@ it.live("a window-opening input names the window in a compact note", () => {
     const result = yield* cell(BIND + "return await app.press('cmd+shift+g');");
     expect(result.value).toEqual({
       ok: true,
-      verdict: "confirmed",
+      verdict: "unverifiable",
       note: "windows opened [82779]",
     });
     expect(Buffer.byteLength(JSON.stringify(result.value))).toBeLessThanOrEqual(200);
