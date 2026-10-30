@@ -572,7 +572,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const earlyExtra = call.method === "tab_upload" ? undefined : extra();
       if (earlyExtra) return yield* earlyExtra;
+      // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
       const selector = stringField(arg, "selector");
+      // A ref acts only through the binding that observed it, which holds its document and gate.
       if (
         [arg.ref, arg.sourceRef, arg.destinationRef].some(
           (ref) =>
@@ -611,6 +613,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           : undefined;
       if (arg.point && (!point || point.targetId !== bound.ref.id))
         return yield* Effect.fail(fail("stale_reference", "Observe the current screenshot again."));
+      // The page may have moved on by itself (a redirect, a route change, a reload); a pixel from
+      // the earlier document could land on anything.
       if (point && bound.documentGeneration !== current.documentGeneration)
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that screenshot. Observe it again."),
@@ -629,6 +633,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ),
           );
       }
+      // A ref from an incomplete tree is held to its document the same way: the browser's ref
+      // table alone was never relied on for those.
       const documentBound =
         bound.incompleteObservationId !== undefined &&
         [arg.ref, arg.sourceRef, arg.destinationRef].some(
@@ -661,6 +667,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return yield* Effect.fail(
           fail("invalid_argument", "Use a point from the current screenshot."),
         );
+      // Only a pointer action can aim at a point; typing or keys would go to whatever has focus.
       if (point && !["click", "right_click", "hover", "drag", "scroll"].includes(call.method))
         return yield* Effect.fail(
           fail("invalid_argument", "Click the point first, or name an element or selector."),
