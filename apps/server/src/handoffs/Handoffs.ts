@@ -167,6 +167,9 @@ export class Handoffs extends Context.Service<
       input: HandoffRespondInput,
       sessionId: AuthSessionId,
     ) => Effect.Effect<Handoff, HandoffError | EnvironmentAuthorizationError>;
+    readonly cancelComputerUseByPerson: (
+      input: HandoffReadInput,
+    ) => Effect.Effect<Handoff, HandoffError>;
     readonly answerSecret: (
       input: SecretRequestAnswerInput,
       sessionId: AuthSessionId,
@@ -468,11 +471,17 @@ const make = Effect.gen(function* () {
   const respondLocked = Effect.fn("Handoffs.respondLocked")(
     function* (
       input: HandoffRespondInput,
-      sessionId: AuthSessionId,
+      sessionId: AuthSessionId | undefined,
       foregroundEpoch: number | undefined,
     ) {
-      const label = yield* clientLabel(input, sessionId);
+      const label =
+        sessionId === undefined ? "Person at this computer" : yield* clientLabel(input, sessionId);
       const record = yield* read(input);
+      if (
+        sessionId === undefined &&
+        (input.action !== "cancelled" || record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH)
+      )
+        return yield* new HandoffError({ reason: "invalid_request" });
       const isComputerUseGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
       // An app, or the whole screen, is one thread's; an overlapping approval waits for it to end.
       if (isComputerUseGrant && input.action === "completed" && isHandoffPending(record.state)) {
@@ -505,6 +514,7 @@ const make = Effect.gen(function* () {
         const namespace = isProviderContinuationPath(record.target.path)
           ? { namespace: record.target.path }
           : {};
+        if (sessionId === undefined) return yield* new HandoffError({ reason: "invalid_request" });
         yield* savePrivate(
           input.handoffId,
           { ...payload, ...namespace, approvedBySessionId: sessionId },
@@ -950,6 +960,8 @@ const make = Effect.gen(function* () {
     read,
     open,
     respond,
+    cancelComputerUseByPerson: (input) =>
+      respondLocked({ ...input, action: "cancelled" }, undefined, undefined),
     sweep,
     holdExpiry: expiryHolds.hold,
     matchesArgs: (handoff, args) =>
