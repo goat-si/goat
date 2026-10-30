@@ -22,16 +22,17 @@ import { HubDeviceCard } from "./HubDeviceCard";
 import { pairingLinkConnectFlow } from "./PairingLinkConnectFlow";
 
 const mocks = vi.hoisted(() => ({ createCredential: vi.fn() }));
-vi.mock("~/environments/primary", () => ({
+vi.mock("~/environments/primary", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/environments/primary")>()),
   createServerPairingCredential: mocks.createCredential,
-  isLoopbackHostname: (host: string) => host === "localhost" || host.startsWith("127."),
 }));
 // Other settings modules in this import graph read the real session atoms.
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
   readEnvironmentScope: () => true,
 }));
-vi.mock("~/state/environments", () => ({
+vi.mock("~/state/environments", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/environments")>()),
   usePrimaryEnvironmentId: () => EnvironmentId.make("primary"),
 }));
 vi.mock("./settingsSearch", () => ({
