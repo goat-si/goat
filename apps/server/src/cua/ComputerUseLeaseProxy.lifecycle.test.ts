@@ -72,6 +72,33 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
     }),
   );
 
+  it.effect("a screen lock reported after cancellation still pauses the session", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ screenLock: true });
+      yield* h.push(active());
+      yield* h.send(call(80, "list_apps"));
+      yield* h.nextToDriver;
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 80 },
+        }),
+      );
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 80,
+          result: { isError: true, content: [], structuredContent: { code: "screen_locked" } },
+        }),
+      );
+      yield* h.screenLockedReported;
+      yield* h.killed;
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
   it.effect("Escape stops the local driver when the server cannot accept the report", () =>
     Effect.gen(function* () {
       const h = yield* harness({ personStop: true, personStopAccepted: false });
