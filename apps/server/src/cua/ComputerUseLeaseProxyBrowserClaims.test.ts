@@ -39,15 +39,47 @@ describe("browser claim capability", () => {
 
 it("requires the applied manifest hash and no reload error", () => {
   const hash = "a".repeat(64);
-  expect(manifestApplied({ capability_manifest_file_sha256: hash }, hash)).toBe(true);
-  expect(manifestApplied({ capability_manifest_file_sha256: "b".repeat(64) }, hash)).toBe(false);
   expect(
     manifestApplied(
-      { capability_manifest_file_sha256: hash, capability_manifest_reload_error: "invalid" },
+      { capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null } },
+      hash,
+    ),
+  ).toBe(true);
+  expect(
+    manifestApplied(
+      { capability_manifest: { sha256: hash, file_sha256: "b".repeat(64), reload_error: null } },
+      hash,
+    ),
+  ).toBe(false);
+  expect(
+    manifestApplied(
+      { capability_manifest: { sha256: hash, file_sha256: hash, reload_error: "invalid" } },
       hash,
     ),
   ).toBe(false);
   expect(manifestApplied({}, hash)).toBe(false);
+});
+
+it("accepts the driver capability manifest only when applied and file hashes agree", () => {
+  const hash = "a".repeat(64);
+  expect(
+    manifestApplied(
+      { capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null } },
+      hash,
+    ),
+  ).toBe(true);
+  expect(
+    manifestApplied(
+      { capability_manifest: { sha256: "b".repeat(64), file_sha256: hash, reload_error: null } },
+      hash,
+    ),
+  ).toBe(false);
+  expect(
+    manifestApplied(
+      { capability_manifest: { sha256: hash, file_sha256: hash, reload_error: "invalid" } },
+      hash,
+    ),
+  ).toBe(false);
 });
 
 it("detects an out-of-scope claimed tab reply without treating redacted other tabs as evidence", () => {

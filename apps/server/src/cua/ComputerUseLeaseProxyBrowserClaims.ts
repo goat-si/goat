@@ -13,9 +13,10 @@ export const replaceCallArguments = (
 export const manifestApplied = (state: unknown, expectedSha256: string): boolean =>
   /^[a-f0-9]{64}$/u.test(expectedSha256) &&
   isRecord(state) &&
-  state.capability_manifest_file_sha256 === expectedSha256 &&
-  (state.capability_manifest_reload_error === undefined ||
-    state.capability_manifest_reload_error === null);
+  isRecord(state.capability_manifest) &&
+  state.capability_manifest.sha256 === expectedSha256 &&
+  state.capability_manifest.file_sha256 === expectedSha256 &&
+  state.capability_manifest.reload_error === null;
 
 export const supportsBrowserClaims = (result: unknown): boolean => {
   if (!isRecord(result) || !Array.isArray(result.tools)) return false;
