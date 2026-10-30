@@ -21,6 +21,7 @@ vi.mock("../../components/ui/Button", () => ({
 
 import { DecisionDurableCard } from "./DecisionDurableCard";
 
+const decodeAnswer = Schema.decodeUnknownSync(DecisionAnswerInput);
 const createdAt = "2026-10-01T00:00:00.000Z";
 function decision(recommended: string | null): Extract<DecisionItem, { kind: "decision" }> {
   const ref = { environmentId: EnvironmentId.make("A"), threadId: ThreadId.make("thread") };
@@ -87,7 +88,7 @@ it("submits a contract-valid answer for the recommended option without asking fo
   expect(card.submit.disabled).toBe(false);
   await act(() => card.submit.click());
   const [answer] = card.onSubmit.mock.calls[0] ?? [];
-  expect(Schema.decodeUnknownSync(DecisionAnswerInput)(answer)).toEqual({
+  expect(decodeAnswer(answer)).toEqual({
     id: "decision:1",
     optionId: "sqlite",
     reason: "Chose SQLite.",
