@@ -292,7 +292,10 @@ it.effect("the app cell API declares the timing app observe and screenshot retur
       );
     }
     expect(api).toContain("interface Observation extends ReadTime");
-    expect(api).toContain("screenshot(): Promise<ReadTime & { imageRef: string;");
+    expect(api).toContain("screenshot(): Promise<ReadTime & Shot>");
+    expect(api).toContain(
+      "type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number;",
+    );
   }),
 );
 

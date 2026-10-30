@@ -110,6 +110,19 @@ export const browserFixture = Effect.fn("PreviewTargetHostTest.browserFixture")(
               (state.clicked ? "\n- button Cancel [ref=e2]" : ""),
           treeComplete: true,
           refGeneration: state.clicked ? "ns-4" : "ns-3",
+          // The server browser captures whenever the read asked for an image.
+          ...((request.input as { captureImage?: boolean }).captureImage
+            ? {
+                screenshot: {
+                  mimeType: "image/png",
+                  data: "AQID",
+                  width: 100,
+                  height: 80,
+                  region: { kind: "viewport", x: 0, y: 0, width: 100, height: 80 },
+                  scale: 1,
+                },
+              }
+            : {}),
         } as A);
       }
       if (state.failure) return Effect.fail(state.failure);

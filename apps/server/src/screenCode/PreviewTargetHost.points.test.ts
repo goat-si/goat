@@ -494,3 +494,55 @@ it.effect(
       expect(clearedDocument.clicks).toHaveLength(2);
     }),
 );
+
+it.effect(
+  "an observe that asked for a screenshot fails when the browser sends none, instead of confirming a tree without its image",
+  () =>
+    Effect.gen(function* () {
+      const tab = {
+        environmentId: "env",
+        browserInstanceId: "server-browser",
+        connectionId: "connection",
+        threadId: "thread",
+        tabId: PreviewTabId.make("tab"),
+        title: "Page",
+        url: "https://example.test/",
+        owner: "unclaimed" as const,
+        ownedByCaller: false,
+        controlGeneration: 0,
+      };
+      const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+        listBoundTabs: () => Effect.succeed([tab]),
+        invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+          Effect.succeed(
+            (request.operation === "status"
+              ? {
+                  tabId: tab.tabId,
+                  url: tab.url,
+                  control: { owner: tab.owner, ownedByCaller: false, generation: 0 },
+                }
+              : {
+                  url: tab.url,
+                  title: tab.title,
+                  loading: false,
+                  accessibilityTree: "- button Save [ref=e1]",
+                  treeComplete: true,
+                  refGeneration: "1",
+                }) as A,
+          ),
+      };
+      const host = yield* makePreviewTargetHost(broker);
+      const binding = yield* host.dispatch(call("select_tab", 1, { tabId: "tab" }), context);
+      const ref = (binding.value as { targetRef: ScreenTargetRef }).targetRef;
+      const shot = yield* host
+        .dispatch(call("observe", 2, { screenshot: true }, ref), context)
+        .pipe(Effect.result);
+      expect(shot._tag === "Failure" && shot.failure).toMatchObject({
+        code: "downstream_failure",
+        effectStarted: false,
+      });
+      // A tree read that asked for no image still answers.
+      const tree = yield* host.dispatch(call("observe", 3, {}, ref), context);
+      expect(tree.category).toBe("confirmed");
+    }),
+);
