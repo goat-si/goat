@@ -60,6 +60,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import {
+  knownProviderFailureMessage,
   makeProviderFailure,
   makeProviderFailureTurnItem,
 } from "@goat/provider-core/server/failure";
@@ -72,6 +73,7 @@ import {
 export { makeInterruptResultTurnItem } from "./runTerminationCause.ts";
 import { makeCloudResultEvents } from "./CloudResultEvents.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import { userFacingDatabaseErrorMessage } from "./UserFacingErrors.ts";
 
 export interface ProviderEventRoutingState {
   readonly ownedThreadIds: ReadonlySet<ThreadId>;
@@ -1779,6 +1781,7 @@ export const layer: Layer.Layer<
                     : null;
                 const latestItemOrdinal = yield* Ref.get(latestTurnItemOrdinal);
                 const openSubagents = yield* Ref.get(openRunOwnedSubagents);
+                const squashed = Cause.squash(cause);
                 let nextRetryWarningAt = completedAt;
                 yield* writeFinalRunEvents({
                   run: input.run,
@@ -1797,7 +1800,13 @@ export const layer: Layer.Layer<
                     ? "provider_process_exit"
                     : "provider_error",
                   terminal: makeFailedTerminalEvent(
-                    makeProviderFailure({ cause: Cause.squash(cause), class: "unknown" }),
+                    makeProviderFailure({
+                      cause: squashed,
+                      message:
+                        knownProviderFailureMessage(squashed) ??
+                        userFacingDatabaseErrorMessage(squashed),
+                      class: "unknown",
+                    }),
                     latestItemOrdinal + 1,
                   ),
                   failureItemPersisted: false,
