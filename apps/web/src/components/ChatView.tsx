@@ -2606,9 +2606,7 @@ export default function ChatView(props: ChatViewProps) {
   const {
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
-    backgroundWorkBanner,
-    childInputBanner,
-    goalBanner,
+    activityBanners,
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,
@@ -2773,9 +2771,7 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   const composerBannerItems = (() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
-    const backgroundWorkItems = [childInputBanner, goalBanner, backgroundWorkBanner].filter(
-      (item) => item !== null,
-    );
+    const backgroundWorkItems = activityBanners;
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {

@@ -287,6 +287,7 @@ export const make = Effect.gen(function* () {
       builtInSkills: [...MESSAGE_NAMED_BUILTIN_SKILLS],
       threadSnooze: true,
       threadPromotion: true,
+      threadForceStop: true,
       environmentThemes: true,
       usageLimitSources: true,
       providerWorkspaceSnapshotsOnDemand: true,
