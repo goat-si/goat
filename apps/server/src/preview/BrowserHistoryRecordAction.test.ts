@@ -12,9 +12,12 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Clock from "effect/Clock";
 import { awaitHistory } from "../cua/ComputerUseHistoryBackground.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
-import { browserHistoryPrefix } from "./BrowserHistoryRecordAction.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
-import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
+import {
+  browserHistoryPrefix,
+  makeBrowserHistoryFork,
+  makeBrowserHistoryRecordAction,
+} from "./BrowserHistoryRecordAction.ts";
 
 it.effect("returns a successful click when history fails or never completes", () =>
   Effect.gen(function* () {
@@ -71,7 +74,7 @@ it.effect.each(["back", "forward"])(
         const history = yield* makeComputerUseHistory;
         const owner = yield* Effect.scope;
         const now = yield* Clock.currentTimeMillis;
-        const fork = Effect.runForkWith(yield* Effect.context<never>());
+        const fork = yield* makeBrowserHistoryFork();
         const launches: Array<Fiber.Fiber<void, never>> = [];
         const record = makeBrowserHistoryRecordAction(
           history,
@@ -133,7 +136,7 @@ it.effect("returns a completed navigation when its destination snapshot is unava
     Effect.gen(function* () {
       const history = yield* makeComputerUseHistory;
       const owner = yield* Effect.scope;
-      const fork = Effect.runForkWith(yield* Effect.context<never>());
+      const fork = yield* makeBrowserHistoryFork();
       let reads = 0;
       const tab = {
         threadId: "thread:closed",
@@ -163,7 +166,7 @@ it.effect("records a redacted entry when retention evidence fails", () =>
       const history = yield* makeComputerUseHistory;
       const owner = yield* Effect.scope;
       const now = yield* Clock.currentTimeMillis;
-      const fork = Effect.runForkWith(yield* Effect.context<never>());
+      const fork = yield* makeBrowserHistoryFork();
       const launches: Array<Fiber.Fiber<void, never>> = [];
       const tab = {
         threadId: "thread:evidence-failure",

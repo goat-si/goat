@@ -96,7 +96,10 @@ import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
-import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
+import {
+  makeBrowserHistoryFork,
+  makeBrowserHistoryRecordAction,
+} from "./BrowserHistoryRecordAction.ts";
 import { browserHistoryTarget } from "./BrowserHistoryTarget.ts";
 import { makeBrowserInputRetention } from "./BrowserInputRetention.ts";
 import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
@@ -355,7 +358,7 @@ const make = Effect.gen(function* () {
   const history = yield* makeComputerUseHistory;
   const serverScope = yield* Effect.scope;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
-  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const runFork = yield* makeBrowserHistoryFork();
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const keepTypedText = () =>
     Option.isSome(settings)

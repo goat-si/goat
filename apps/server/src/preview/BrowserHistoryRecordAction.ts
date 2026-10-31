@@ -16,6 +16,10 @@ type Tab = {
   readonly diagnostics: { readonly firstLine: (cause: unknown) => string };
 };
 
+export const makeBrowserHistoryFork = Effect.fn("ComputerUseHistory.makeBrowserFork")(function* () {
+  return Effect.runForkWith(yield* Effect.context<never>());
+});
+
 export function makeBrowserHistoryRecordAction(
   history: Effect.Success<typeof makeComputerUseHistory>,
   fork: (effect: Effect.Effect<void>) => unknown,
