@@ -9,6 +9,34 @@ import type { ScreenHostCall, ScreenObservation, ScreenTargetRef } from "@goat/c
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+import { confirmByTree } from "./DesktopTreeEffect.ts";
+import { terminalFailure } from "../cua/ComputerUseTerminal.ts";
+
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "a terminal %s during tree confirmation preserves prior input uncertainty",
+  (reason) =>
+    Effect.gen(function* () {
+      const failure = terminalFailure(reason, "get_window_state", {});
+      if (failure === undefined) return yield* Effect.die("expected terminal failure");
+      const result = yield* confirmByTree(
+        { category: "suspected_noop" },
+        {
+          rows: [{ role: "button", name: "Apply", driverToken: "one" }],
+          windowId: 7,
+          connectionGeneration: "driver",
+        },
+        Effect.fail(failure),
+        60000,
+        false,
+      ).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure.code).toBe(reason);
+        expect(result.failure.safety?.possibleCommit).toBe(true);
+        expect(result.failure.safety?.retryClass).toBe("never");
+      }
+    }),
+);
 import {
   NotStarted,
   call,

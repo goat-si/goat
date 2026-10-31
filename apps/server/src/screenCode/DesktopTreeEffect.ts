@@ -15,6 +15,11 @@ const COMPLETED_WRITE = classifyActionOutcome({
   status: "completed",
   dispatched: true,
 });
+const INDETERMINATE_WRITE = classifyActionOutcome({
+  effect: "write",
+  status: "indeterminate",
+  dispatched: true,
+});
 
 /** A whole, uncut tree read of one window under one driver, the only read a change is told from. */
 export interface TreeBaseline {
@@ -77,7 +82,13 @@ export const confirmByTree = Effect.fn("DesktopTreeEffect.confirmByTree")(functi
   const now = yield* Clock.currentTimeMillis;
   if (deadlineMillis - now - CELL_RESERVE_MS < driverCallCapMs("get_window_state", {}))
     return result;
-  const after = yield* read.pipe(Effect.orElseSucceed(() => undefined));
+  const after = yield* read.pipe(
+    Effect.catchIf(
+      (error) => error.code !== "stopped_by_person" && error.code !== "screen_locked",
+      () => Effect.succeed(undefined),
+    ),
+    Effect.mapError((error) => ({ ...error, effectStarted: true, safety: INDETERMINATE_WRITE })),
+  );
   const change =
     after === undefined ||
     after.windowId !== baseline.windowId ||
