@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 
 import { act, render } from "../../../test/render";
 import { ThemeColorField } from "./ThemeColorPicker";
+import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 
 const HUE = "Accent color hue";
 const PLANE = "Accent color saturation and brightness";
@@ -103,4 +104,14 @@ describe("theme color field", () => {
     await echo("#ffffff");
     expect(slider(HUE).getAttribute("aria-valuenow")).toBe("10");
   });
+});
+
+it("adds the displayed default provider accent color", async () => {
+  const onCommit = vi.fn();
+  await using screen = await renderPicker(
+    <ProviderAccentColorPicker displayName="Example" value={undefined} onCommit={onCommit} />,
+  );
+  await open("Add accent color for Example");
+  await userEvent.click(screen.getByRole("button", { name: "Add color" }));
+  expect(onCommit).toHaveBeenCalledExactlyOnceWith("#2563eb");
 });
