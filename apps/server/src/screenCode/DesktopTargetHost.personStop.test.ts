@@ -128,3 +128,24 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
       }
     }),
 );
+
+it.effect("a terminal unknown outcome preserves reported possible input", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      list_apps: new UnknownOutcome({
+        code: "stopped_by_person",
+        detail: "screen_locked",
+        refused: "screenLocked",
+        safety: { possibleCommit: true, retryClass: "never" },
+      }),
+    });
+    const result = yield* host.discover(call("list_apps"), context).pipe(Effect.result);
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure") {
+      expect(result.failure.code).toBe("stopped_by_person");
+      expect(result.failure.safety?.retryClass).toBe("never");
+      expect(result.failure.safety?.possibleCommit).toBe(true);
+      expect(result.failure.effectStarted).toBe(true);
+    }
+  }),
+);

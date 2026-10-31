@@ -158,6 +158,23 @@ function classifiedSafety(
     isReadOnlyCall(tool, args) || (tool === "run_script" && scriptSentNothing(structured))
       ? "read"
       : "write";
+  const nestedCode = isRecord(structured.refusal) ? structured.refusal.code : undefined;
+  const terminal = [structured.code, nestedCode].some(
+    (code) => code === "stopped_by_person" || code === "screen_locked",
+  );
+  const reportedInput = isRecord(structured.safety) && structured.safety.possibleCommit === true;
+  if (
+    terminal &&
+    (error !== undefined ||
+      result.isError === true ||
+      envelope.status === "unknown_outcome" ||
+      envelope.status === "not_started") &&
+    (reportedInput || (envelope.status === "unknown_outcome" && effect === "write"))
+  )
+    return {
+      ...classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true }),
+      retryClass: "never",
+    };
   // GOAT's own refusal (ComputerUseLeaseResponses refusal) names its detail and sent nothing.
   if (
     isRefusalDetail(structured.detail) &&
