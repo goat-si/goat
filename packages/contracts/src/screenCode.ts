@@ -390,6 +390,7 @@ export const ScreenRunError = Schema.Struct({
     "permission_denied",
     "user_interacting",
     "screen_locked",
+    "stopped_by_person",
     "user_intervened",
     "stopped",
     "deadline",

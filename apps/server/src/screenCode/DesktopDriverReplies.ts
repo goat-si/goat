@@ -67,12 +67,29 @@ export const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | 
   return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
 };
 const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
-  if (reply.status === "unknown_outcome")
-    return { ...fail("unknown_outcome"), effectStarted: true };
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
   const said = refusalText(result, structured);
   const driverCode = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  if (
+    (reply.status === "unknown_outcome" ||
+      reply.status === "not_started" ||
+      result?.isError === true) &&
+    (driverCode === "stopped_by_person" || driverCode === "screen_locked")
+  )
+    return {
+      ...fail(
+        driverCode,
+        said ??
+          (driverCode === "screen_locked"
+            ? "The screen is locked; stop until the person unlocks it."
+            : "The person stopped computer use; do not retry this turn."),
+      ),
+      effectStarted: reply.status === "unknown_outcome",
+      ...refusalOf(structured),
+    };
+  if (reply.status === "unknown_outcome")
+    return { ...fail("unknown_outcome"), effectStarted: true };
   // GOAT's proxy refused a call this driver cannot take as asked; its words say what to do.
   if (
     structured?.detail === "outside_manifest" &&

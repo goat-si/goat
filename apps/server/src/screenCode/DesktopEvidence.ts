@@ -248,7 +248,11 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
   const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
   if (!reply) return undefined;
   const error = driverError(reply);
-  if (error?.code === "user_interacting" || error?.code === "screen_locked")
+  if (
+    error?.code === "user_interacting" ||
+    error?.code === "screen_locked" ||
+    error?.code === "stopped_by_person"
+  )
     return yield* Effect.fail(error);
   if (error !== undefined) return undefined;
   return driverValue(reply);
@@ -373,6 +377,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
   if (
     sent._tag === "Failure" &&
     (sent.failure.code === "screen_locked" ||
+      sent.failure.code === "stopped_by_person" ||
       sent.failure.code === "user_interacting" ||
       !(intent === "close" && sent.failure.effectStarted === true))
   )

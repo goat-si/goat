@@ -171,7 +171,27 @@ function classifiedSafety(
   const failed =
     error !== undefined || result.isError === true || envelope.status === "unknown_outcome";
   const refusalCode = isRecord(structured.refusal) ? structured.refusal.code : structured.code;
+  if (
+    (refusalCode === "stopped_by_person" || refusalCode === "screen_locked") &&
+    envelope.status === "unknown_outcome"
+  )
+    return {
+      ...classifyActionOutcome({ effect, status: "indeterminate", dispatched: true }),
+      retryClass: "never",
+    };
   const screenLocked = driverScreenLocked(message);
+  if (refusalCode === "stopped_by_person" && failed) {
+    const dispatched = structured.effect === "unverifiable";
+    return {
+      ...classifyActionOutcome({
+        effect,
+        status: dispatched ? "indeterminate" : "refused",
+        dispatched,
+        refusalCategory: "terminal",
+      }),
+      retryClass: "never",
+    };
+  }
   if (
     screenLocked ||
     (refusalCode === "user_interacting" &&

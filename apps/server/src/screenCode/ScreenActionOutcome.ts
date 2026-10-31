@@ -91,6 +91,7 @@ export const cellErrorSafety = <
     readonly safety?: ActionOutcomeSafety;
     readonly effectStarted?: boolean;
     readonly callId?: number;
+    readonly code?: string;
     readonly nextStep?: string;
   },
 >(
@@ -103,7 +104,10 @@ export const cellErrorSafety = <
   )
     return error;
   const nextStep =
-    error.effectStarted === true || error.nextStep === undefined
+    error.effectStarted === true ||
+    error.nextStep === undefined ||
+    error.code === "stopped_by_person" ||
+    error.code === "screen_locked"
       ? undefined
       : afterEarlierInput(error, receipts);
   return {
