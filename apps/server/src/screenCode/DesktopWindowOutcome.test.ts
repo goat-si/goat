@@ -321,16 +321,16 @@ it.effect("a gone window names an open window seen after a click without rebindi
           ? {
               windows: [
                 shown(5762),
-                shown(5763, { pid: 99, sheet_of_window_id: 7, title: "Save" }),
+                shown(5763, { pid: 99, sheet_of_window_id: 5744, title: "Save" }),
               ],
             }
-          : listing([7]),
+          : listing([5744]),
       get_window_state: () =>
         clicked
           ? new DriverError({ code: "window_id_not_found" })
           : {
               pid: 42,
-              window_id: 7,
+              window_id: 5744,
               tree_markdown: "Apply",
               elements_complete: true,
               elements: [{ role: "button", label: "Apply", element_token: "s:1" }],
@@ -356,7 +356,10 @@ it.effect("a gone window names an open window seen after a click without rebindi
       leases: f.leases,
       platform: "darwin",
     });
-    const ref = yield* bind(host);
+    const ref = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 5744 }),
+      context,
+    )).value as ScreenTargetRef;
     const seen = (yield* host.observe(call("get_window_state", {}, ref), context))
       .value as ScreenObservation;
     const element = seen.elements[0];
@@ -383,7 +386,7 @@ it.effect("a gone window names an open window seen after a click without rebindi
       'screen.app({ bundle_id: "org.example.Editor", window_id: 5762 })',
     );
     expect(failed.nextStep).toContain(
-      'window_id: 5763, title: "Save", sheet parent: 7, another process (pid 99)',
+      'window_id: 5763, title: "Save", sheet parent: 5744, another process (pid 99)',
     );
     expect(sent.slice(before).map((entry) => entry.tool)).toEqual(["get_window_state"]);
   }),
