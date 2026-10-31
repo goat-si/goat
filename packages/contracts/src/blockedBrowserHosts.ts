@@ -26,10 +26,12 @@ const BlockedBrowserHost = Schema.String.check(
 );
 
 export const BlockedBrowserSettingsFields = {
+  enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   blockedBrowserHosts: Schema.Array(BlockedBrowserHost).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
 };
 export const BlockedBrowserSettingsPatchFields = {
+  enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   blockedBrowserHosts: Schema.optionalKey(Schema.Array(BlockedBrowserHost)),
 };
