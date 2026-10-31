@@ -3,14 +3,15 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/24";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/26";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Never resend an input. Stop from the person ends the cell at once.`;
 
-const COMMON = `type Target = number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
+const COMMON = `type ElementHandle = { readonly elementHandle: string }; // a copy is refused
+type Target = ElementHandle | number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
@@ -21,6 +22,8 @@ type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"
 // warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
 // Set screen.debug = true for diagnostic details on every input in this cell, or pass verify: true on supported app inputs to read evidence and include details for that call.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
+// Observation targetRef, targetGeneration, surfaceGeneration and phases remain directly readable but are non-enumerable (lost in spread, JSON and screen.values copies); screen.debug = true makes them enumerable.
+// With screen.debug, app reads also include phases.hops when proxy timing is available.
 // ReadTime on observe and screenshot: host time of the read (the driver call, for a tab the browser's snapshot; tree parsing; rendering; the rest); absent when it would not fit the reply.
 type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted?: boolean; [k: string]: unknown };
 // The picture comes back as an image beside the cell's JSON, under its imageRef; [x, y] count its pixels from the top-left. omitted: it did not fit the cell's image limit.
@@ -36,7 +39,8 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 // Diff text uses + added, ~ changed and - removed rows; unchanged rows keep the numbers they had in the previous observation.
-interface Observation extends ReadTime { effect?: string; // first post-input diff: window evidence, not proof of the intended effect
+// obs.ref(n) holds an element across awaits, passed as the target argument itself; refused unsent (stale_reference) after the target is read again (observe({after}) pages keep it). Bare numbers always mean the latest observation. Arguments are plain data.
+interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?: string; // first post-input diff: window evidence, not proof of the intended effect
   text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
@@ -127,7 +131,7 @@ export const screenTargetApi = (surfaces: {
     ...(tab ? [SCREEN_TAB] : []),
     "  discover(): Promise<{ apps: unknown; windows: unknown; tabs: unknown; unavailable: object }>; // app and window rows another thread uses now carry inUse: true and holderThreadId (it may have just finished); holdersUnknown: true means some rows could not be checked",
     "  state: object; // survives cells of this turn",
-    "  debug: boolean; // diagnostics for inputs in this cell; initially false",
+    "  debug: boolean; // diagnostics for inputs and observation timing in this cell; initially false",
     "};",
     ...(app
       ? []

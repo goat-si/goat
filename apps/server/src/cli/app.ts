@@ -1,4 +1,6 @@
 // @effect-diagnostics globalTimers:off -- The Node socket client owns its response deadline and clears it on every completion path.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Socket ownership validation needs lstat to reject symlinks.
+import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
@@ -9,7 +11,10 @@ import {
   type DesktopAppActivationPlatform,
   type DesktopAppActivationRequest,
 } from "@goat/contracts";
-import { resolveDesktopAppControlAddresses } from "@goat/shared/desktopAppControl";
+import {
+  resolveDesktopAppControlAddresses,
+  type DesktopAppControlAddress,
+} from "@goat/shared/desktopAppControl";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Config from "effect/Config";
 import * as Console from "effect/Console";
@@ -78,14 +83,38 @@ function isDesktopPlatform(platform: NodeJS.Platform): platform is DesktopAppAct
   return platform === "darwin" || platform === "linux" || platform === "win32";
 }
 
-function sendDesktopAppActivationRequest(input: {
-  readonly address: string;
-  readonly fallbackAddresses?: ReadonlyArray<string>;
+async function sendDesktopAppActivationRequest(input: {
+  readonly address: DesktopAppControlAddress;
+  readonly fallbackAddresses?: ReadonlyArray<DesktopAppControlAddress>;
+  readonly userId: number | undefined;
   readonly request: DesktopAppActivationRequest;
   readonly timeoutMs?: number;
 }): Promise<DesktopAppActivationResponse> {
+  if (input.address.directory !== null) {
+    let stat;
+    try {
+      stat = await NodeFSP.lstat(input.address.directory);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT" && input.fallbackAddresses?.length) {
+        return sendDesktopAppActivationRequest({
+          ...input,
+          address: input.fallbackAddresses[0] as DesktopAppControlAddress,
+          fallbackAddresses: input.fallbackAddresses.slice(1),
+        });
+      }
+      throw cause;
+    }
+    if (
+      !stat.isDirectory() ||
+      input.userId === undefined ||
+      stat.uid !== input.userId ||
+      (stat.mode & 0o077) !== 0
+    ) {
+      throw new Error("The desktop app socket directory is not private or owned by this user.");
+    }
+  }
   return new Promise((resolve, reject) => {
-    const socket = NodeNet.createConnection(input.address);
+    const socket = NodeNet.createConnection(input.address.address);
     socket.setEncoding("utf8");
     let buffer = "";
     let settled = false;
@@ -161,6 +190,7 @@ function sendDesktopAppActivationRequest(input: {
           sendDesktopAppActivationRequest({
             address: input.fallbackAddresses[0],
             fallbackAddresses: input.fallbackAddresses.slice(1),
+            userId: input.userId,
             request: input.request,
             ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
           }),
@@ -214,7 +244,7 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
       tempDir: environment.systemTemporaryDirectory || NodeOS.tmpdir(),
       userId,
       joinPath: path.join,
-    }).map(({ address }) => address);
+    });
   const crypto = yield* Crypto.Crypto;
   const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
   const request: DesktopAppActivationRequest = {
@@ -240,11 +270,12 @@ const runAppCommand = Effect.fn("cli.app")(function* (flags: {
       sendDesktopAppActivationRequest({
         address: address!,
         fallbackAddresses,
+        userId,
         request,
       }),
     catch: (cause) =>
       new DesktopAppUnreachableError({
-        candidateAddresses: [address!, ...fallbackAddresses],
+        candidateAddresses: [address!, ...fallbackAddresses].map((candidate) => candidate.address),
         requestId: request.requestId,
         workspaceRoot,
         cause,

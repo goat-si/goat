@@ -497,7 +497,8 @@ export const make = Effect.gen(function* () {
     };
     const groups = Map.groupBy(lookupCandidates, lookupKey);
 
-    const wouldSettle = Effect.fn("ThreadSettlementServiceV2.wouldSettle")(function* (
+    // wouldSettle and pullRequestFor run per lookup group; the git and pull request reads they make carry the spans.
+    const wouldSettle = Effect.fnUntraced(function* (
       group: ReadonlyArray<(typeof lookupCandidates)[number]>,
       pullRequest: SettlementPullRequest,
     ) {
@@ -518,7 +519,7 @@ export const make = Effect.gen(function* () {
       });
     });
 
-    const pullRequestFor = Effect.fn("ThreadSettlementServiceV2.pullRequestFor")(function* (
+    const pullRequestFor = Effect.fnUntraced(function* (
       group: ReadonlyArray<(typeof lookupCandidates)[number]>,
     ) {
       const thread = group[0]!;

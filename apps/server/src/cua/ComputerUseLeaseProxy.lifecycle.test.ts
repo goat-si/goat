@@ -15,9 +15,12 @@ import {
   call,
   CONTROL,
   foregroundActive,
-  harness,
+  harness as makeHarness,
   refusedCall,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 const shortForeground = () => {
   const update = foregroundActive();
@@ -290,7 +293,12 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
               : Effect.void,
         });
         yield* h.push(shortForeground());
-        yield* h.send(call(1, "run_script", { script: "opaque work" }));
+        yield* h.send(
+          call(1, "run_script", {
+            script: "opaque work",
+            app_scope: { apps: ["com.apple.calculator"] },
+          }),
+        );
         yield* h.nextDispatch;
         yield* h.nextReservation;
         yield* TestClock.adjust("5 minutes");
@@ -338,7 +346,12 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
           kill: (index) => (index === 0 ? Deferred.await(release) : Effect.void),
         });
         yield* h.push(shortForeground());
-        yield* h.send(call(1, "run_script", { script: "opaque work" }));
+        yield* h.send(
+          call(1, "run_script", {
+            script: "opaque work",
+            app_scope: { apps: ["com.apple.calculator"] },
+          }),
+        );
         yield* h.nextDispatch;
         const oldTicket = yield* h.nextReservation;
         yield* TestClock.adjust("5 minutes");

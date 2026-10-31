@@ -9,6 +9,8 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Tracer from "effect/Tracer";
 import { OtlpResource, OtlpTracer, OtlpSerialization } from "effect/observability";
 
+import { redactUrlCredentials, redactCauseCredentials } from "./urlCredentialRedaction.ts";
+
 import { makeTraceSink } from "./traceSink.ts";
 export { makeTraceSink } from "./traceSink.ts";
 
@@ -230,15 +232,28 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function markSeen(value: object, seen: WeakSet<object>): boolean {
-  if (seen.has(value)) {
-    return true;
-  }
-  seen.add(value);
-  return false;
+// Repeated references expand once per path, so a small shared graph can grow exponentially.
+const TRACE_ATTRIBUTE_MAX_NODES = 10_000;
+
+interface NormalizeState {
+  // Only the current ancestors, so a value repeated under two keys is not a cycle.
+  readonly seen: WeakSet<object>;
+  remainingNodes: number;
 }
 
-function normalizeJsonValue(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+function enterNode(value: object, state: NormalizeState): string | undefined {
+  if (state.seen.has(value)) {
+    return "[Circular]";
+  }
+  if (state.remainingNodes <= 0) {
+    return "[Truncated]";
+  }
+  state.remainingNodes--;
+  state.seen.add(value);
+  return undefined;
+}
+
+function normalizeJsonValue(value: unknown, state: NormalizeState): unknown {
   if (
     value === null ||
     value === undefined ||
@@ -262,46 +277,59 @@ function normalizeJsonValue(value: unknown, seen: WeakSet<object> = new WeakSet(
     };
   }
   if (Array.isArray(value)) {
-    if (markSeen(value, seen)) {
-      return "[Circular]";
+    const marker = enterNode(value, state);
+    if (marker) {
+      return marker;
     }
-    return value.map((entry) => normalizeJsonValue(entry, seen));
+    const normalized = value.map((entry) => normalizeJsonValue(entry, state));
+    state.seen.delete(value);
+    return normalized;
   }
   if (value instanceof Map) {
-    if (markSeen(value, seen)) {
-      return "[Circular]";
+    const marker = enterNode(value, state);
+    if (marker) {
+      return marker;
     }
-    return Object.fromEntries(
+    const normalized = Object.fromEntries(
       Array.from(value.entries(), ([key, entryValue]) => [
         String(key),
-        normalizeJsonValue(entryValue, seen),
+        normalizeJsonValue(entryValue, state),
       ]),
     );
+    state.seen.delete(value);
+    return normalized;
   }
   if (value instanceof Set) {
-    if (markSeen(value, seen)) {
-      return "[Circular]";
+    const marker = enterNode(value, state);
+    if (marker) {
+      return marker;
     }
-    return Array.from(value.values(), (entry) => normalizeJsonValue(entry, seen));
+    const normalized = Array.from(value.values(), (entry) => normalizeJsonValue(entry, state));
+    state.seen.delete(value);
+    return normalized;
   }
   if (!isPlainObject(value)) {
     return String(value);
   }
-  if (markSeen(value, seen)) {
-    return "[Circular]";
+  const marker = enterNode(value, state);
+  if (marker) {
+    return marker;
   }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entryValue]) => [key, normalizeJsonValue(entryValue, seen)]),
+  const normalized = Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => [key, normalizeJsonValue(entryValue, state)]),
   );
+  state.seen.delete(value);
+  return normalized;
 }
 
 export function compactTraceAttributes(
   attributes: Readonly<Record<string, unknown>>,
 ): TraceAttributes {
+  const state: NormalizeState = { seen: new WeakSet(), remainingNodes: TRACE_ATTRIBUTE_MAX_NODES };
   const entries: Array<[string, unknown]> = [];
   for (const [key, value] of Object.entries(attributes)) {
     if (value !== undefined) {
-      entries.push([key, normalizeJsonValue(value)]);
+      entries.push([key, normalizeJsonValue(value, state)]);
     }
   }
   return Object.fromEntries(entries);
@@ -317,9 +345,10 @@ function traceExitOf(
   redactCause: LocalFileTracerOptions["redactCause"],
 ): Exit.Exit<unknown, unknown> {
   if (ExitRuntime.isSuccess(exit)) return ExitRuntime.void;
-  if (redactCause === undefined) return exit;
   try {
-    return ExitRuntime.failCause(redactCause(exit.cause));
+    return ExitRuntime.failCause(
+      redactCauseCredentials(redactCause ? redactCause(exit.cause) : exit.cause),
+    );
   } catch {
     // A redactor that fails must not let the unredacted cause through.
     return ExitRuntime.die(new Error("span cause could not be redacted"));
@@ -488,12 +517,20 @@ class LocalFileSpan implements Tracer.Span {
   }
 
   attribute(key: string, value: unknown): void {
-    this.attributes.set(key, value);
-    this.delegate.attribute(key, value);
+    const recorded =
+      (key === "url.full" || key === "url.query") && typeof value === "string"
+        ? redactUrlCredentials(value)
+        : value;
+    this.attributes.set(key, recorded);
+    this.delegate.attribute(key, recorded);
   }
 
   event(name: string, startTime: bigint, attributes?: Record<string, unknown>): void {
-    const nextAttributes = attributes ?? {};
+    const cause = attributes?.["effect.cause"];
+    const nextAttributes =
+      typeof cause === "string"
+        ? { ...attributes, "effect.cause": redactUrlCredentials(cause) }
+        : (attributes ?? {});
     this.events.push([name, startTime, nextAttributes]);
     this.delegate.event(name, startTime, nextAttributes);
   }

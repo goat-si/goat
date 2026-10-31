@@ -119,9 +119,14 @@ const browserSetupCommand = Command.make("setup", { baseDir: baseDirFlag }).pipe
       }
       const fs = yield* FileSystem.FileSystem;
       const isRoot = (yield* HostProcess.UserId) === 0;
-      const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
-      // Root, unless sudo came from another user, is likely the server's own account.
       const env = yield* HostProcess.Environment;
+      const baseDirPath = yield* setupBaseDir(baseDir);
+      // sudo resets the environment, so a chosen home has to be on the command line.
+      const setupCommand = yield* resolveRootCliCommand(
+        PreviewBrowserHost.SETUP_SUBCOMMAND,
+        Option.isSome(baseDir) || env.GOAT_HOME !== undefined ? ["--base-dir", baseDirPath] : [],
+      );
+      // Root, unless sudo came from another user, is likely the server's own account.
       const rootWarning =
         isRoot && (env.SUDO_USER ?? "root") === "root" && !PreviewBrowserHost.sandboxDisabled(env)
           ? new PreviewBrowserHost.PreviewBrowserRootError().message
@@ -134,7 +139,7 @@ const browserSetupCommand = Command.make("setup", { baseDir: baseDirFlag }).pipe
         (yield* fs
           .exists(PreviewBrowserHost.LEGACY_APPARMOR_PROFILE_PATH)
           .pipe(Effect.orElseSucceed(() => false)));
-      const browser = yield* installedBrowser(yield* setupBaseDir(baseDir));
+      const browser = yield* installedBrowser(baseDirPath);
       const missing = Option.isSome(browser)
         ? yield* PreviewBrowserHost.missingLibraries(browser.value)
         : [];

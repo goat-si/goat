@@ -1,3 +1,4 @@
+import { useAddEnvironmentForm } from "./useAddEnvironmentForm";
 import { GOAT_CONNECT_COMING_SOON } from "@goat/shared/goatConnect";
 import { isGoatConnectUnavailable } from "./EnvironmentRow.logic";
 import { isHubNodesUnsupportedError } from "@goat/client-runtime/hub-nodes";
@@ -746,13 +747,14 @@ export function ConnectionEnvironmentsSection({
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
   // Set when the dialog adds a route to a saved machine instead of a new one.
   const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
-  const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
-  const [savedBackendHost, setSavedBackendHost] = useState("");
-  const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
-  const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
-  const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
-  const [savedBackendSshPort, setSavedBackendSshPort] = useState("");
-  const [sshHostSuggestionsOpen, setSshHostSuggestionsOpen] = useState(false);
+  const addForm = useAddEnvironmentForm();
+  const [savedBackendMode, setSavedBackendMode] = addForm.mode;
+  const [savedBackendHost, setSavedBackendHost] = addForm.host;
+  const [savedBackendPairingCode, setSavedBackendPairingCode] = addForm.pairingCode;
+  const [savedBackendSshHost, setSavedBackendSshHost] = addForm.sshHost;
+  const [savedBackendSshUsername, setSavedBackendSshUsername] = addForm.sshUsername;
+  const [savedBackendSshPort, setSavedBackendSshPort] = addForm.sshPort;
+  const [sshHostSuggestionsOpen, setSshHostSuggestionsOpen] = addForm.suggestionsOpen;
   // Tracks the arrow-key/hover highlight so Enter selects it instead of submitting the typed text.
   const highlightedSshHostRef = useRef<DesktopDiscoveredSshHost | undefined>(undefined);
   const [sshPreflight, setSshPreflight] = useState<{
@@ -933,11 +935,7 @@ export function ConnectionEnvironmentsSection({
     void registerSavedHubNode(target, routeTarget?.label ?? target.alias);
     sshConnectInFlight.current = false;
     invalidateSshPreflight();
-    setSavedBackendHost("");
-    setSavedBackendPairingCode("");
-    setSavedBackendSshHost("");
-    setSavedBackendSshUsername("");
-    setSavedBackendSshPort("");
+    addForm.reset();
     setAddBackendDialogOpen(false);
     toastManager.add({
       type: "success",
@@ -1187,11 +1185,7 @@ export function ConnectionEnvironmentsSection({
       return;
     }
 
-    setSavedBackendHost("");
-    setSavedBackendPairingCode("");
-    setSavedBackendSshHost("");
-    setSavedBackendSshUsername("");
-    setSavedBackendSshPort("");
+    addForm.reset();
     setAddBackendDialogOpen(false);
     toastManager.add(
       routeTarget
@@ -1485,6 +1479,7 @@ export function ConnectionEnvironmentsSection({
       }
       return;
     }
+    addForm.reset();
     setAddBackendDialogOpen(false);
     toastManager.add({
       type: "success",
@@ -1754,6 +1749,8 @@ export function ConnectionEnvironmentsSection({
                   invalidateSshPreflight();
                   sshSubmission.current += 1;
                   setSshPreparation(null);
+                  addForm.reset();
+                  highlightedSshHostRef.current = undefined;
                 }
                 setAddBackendDialogOpen(open);
                 if (open) {

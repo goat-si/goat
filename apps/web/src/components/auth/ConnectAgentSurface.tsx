@@ -4,7 +4,7 @@ import {
   AuthMcpApprovalError,
   AuthMcpClientAccess,
   AuthMcpMemoryScope,
-  type AuthMcpAuthorizationRequest,
+  AuthMcpAuthorizationRequest,
 } from "@goat/contracts";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { isLoopbackHost } from "@goat/shared/preview";
@@ -79,8 +79,10 @@ function runApproval<A>(
   ).catch((): Answer<A> => ({ kind: "error", message: UNREACHABLE }));
 }
 
+const decodeAuthorizationRequest = Schema.decodeSync(AuthMcpAuthorizationRequest);
+
 function readAuthorizationRequest(): AuthMcpAuthorizationRequest {
-  return Object.fromEntries(new URL(window.location.href).searchParams);
+  return decodeAuthorizationRequest(Object.fromEntries(new URL(window.location.href).searchParams));
 }
 
 /** Sessions can grant only scopes they hold. */

@@ -7,6 +7,7 @@ import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
 import {
   presentPendingBackgroundWork,
   presentProviderGoal,
+  type RunStopPresentation,
 } from "@goat/client-runtime/state/thread-execution";
 import { childThreadInputsTitle } from "@goat/client-runtime/state/threads";
 import {
@@ -14,6 +15,8 @@ import {
   MessageCircleIcon,
   ShieldQuestionIcon,
   TargetIcon,
+  SquareIcon,
+  TriangleAlertIcon,
 } from "~/components/solar";
 import { Fragment } from "react";
 import { cn } from "~/lib/utils";
@@ -94,6 +97,40 @@ export function goalBannerItem(input: {
         </Button>
       </>
     ),
+  };
+}
+
+/** A Stop the provider has not finished; Force stop once it stops answering. */
+export function runStopBannerItem(input: {
+  readonly threadId: ThreadId;
+  readonly stop: RunStopPresentation;
+  readonly canForceStop: boolean;
+  readonly forceStopping: boolean;
+  readonly onForceStop: () => void;
+}): ComposerBannerStackItem {
+  const unresponsive = input.stop.state === "unresponsive";
+  return {
+    id: `run-stop:${input.threadId}`,
+    variant: unresponsive ? "warning" : "default",
+    priority: unresponsive ? "urgent" : "activity",
+    icon: unresponsive ? <TriangleAlertIcon /> : <SquareIcon />,
+    title: unresponsive ? "Agent not responding to Stop" : "Stopping",
+    description: !unresponsive
+      ? undefined
+      : input.stop.cloud
+        ? "The cloud provider has not confirmed the stop yet."
+        : "It may be short on memory. Force stop kills its processes.",
+    actions:
+      unresponsive && input.canForceStop && !input.stop.cloud ? (
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={input.forceStopping}
+          onClick={input.onForceStop}
+        >
+          {input.forceStopping ? "Force stopping..." : "Force stop"}
+        </Button>
+      ) : undefined,
   };
 }
 

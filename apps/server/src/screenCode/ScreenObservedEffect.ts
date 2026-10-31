@@ -59,7 +59,7 @@ export function applyObservedEffect(
               ? `after ${first?.method ?? "input"}`
               : `after ${matched.length} inputs`;
           const effect = noChange
-            ? `${label}: no change seen in this window; effect may be elsewhere, check before resending`
+            ? `${label}: no change in this window`
             : `${label}: changed (${rows[0]})`;
           const observedEffect = {
             state: noChange ? ("no_change_seen" as const) : ("change_seen" as const),

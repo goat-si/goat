@@ -1,3 +1,4 @@
+import { resolveSidebarReorderableThreadKeys } from "./reorderEligibility";
 import type { EnvironmentServerConfig } from "@goat/client-runtime/connection";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
@@ -49,6 +50,7 @@ export type SidebarOptimisticDrop = {
 export interface SidebarThreadPartitionInput {
   readonly threads: readonly EnvironmentThreadShell[];
   readonly scopedProjectKeys: ReadonlySet<string> | null;
+  readonly connectedEnvironmentIds: readonly EnvironmentId[];
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
@@ -130,24 +132,17 @@ export function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
       : active;
   const snoozed: EnvironmentThreadShell[] = [];
   const settled: EnvironmentThreadShell[] = [];
-  const draggable = new Set<string>();
-  const activeReorderable = new Set<string>();
+  const { draggableThreadKeys: draggable, activeReorderableThreadKeys: activeReorderable } =
+    resolveSidebarReorderableThreadKeys({
+      threads: launchFold.roots,
+      serverConfigs,
+      connectedEnvironmentIds: input.connectedEnvironmentIds,
+    });
   for (const thread of launchFold.roots) {
     const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
-    // Threads on servers without the settlement capability (old server,
-    // or descriptor not loaded yet) never classify as settled: the user
-    // could neither un-settle nor pin them, so auto-settling them would
-    // strand rows in a tail with no working affordances.
     const supportsSettlement = capabilities?.threadSettlement === true;
     const supportsSnooze = capabilities?.threadSnooze === true;
     const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-    if (capabilities?.threadActiveReorder === true) activeReorderable.add(threadKey);
-    // Older servers retain their existing drag actions. Active placement
-    // additionally requires its own ordering capability at the drop target.
-    // This gates sorting only: every row can still drag out to a composer.
-    if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
-      draggable.add(threadKey);
-    }
     if (optimisticDrop?.key === threadKey) {
       const projected = applySidebarThreadDrop(
         thread,

@@ -44,6 +44,13 @@ These limits keep agents away from places they never need. They do not stop an
 agent from typing into an app it may use, so give agents work you would let
 them do at that keyboard.
 
+Computer use also blocks System Settings, login and security prompts, and Screen
+Time. Full access started by a bot, channel, schedule, webhook, or another
+environment cannot control Terminal or iTerm. An organization can block more
+apps by adding their bundle IDs to `cuaDeniedApps` in the environment's
+`userdata/settings.json`; only a person can change this setting. Input without
+an identifiable target is refused; specify an app window to continue.
+
 ## Ask an agent to work across the browser and apps
 
 Agents read and use web pages in GOAT's built-in browser by default, including

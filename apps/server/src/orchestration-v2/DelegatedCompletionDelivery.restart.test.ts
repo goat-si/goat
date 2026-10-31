@@ -14,6 +14,7 @@ import {
   ProviderThreadId,
   RunId,
   ThreadId,
+  TurnItemId,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -22,7 +23,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
-import { layerTest, seedParentWithTerminalTask } from "./DelegatedCompletionDelivery.testkit.ts";
+import {
+  layerTest,
+  modelSelection,
+  seedParentWithTerminalTask,
+} from "./DelegatedCompletionDelivery.testkit.ts";
 
 it.layer(layerTest)("delegated tasks across a server restart", (it) => {
   it.effect("queues a child result without creating a provider history handoff", () =>
@@ -318,6 +323,65 @@ it.layer(layerTest)("delegated tasks across a server restart", (it) => {
       const task = settled.subagents.find((row) => row.id === child.taskId);
       assert.equal(task?.status, "cancelled");
       assert.equal(task?.completionDelivery?.state, "claimed");
+
+      // The parent's Stop committed, but the restart cut the effect that stops its children.
+      const stoppedChild = yield* seedRestartCancelledChild({
+        parentThreadId: threadId,
+        projectId,
+        parentRunId: runId,
+        rootNodeId,
+        name: "restart-parent-stopped-child",
+        completionWake: "always",
+        continuationPending: true,
+        now,
+      });
+      yield* (yield* EventSink.EventSinkV2).write({
+        commandId: CommandId.make("command:restart-declined-parent:stop"),
+        events: [
+          {
+            id: EventId.make("event:restart-declined-parent:interrupt-request"),
+            type: "turn-item.updated",
+            threadId,
+            runId,
+            nodeId: rootNodeId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: {
+              id: TurnItemId.make("turn-item:restart-declined-parent:interrupt-request"),
+              type: "run_interrupt_request",
+              threadId,
+              runId,
+              nodeId: rootNodeId,
+              providerThreadId: null,
+              providerTurnId: null,
+              nativeItemRef: null,
+              parentItemId: null,
+              ordinal: 90,
+              status: "completed",
+              title: "Interrupt requested",
+              startedAt: now,
+              completedAt: now,
+              updatedAt: now,
+              message: "Stopped by user",
+            },
+          },
+        ],
+      });
+      yield* continueRestartedRun({
+        threadId: stoppedChild.childThreadId,
+        sourceRunId: stoppedChild.childRunId,
+      }).pipe(Effect.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true })));
+      const afterStop = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(
+        afterStop.subagents.find((row) => row.id === stoppedChild.taskId)?.status,
+        "cancelled",
+      );
+      assert.deepEqual(
+        (yield* orchestrator.getThreadProjection(stoppedChild.childThreadId)).runs.map(
+          (run) => run.id,
+        ),
+        [stoppedChild.childRunId],
+      );
     }),
   );
 

@@ -1,5 +1,6 @@
 import type { EnvironmentId, RunId, ThreadId } from "@goat/contracts";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
+import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 
 export const REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL = "Remove queued message";
 
@@ -41,7 +42,9 @@ export function resolveThreadQueueRowControls(input: {
     canSend: mutationEnabled && (input.canPromoteToSteer || input.canSendNow) && !isEditing,
     dismissAccessibilityLabel: REMOVE_QUEUED_MESSAGE_ACCESSIBILITY_LABEL,
     // Editing and sending keep the original text so quoted citations stay linked.
-    displayText: assistantCitationsToPlainText(input.text),
+    displayText: isAttachmentOnlyBootstrapPrompt(input.text)
+      ? ""
+      : assistantCitationsToPlainText(input.text),
     isEditing,
   };
 }

@@ -2,7 +2,10 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import { POINT_BASIS_UNSUPPORTED } from "./ComputerUseLeaseProxyPointBasis.ts";
-import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, autoToolListing: false, ...options });
 
 const at = { pid: 4, window_id: 9, x: 20, y: 16, snapshot_id: "s0000001b" };
 /** A tools/list answer whose click tools do or do not take a snapshot_id. */

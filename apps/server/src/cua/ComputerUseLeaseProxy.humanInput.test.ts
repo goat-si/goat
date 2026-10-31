@@ -10,9 +10,12 @@ import {
   active,
   call,
   CONTROL,
-  harness,
+  harness as makeHarness,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("ComputerUseLeaseProxy telling a person's input from the agent's", () => {
   it.effect.each(["pointer", "keyboard"] as const)(

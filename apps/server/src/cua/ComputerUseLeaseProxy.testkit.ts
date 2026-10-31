@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import type { NamedWindow } from "./x11WindowPlacement.ts";
 import { makeHelperInputFeed } from "./agentInputReports.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
@@ -134,6 +135,13 @@ export const harness = Effect.fn(function* (
     readonly automationHolder?: "helper" | "app";
     /** Feeds the proxy the host's cursor events, offered with `cursor`. */
     readonly cursorEvents?: boolean;
+    readonly autoAppListing?: boolean;
+    readonly autoListedApps?: ReadonlyArray<{
+      readonly pid: number;
+      readonly bundle_id: string;
+      readonly name: string;
+    }>;
+    readonly autoToolListing?: boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -314,14 +322,59 @@ export const harness = Effect.fn(function* (
       return {
         ...(options.humanInput ? { humanInput: hid.events } : {}),
         send: (line: string) =>
-          Effect.sync(() => {
-            const params = (JSON.parse(line) as { params?: { name?: unknown } }).params;
-            if (typeof params?.name === "string") log.push("send " + params.name);
-          }).pipe(
-            Effect.andThen(Queue.offer(dispatched, { index, line })),
-            Effect.andThen(Queue.offer(driver.toDriver, line)),
-            Effect.asVoid,
-          ),
+          Effect.suspend(() => {
+            const request = parse(line);
+            if (
+              options.autoAppListing === true &&
+              typeof request?.id === "string" &&
+              request.id.startsWith("goat-proxy:apps:")
+            )
+              return Queue.offer(
+                driver.fromDriver,
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: request.id,
+                  result: {
+                    structuredContent: {
+                      apps:
+                        options.autoListedApps ??
+                        [1, 4, 5, 6, 7, 8, 10, 42, 900].map((pid) => ({
+                          pid,
+                          bundle_id: pid === 42 ? "com.apple.calculator" : `com.example.app${pid}`,
+                          name: `App ${pid}`,
+                        })),
+                    },
+                  },
+                }),
+              ).pipe(Effect.asVoid);
+            if (
+              options.autoAppListing === true &&
+              options.autoToolListing !== false &&
+              typeof request?.id === "string" &&
+              request.id.startsWith("goat-proxy:tools:")
+            )
+              return Queue.offer(
+                driver.fromDriver,
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: request.id,
+                  result: {
+                    tools: ["run_script", "run_steps"].map((name) => ({
+                      name,
+                      inputSchema: {
+                        type: "object",
+                        properties: { app_scope: { type: "object" } },
+                      },
+                    })),
+                  },
+                }),
+              ).pipe(Effect.asVoid);
+            if (typeof request?.params?.name === "string") log.push("send " + request.params.name);
+            return Queue.offer(dispatched, { index, line }).pipe(
+              Effect.andThen(Queue.offer(driver.toDriver, line)),
+              Effect.asVoid,
+            );
+          }),
         lines: Stream.unwrap(
           Deferred.succeed(driver.observed, "reading").pipe(
             Effect.as(Stream.fromQueue(driver.fromDriver)),

@@ -1,3 +1,4 @@
+import { reportPreviewAddressError } from "./previewAddressError";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import { settlePromise } from "@goat/client-runtime/state/runtime";
 import { previewStreamDownloadUrl } from "@goat/client-runtime/preview/server-browser-stream";
@@ -289,7 +290,9 @@ export function PreviewView({
       if (await navigateToResolvedUrl(resolved)) {
         recordVisitForThread(threadRef, resolved);
       }
-    } catch {}
+    } catch (error) {
+      reportPreviewAddressError(error);
+    }
   };
 
   const handleOpenServerUrl = async (next: string) => {
@@ -301,7 +304,9 @@ export function PreviewView({
       if (await navigateToResolvedUrl(resolved)) {
         recordVisitForThread(threadRef, next);
       }
-    } catch {}
+    } catch (error) {
+      reportPreviewAddressError(error);
+    }
   };
 
   const handleRefresh = () => {
@@ -912,6 +917,7 @@ export function PreviewView({
         onForward={handleForward}
         onRefresh={handleRefresh}
         onSubmit={(next) => void handleSubmitUrl(next)}
+        onInvalidInput={(next) => void handleSubmitUrl(next)}
         onOpenInBrowser={tabId ? handleOpenInBrowser : undefined}
         onCapture={previewBridge && tabId && !isServerTab ? handleCapture : undefined}
         captureDisabled={!desktopOverlay || isUnreachable}

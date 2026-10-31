@@ -79,7 +79,7 @@ describe.skipIf(!headlessShellInstalled)("CDP relay under Playwright", () => {
         { name: "sid", value, url: "http://cookies.test", httpOnly: true },
         { name: "other", value: "elsewhere", url: "http://other.test" },
       ]);
-      await context.route("http://cookies.test/**", (route) =>
+      await context.route("**/*", (route) =>
         route.fulfill({ contentType: "text/html", body: "<title>Relay</title>" }),
       );
       const page = await context.newPage();
@@ -145,6 +145,7 @@ describe.skipIf(!headlessShellInstalled)("CDP relay under Playwright", () => {
             setDownloadDirectory: () => {},
           },
           (message) => socket.send(message),
+          () => socket.close(),
         );
         socket.on("message", (data) => relay?.receive(String(data)));
       });

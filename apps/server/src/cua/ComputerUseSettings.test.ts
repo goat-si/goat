@@ -79,13 +79,47 @@ it.effect("turns computer use off even when session cleanup is unavailable", () 
 it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
-    const result = yield* Effect.result(
-      settings.updateSettings({ cuaAllowedApps: ["com.1password.1password"] }),
-    );
-    expect(result._tag).toBe("Failure");
-    if (result._tag === "Failure") expect(result.failure.message).toContain("protected app");
+    for (const app of [
+      "com.1password.1password",
+      "com.apple.systempreferences",
+      "com.apple.loginwindow",
+      "com.apple.SecurityAgent",
+      "com.apple.coreauthd",
+      "com.apple.LocalAuthentication.UIAgent",
+      "com.apple.keychainaccess",
+      "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeSettingsAgent",
+      "com.apple.ScreenTimeWidgetApplication",
+      "com.apple.ScreenTimeViewService",
+    ]) {
+      const result = yield* Effect.result(settings.updateSettings({ cuaAllowedApps: [app] }));
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.message).toContain("protected app");
+    }
     expect((yield* settings.getSettings).cuaAllowedApps).toEqual([]);
   }).pipe(Effect.provide(base)),
+);
+
+it.effect("retains an organization app deny list in settings", () =>
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Blocked"] });
+    expect((yield* settings.getSettings).cuaDeniedApps).toEqual(["com.example.Blocked"]);
+  }).pipe(Effect.provide(base)),
+);
+
+it.effect("loads an organization deny list from settings.json", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const config = yield* ServerConfig.ServerConfig;
+    yield* fs.writeFileString(
+      config.settingsPath,
+      JSON.stringify({ cuaDeniedApps: ["com.example.Blocked"] }),
+    );
+    const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.start;
+    expect((yield* settings.getSettings).cuaDeniedApps).toEqual(["com.example.Blocked"]);
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
 it.effect("persists allowed apps and rejects protected apps without changing the file", () =>

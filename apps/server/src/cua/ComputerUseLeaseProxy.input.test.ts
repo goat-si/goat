@@ -5,7 +5,10 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 
 import { makeHelperInputFeed } from "./agentInputReports.ts";
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, CONTROL, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("ComputerUseLeaseProxy person and agent input", () => {
   it.effect(

@@ -67,6 +67,9 @@ const COMPUTER_USE_APP_ICON_MAX_CHARS = 64 * 1024;
 export const ComputerUseApp = Schema.Struct({
   id: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
+  executables: Schema.optionalKey(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
+  ),
   icon: Schema.optionalKey(
     TrimmedNonEmptyString.check(
       Schema.isMaxLength(COMPUTER_USE_APP_ICON_MAX_CHARS),
@@ -581,6 +584,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+    identityEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     /**
      * How many times the host has paused agents, and why last. A pause and its end can both
      * land before the proxy reads the control, so a higher count still ends the call in flight.
@@ -648,6 +652,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "invalid_target",
   "control_idle",
   "app_not_approved",
+  "app_not_allowed",
   "desktop_not_approved",
   "foreground_not_approved",
   /** Whole-display screenshots are off; an agent looks at one window at a time (#1321). */
@@ -716,6 +721,7 @@ export const computerUseRefusalReason = (
     case "automation_pending":
       return "permissionsPending";
     case "app_not_approved":
+    case "app_not_allowed":
       return "appNotAllowed";
     case "helper_restarted":
     case "helper_refused":
@@ -780,6 +786,11 @@ export const ComputerUseCallReservation = Schema.Union([
     foregroundGrantId: Schema.optionalKey(TurnItemId),
     /** The app the proxy judged this call to act on, by the id its scope check uses (#1484). */
     app: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(500))),
+    safetyApps: Schema.optionalKey(
+      Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(500))).check(
+        Schema.isMaxLength(100),
+      ),
+    ),
     appLabel: Schema.optionalKey(ComputerUseCallAppLabel),
   }),
   strictTicketValidation,

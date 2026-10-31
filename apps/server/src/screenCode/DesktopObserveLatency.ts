@@ -748,7 +748,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
                 ? currentStatus === "no_change"
                   ? numbersChanged
                     ? `no change since ${baseObservationId}; numbers as in that observation${focus}`
-                    : `no change; numbers unchanged; latest full observation is ${bound.fullObservationId}${focus}`
+                    : `no change; numbers unchanged${focus}`
                   : numbersChanged
                     ? `${rows}\nother numbers unchanged since ${baseObservationId}; observe({diff:false}) lists every current number`
                     : `${rows}\nother numbers unchanged; latest full observation is ${bound.fullObservationId}`
@@ -809,7 +809,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         driverMs,
         parseMs,
         renderMs,
-        hops: hopsOf(call),
+        ...(args.debug === true ? { hops: hopsOf(call) } : {}),
       });
       return {
         value: withObserveTiming(
@@ -867,7 +867,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     driverMs,
     parseMs,
     renderMs,
-    hops: hopsOf(call),
+    ...(args.debug === true ? { hops: hopsOf(call) } : {}),
   });
   return {
     value: withScreenshotTiming(metadata, timing, context.limits.returnBytes),

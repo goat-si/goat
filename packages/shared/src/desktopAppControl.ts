@@ -37,8 +37,13 @@ export function resolveDesktopAppControlAddresses(input: {
 
   const userKey = input.userId === undefined ? stateHash.slice(0, 12) : input.userId;
   const addressFor = (prefix: string) => {
-    const directory = input.joinPath(input.tempDir, `${prefix}${userKey}`);
-    return { address: input.joinPath(directory, `${stateHash}.sock`), directory };
+    const socketName = `${stateHash}.sock`;
+    const maxPathBytes = input.platform === "linux" ? 107 : 103;
+    let directory = input.joinPath(input.tempDir, `${prefix}${userKey}`);
+    if (new TextEncoder().encode(input.joinPath(directory, socketName)).byteLength > maxPathBytes) {
+      directory = input.joinPath("/tmp", `${prefix}${userKey}`);
+    }
+    return { address: input.joinPath(directory, socketName), directory };
   };
   return [addressFor("goat-"), addressFor(LEGACY_DESKTOP_APP_SOCKET_DIRECTORY_PREFIX)];
 }

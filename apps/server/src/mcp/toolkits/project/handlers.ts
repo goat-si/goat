@@ -2,6 +2,8 @@ import { OrchestratorMcpFailure, ProjectId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
+import { mutateProjectWithClone } from "../../../project/ProjectMutation.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
@@ -173,9 +175,12 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
     McpToolAccess.writesEnvironment((input) =>
       Effect.gen(function* () {
         const projects = yield* Project.ProjectService;
-        return yield* projects
-          .delete({ ...input, commandId: yield* newCommandId() })
-          .pipe(Effect.mapError(projectFailure));
+        const clones = yield* ProjectCloneTracker.ProjectCloneTracker;
+        return yield* mutateProjectWithClone(projects, clones, {
+          ...input,
+          type: "project.delete",
+          commandId: yield* newCommandId(),
+        }).pipe(Effect.mapError(projectFailure));
       }),
     ),
   ),

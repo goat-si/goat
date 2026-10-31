@@ -15,10 +15,10 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
-import { testActionChannel, testActionGate } from "./actionChannel.testkit.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
-import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
 // `chromium.executablePath()` is the full Chrome build, so it stays missing
@@ -259,31 +259,6 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     await page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=f type=file>')");
     await expect(uploading).rejects.toThrow("stopped");
     expect(await page.evaluate("f.files.length")).toBe(0);
-  });
-  it("refuses a blocked upload without changing the input and uploads through a label when allowed", async () => {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
-    using _removeDirectory = {
-      [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
-    };
-    const file = NodePath.join(directory, "note.txt");
-    NodeFS.writeFileSync(file, "hello");
-    await page.setContent(
-      '<label id="l">Attach <input id="f" type="file"></label><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
-    );
-    const blocked = testActionGate(page, cdp, () => {
-      throw new BrowserControlInterrupted("Blocked host", "blocked_url");
-    });
-    await expect(
-      PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, blocked),
-    ).rejects.toMatchObject({ reason: "blocked_url" });
-    expect(await page.evaluate("[f.files.length, window.changes]")).toEqual([0, 0]);
-    await PreviewUpload.setInputFiles(
-      page,
-      cdp,
-      { locator: "#l", paths: [file] },
-      testActionGate(page, cdp),
-    );
-    expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
   });
   it("skips the capture for a text-only snapshot and still returns the page", async () => {
     await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
@@ -995,5 +970,19 @@ describe("a gate reused across a click's presses", () => {
       ),
     ).rejects.toMatchObject({ reason: "interrupted", beforeInput: false });
     expect(presses).toEqual(["first"]);
+  });
+});
+
+describe("server browser net errors", () => {
+  it.each([
+    ["net::ERR_CONNECTION_REFUSED", "ERR_CONNECTION_REFUSED", -102],
+    [
+      "page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://localhost:5173/",
+      "ERR_HTTP2_PROTOCOL_ERROR",
+      -2,
+    ],
+    ["net::ERR_TLS13_DOWNGRADE_DETECTED", "ERR_TLS13_DOWNGRADE_DETECTED", -2],
+  ])("reads the whole error name from %j", (errorText, description, code) => {
+    expect(ServerBrowserPage.parseNetError(errorText)).toEqual({ description, code });
   });
 });

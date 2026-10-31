@@ -74,6 +74,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerConfigModule from "./config.ts";
 import * as DeviceService from "./device/DeviceService.ts";
+import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -855,6 +856,7 @@ it.effect(
           namedProjectsRoot: process.cwd(),
         }),
         layerConfigEnvironment,
+        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
         Layer.mock(EnvironmentAuth.EnvironmentAuth)({
           getDescriptor: () =>
             Effect.succeed({
@@ -908,6 +910,7 @@ it.effect(
             {},
             yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
+            () => Effect.void,
           ).pipe(Layer.provide(configRpcServices)),
         ),
       );
@@ -1033,6 +1036,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         namedProjectsRoot: process.cwd(),
       }),
       layerConfigEnvironment,
+      Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({
         getDescriptor: () =>
           Effect.succeed({
@@ -1075,6 +1079,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
           {},
           yield* PreviewAutomationBroker.PreviewAutomationBroker,
           yield* ServerBrowser.ServerBrowser,
+          () => Effect.void,
         ).pipe(Layer.provide(configRpcServices)),
       ),
     );

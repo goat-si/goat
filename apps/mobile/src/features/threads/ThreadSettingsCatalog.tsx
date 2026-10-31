@@ -4,7 +4,12 @@ import { formatProviderUpdateRequiredNotice } from "@goat/client-runtime/provide
 import { useState, type ReactNode } from "react";
 import { Platform, Pressable, RefreshControl, TextInput, View } from "react-native";
 import { useKeyboardState } from "react-native-keyboard-controller";
-import Animated, { FadeIn, FadeOut, LinearTransition } from "react-native-reanimated";
+import Animated, {
+  FadeIn,
+  FadeOut,
+  LinearTransition,
+  useReducedMotion,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
@@ -17,6 +22,7 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { useReduceMotionEnabled } from "../../lib/appState";
 import type { ModelOption } from "../../lib/modelOptions";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
@@ -299,7 +305,10 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
       if (error) Dialog.alert("Could not refresh models", error);
     });
   };
-  const [animationsReady, setAnimationsReady] = useState(false);
+  const [listLoaded, setListLoaded] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const reduceMotionEnabled = useReduceMotionEnabled();
+  const animationsReady = listLoaded && !reducedMotion && !reduceMotionEnabled;
   const catalogItems = buildThreadSettingsCatalogItems(session);
   const hasActiveCatalogFilter =
     session.providerFilter !== null || session.searchQuery.trim().length > 0;
@@ -426,7 +435,7 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
           <RefreshControl refreshing={isRefreshingProviders} onRefresh={refreshProviders} />
         ) : undefined
       }
-      onLoad={() => setAnimationsReady(true)}
+      onLoad={() => setListLoaded(true)}
       renderItem={renderCatalogItem}
       showsVerticalScrollIndicator={false}
     />

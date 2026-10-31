@@ -132,6 +132,7 @@ export const acpMemoryDelivery = (kind: "acp" | "grok" | "antigravity", attached
         const context = yield* Layer.build(
           AcpSessionRuntime.layer({
             ...input,
+            clientInfo: { name: "goat-test", version: "0.0.0" },
             authMethodId: "test",
             spawn: {
               command: process.execPath,

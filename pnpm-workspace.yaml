@@ -157,7 +157,7 @@ minimumReleaseAgeExclude:
   - expo-sharing@58.0.19
   - expo-sqlite@58.0.13
   - expo-symbols@58.0.4
-  - electron@44.9.3
+  - electron@44.10.0
   - "@anthropic-ai/claude-agent-sdk@0.3.276"
   - "@alchemy.run/cloudflare-runtime@2.0.0-beta.80"
   - "@alchemy.run/floci@2.0.0-beta.80"
@@ -235,6 +235,8 @@ overrides:
   mdast-util-math: 3.0.0
   micromark-extension-llm-math: 3.1.0
   alchemy: 2.0.0-beta.80
+  micromark: 4.0.2
+  mdast-util-to-hast: 13.2.1
   expo-audio: 58.0.9
   expo-network: 58.0.3
   "@clerk/expo-native-components": 0.4.0
@@ -364,6 +366,8 @@ patchedDependencies:
   micromark-extension-gfm-table@2.1.1: patches/micromark-extension-gfm-table@2.1.1.patch
   "@ubjs/node@0.31.0-3": patches/@ubjs__node@0.31.0-3.patch
   alchemy@2.0.0-beta.80: patches/alchemy@2.0.0-beta.80.patch
+  micromark@4.0.2: patches/micromark@4.0.2.patch
+  mdast-util-to-hast@13.2.1: patches/mdast-util-to-hast@13.2.1.patch
   expo-audio@58.0.9: patches/expo-audio@58.0.9.patch
   expo-video@58.0.11: patches/expo-video@58.0.11.patch
   expo-network@58.0.3: patches/expo-network@58.0.3.patch

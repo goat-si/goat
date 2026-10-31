@@ -16,7 +16,7 @@ import {
 
 const withProfiles = (names: ReadonlyArray<string>) => {
   const profiles = new SessionProfiles();
-  profiles.report({
+  profiles.report(profiles.connect(), {
     profiles: names.map((name) => ({ id: name.toLowerCase(), name, kind: "persistent" as const })),
     defaultProfileId: "default",
   });

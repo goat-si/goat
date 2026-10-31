@@ -16,6 +16,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import { formatThreadLink } from "@goat/shared/threadLinks";
 
 const ALL_MCP_CAPABILITIES = [
   "memory",
@@ -45,6 +46,8 @@ export interface McpClientCaller {
   readonly access: AuthMcpClientAccess;
   /** May accept or decline provider approvals (`orchestration:approve`). */
   readonly approvals?: boolean;
+  /** The origin an outside client reached; its thread links open the web app there. */
+  readonly webOrigin?: string | undefined;
 }
 
 /** Read-only clients map to the lowest mode because McpToolAccess blocks writes first. */
@@ -74,6 +77,25 @@ export interface McpInvocationScope {
   readonly thread: McpThreadCaller | undefined;
   readonly client: McpClientCaller | undefined;
 }
+
+/**
+ * GOAT clients render `goat-thread://` links as thread chips. Outside MCP clients cannot open
+ * them, so their links point at the web app on the origin they reached.
+ */
+export const threadLinkFor = (
+  scope: Pick<McpInvocationScope, "environmentId" | "client">,
+  threadId: ThreadId,
+  title: string,
+): string => {
+  const origin = scope.client?.webOrigin;
+  return origin === undefined
+    ? formatThreadLink(threadId, title)
+    : formatThreadLink(
+        threadId,
+        title,
+        `${origin}/${encodeURIComponent(scope.environmentId)}/${encodeURIComponent(threadId)}`,
+      );
+};
 
 export class McpInvocationContext extends Context.Service<
   McpInvocationContext,

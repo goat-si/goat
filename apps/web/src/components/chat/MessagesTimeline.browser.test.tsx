@@ -1,7 +1,20 @@
+import * as DateTime from "effect/DateTime";
+import { Atom } from "effect/reactivity";
+import { environmentThreadDetails } from "../../state/threads";
 import { AudioPreview } from "../files/AudioPreview";
 import { onTestFinished } from "vite-plus/test";
 import { stubGlobal } from "../../../test/render";
-import { MessageId, RunAttemptId, RunId, ScheduledTaskId, ThreadId } from "@goat/contracts";
+import {
+  NodeId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type OrchestrationV2Subagent,
+  MessageId,
+  RunAttemptId,
+  RunId,
+  ScheduledTaskId,
+  ThreadId,
+} from "@goat/contracts";
 import { Profiler, StrictMode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -62,6 +75,84 @@ vi.mock(import("~/assets/assetUrls"), async (original) => {
 function setup({ scheduledTasks = [] as ReadonlyArray<{ id: string; title: string }> } = {}) {
   environmentQuery.data = { tasks: scheduledTasks };
 }
+
+describe("MessagesTimeline work rows", () => {
+  it.each(["delegated", "legacy", "missing"] as const)(
+    "uses the reported task for %s completion notifications",
+    async (source) => {
+      setup();
+      const now = DateTime.makeUnsafe(CREATED_AT);
+      const childThreadId = ThreadId.make("shared-child");
+      const task = (
+        id: string,
+        status: OrchestrationV2Subagent["status"],
+        result: string,
+      ): OrchestrationV2Subagent => ({
+        id: NodeId.make(id),
+        threadId: ThreadId.make("thread-1"),
+        runId: null,
+        parentNodeId: NodeId.make("parent-root"),
+        origin: "app_owned",
+        createdBy: "agent",
+        driver: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Simplify delivery",
+        title: "Simplify delivery",
+        model: null,
+        status,
+        result,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+      });
+      const tasks = [
+        task("original", "interrupted", "Old interrupted progress"),
+        task("continued", "completed", "Final implementation report"),
+        task("follow-up", "completed", "Follow-up explanation"),
+      ];
+      using _threadAtom = vi.spyOn(environmentThreadDetails, "threadAtom").mockReturnValue(
+        Atom.make({
+          projection: { subagents: tasks, turnItems: [], visibleTurnItems: [] },
+        }) as never,
+      );
+      const onOpenThread = vi.fn();
+      await using screen = await renderTimeline(
+        (source === "delegated" ? ["continued", "follow-up"] : [source]).map((id) =>
+          work(`notification-${id}`, {
+            label: "Notification fallback",
+            tone: "info",
+            itemType: "notification",
+            projectedItem: v2Item("notification", {
+              id: `notification-${id}`,
+              source:
+                source === "legacy"
+                  ? { kind: "subagent", childThreadId }
+                  : { kind: "delegated_task", childThreadId, taskIds: [NodeId.make(id)] },
+              outcome: "completed",
+              summary: "Notification fallback",
+            }),
+          }),
+        ),
+        { onOpenThread },
+      );
+      if (source === "delegated") {
+        expect(screen.text()).toContain("Final implementation report");
+        expect(screen.text()).toContain("Follow-up explanation");
+        expect(screen.text()).not.toContain("Old interrupted progress");
+        await click(screen.buttons("Open Simplify delivery")[0]!);
+        expect(onOpenThread).toHaveBeenCalledWith(childThreadId);
+      } else if (source === "legacy") {
+        expect(screen.text()).toContain("Old interrupted progress");
+      } else {
+        expect(screen.text()).toContain("Notification fallback");
+        expect(screen.text()).not.toContain("Old interrupted progress");
+      }
+    },
+  );
+});
 
 describe("MessagesTimeline messages", () => {
   it("settles when equally long messages have very different rendered heights", async () => {

@@ -172,11 +172,10 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
   // refuses unattended work that lost a race for the screen.
   const control = everyApp
     ? yield* leases.value
-        .everyAppControl(
-          input.threadId,
-          unattended,
-          input.runId === undefined ? {} : { runId: input.runId },
-        )
+        .everyAppControl(input.threadId, unattended, {
+          ...(input.runId === undefined ? {} : { runId: input.runId }),
+          nonPerson: input.origin._tag === "unattended",
+        })
         .pipe(Effect.orElseSucceed(() => Option.none()))
     : Option.some(yield* leases.value.control(input.threadId, lease, input.runId));
   if (Option.isNone(control)) return none("held", blockUserConfig);

@@ -35,12 +35,39 @@ export class SessionProfiles {
     readonly defaultProfileId: string;
   } | null = null;
 
-  report(input: PreviewReportProfilesInput) {
-    const profiles = resolveBrowserProfiles(input.profiles);
+  private readonly byClient = new Map<number, PreviewReportProfilesInput>();
+  private nextClient = 0;
+
+  connect() {
+    return this.nextClient++;
+  }
+
+  disconnect(client: number) {
+    this.byClient.delete(client);
+    this.rebuild();
+  }
+
+  report(client: number, input: PreviewReportProfilesInput) {
+    this.byClient.delete(client);
+    this.byClient.set(client, input);
+    this.rebuild();
+  }
+
+  // Each client reports only the profiles in its own settings, so the catalog is their union
+  // while they stay connected. The last catalog stays usable after every client disconnects.
+  private rebuild() {
+    const byId = new Map<string, BrowserProfile>();
+    let latest: PreviewReportProfilesInput | undefined;
+    for (const report of this.byClient.values()) {
+      for (const profile of report.profiles) byId.set(profile.id, profile);
+      latest = report;
+    }
+    if (latest === undefined) return;
+    const profiles = resolveBrowserProfiles([...byId.values()]);
     this.reported = {
       profiles,
       defaultProfileId:
-        findBrowserProfile(profiles, input.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
+        findBrowserProfile(profiles, latest.defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID,
     };
   }
 

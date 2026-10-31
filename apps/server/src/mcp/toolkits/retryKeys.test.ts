@@ -24,6 +24,7 @@ import * as Threads from "../../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../../persistence/Sqlite.ts";
 import * as ManagedFolders from "../../project/ManagedProjectFolders.ts";
 import * as Projects from "../../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
 import * as PendingAttachmentSweep from "../../assets/PendingAttachmentSweep.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import * as RemoteDispatch from "../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -141,11 +142,18 @@ const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
         Effect.sync(() => {
           const sequence = record(input);
           return {
-            task: { id: input.id, lastRunStatus: "succeeded", runCount: sequence, nextRunAt: null },
+            task: {
+              id: input.id,
+              title: "Retry schedule",
+              lastRunStatus: "succeeded",
+              runCount: sequence,
+              nextRunAt: null,
+            },
             threadId: `scheduled-${sequence}`,
           } as never;
         }),
     }),
+    Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ discard: () => Effect.void }),
     Layer.mock(Projects.ProjectService)({
       create: (input) =>
         Effect.sync(() => {

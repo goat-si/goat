@@ -185,6 +185,7 @@ export interface ProviderChangeRequestStat {
 }
 
 export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
+  readonly maintainerCanModify?: boolean;
   readonly headSha?: string | null;
   readonly body: string;
   readonly changedFiles: number;
@@ -310,6 +311,11 @@ export interface PullRequestProviderApi {
    * definition's `publicHost` can be read from a project with no checkout of its repository.
    */
   readonly readsPublicHostWithoutCheckout?: boolean;
+  /**
+   * Absent means every host detected as this kind is read. A host it refuses is listed as one that
+   * cannot be browsed here, and nothing is sent for it.
+   */
+  readonly servesHost?: (host: string) => boolean;
 
   readonly getViewer: (input: {
     readonly cwd: string;
@@ -360,6 +366,16 @@ export interface PullRequestProviderApi {
   readonly getChangeRequest: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestDetail, PullRequestProviderError>;
+
+  /**
+   * For a provider that holds change request reads of its own: called when the service drops its
+   * reads, so a refresh or a finished turn reaches the host. No scope forgets everything; a scope
+   * without a number forgets the repository's change requests.
+   */
+  readonly forgetChangeRequestReads?: (scope?: {
+    readonly repository: string;
+    readonly number?: number;
+  }) => Effect.Effect<void>;
 
   readonly getChangeRequestPreview?: (
     input: ProviderRepositoryRef & { readonly number: number },
@@ -472,6 +488,7 @@ export interface PullRequestProviderApi {
   /** Requires edit capability and at least one field. */
   readonly updateChangeRequest?: (
     input: ProviderRepositoryRef & {
+      readonly maintainerCanModify?: boolean | undefined;
       readonly number: number;
       readonly title?: string | undefined;
       readonly body?: string | undefined;

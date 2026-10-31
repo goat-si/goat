@@ -483,6 +483,7 @@ class GoatReviewDiffView(context: Context, appContext: AppContext) : ExpoView(co
       )
       postInvalidateOnAnimation()
     } else {
+      verticalScroller.forceFinished(true)
       canvasView.setVerticalOffset(target)
     }
   }

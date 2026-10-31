@@ -22,13 +22,17 @@ const fixture = (closeGate?: Promise<void>) => {
     [];
   const client = HttpClient.make((request) =>
     Effect.promise(async () => {
-      if (closeGate && request.method === "POST" && request.url.endsWith("/webrtc/close"))
+      if (
+        closeGate &&
+        request.method === "POST" &&
+        new URL(request.url).pathname.endsWith("/webrtc/close")
+      )
         await closeGate;
       const body =
         request.body._tag === "Uint8Array" ? new TextDecoder().decode(request.body.body) : "";
       requests.push({ method: request.method, url: request.url, body });
       // serve-sim only accepts POST signalling.
-      if (request.method !== "POST" && request.url.endsWith("/webrtc/close"))
+      if (request.method !== "POST" && new URL(request.url).pathname.endsWith("/webrtc/close"))
         return HttpClientResponse.fromWeb(request, new Response("", { status: 405 }));
       // A live MJPEG-like stream: one frame, then it stays open.
       const stream = request.url.endsWith("/stream.mjpeg")
@@ -77,8 +81,18 @@ const upstreamCloses = (
   requests: ReadonlyArray<{ readonly method: string; readonly url: string; readonly body: string }>,
 ) =>
   requests
-    .filter((request) => request.method === "POST" && request.url.endsWith("/webrtc/close"))
+    .filter(
+      (request) =>
+        request.method === "POST" && new URL(request.url).pathname.endsWith("/webrtc/close"),
+    )
     .map((request) => [request.url, JSON.parse(request.body).sessionId]);
+
+const androidSignal = (path: string, device: string) =>
+  new Request(`http://t3.test/api/device-hub/vendor/serve-emu/webrtc/${path}?device=${device}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId: "peer-1" }),
+  });
 
 describe("device hub proxy revocation", () => {
   it("ends a live device stream when its session loses authority", async () => {
@@ -127,6 +141,33 @@ describe("device hub proxy revocation", () => {
       expect(upstreamCloses(requests).toSorted()).toEqual([
         ["http://hub.test/vendor/serve-sim/helper/sim-1/webrtc/close", "peer-1"],
         ["http://hub.test/vendor/serve-sim/helper/sim-2/webrtc/close", "peer-1"],
+      ]),
+    );
+  });
+
+  it("closes same-id peers on both Android devices when their shared session is revoked", async () => {
+    const { handler, requests, revoke } = fixture();
+    await (await handler(androidSignal("offer", "emulator-5554"))).text();
+    await (await handler(androidSignal("offer", "emulator-5556"))).text();
+    revoke();
+    await vi.waitFor(() =>
+      expect(upstreamCloses(requests).toSorted()).toEqual([
+        ["http://hub.test/vendor/serve-emu/webrtc/close?device=emulator-5554", "peer-1"],
+        ["http://hub.test/vendor/serve-emu/webrtc/close?device=emulator-5556", "peer-1"],
+      ]),
+    );
+  });
+
+  it("closing one Android device's peer leaves the other device's revocation watch active", async () => {
+    const { handler, requests, revoke } = fixture();
+    await (await handler(androidSignal("offer", "emulator-5554"))).text();
+    await (await handler(androidSignal("offer", "emulator-5556"))).text();
+    await (await handler(androidSignal("close", "emulator-5554"))).text();
+    revoke();
+    await vi.waitFor(() =>
+      expect(upstreamCloses(requests)).toEqual([
+        ["http://hub.test/vendor/serve-emu/webrtc/close?device=emulator-5554", "peer-1"],
+        ["http://hub.test/vendor/serve-emu/webrtc/close?device=emulator-5556", "peer-1"],
       ]),
     );
   });

@@ -11,7 +11,10 @@ import {
 import { videoMimeType } from "@goat/shared/video";
 import { createContext, useContext, useCallback, useMemo, useState } from "react";
 import { changeRequestReferenceAutolinker } from "@goat/client-runtime/pull-request-markdown";
-import type { ReferenceAutolink } from "@goat/client-runtime/source-control-clients";
+import {
+  sourceControlClients,
+  type ReferenceAutolink,
+} from "@goat/client-runtime/source-control-clients";
 import { linkReferenceAutolinks } from "./pullRequestAutolinks";
 
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -31,6 +34,7 @@ import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText"
 const AutolinksContext = createContext<((text: string) => ReadonlyArray<ReferenceAutolink>) | null>(
   null,
 );
+const LineBreaksContext = createContext(false);
 
 export function PullRequestMarkdownRepository(props: {
   /** The change request the markdown belongs to, whose host decides what its text links. */
@@ -47,6 +51,7 @@ export function PullRequestMarkdownRepository(props: {
         : changeRequestReferenceAutolinker({ provider, url }),
     [provider, url],
   );
+  const lineBreaks = sourceControlClients.find(provider ?? "")?.hardLineBreaks ?? false;
   const target = pullRequestTarget(props.params);
   const project = useProject({
     environmentId: target.environmentId,
@@ -59,7 +64,9 @@ export function PullRequestMarkdownRepository(props: {
   );
   return (
     <AutolinksContext value={autolinks}>
-      <PullRequestMediaContext value={media}>{props.children}</PullRequestMediaContext>
+      <LineBreaksContext value={lineBreaks}>
+        <PullRequestMediaContext value={media}>{props.children}</PullRequestMediaContext>
+      </LineBreaksContext>
     </AutolinksContext>
   );
 }
@@ -94,6 +101,7 @@ function MarkdownImage(props: {
 export function PullRequestMarkdown(props: {
   readonly markdown: string;
   readonly imageGroupMarkdown?: string;
+  readonly lineBreaks?: boolean;
 }) {
   const segments = useMemo(() => splitPullRequestBody(props.markdown), [props.markdown]);
   return (
@@ -104,6 +112,7 @@ export function PullRequestMarkdown(props: {
             key={segment.id}
             markdown={segment.text}
             imageGroupMarkdown={props.imageGroupMarkdown ?? props.markdown}
+            lineBreaks={props.lineBreaks}
           />
         ) : (
           <PullRequestMedia key={segment.id} url={segment.url} kind={segment.media} />
@@ -116,7 +125,9 @@ export function PullRequestMarkdown(props: {
 function PullRequestMarkdownContent(props: {
   readonly markdown: string;
   readonly imageGroupMarkdown?: string;
+  readonly lineBreaks: boolean | undefined;
 }) {
+  const hostLineBreaks = useContext(LineBreaksContext);
   const autolinks = useContext(AutolinksContext);
   const mediaContext = useContext(PullRequestMediaContext);
   const markdown = useMemo(
@@ -151,6 +162,7 @@ function PullRequestMarkdownContent(props: {
     <FilePreviewGallery value={gallery}>
       <SelectableMarkdownText
         markdown={markdown}
+        preserveSoftBreaks={props.lineBreaks ?? hostLineBreaks}
         textStyle={styles.nativeTextStyle}
         onLinkPress={openLink}
         renderImage={renderImage}

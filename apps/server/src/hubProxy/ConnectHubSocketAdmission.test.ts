@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import { expect, it } from "@effect/vitest";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import * as Deferred from "effect/Deferred";
@@ -128,7 +129,7 @@ it.effect.each([
           proxy: boolean,
         ) {
           const ticket = yield* hub.auth.issueWebSocketTicket(session);
-          return `${hub.baseUrl.replace(/^http/u, "ws")}${proxy ? "hub/nodes/node-1/" : ""}ws?wsTicket=${encodeURIComponent(ticket.ticket)}&orchestrationProtocol=1001`;
+          return `${hub.baseUrl.replace(/^http/u, "ws")}${proxy ? "hub/nodes/node-1/" : ""}ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}&orchestrationProtocol=1001`;
         });
         const hubSocket = yield* open(yield* url(cloud, false));
         const proxySocket = yield* open(yield* url(cloud, true));

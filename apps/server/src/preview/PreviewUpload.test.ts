@@ -120,4 +120,34 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
       expect(await state("#i")).toEqual([null, 1]);
     }
   });
+
+  it("refuses a blocked upload without changing the input and uploads through a label when allowed", async () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
+    using _removeDirectory = {
+      [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
+    };
+    const file = NodePath.join(directory, "note.txt");
+    NodeFS.writeFileSync(file, "hello");
+    const context = await browser.newContext();
+    await using _context = { [Symbol.asyncDispose]: () => context.close() };
+    const page = await context.newPage();
+    const cdp = await context.newCDPSession(page);
+    await page.setContent(
+      '<label id="l">Attach <input id="f" type="file"></label><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
+    );
+    const blocked = testActionGate(page, cdp, () => {
+      throw new BrowserControlInterrupted("Blocked host", "blocked_url");
+    });
+    await expect(
+      PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, blocked),
+    ).rejects.toMatchObject({ reason: "blocked_url" });
+    expect(await page.evaluate("[f.files.length, window.changes]")).toEqual([0, 0]);
+    await PreviewUpload.setInputFiles(
+      page,
+      cdp,
+      { locator: "#l", paths: [file] },
+      testActionGate(page, cdp),
+    );
+    expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
+  });
 });

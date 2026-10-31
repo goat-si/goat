@@ -57,6 +57,7 @@ export const runSetup = Effect.fn("test.runSetup")(function* (input: {
             ),
             Effect.as({} as never),
           ),
+        getShell: () => Effect.succeed("/bin/sh"),
         write: ({ data }) =>
           Effect.sync(() => {
             writes.push(data);
@@ -103,6 +104,7 @@ export const makeObservedSetup = Effect.gen(function* () {
           emit({ type: "output", threadId, terminalId, data: "\x1b[?2004h" }).pipe(
             Effect.as({} as never),
           ),
+        getShell: () => Effect.succeed("/bin/sh"),
         write: (input) => Deferred.succeed(written, input).pipe(Effect.asVoid),
         closeIdle: () => Effect.void,
         subscribe: (onEvent) =>

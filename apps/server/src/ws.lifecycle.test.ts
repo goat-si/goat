@@ -124,6 +124,7 @@ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
+import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
@@ -310,6 +311,7 @@ it.effect.each([
         Layer.mock(UsageLimitSources.UsageLimitSources)({}),
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
         Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           namedProjectsRoot: process.cwd(),
         }),
@@ -342,6 +344,7 @@ it.effect.each([
             {},
             yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
+            () => Effect.void,
           ).pipe(Layer.provide(services)),
         ),
       );

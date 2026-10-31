@@ -93,6 +93,17 @@ describe("effort slider", () => {
     ).toBe(0);
   });
 
+  it("keeps prompt-injected levels out of the slider's indices", () => {
+    const descriptor = { ...steps, promptInjectedValues: ["ultrathink"] };
+    expect(resolveEffortStepIndex(descriptor, "ultrathink")).toBe(1);
+    expect(resolveEffortStepIndex(descriptor, "high")).toBe(2);
+    const middleInjected = {
+      ...steps,
+      promptInjectedValues: ["medium"],
+    };
+    expect(resolveEffortStepIndex(middleInjected, "high")).toBe(1);
+  });
+
   it("spreads dots and thumb stops edge to edge", () => {
     expect([0, 1, 2, 3].map((index) => effortStepFraction(index, 4))).toEqual([0, 1 / 3, 2 / 3, 1]);
     expect(effortStepFraction(0, 1)).toBe(0);

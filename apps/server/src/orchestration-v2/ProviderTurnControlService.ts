@@ -32,6 +32,8 @@ export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnCon
     providerTurnId: ProviderTurnId,
     turnCompleted: Schema.optional(Schema.Boolean),
     reason: Schema.optional(Schema.Literal("tracking-unavailable")),
+    /** The provider never confirmed the stop; Force stop is the way out. */
+    unresponsive: Schema.optional(Schema.Boolean),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -238,15 +240,29 @@ export const layer: Layer.Layer<
             });
           }
           // Settled turns still reach adapters, which alone know whether background work remains.
-          yield* session.value.interruptTurn({
-            providerThread: loaded.providerThread,
-            providerTurnId: loaded.providerTurn.id,
-            requestRuntimeRestart: true,
-          });
+          yield* session.value
+            .interruptTurn({
+              providerThread: loaded.providerThread,
+              providerTurnId: loaded.providerTurn.id,
+              requestRuntimeRestart: true,
+            })
+            .pipe(
+              Effect.catchTags({
+                ProviderAdapterInterruptTimeoutError: (cause) =>
+                  Effect.fail(
+                    new ProviderTurnControlError({
+                      threadId: input.threadId,
+                      operation: "interrupt",
+                      providerTurnId: input.providerTurnId,
+                      unresponsive: true,
+                      cause,
+                    }),
+                  ),
+              }),
+            );
           // Cloud acknowledgement requests cancellation; its observer owns terminal settlement.
           if (loaded.providerThread.cloudTask !== undefined) return;
-          // The wait is real time: ingestion runs on other fibers and never
-          // advances a test clock, so a test clock would hold Stop forever.
+          // Use real time; ingestion fibers do not advance TestClock and would leave Stop blocked.
           yield* Effect.gen(function* () {
             const deadline = (yield* Clock.currentTimeMillis) + 2_000;
             while (

@@ -550,7 +550,8 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
       {item.type === "checkpoint" ? (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-muted-foreground">
-            {support.checkpoint?.status ?? item.status} · {item.files.length} files
+            {support.checkpoint?.status ?? item.status} ·{" "}
+            {(item.filesTotal?.count ?? item.files.length).toLocaleString()} files
           </span>
           {props.onRollbackCheckpoint && support.checkpoint?.status === "ready" ? (
             <Button

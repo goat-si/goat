@@ -356,6 +356,29 @@ const windowsWithBounds = {
   ],
 };
 
+it.live("element handles survive a page of the same read", () => {
+  const { host, sent } = fixture({
+    list_windows: windowsWithBounds,
+    get_window_state: activityMonitor(500),
+    click: { effect: "unverifiable" },
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+       const first = await app.observe(); const held = first.ref(0);
+       const after = Number(/after:(\\d+)/.exec(first.omitted.find((o) => o.kind === 'budget').detail)[1]);
+       const page = await app.observe({after}); await app.click(held);
+       const index = Number(/\\[(\\d+)\\]/.exec(page.text)[1]); await app.click(page.ref(index)); return index;`,
+    );
+    expect(result.status).toBe("completed");
+    expect(
+      sent
+        .filter((entry) => entry.tool === "click")
+        .map((entry) => (entry.args as { element_token?: string }).element_token),
+    ).toEqual(["s1:0", `s1:${result.value}`]);
+  }).pipe(Effect.provide(cellService(host)));
+});
+
 it.live("a page's elements join the latest observation, so their numbers and names resolve", () => {
   const { host, sent } = fixture({
     list_windows: windowsWithBounds,

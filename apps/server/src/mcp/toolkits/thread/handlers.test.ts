@@ -1,6 +1,7 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import { McpSchema, McpServer } from "effect/ai";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -33,7 +34,12 @@ const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("mcp-thread-environment"),
   requestNamespace: "client:session-1",
   thread: undefined,
-  client: { sessionId: "session-1", label: "Claude Code", access: "full-access" },
+  client: {
+    sessionId: "session-1",
+    label: "Claude Code",
+    access: "full-access",
+    webOrigin: "https://box.example.ts.net",
+  },
   issuedAt: 0,
   capabilities: new Set(["orchestration"]),
 };
@@ -55,6 +61,7 @@ const client = McpSchema.McpServerClient.of({
 const task = (id: string, threadId: string | null, lastRunStatus: "succeeded" | "failed") =>
   ({
     id,
+    title: "Nightly review",
     threadId,
     lastRunStatus,
     runCount: 1,
@@ -72,6 +79,81 @@ const task = (id: string, threadId: string | null, lastRunStatus: "succeeded" | 
     },
   }) as never;
 
+const layerThreadTools = McpHttpServer.layerThreadToolkit.pipe(
+  Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
+  Layer.provide(layerNoFleetSync),
+  Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
+  Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(ServerSettings.layerTest()),
+  Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
+  Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
+  Layer.provide(
+    Layer.mock(LaunchWatchService.LaunchWatchService)({
+      find: () => Effect.succeed(null),
+    }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
+  ),
+  Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provide(NodeCrypto.layer),
+  Layer.provide(
+    Layer.mock(ThreadSearch.ThreadSearch)({
+      matchThreads: () =>
+        Effect.succeed([
+          {
+            threadId: ThreadId.make("searched-thread"),
+            projectId: ProjectId.make("project-search"),
+            projectTitle: "Search",
+            title: "Fix flaky test",
+            source: "title" as const,
+            snippet: "Fix flaky test",
+            messageCreatedAt: null,
+          },
+        ]),
+    }),
+  ),
+  Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
+  Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
+  Layer.provide(
+    Layer.mock(ThreadManagement.ThreadManagementService)({
+      listProjectThreads: () =>
+        Effect.succeed([
+          {
+            id: ThreadId.make("searched-thread"),
+            title: "Fix flaky test",
+            status: "idle",
+            updatedAt: DateTime.makeUnsafe("2026-10-15T00:00:00.000Z"),
+            archivedAt: null,
+          } as never,
+        ]),
+    }),
+  ),
+  Layer.provide(
+    Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ connectedHosts: Effect.succeed([]) }),
+  ),
+  Layer.provide(
+    Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+      list: () =>
+        Effect.succeed({
+          tasks: [
+            task("task-unbound", null, "succeeded"),
+            task("task-bound", "bound-thread", "failed"),
+          ],
+        }),
+      // The bound task's dispatch failed; the unbound one launched a fresh thread.
+      runNow: (input) =>
+        Effect.succeed(
+          input.id === "task-unbound"
+            ? {
+                task: task(input.id, null, "succeeded"),
+                threadId: "launched-thread" as never,
+              }
+            : { task: task(input.id, "bound-thread", "failed"), threadId: null },
+        ),
+    }),
+  ),
+  Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
+  Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
+);
+
 it.effect("goat_schedule_run reports the thread the run dispatched to, not the binding", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -88,6 +170,8 @@ it.effect("goat_schedule_run reports the thread the run dispatched to, not the b
       lastRun: { firingId: "firing", runId: "exact-run", status: "queued" },
       taskId: "task-unbound",
       threadId: "launched-thread",
+      // regression: B11-R1-01 an outside client got no thread link it could open
+      link: "[Nightly review](https://box.example.ts.net/mcp-thread-environment/launched-thread)",
       lastRunStatus: "succeeded",
     });
     const failed = yield* run("task-bound");
@@ -96,56 +180,29 @@ it.effect("goat_schedule_run reports the thread the run dispatched to, not the b
       threadId: null,
       lastRunStatus: "failed",
     });
-  }).pipe(
-    Effect.provide(
-      McpHttpServer.layerThreadToolkit.pipe(
-        Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
-        Layer.provide(layerNoFleetSync),
-        Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
-        Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
-        Layer.provide(ServerSettings.layerTest()),
-        Layer.provide(Layer.mock(ThreadResultService.ThreadResultService)({})),
-        Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
-        Layer.provide(
-          Layer.mock(LaunchWatchService.LaunchWatchService)({
-            find: () => Effect.succeed(null),
-          }).pipe(Layer.provideMerge(Layer.mock(ThreadReplicaService.ThreadReplicaService)({}))),
-        ),
-        Layer.provideMerge(McpServer.McpServer.layer),
-        Layer.provide(NodeCrypto.layer),
-        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
-        Layer.provide(Layer.mock(ProviderRegistry.ProviderRegistry)({})),
-        Layer.provide(Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({})),
-        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
-        Layer.provide(
-          Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({ connectedHosts: Effect.succeed([]) }),
-        ),
-        Layer.provide(
-          Layer.mock(ScheduledTaskService.ScheduledTaskService)({
-            list: () =>
-              Effect.succeed({
-                tasks: [
-                  task("task-unbound", null, "succeeded"),
-                  task("task-bound", "bound-thread", "failed"),
-                ],
-              }),
-            // The bound task's dispatch failed; the unbound one launched a fresh thread.
-            runNow: (input) =>
-              Effect.succeed(
-                input.id === "task-unbound"
-                  ? {
-                      task: task(input.id, null, "succeeded"),
-                      threadId: "launched-thread" as never,
-                    }
-                  : { task: task(input.id, "bound-thread", "failed"), threadId: null },
-              ),
-          }),
-        ),
-        Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
-        Layer.provide(Layer.mock(SecretRequests.SecretRequests)({})),
-      ),
-    ),
-  ),
+    expect(failed.structuredContent).not.toHaveProperty("link");
+  }).pipe(Effect.provide(layerThreadTools)),
+);
+
+// regression: B11-R1-01 search matches on this host had no link an outside client could open
+it.effect("goat_thread_search links this host's matches on the origin the client reached", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const found = yield* server
+      .callTool({ name: "goat_thread_search", arguments: { query: "flaky" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+    expect(found.structuredContent).toMatchObject({
+      matches: [
+        {
+          threadId: "searched-thread",
+          link: "[Fix flaky test](https://box.example.ts.net/mcp-thread-environment/searched-thread)",
+        },
+      ],
+    });
+  }).pipe(Effect.provide(layerThreadTools)),
 );
 
 it.effect.each(["run_mismatch", "storage"] as const)(

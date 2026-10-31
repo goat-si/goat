@@ -19,8 +19,9 @@ does the same. Change these shortcuts in **Settings → Keybindings** under
 or **Composer: Send and Start New Thread**. These bindings take priority over the
 send shortcut. Click the send button to use the configured follow-up behavior.
 
-When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
-steer. While the composer uses `mod+Shift+Enter` for the opposite action, first click
+When a thread has queued messages, `mod+Shift+Enter` sends the first one as a steer
+while a turn is running, or as a new turn when the thread is stopped. While the
+composer uses `mod+Shift+Enter` for the opposite action, first click
 elsewhere in the thread, outside the composer and any terminal. Change it under
 **Queue: Send First Queued Message** in Keybindings.
 
@@ -171,7 +172,8 @@ Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
 `previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `notesPageOpen`,
 `composerFocus`, `draftThreadRoute`, `turnRunning`, `editableFocus`, `fileViewFocus`,
 `fileTreeFocus`, `isWeb`, and `isDesktop`.
-`draftThreadRoute` is true in a new thread before you send its first message.
+`draftThreadRoute` is true in a new thread, including a restored draft, before you
+send its first message.
 `editableFocus` is true while a text field, the composer, or another editor has
 the keyboard. `fileViewFocus` is true while the Files panel or an open file has
 the keyboard, and `fileTreeFocus` while the Files panel has it. `isWeb` is true in a browser tab. `isDesktop` is true in the

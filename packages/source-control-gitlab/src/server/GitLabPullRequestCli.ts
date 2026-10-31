@@ -12,6 +12,7 @@ import { resolvePullRequestAuthorFilter, VcsProcessExitError } from "@goat/contr
 import type {
   PullRequestAction,
   PullRequestActor,
+  PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
   PullRequestInvolvement,
@@ -41,21 +42,29 @@ import {
   decodeMergeRequestDiffsJson,
   decodeMergeRequestChangesJson,
   decodeMergeRequestListJson,
+  decodeMergeRequestFileStatsJson,
+  decodeMergeRequestStatsJson,
   decodeNotesJson,
   decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
   decodeProjectLabelsJson,
   decodeProjectUsersJson,
   decodeRepositoryBlobsJson,
+  decodeTriggerJobChecksJson,
   decodeViewerJson,
   gitLabAwardName,
+  MERGE_REQUEST_FILE_STATS_GRAPHQL_QUERY,
+  MERGE_REQUEST_STATS_GRAPHQL_QUERY,
   REPOSITORY_BLOBS_GRAPHQL_QUERY,
   type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
   type GitLabProjectUsers,
 } from "./gitLabMergeRequestJson.ts";
-import type { ProviderListCursor } from "@goat/source-control-core/server/PullRequestProvider";
+import type {
+  ProviderFileStats,
+  ProviderListCursor,
+} from "@goat/source-control-core/server/PullRequestProvider";
 
 export class GitLabMergeRequestReadError extends Schema.TaggedError<GitLabMergeRequestReadError>()(
   "GitLabMergeRequestReadError",
@@ -206,10 +215,12 @@ export class GitLabPullRequestCli extends Context.Service<
   {
     readonly getViewerUsername: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
     }) => Effect.Effect<string, GitLabPullRequestCliError>;
 
     readonly listMergeRequests: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
@@ -222,12 +233,41 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly getMergeRequestDetail: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
+      /** `false` skips the trigger job read; the permission check before every write does. */
+      readonly downstreamChecks?: boolean;
     }) => Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError>;
+
+    /** Line counts for the given merge requests; one with no answer is left out. */
+    readonly listMergeRequestStats: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly changeRequests: ReadonlyArray<{
+        readonly repository: string;
+        readonly number: number;
+      }>;
+    }) => Effect.Effect<
+      ReadonlyArray<{
+        readonly repository: string;
+        readonly number: number;
+        readonly additions: number;
+        readonly deletions: number;
+      }>,
+      GitLabPullRequestCliError
+    >;
+
+    readonly getMergeRequestFileStats: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<ProviderFileStats, GitLabPullRequestCliError>;
 
     readonly listNotes: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
@@ -237,12 +277,14 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly listCommits: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<ReadonlyArray<PullRequestCommit>, GitLabPullRequestCliError>;
 
     readonly getMergeRequestDiff: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly cursor?: string | undefined;
@@ -251,6 +293,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly getMergeRequestDiffFileContents: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly commit?: string | undefined;
@@ -264,11 +307,13 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly getProjectMergeCapabilities: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
     }) => Effect.Effect<PullRequestMergeCapabilities, GitLabPullRequestCliError>;
 
     readonly getFileRevisions: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly paths: ReadonlyArray<string>;
@@ -276,12 +321,14 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly listReviewerCandidates: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<PullRequestReviewerCandidateList, GitLabPullRequestCliError>;
 
     readonly listProjectLabels: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly search?: string | undefined;
     }) => Effect.Effect<
@@ -291,6 +338,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly listProjectUsers: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly search?: string | undefined;
     }) => Effect.Effect<
@@ -300,6 +348,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly setReviewerRequest: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly reviewers: ReadonlyArray<{ readonly id: string }>;
@@ -308,6 +357,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly runMergeRequestAction: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly action: PullRequestAction;
@@ -317,6 +367,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly updateMergeRequest: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly title?: string | undefined;
@@ -325,6 +376,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly commentOnMergeRequest: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly body: string;
@@ -332,6 +384,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly updateNote: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly noteId: string;
@@ -340,6 +393,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly listDiscussions: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
@@ -349,6 +403,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly submitReview: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly verdict: PullRequestReviewVerdict;
@@ -358,6 +413,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly replyToDiscussion: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly discussionId: string;
@@ -366,6 +422,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly setDiscussionResolution: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly discussionId: string;
@@ -374,6 +431,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly listReactions: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
@@ -386,6 +444,7 @@ export class GitLabPullRequestCli extends Context.Service<
 
     readonly setReaction: (input: {
       readonly cwd: string;
+      readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
       readonly noteId?: string | undefined;
@@ -530,6 +589,7 @@ export const make = Effect.gen(function* () {
 
   const api = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly path: string;
     readonly method?: string;
     readonly stdin?: string;
@@ -538,6 +598,7 @@ export const make = Effect.gen(function* () {
   }) =>
     gitlab.execute({
       cwd: input.cwd,
+      host: input.host,
       args: [
         "api",
         input.path,
@@ -554,6 +615,7 @@ export const make = Effect.gen(function* () {
 
   const listPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly state: PullRequestListState;
     readonly involvement: PullRequestInvolvement;
@@ -575,6 +637,7 @@ export const make = Effect.gen(function* () {
     const lastPage = Math.floor((delivered + input.limit) / perPage) + 1;
     return api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/merge_requests?${query([
         ["state", stateParam(input.state)],
         ...involvementParams(input),
@@ -656,6 +719,7 @@ export const make = Effect.gen(function* () {
 
   const diffPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
@@ -663,6 +727,7 @@ export const make = Effect.gen(function* () {
   }): Effect.Effect<GitLabMergeRequestDiffSlice, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/${
         input.commit === undefined
           ? `merge_requests/${input.number}/diffs`
@@ -688,6 +753,7 @@ export const make = Effect.gen(function* () {
           // GitLab before 15.7 has no /diffs endpoint. /changes returns one complete slice.
           return api({
             cwd: input.cwd,
+            host: input.host,
             path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/changes?access_raw_diffs=true`,
             maxOutputBytes: DIFF_MAX_OUTPUT_BYTES,
             timeoutMs: DIFF_TIMEOUT_MS,
@@ -736,6 +802,7 @@ export const make = Effect.gen(function* () {
 
   const notesPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
@@ -746,6 +813,7 @@ export const make = Effect.gen(function* () {
   > =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes?${query(
         [
           ["per_page", String(MAX_PAGE_SIZE)],
@@ -779,6 +847,7 @@ export const make = Effect.gen(function* () {
 
   const discussionsPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
@@ -789,6 +858,7 @@ export const make = Effect.gen(function* () {
   > =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions?${query(
         [
           ["per_page", String(MAX_PAGE_SIZE)],
@@ -821,11 +891,13 @@ export const make = Effect.gen(function* () {
 
   const getDiffRefs = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
   }): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
     }).pipe(
       Effect.flatMap((result): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> => {
@@ -854,12 +926,14 @@ export const make = Effect.gen(function* () {
 
   const getCommitDiffRefs = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly commit: string;
     readonly allowRoot: boolean;
   }): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/repository/commits/${input.commit}`,
     }).pipe(
       Effect.flatMap((result): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> => {
@@ -894,11 +968,13 @@ export const make = Effect.gen(function* () {
 
   const mergeRequestDetail = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
   }): Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}?${query([
         ["include_diverged_commits_count", "true"],
       ])}`,
@@ -918,13 +994,38 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const triggerJobChecks = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly pipeline: { readonly id: number; readonly projectId: number };
+  }): Effect.Effect<ReadonlyArray<PullRequestCheck>> =>
+    api({
+      cwd: input.cwd,
+      host: input.host,
+      // `bridges` rather than `trigger_jobs`: GitLab 19.2 deprecates it but still serves it, and
+      // older self-managed installs know no other name.
+      path: `projects/${input.pipeline.projectId}/pipelines/${input.pipeline.id}/bridges?${query([
+        ["per_page", String(MAX_PAGE_SIZE)],
+      ])}`,
+    }).pipe(
+      Effect.map((result) => {
+        const decoded = decodeTriggerJobChecksJson(result.stdout.trim());
+        return Result.isSuccess(decoded) && decoded.success.rawCount < MAX_PAGE_SIZE
+          ? decoded.success.checks
+          : [];
+      }),
+      Effect.orElseSucceed((): ReadonlyArray<PullRequestCheck> => []),
+    );
+
   const projectUsers = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly search?: string | undefined;
   }): Effect.Effect<GitLabProjectUsers, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: `projects/${projectPath(input.repository)}/users?${query([
         ["per_page", String(MAX_PAGE_SIZE)],
         ...searchParams(input.search),
@@ -958,6 +1059,7 @@ export const make = Effect.gen(function* () {
 
   const awardsPage = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly cursor: string | null;
@@ -975,6 +1077,7 @@ export const make = Effect.gen(function* () {
   > =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: "graphql",
       method: "POST",
       stdin: JSON.stringify({
@@ -1015,17 +1118,114 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /** The stats connection hands back one page, so a repository's rows are asked for 100 at a time. */
+  const STAT_IIDS_PER_REQUEST = 100;
+
+  const graphqlRead = <A>(input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly operation: string;
+    readonly query: string;
+    readonly variables: Record<string, unknown>;
+    readonly decode: (raw: string) => Result.Result<A, unknown>;
+  }) =>
+    api({
+      cwd: input.cwd,
+      host: input.host,
+      path: "graphql",
+      method: "POST",
+      stdin: JSON.stringify({ query: input.query, variables: input.variables }),
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = input.decode(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? Effect.succeed(decoded.success)
+          : Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: input.operation,
+                cause: decoded.failure,
+              }),
+            );
+      }),
+    );
+
+  const mergeRequestStats = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+    readonly numbers: ReadonlyArray<number>;
+  }) =>
+    graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "listMergeRequestStats",
+      query: MERGE_REQUEST_STATS_GRAPHQL_QUERY,
+      variables: { fullPath: input.repository, iids: input.numbers.map(String) },
+      decode: decodeMergeRequestStatsJson,
+    });
+
+  const STAT_REQUEST_CONCURRENCY = 4;
+
+  const listMergeRequestStats: GitLabPullRequestCli["Service"]["listMergeRequestStats"] = (
+    input,
+  ) => {
+    const byRepository = new Map<string, Set<number>>();
+    for (const { repository, number } of input.changeRequests) {
+      const numbers = byRepository.get(repository) ?? new Set<number>();
+      numbers.add(number);
+      byRepository.set(repository, numbers);
+    }
+    const reads: Array<{ readonly repository: string; readonly numbers: ReadonlyArray<number> }> =
+      [];
+    for (const [repository, numberSet] of byRepository) {
+      const numbers = [...numberSet];
+      for (let start = 0; start < numbers.length; start += STAT_IIDS_PER_REQUEST) {
+        reads.push({ repository, numbers: numbers.slice(start, start + STAT_IIDS_PER_REQUEST) });
+      }
+    }
+    return Effect.forEach(
+      reads,
+      (read) =>
+        mergeRequestStats({ cwd: input.cwd, host: input.host, ...read }).pipe(
+          Effect.map((stats) =>
+            read.numbers.flatMap((number) => {
+              const stat = stats.get(number);
+              return stat === undefined ? [] : [{ repository: read.repository, number, ...stat }];
+            }),
+          ),
+          // One read GitLab could not answer costs its own rows their counts, not every other
+          // read's on the same page. An unusable CLI or account still reaches the caller.
+          Effect.catchIf(
+            (cause) =>
+              cause._tag !== "GitLabCliUnavailableError" &&
+              cause._tag !== "GitLabCliAuthenticationError" &&
+              cause._tag !== "GitLabCliRateLimitError",
+            (cause) =>
+              Effect.logWarning("GitLab merge request line count read failed", {
+                repository: read.repository,
+                reason: cause._tag,
+              }).pipe(Effect.as([])),
+          ),
+        ),
+      { concurrency: STAT_REQUEST_CONCURRENCY },
+    ).pipe(Effect.map((results) => results.flat()));
+  };
+
   // GitLab charges by path count and returns one connection page; respect both limits.
   const BLOB_PATHS_PER_REQUEST = 100;
 
   const blobsAt = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly ref: string;
     readonly paths: ReadonlyArray<string>;
   }): Effect.Effect<ReadonlyMap<string, string> | null, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
+      host: input.host,
       path: "graphql",
       method: "POST",
       stdin: JSON.stringify({
@@ -1052,6 +1252,7 @@ export const make = Effect.gen(function* () {
 
   const fileRevisions = (input: {
     readonly cwd: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly paths: ReadonlyArray<string>;
@@ -1088,8 +1289,8 @@ export const make = Effect.gen(function* () {
           }),
         );
 
-  const viewerUsername = (input: { readonly cwd: string }) =>
-    api({ cwd: input.cwd, path: "user" }).pipe(
+  const viewerUsername = (input: { readonly cwd: string; readonly host?: string | undefined }) =>
+    api({ cwd: input.cwd, host: input.host, path: "user" }).pipe(
       Effect.flatMap((result): Effect.Effect<string, GitLabPullRequestCliError> => {
         const decoded = decodeViewerJson(result.stdout.trim());
         if (!Result.isSuccess(decoded)) {
@@ -1117,7 +1318,32 @@ export const make = Effect.gen(function* () {
       return listPage({ ...input, page, collected: [], cursorAdvance: 0 });
     }),
 
-    getMergeRequestDetail: mergeRequestDetail,
+    getMergeRequestDetail: Effect.fn("GitLabPullRequestCli.getMergeRequestDetail")(
+      function* (input) {
+        const detail = yield* mergeRequestDetail(input);
+        if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
+        const downstream = yield* triggerJobChecks({
+          ...input,
+          pipeline: detail.headPipeline,
+        });
+        return downstream.length === 0
+          ? detail
+          : { ...detail, checks: [...detail.checks, ...downstream] };
+      },
+    ),
+
+    listMergeRequestStats,
+
+    getMergeRequestFileStats: Effect.fn("GitLabPullRequestCli.getMergeRequestFileStats")((input) =>
+      graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getMergeRequestFileStats",
+        query: MERGE_REQUEST_FILE_STATS_GRAPHQL_QUERY,
+        variables: { fullPath: input.repository, iid: String(input.number) },
+        decode: decodeMergeRequestFileStatsJson,
+      }),
+    ),
 
     listNotes: Effect.fn("GitLabPullRequestCli.listNotes")(function (input) {
       return notesPage({ ...input, page: 1, collected: [] });
@@ -1134,6 +1360,7 @@ export const make = Effect.gen(function* () {
       if (input.reacted) {
         yield* api({
           cwd: input.cwd,
+          host: input.host,
           path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
           method: "POST",
         });
@@ -1141,8 +1368,8 @@ export const make = Effect.gen(function* () {
       }
       // GitLab deletes an award by its id and takes no emoji name there, so the reader's own
       // award of that name is looked up first.
-      const viewer = yield* viewerUsername({ cwd: input.cwd });
-      const listed = yield* api({ cwd: input.cwd, path: subject });
+      const viewer = yield* viewerUsername(input);
+      const listed = yield* api({ cwd: input.cwd, host: input.host, path: subject });
       const own = decodeOwnAwardIdJson(listed.stdout.trim(), {
         content: input.content,
         viewer,
@@ -1158,6 +1385,7 @@ export const make = Effect.gen(function* () {
       if (own.success === null) return;
       yield* api({
         cwd: input.cwd,
+        host: input.host,
         path: `${subject}/${own.success}`,
         method: "DELETE",
       });
@@ -1166,6 +1394,7 @@ export const make = Effect.gen(function* () {
     listCommits: Effect.fn("GitLabPullRequestCli.listCommits")(function (input) {
       return api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/commits?${query(
           [
             ["per_page", String(COMMIT_PAGE_SIZE)],
@@ -1195,6 +1424,7 @@ export const make = Effect.gen(function* () {
       }
       const target = {
         cwd: input.cwd,
+        host: input.host,
         repository: input.repository,
         number: input.number,
         ...(input.commit === undefined ? {} : { commit: input.commit }),
@@ -1218,6 +1448,7 @@ export const make = Effect.gen(function* () {
         ? getDiffRefs(input)
         : getCommitDiffRefs({
             cwd: input.cwd,
+            host: input.host,
             repository: input.repository,
             commit: input.commit,
             allowRoot: input.changeType === "new",
@@ -1226,6 +1457,7 @@ export const make = Effect.gen(function* () {
       const readFile = (revision: string, filePath: string) =>
         api({
           cwd: input.cwd,
+          host: input.host,
           path: `projects/${projectPath(input.repository)}/repository/files/${encodeURIComponent(
             filePath,
           )}/raw?ref=${encodeURIComponent(revision)}`,
@@ -1264,6 +1496,7 @@ export const make = Effect.gen(function* () {
       function (input) {
         return api({
           cwd: input.cwd,
+          host: input.host,
           path: `projects/${projectPath(input.repository)}?license=false`,
         }).pipe(
           Effect.flatMap((result) => {
@@ -1286,6 +1519,7 @@ export const make = Effect.gen(function* () {
     listProjectLabels: Effect.fn("GitLabPullRequestCli.listProjectLabels")(function (input) {
       return api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/labels?${query([
           ["per_page", String(MAX_PAGE_SIZE)],
           ...searchParams(input.search),
@@ -1354,6 +1588,7 @@ export const make = Effect.gen(function* () {
           }
           return api({
             cwd: input.cwd,
+            host: input.host,
             path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
             method: "PUT",
             stdin: JSON.stringify({ reviewer_ids: [...ids] }),
@@ -1380,6 +1615,7 @@ export const make = Effect.gen(function* () {
         if (input.action === "disable-auto-merge") {
           return yield* api({
             cwd: input.cwd,
+            host: input.host,
             path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/cancel_merge_when_pipeline_succeeds`,
             method: "POST",
           }).pipe(Effect.asVoid);
@@ -1387,6 +1623,7 @@ export const make = Effect.gen(function* () {
         const executeMr = (subcommand: string, ...flags: ReadonlyArray<string>) =>
           gitlab.execute({
             cwd: input.cwd,
+            host: input.host,
             args: ["mr", subcommand, String(input.number), "--repo", input.repository, ...flags],
           });
         const [subcommand, ...flags] = actionArgs(input.action, input.mergeMethod);
@@ -1405,6 +1642,7 @@ export const make = Effect.gen(function* () {
     updateMergeRequest: Effect.fn("GitLabPullRequestCli.updateMergeRequest")(function (input) {
       return api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
         method: "PUT",
         // Omitted fields remain unchanged; empty values clear them.
@@ -1419,6 +1657,7 @@ export const make = Effect.gen(function* () {
       function (input) {
         return api({
           cwd: input.cwd,
+          host: input.host,
           path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes`,
           method: "POST",
           // JSON avoids glab's coercion of numeric/boolean comment bodies.
@@ -1430,6 +1669,7 @@ export const make = Effect.gen(function* () {
     updateNote: Effect.fn("GitLabPullRequestCli.updateNote")(function (input) {
       return api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes/${encodeURIComponent(
           input.noteId,
         )}`,
@@ -1456,6 +1696,7 @@ export const make = Effect.gen(function* () {
           (comment) =>
             api({
               cwd: input.cwd,
+              host: input.host,
               path: `${mergeRequest}/discussions`,
               method: "POST",
               stdin: JSON.stringify({
@@ -1480,6 +1721,7 @@ export const make = Effect.gen(function* () {
       if (input.body.trim().length > 0) {
         yield* api({
           cwd: input.cwd,
+          host: input.host,
           path: `${mergeRequest}/notes`,
           method: "POST",
           // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -1487,13 +1729,19 @@ export const make = Effect.gen(function* () {
         });
       }
       if (input.verdict === "approve") {
-        yield* api({ cwd: input.cwd, path: `${mergeRequest}/approve`, method: "POST" });
+        yield* api({
+          cwd: input.cwd,
+          host: input.host,
+          path: `${mergeRequest}/approve`,
+          method: "POST",
+        });
       }
     }),
 
     replyToDiscussion: Effect.fn("GitLabPullRequestCli.replyToDiscussion")(function (input) {
       return api({
         cwd: input.cwd,
+        host: input.host,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions/${encodeURIComponent(
           input.discussionId,
         )}/notes`,
@@ -1506,6 +1754,7 @@ export const make = Effect.gen(function* () {
       function (input) {
         return api({
           cwd: input.cwd,
+          host: input.host,
           path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions/${encodeURIComponent(
             input.discussionId,
           )}`,

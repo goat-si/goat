@@ -165,7 +165,7 @@ it("updates the width probe badge when Priority gains, changes and loses threads
   expect(container.textContent).toBe("GOAT");
 });
 
-it("renders only the activity bell toggle and priority count in the header", async () => {
+it("renders the sidebar toggle, history buttons and activity bell in the desktop header", async () => {
   brandState.realToggles = true;
   publishSidebarPriorityCount(3);
   await renderBrand(false);
@@ -173,7 +173,12 @@ it("renders only the activity bell toggle and priority count in the header", asy
   const buttons = Array.from(container.querySelectorAll("button")).map((button) =>
     button.getAttribute("aria-label"),
   );
-  expect(buttons).toEqual(["Toggle main sidebar", "Turn off activity view, 3 in Priority"]);
+  expect(buttons).toEqual([
+    "Toggle main sidebar",
+    "Go back",
+    "Go forward",
+    "Turn off activity view, 3 in Priority",
+  ]);
   expect(container.querySelector('[aria-label*="GOAT Bot"]')).toBeNull();
   expect(container.querySelector('[aria-label="Search threads"]')).toBeNull();
 });

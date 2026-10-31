@@ -21,21 +21,32 @@ const MAX_LOCATE_ATTEMPTS = 40;
 /** Skip ahead of fast writers; only the tail is displayed. */
 const MAX_READ_BYTES = 256 * 1024;
 
-/**
- * Claude Code's per-user temp root: `claude-<uid>` under `CLAUDE_CODE_TMPDIR` or `/tmp`
- * where there is a uid. Windows has none, so Claude Code (2.1.276) uses `claude` under
- * `CLAUDE_CODE_TMPDIR` or `os.tmpdir()` in its own process, which reads TEMP, then TMP,
- * from the environment GOAT starts it with.
- */
+// Claude's per-user temp root follows the process environment and launch cwd.
+// Windows has no uid and uses `claude` under CLAUDE_CODE_TMPDIR or TEMP/TMP.
 export function claudeTaskOutputRoot(
   environment: Readonly<Record<string, string | undefined>> | undefined,
   path: Path.Path,
-  host: { readonly uid: number | undefined },
+  host: {
+    readonly uid: number | undefined;
+    readonly cwd?: string | null;
+    readonly platform?: NodeJS.Platform;
+  },
 ): string | undefined {
   const override = environment?.CLAUDE_CODE_TMPDIR?.trim();
-  if (host.uid !== undefined) return path.join(override || "/tmp", `claude-${host.uid}`);
+  if (host.uid !== undefined) {
+    // Claude's macOS build ignores the launchd TMPDIR; Linux follows its process environment.
+    const fallback =
+      host.platform === "darwin"
+        ? "/tmp"
+        : environment?.TMPDIR || environment?.TMP || environment?.TEMP || "/tmp";
+    return path.resolve(host.cwd ?? ".", override || fallback, `claude-${host.uid}`);
+  }
   const base = override || environment?.TEMP?.trim() || environment?.TMP?.trim();
-  return base ? path.join(base, "claude") : undefined;
+  return base
+    ? host.cwd
+      ? path.resolve(host.cwd, base, "claude")
+      : path.join(base, "claude")
+    : undefined;
 }
 
 const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {

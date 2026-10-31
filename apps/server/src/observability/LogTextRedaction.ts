@@ -1,3 +1,5 @@
+import { redactUrlCredentials } from "@goat/shared/urlCredentialRedaction";
+
 import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
 
 /**
@@ -432,7 +434,7 @@ export function redactLogText(text: string): string {
       typeof replacement === "string"
         ? current.replace(pattern, replacement)
         : current.replace(pattern, replacement),
-    maskCredentialFields(redactGoatCredentials(maskPrivateKeys(scanned))),
+    maskCredentialFields(redactGoatCredentials(maskPrivateKeys(redactUrlCredentials(scanned)))),
   );
   const assigned = maskAssignments(redacted);
   return assigned.length <= MAX_STRING && scanned === text

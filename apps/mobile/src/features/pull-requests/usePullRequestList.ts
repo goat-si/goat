@@ -83,7 +83,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
         activeScope.current !== scopeKey ||
         requests.current.page ||
         requests.current.refresh ||
-        (!retry && requests.current.error)
+        (!retry && requests.current.failedKind === "page")
       )
         return;
       const continuations = targets.flatMap((target) => {
@@ -177,7 +177,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       const error = requestErrors(responses);
       requests.current.error = error;
       requests.current.failedKind = error === null ? null : "refresh";
-      setLoading({ key: scopeKey, page: false, refresh: false, error });
+      setLoading({ key: scopeKey, page: false, refresh: false, error: null });
     }
   };
 

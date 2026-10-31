@@ -314,7 +314,11 @@ export function createThreadOutboxDelivery(): {
     }
     acknowledgedExistingThreadMessageIds.add(persistedMessage.messageId);
     const delivered =
-      (await completeQueuedMessageDelivery(persistedMessage, deliveryRevision)) === "removed";
+      (await completeQueuedMessageDelivery(
+        persistedMessage,
+        deliveryRevision,
+        AsyncResult.isSuccess(deliveryResult) ? deliveryResult.value.sequence : undefined,
+      )) === "removed";
     if (delivered) {
       acknowledgedExistingThreadMessageIds.delete(persistedMessage.messageId);
     }
@@ -474,7 +478,11 @@ export function createThreadOutboxDelivery(): {
       return restoreQueuedMessage(persistedMessage, failure.message);
     }
     recordPendingThreadCreationOutcome({ kind: "delivered", message: persistedMessage });
-    const outcome = await completeQueuedMessageDelivery(persistedMessage, deliveryRevision);
+    const outcome = await completeQueuedMessageDelivery(
+      persistedMessage,
+      deliveryRevision,
+      AsyncResult.isSuccess(deliveryResult) ? deliveryResult.value.sequence : undefined,
+    );
     if (outcome === "edited") {
       if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
         return true;

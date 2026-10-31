@@ -1,3 +1,4 @@
+import { HistoryNavigationButtons } from "./HistoryNavigationButtons";
 import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "~/components/solar";
 import type { ReactNode } from "react";
 import { memo } from "react";
@@ -82,7 +83,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         />
       </div>
       <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
-        <SidebarBrand />
+        <div className="flex shrink-0 items-center gap-1">
+          <SidebarBrand />
+          {isElectron ? <HistoryNavigationButtons /> : null}
+        </div>
         {showChannel ? (
           <div className="ml-1 flex h-7 items-center">
             <BrandChannelPill channel={channel} />
@@ -96,8 +100,10 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 });
 
 export function SidebarBrandWidthProbe({
+  isElectron = false,
   onWidthChange,
 }: {
+  isElectron?: boolean;
   onWidthChange: (width: number) => void;
 }) {
   const priorityCount = useSidebarPriorityCount();
@@ -117,6 +123,9 @@ export function SidebarBrandWidthProbe({
     >
       <div className="ml-[calc(var(--workspace-titlebar-content-left)-0.375rem)] flex px-1.5">
         <SidebarBrandContents wordmark />
+        {isElectron ? (
+          <div className="ml-1 w-[calc(2*var(--workspace-titlebar-control-size))]" />
+        ) : null}
       </div>
       <span className="flex items-center gap-1">
         <span className="size-8 sm:size-7" />

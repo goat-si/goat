@@ -262,6 +262,8 @@ export default function FileBrowserPanel({
           ? selectedPaths.map((path) => path.replace(/\/$/, ""))
           : [relativePath];
       const plural = copyRows.length > 1 ? "s" : "";
+      // The tree's outside-click handler would dismiss the app menu before click.
+      context.close({ restoreFocus: !pointerIsFresh });
       // Native menus have no tooltips, so the label names the root relative paths start at.
       const workspaceName = workspaceRoot.split(/[\\/]/).findLast(Boolean) ?? workspaceRoot;
       const hasRelativePath = hasRelativeCopyPaths(copyRows.map(panelPath), workspaceRoot);
@@ -347,7 +349,6 @@ export default function FileBrowserPanel({
           }
         }
       }).then((result) => {
-        context.close();
         if (!AsyncResult.isSuccess(result)) throw Cause.squash(result.cause);
       });
     },

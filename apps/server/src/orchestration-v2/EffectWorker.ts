@@ -194,35 +194,50 @@ export const layerExecutor: Layer.Layer<
                         cause,
                       }),
                 ),
-                Effect.catch((cause) =>
-                  cause.reason !== "tracking-unavailable" &&
-                  request.subagent === undefined &&
-                  isNonRetryableProviderTurnControlFailure(
-                    request.type,
-                    Cause.pretty(Cause.fail(cause)),
-                  )
-                    ? Effect.void
-                    : Effect.fail(cause),
+                Effect.map((outcome) => ({ unresponsive: false, outcome }) as const),
+                // Settling here would end the run while the agent may still be running; the
+                // user decides with Force stop instead.
+                Effect.catchIf(
+                  (cause) => request.subagent === undefined && cause.unresponsive === true,
+                  () => Effect.succeed({ unresponsive: true, outcome: undefined } as const),
                 ),
-                Effect.andThen((outcome) =>
-                  request.subagent !== undefined && outcome === undefined
-                    ? Effect.void
-                    : threads.dispatch({
-                        type: "thread.background-work.settle",
-                        commandId: CommandId.make(`${effect.id}:background-work-settled`),
-                        ...(request.subagent === undefined || outcome === undefined
-                          ? {}
-                          : {
-                              subagent: {
-                                id: request.subagent.id,
-                                stoppedAt: DateTime.makeUnsafe(effect.createdAt),
-                                outcome,
-                              },
-                            }),
+                Effect.catchIf(
+                  (cause) =>
+                    cause.reason !== "tracking-unavailable" &&
+                    request.subagent === undefined &&
+                    isNonRetryableProviderTurnControlFailure(
+                      request.type,
+                      Cause.pretty(Cause.fail(cause)),
+                    ),
+                  () => Effect.succeed({ unresponsive: false, outcome: undefined } as const),
+                ),
+                Effect.andThen(({ unresponsive, outcome }) =>
+                  unresponsive
+                    ? threads.dispatch({
+                        type: "thread.interrupt.unresponsive",
+                        commandId: CommandId.make(`${effect.id}:unresponsive`),
                         threadId: effect.threadId,
                         providerThreadId: request.providerThreadId,
                         providerTurnId: request.providerTurnId,
-                      }),
+                      })
+                    : request.subagent !== undefined && outcome === undefined
+                      ? Effect.void
+                      : threads.dispatch({
+                          type: "thread.background-work.settle",
+                          commandId: CommandId.make(`${effect.id}:background-work-settled`),
+                          ...(request.subagent === undefined || outcome === undefined
+                            ? {}
+                            : {
+                                subagent: {
+                                  id: request.subagent.id,
+                                  stoppedAt: DateTime.makeUnsafe(effect.createdAt),
+                                  outcome,
+                                },
+                              }),
+                          threadId: effect.threadId,
+                          providerThreadId: request.providerThreadId,
+                          providerTurnId: request.providerTurnId,
+                        }),
                 ),
                 Effect.mapError(
                   (cause) =>

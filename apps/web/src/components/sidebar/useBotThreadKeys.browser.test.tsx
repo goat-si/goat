@@ -72,6 +72,7 @@ function SidebarRows() {
   const { launchFold } = partitionSidebarThreads({
     threads: THREADS,
     scopedProjectKeys: null,
+    connectedEnvironmentIds: [],
     serverConfigs: new Map(),
     optimisticDrop: null,
     workingShelfEnabled: false,

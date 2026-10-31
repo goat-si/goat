@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { batchAppScope } from "./ComputerUseBatchScope.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
@@ -32,8 +33,9 @@ export const fixture = Effect.fn("reservations.fixture")(function* () {
     connectionId = "driver:1",
     interruptions = 0,
     foregroundGrantId?: import("@goat/contracts").TurnItemId,
-  ) =>
-    leases.callReservation(owner, {
+  ) => {
+    const batch = batchAppScope(name, args);
+    return leases.callReservation(owner, {
       action: "reserve",
       controlId: owner === a ? first.controlId : second.controlId,
       connectionId,
@@ -42,8 +44,10 @@ export const fixture = Effect.fn("reservations.fixture")(function* () {
       idleEpoch: 0,
       name,
       args,
+      ...(batch === undefined ? {} : { safetyApps: batch.apps }),
       ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
     });
+  };
   const release = (
     owner: typeof a,
     reservationId: string,

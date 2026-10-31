@@ -224,6 +224,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         RuntimeLayer.layerSessionReceiptHold.pipe(
+          Layer.provide(Fixture.layerNoProviderInstances),
           Layer.provideMerge(Fixture.layer),
           Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "receipt-runtime-" })),
           Layer.provide(NodeServices.layer),
