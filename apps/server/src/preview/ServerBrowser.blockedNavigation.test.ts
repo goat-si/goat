@@ -472,12 +472,12 @@ it.effect("a slow blocked popup fences active context tabs before the response a
       yield* viewer.input({ type: "takeControl" });
       const observed = yield* Deferred.make<void>();
       const cut = SessionControl.prototype.cutBlockedUrl;
-      const spy = vi
-        .spyOn(SessionControl.prototype, "cutBlockedUrl")
-        .mockImplementation(function () {
-          cut.call(this);
-          Deferred.doneUnsafe(observed, Effect.void);
-        });
+      const spy = vi.spyOn(SessionControl.prototype, "cutBlockedUrl").mockImplementation(function (
+        this: SessionControl,
+      ) {
+        cut.call(this);
+        Deferred.doneUnsafe(observed, Effect.void);
+      });
       yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
       const opening = yield* Effect.promise(() =>
         f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),

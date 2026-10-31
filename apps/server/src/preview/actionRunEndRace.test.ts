@@ -147,15 +147,8 @@ it.effect("a blocked visit cuts a waiting observer from an earlier concurrent ru
         desktop: null,
         viewers: new Set<never>(),
       };
-      const gate = tabActionGate(
-        tab,
-        request(threadId),
-        fence,
-        Infinity,
-        new AbortController().signal,
-        undefined,
-        true,
-      );
+      const signal = (yield* Effect.sync(() => new AbortController())).signal;
+      const gate = tabActionGate(tab, request(threadId), fence, Infinity, signal, undefined, true);
       const release = yield* Deferred.make<void>();
       const lock = Promise.withResolvers<void>();
       yield* Effect.forkChild(
