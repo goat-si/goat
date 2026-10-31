@@ -71,7 +71,15 @@ export function makeBrowserHistoryRecordAction(
       const { finishRetention, ...entry } = snapshot;
       const record = Effect.fn("ComputerUseHistory.recordBrowserOutcome")(function* () {
         const evidence =
-          finishRetention === undefined ? false : yield* Effect.tryPromise(finishRetention);
+          finishRetention === undefined
+            ? false
+            : yield* Effect.tryPromise(finishRetention).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Computer use history evidence failed", { cause }).pipe(
+                    Effect.as(false),
+                  ),
+                ),
+              );
         const keep = entry.verdict === "sent" && evidence;
         yield* recordBrowserAction(history, {
           ...entry,

@@ -155,3 +155,47 @@ it.effect("returns a completed navigation when its destination snapshot is unava
     }),
   ).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
+
+it.effect("records a redacted entry when retention evidence fails", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const history = yield* makeComputerUseHistory;
+      const owner = yield* Effect.scope;
+      const now = yield* Clock.currentTimeMillis;
+      const fork = Effect.runForkWith(yield* Effect.context<never>());
+      const launches: Array<Fiber.Fiber<void, never>> = [];
+      const tab = {
+        threadId: "thread:evidence-failure",
+        page: { url: () => "https://example.test" },
+        actionTimeline: new Array<PreviewAutomationActionEvent>(),
+        diagnostics: { firstLine: (cause: unknown) => String(cause) },
+      };
+      const record = makeBrowserHistoryRecordAction(
+        history,
+        (effect) => {
+          launches.push(fork(effect));
+        },
+        owner,
+        () => now,
+      );
+      yield* Effect.promise(() =>
+        record(tab, "type", async () => "done", {
+          typedText: "hello",
+          finishRetention: async () => {
+            throw new Error("evidence unavailable");
+          },
+        }),
+      );
+      yield* Effect.forEach(launches, Fiber.join, { discard: true });
+      const event = tab.actionTimeline[0];
+      if (event === undefined) return assert.fail("missing event");
+      yield* awaitHistory(browserHistoryPrefix(tab.threadId) + event.id);
+      const rows = yield* history.listForThread(tab.threadId);
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.verdict, "sent");
+      assert.equal(rows[0]?.typedLength, 5);
+      assert.isNull(rows[0]?.typedText);
+    }),
+  ).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
