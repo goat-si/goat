@@ -31,24 +31,28 @@ export function ComputerUseHistorySection(props: {
     pending.current = true;
     setLoading(true);
     setFailed(false);
-    try {
-      const result = await request({
-        environmentId: props.environmentId,
-        input: {
-          threadId: props.threadId,
-          limit: 30,
-          ...(cursor === null ? {} : { before: cursor }),
-        },
+    await request({
+      environmentId: props.environmentId,
+      input: {
+        threadId: props.threadId,
+        limit: 30,
+        ...(cursor === null ? {} : { before: cursor }),
+      },
+    })
+      .then((result) => {
+        if (result._tag === "Success") {
+          setEntries((previous) => [...previous, ...result.value.entries]);
+          setCursor(result.value.nextCursor);
+          setLoaded(true);
+        } else setFailed(true);
+      })
+      .catch(() => {
+        setFailed(true);
+      })
+      .finally(() => {
+        pending.current = false;
+        setLoading(false);
       });
-      if (result._tag === "Success") {
-        setEntries((previous) => [...previous, ...result.value.entries]);
-        setCursor(result.value.nextCursor);
-        setLoaded(true);
-      } else setFailed(true);
-    } finally {
-      pending.current = false;
-      setLoading(false);
-    }
   };
   return (
     <section aria-label="Computer use history">

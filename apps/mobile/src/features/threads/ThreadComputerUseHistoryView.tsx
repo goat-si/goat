@@ -27,17 +27,20 @@ export function ThreadComputerUseHistoryView(props: {
     pending.current = true;
     setLoading(true);
     setFailed(false);
-    try {
-      const page = await props.load(cursor);
-      setEntries((previous) => [...previous, ...page.entries]);
-      setCursor(page.nextCursor);
-      setLoaded(true);
-    } catch {
-      setFailed(true);
-    } finally {
-      pending.current = false;
-      setLoading(false);
-    }
+    await props
+      .load(cursor)
+      .then((page) => {
+        setEntries((previous) => [...previous, ...page.entries]);
+        setCursor(page.nextCursor);
+        setLoaded(true);
+      })
+      .catch(() => {
+        setFailed(true);
+      })
+      .finally(() => {
+        pending.current = false;
+        setLoading(false);
+      });
   };
   return (
     <View className="gap-2">
