@@ -60,6 +60,7 @@ export const CONTEXT_MENU_ICONS: Readonly<Record<string, IconNode>> = {
   "pin-off": solar.pin,
   "refresh-cw": solar.refresh,
   settings: solar.settings,
+  "folder-plus": solar.addFolder,
   "folder-tree": solar.folderTree,
   trash: solar.trashBinMinimalistic,
 };
