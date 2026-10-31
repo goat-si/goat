@@ -691,7 +691,7 @@
   "packages/client-runtime/src/remotePerformance.bench.ts": { "nonNull": 3 },
   "packages/client-runtime/src/reviewGuideTour.ts": { "nonNull": 1 },
   "packages/client-runtime/src/rpc/client.test.ts": { "lines": 1035 },
-  "packages/client-runtime/src/rpc/session.test.ts": { "lines": 1197 },
+  "packages/client-runtime/src/rpc/session.test.ts": { "lines": 1016 },
   "packages/client-runtime/src/state/fileMetadata.ts": { "nonNull": 1 },
   "packages/client-runtime/src/state/fleet.ts": { "nonNull": 2 },
   "packages/client-runtime/src/state/fleetHeat.ts": { "nonNull": 7 },

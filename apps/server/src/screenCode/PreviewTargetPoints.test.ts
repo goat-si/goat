@@ -351,7 +351,11 @@ it.effect("a ref from an incomplete tree is refused after the page changes, befo
     const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
       listBoundTabs: () => Effect.succeed([tab]),
       invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
-        if (request.operation === "click" || request.operation === "drag")
+        if (
+          request.operation === "click" ||
+          request.operation === "drag" ||
+          request.operation === "upload"
+        )
           sent.push({ operation: request.operation, exact: request.exact });
         return Effect.succeed(
           (request.operation === "status"
@@ -408,6 +412,16 @@ it.effect("a ref from an incomplete tree is refused after the page changes, befo
       .dispatch(call("drag", 6, { sourceRef: card!.ref, destinationRef: save!.ref }, ref), context)
       .pipe(Effect.result);
     expect(staleDrag._tag === "Failure" && staleDrag.failure).toMatchObject({
+      code: "stale_reference",
+      effectStarted: false,
+    });
+    const staleUpload = yield* host
+      .dispatch(
+        call("tab_upload", 61, { ref: save!.ref, files: ["/tmp/example.txt"] }, ref),
+        context,
+      )
+      .pipe(Effect.result);
+    expect(staleUpload._tag === "Failure" && staleUpload.failure).toMatchObject({
       code: "stale_reference",
       effectStarted: false,
     });

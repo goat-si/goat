@@ -199,3 +199,19 @@ describe("ScreenCellRow", () => {
     expect(summary).toContain("2 unverifiable · 1 window change seen · 1 no window change seen");
   });
 });
+
+it("names tab operation receipts without exposing their arguments", () => {
+  const actions = [
+    ["tab_dialog", "dialog"],
+    ["tab_upload", "upload"],
+    ["tab_evaluate", "evaluate"],
+    ["tab_fill_secret", "fill secret"],
+    ["tab_logs", "observe"],
+  ] as const;
+  for (const [method, verb] of actions)
+    expect(
+      screenCellTitle(
+        facts({ subjects: ["site.test"], subjectCount: 1, receipts: [receipt(1, method)] }),
+      ),
+    ).toBe(`site.test · ${verb}`);
+});

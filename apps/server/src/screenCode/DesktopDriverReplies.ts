@@ -202,7 +202,10 @@ export const driverWarnings = (
     }
   }
   const focusWarning = focusRestorationWarning(focus);
-  const inputTexts = source === "input" ? texts : [];
+  const inputTexts =
+    source === "input" && typeof fields?.warning !== "string" && typeof fields?.note !== "string"
+      ? texts
+      : [];
   const marked = inputTexts.find((part) => part?.includes("Its effect is unverified."));
   const after = marked?.split("Its effect is unverified.", 2)[1];
   const fallback =

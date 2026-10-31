@@ -216,7 +216,9 @@ reported, are listed behind the **+N** beside the count.
 On mobile, **Fleet** is the first tab of **Usage**, and Usage opens on it, once the phone reaches
 more than one machine or is connected to a hub. It shows the same counts and lists the running
 threads by machine; tap a thread to open it, or a machine that is not connected to open
-Connections.
+Connections. Its graph shows up to six machines (five on narrower phones) and three agents on
+each, with the rest as **+N**; tap a machine to show only its threads, or an agent to open its
+thread.
 
 A machine in the graph turns amber, orange, or red as it gets busier, and a machine near its
 limit catches fire. Heat comes from the same reading as **Settings → Connections → Hosts**: CPU

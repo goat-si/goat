@@ -10,7 +10,7 @@ import {
 } from "./DesktopTargetHost.testkit.ts";
 
 /**
- * What the pinned driver (cua-driver 0.38.0-goat.8) accepts: a per-call target only for the tools
+ * What the pinned driver (cua-driver 0.38.0-goat.16) accepts: a per-call target only for the tools
  * in cua-driver-core/src/action_target.rs:6-14, and for these two tools only the properties of
  * platform-macos/src/tools/set_value.rs:61-77 and right_click.rs:39-65 (additionalProperties false).
  */
@@ -33,6 +33,8 @@ const SCHEMA: Readonly<Record<string, ReadonlySet<string>>> = {
     "x",
     "y",
     "modifier",
+    "coordinate_space",
+    "window_basis",
     "delivery_mode",
     "post_action_wait",
   ]),
@@ -91,8 +93,10 @@ it.effect("setValue and a right click reach the driver with the arguments it tak
         post_action_wait: "none",
       },
       {
-        x: 10,
-        y: 20,
+        x: 5,
+        y: 10,
+        coordinate_space: "window_points",
+        window_basis: { x: 10, y: 20, w: 50, h: 40 },
         delivery_mode: "background",
         pid: 42,
         window_id: 7,

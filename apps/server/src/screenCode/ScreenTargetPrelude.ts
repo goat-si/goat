@@ -1,3 +1,4 @@
+import { screenTabExtrasPrelude } from "./ScreenTabExtrasPrelude.ts";
 import { MAX_BATCH_CALLS } from "./ScreenRunLimits.ts";
 
 /**
@@ -141,7 +142,8 @@ const __legacy = (arg) =>
     'sourceRef' in arg || 'deltaY' in arg || 'deltaX' in arg || 'mode' in arg || 'baseObservationId' in arg || 'urlIncludes' in arg || 'loadState' in arg);
 const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
 const __inputs = new Set(['click', 'right_click', 'hover', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
-  'type_text', 'select', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
+  'type_text', 'select', 'tab_upload', 'tab_fill_secret', 'tab_dialog', 'tab_evaluate', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
+${screenTabExtrasPrelude}
 const __target = (binding, note, owner, extraProps = {}) => {
   let ref = binding.targetRef ?? binding;
   let currentWindowId = extraProps.windowId;
@@ -165,6 +167,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
     const args = { ...withRegion, targetRef: ref };
+    if (method === 'tab_evaluate') return __call(method, args);
     if (__inputs.has(method)) return __reply(method, [args]).then((reply) => done(reply, args));
     return __call(method, args).then((value) => {
       if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
@@ -533,6 +536,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const surface = tab ? {
     ...common,
+    ...__tabExtras(tab, call, aim, act, seen),
     status: () => call('tab_status'),
     read: (arg = {}) => call('read_page', arg),
     fetch: async (url, options = {}) =>
@@ -557,6 +561,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     },
   } : {
     ...common,
+    ...__tabExtras(tab, call, aim, act, seen),
     ...extraProps,
     menu: (path, options = {}) =>
       act('menu', 'invoke_menu', {
