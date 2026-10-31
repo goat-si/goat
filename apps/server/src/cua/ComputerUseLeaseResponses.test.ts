@@ -146,3 +146,10 @@ it("an off-screen replacement preserves terminal evidence from its prior answer"
   assert.isTrue(answer.structuredContent.safety.possibleCommit);
   assert.equal(answer.structuredContent.safety.retryClass, "never");
 });
+
+it("an off-screen read retains input evidence even before a terminal reason arrives", () => {
+  const answer = parsed(
+    offScreenAnswer(8, "tools/call", "list_apps", "unknown", undefined, replaceWithTerminal(true)),
+  ).result;
+  assert.isTrue(answer.structuredContent.safety.possibleCommit);
+});

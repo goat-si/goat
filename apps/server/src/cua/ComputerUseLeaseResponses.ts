@@ -59,11 +59,13 @@ export const refusal = (
         ? "stopped_by_person"
         : undefined;
   const merged = replaceWithTerminal(replaced, incoming);
-  if (merged.reason !== undefined && merged.possibleCommit) {
+  if (merged.possibleCommit) {
     const cause: Interruption =
       merged.reason === "screen_locked"
         ? { _tag: "pause", reason: "screen_locked" }
-        : { _tag: "end", reason: "stopped" };
+        : merged.reason === "stopped_by_person"
+          ? { _tag: "end", reason: "stopped" }
+          : { _tag: "other", detail, message };
     return cutOff(id, call?.tool, cause, call?.args, merged);
   }
   if (merged.reason === "stopped_by_person" && incoming !== "stopped_by_person") {
