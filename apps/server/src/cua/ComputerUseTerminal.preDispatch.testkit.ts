@@ -590,12 +590,23 @@ const unconfirmedProof = (input: Input) =>
     return finalize(answer, input);
   });
 
+const heldProof = (input: Input) =>
+  Effect.gen(function* () {
+    const h = yield* harness({ elsewhere: new Set(), transportHeld: () => true });
+    yield* h.push(active());
+    yield* h.send(call(1, "health_report"));
+    const answer = JSON.stringify(yield* h.nextToProvider);
+    assert.include(answer, '"detail":"reconnecting"');
+    return finalize(answer, input);
+  });
+
 export const preDispatchSites: ReadonlyArray<{
   readonly name: string;
   readonly undispatched: true;
   readonly implicitReason?: ComputerUseTerminalReason;
   readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
 }> = [
+  { name: "ComputerUseLeaseProxy.heldProof", undispatched: true, run: heldProof },
   { name: "ComputerUseLeaseProxy.unconfirmedProof", undispatched: true, run: unconfirmedProof },
   { name: "ComputerUseLeaseProxy.replacedAdmission", undispatched: true, run: replacedAdmission },
   { name: "ComputerUseLeaseProxyThread.reconnecting", undispatched: true, run: reconnecting },
