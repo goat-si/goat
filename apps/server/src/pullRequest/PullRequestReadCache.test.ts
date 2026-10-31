@@ -128,7 +128,7 @@ it.layer(NodeServices.layer)("PR filesystem cache", (it) => {
     (corrupt) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-pr-cache-" });
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pr-cache-" });
         const original = yield* cacheLayer(directory);
         yield* original.get("summary", Effect.succeed("stale"), ["pr"]);
         yield* fs.writeFileString(directory + "/revisions", corrupt);

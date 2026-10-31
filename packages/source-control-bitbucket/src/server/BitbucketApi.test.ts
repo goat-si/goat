@@ -219,7 +219,7 @@ it.effect.each([false, true])("honors PR URL repositories, context=%s", (withCon
                 baseUrl: "https://bitbucket.org",
               },
               remoteName: "origin",
-              remoteUrl: "git@bitbucket.org:pingdotgg/t3code.git",
+              remoteUrl: "git@bitbucket.org:goat-si/goat.git",
             },
           }
         : {}),
@@ -260,7 +260,7 @@ it.effect.each([false, true])(
       response: () =>
         Response.json({
           ...bitbucketPullRequest,
-          source: { ...bitbucketPullRequest.source, repository: { full_name: "pingdotgg/t3code" } },
+          source: { ...bitbucketPullRequest.source, repository: { full_name: "goat-si/goat" } },
         }),
     });
     return Effect.gen(function* () {
@@ -277,7 +277,7 @@ it.effect.each([false, true])(
                   baseUrl: "https://bitbucket.org",
                 },
                 remoteName: "upstream",
-                remoteUrl: "git@bitbucket.org:PingDotGG/T3Code.git",
+                remoteUrl: "git@bitbucket.org:Goat-SI/Goat.git",
               },
             }
           : {}),
