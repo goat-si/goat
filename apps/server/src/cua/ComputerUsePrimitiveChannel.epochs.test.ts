@@ -25,6 +25,7 @@ const decodeSafety = Schema.decodeUnknownOption(
 );
 
 it.effect.each([
+  "stop then successful input",
   "stop then result lock",
   "stop then rpc lock",
   "lock then stop",
@@ -119,7 +120,11 @@ it.effect.each([
       );
     const first = Option.getOrThrow(yield* Stream.runHead(registered.requests));
     if (first.state !== "primitive-request") return assert.fail("expected primitive");
-    if (order === "stop then result lock" || order === "stop then rpc lock") {
+    if (
+      order === "stop then result lock" ||
+      order === "stop then rpc lock" ||
+      order === "stop then successful input"
+    ) {
       notify({ kind: "stop", threadId, controlId, terminal: "stopped_by_person" });
       const terminal = {
         code: "screen_locked",
@@ -130,10 +135,17 @@ it.effect.each([
         registrationId: registered.registrationId,
         reply: {
           ...first,
-          status: "unknown_outcome",
+          status: order === "stop then successful input" ? "settled" : "unknown_outcome",
           ...(order === "stop then result lock"
             ? { result: { isError: true, structuredContent: terminal } }
-            : { error: { code: -32000, data: terminal } }),
+            : order === "stop then successful input"
+              ? {
+                  result: {
+                    isError: false,
+                    structuredContent: { safety: { possibleCommit: true } },
+                  },
+                }
+              : { error: { code: -32000, data: terminal } }),
         },
       });
       const answer = yield* Fiber.join(pending);

@@ -45,6 +45,10 @@ it("merges an already typed terminal reply without dropping possible input", () 
 it("does not classify ordinary successful data as a terminal reply", () => {
   const data = { structuredContent: { code: "screen_locked" } };
   assert.isUndefined(terminalReplyState(data, "settled").reason);
+  const marked = { structuredContent: { code: "screen_locked", safety: { possibleCommit: true } } };
+  const state = terminalReplyState(marked, "settled");
+  assert.isUndefined(state.reason);
+  assert.isTrue(state.possibleCommit);
 });
 
 it("retains a terminal code when unrelated reply fields are malformed", () => {

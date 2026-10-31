@@ -106,10 +106,7 @@ export const terminalReplyState = (
   status?: "settled" | "not_started" | "unknown_outcome",
 ) => {
   const decoded = decodeTerminalReply(value);
-  if (
-    decoded._tag === "None" ||
-    (decoded.value.isError !== true && status !== "not_started" && status !== "unknown_outcome")
-  )
+  if (decoded._tag === "None")
     return {
       reason: undefined,
       possibleCommit: false,
@@ -117,10 +114,17 @@ export const terminalReplyState = (
       terminalSafety: false,
     };
   const content = decoded.value.structuredContent;
+  const safety = decodeSafety(content.safety);
+  if (decoded.value.isError !== true && status !== "not_started" && status !== "unknown_outcome")
+    return {
+      reason: undefined,
+      possibleCommit: safety._tag === "Some" && safety.value.possibleCommit === true,
+      wireReason: undefined,
+      terminalSafety: false,
+    };
   const terminal = (code: unknown) =>
     code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
   const refusal = decodeRefusal(content.refusal);
-  const safety = decodeSafety(content.safety);
   const wireReason = terminal(content.code);
   return {
     ...mergeTerminal(
