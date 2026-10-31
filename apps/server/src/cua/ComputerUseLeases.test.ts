@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ThreadId } from "@goat/contracts";
+import { ComputerUsePauseReason, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -8,6 +8,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
@@ -27,6 +28,8 @@ import {
   grant,
 } from "./ComputerUseLeases.projection.testkit.ts";
 
+const isComputerUsePauseReason = Schema.is(ComputerUsePauseReason);
+
 const layer = it.layer(
   Layer.merge(
     database,
@@ -34,6 +37,64 @@ const layer = it.layer(
   ),
 );
 layer("ComputerUseLeases controls", (it) => {
+  it.effect("screen lock pauses the live session with its own reason", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        assert.isTrue(isComputerUsePauseReason("screen_locked"));
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const owner = ThreadId.make("thread-screen-locked");
+        yield* Effect.addFinalizer(() => leases.resume.pipe(Effect.andThen(leases.stop(owner))));
+        const control = yield* leases.control(owner, Option.none());
+        yield* leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "driver:lock",
+          callId: "read",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "list_apps",
+          args: {},
+        });
+        const screenLocked = leases.screenLocked;
+        if (screenLocked === undefined) return yield* Effect.die("missing screenLocked");
+        assert.isFalse(yield* screenLocked(owner, "stale-control"));
+        assert.isTrue(yield* screenLocked(owner, control.controlId));
+        assert.isTrue(yield* screenLocked(owner, control.controlId));
+        yield* leases.resume;
+        const afterResume = yield* leases.controlState(owner, control.controlId);
+        assert.equal(afterResume._tag === "active" ? afterResume.interruptions.count : -1, 1);
+        assert.isTrue(yield* screenLocked(owner, control.controlId));
+        assert.deepInclude(yield* leases.controlState(owner, control.controlId), {
+          _tag: "paused",
+          reason: "screen_locked",
+        });
+        yield* run(owner, "run-lock-end", 1, "completed");
+        yield* leases.turnEnded(owner);
+        yield* leases.control(owner, Option.none());
+        const listed = (yield* leases.sessions).find(
+          ({ control: entry }) => entry.controlId === control.controlId,
+        );
+        assert.isTrue(listed?.control.acted === true);
+      }),
+    ),
+  );
+  it.effect("an Escape report for an expired control cannot stop a later session", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-expired-escape");
+      const control = yield* leases.control(owner, Option.none());
+      const stopAllIfCurrent = leases.stopAllIfCurrent;
+      if (stopAllIfCurrent === undefined) return yield* Effect.die("missing stopAllIfCurrent");
+      yield* TestClock.adjust("61 minutes");
+      assert.isFalse(yield* stopAllIfCurrent(owner, control.controlId));
+      const replacement = yield* leases.control(owner, Option.none());
+      assert.isFalse(yield* stopAllIfCurrent(owner, control.controlId));
+      assert.equal((yield* leases.controlState(owner, replacement.controlId))._tag, "active");
+      yield* leases.stop(owner);
+    }),
+  );
   it.effect("reading the current control never mints or revives a stopped control", () =>
     Effect.gen(function* () {
       yield* runMigrations();

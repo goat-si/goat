@@ -92,15 +92,21 @@ async function report(
   url: string,
   authorization: string,
   body: ComputerUseLeaseReport,
+  proxyToken?: string,
+  acceptConflict = false,
 ): Promise<boolean> {
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: { authorization, "content-type": "application/json" },
+      headers: {
+        authorization,
+        "content-type": "application/json",
+        ...(proxyToken === undefined ? {} : { "x-goat-proxy-channel": proxyToken }),
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TARGET_REPORT_TIMEOUT_MS),
     });
-    return response.status === 204;
+    return response.status === 204 || (acceptConflict && response.status === 409);
   } catch {
     return false;
   }
@@ -410,18 +416,24 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           });
           // The helper's input reports, every one of them: a person's may be among a burst.
           const seen = yield* makeHelperInputFeed();
+          const personStops = yield* Queue.unbounded<void>();
           const channel = child.stdio[3];
           return {
             ...(overlay && channel instanceof NodeStream.Duplex
               ? {
                   // Dated the moment the line is read, on the clock the server compares with.
-                  overlay: overlayChannel(channel, (input) =>
-                    seen.offer({
-                      source: input.source,
-                      at: Date.now() - input.ageMs,
-                    }),
+                  overlay: overlayChannel(
+                    channel,
+                    (input) =>
+                      seen.offer({
+                        source: input.source,
+                        at: Date.now() - input.ageMs,
+                      }),
+                    () => void Queue.offerUnsafe(personStops, undefined),
+                    proxyChannelToken !== undefined,
                   ),
                   humanInput: seen.events,
+                  personStop: Stream.fromQueue(personStops),
                 }
               : {}),
             send: (line: string) =>
@@ -476,6 +488,28 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
     onHumanInput: (
       events: Parameters<NonNullable<LeaseProxyOptions<never, never>["onHumanInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, humanInput: [...events] })),
+    onScreenLocked: () =>
+      Effect.promise(() =>
+        report(url, authorization, { controlId, screenLocked: true }, proxyChannelToken),
+      ).pipe(
+        Effect.tap((accepted) =>
+          accepted
+            ? Effect.void
+            : Effect.logWarning(
+                "Could not report the screen lock to GOAT; the local driver remains paused.",
+              ),
+        ),
+      ),
+    onPersonStop: () =>
+      Effect.promise(() =>
+        report(
+          url,
+          authorization,
+          { controlId, personStop: "person_esc" },
+          proxyChannelToken,
+          true,
+        ),
+      ),
     onAgentInput: (
       agentInput: Parameters<NonNullable<LeaseProxyOptions<never, never>["onAgentInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, agentInput })),

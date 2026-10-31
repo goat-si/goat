@@ -204,7 +204,11 @@ export const PreviewSessionControlResult = Schema.Struct({
 export type PreviewSessionControlResult = typeof PreviewSessionControlResult.Type;
 
 /** The chip every client shows for a session, so the words match everywhere. */
-export const previewSessionChip = (session: Pick<PreviewSession, "owner" | "status">) => {
+export const previewSessionChip = (
+  session: Pick<PreviewSession, "owner" | "status"> & Partial<Pick<PreviewSession, "reason">>,
+) => {
+  if (session.status === "paused" && session.reason === "screenLocked")
+    return "Screen locked" as const;
   if (session.owner === "private") return "Private (paused)" as const;
   if (session.status === "permission-needed") return "Permission needed" as const;
   if (session.status === "stopped") return "Stopped" as const;

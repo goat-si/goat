@@ -7,7 +7,11 @@ import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { stopAllComputerUse, stopComputerUse } from "./ComputerUseRpcHandlers.ts";
+import {
+  stopAllComputerUse,
+  stopComputerUse,
+  stopComputerUseFromHelper,
+} from "./ComputerUseRpcHandlers.ts";
 import { applyPatch } from "./ComputerUseSettings.ts";
 import {
   requestWithHandoffs,
@@ -59,7 +63,7 @@ it.effect.each([
   ),
 );
 
-it.effect.each(["end", "stop all", "disable"] as const)(
+it.effect.each(["end", "stop all", "person esc", "disable"] as const)(
   "old mention cannot restore an approval after %s",
   (termination) =>
     withHarness(({ orchestrator }) =>
@@ -95,6 +99,28 @@ it.effect.each(["end", "stop all", "disable"] as const)(
               );
             if (termination === "stop all")
               yield* stopAllComputerUse(Option.some(leases), handoffs, sessionId);
+            if (termination === "person esc") {
+              const control = yield* leases.control(threadId, yield* leases.active(threadId));
+              let stops = 0;
+              const observed = {
+                ...handoffs,
+                stopComputerUseSessions: (
+                  ...args: Parameters<typeof handoffs.stopComputerUseSessions>
+                ) => {
+                  stops += 1;
+                  return handoffs.stopComputerUseSessions(...args);
+                },
+              };
+              assert.isTrue(
+                (yield* stopComputerUseFromHelper(
+                  Option.some(leases),
+                  observed,
+                  threadId,
+                  control.controlId,
+                )).stopped,
+              );
+              assert.equal(stops, 1);
+            }
             if (termination === "disable") {
               const settings = yield* ServerSettings.ServerSettingsService;
               yield* handoffs.withComputerUseToggle(

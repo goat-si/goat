@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { driverExitReason } from "./ComputerUseDriverExit.ts";
 import {
   captureStalled,
+  driverScreenLocked,
   driverOutcomeSafety,
   driverRefused,
   markUnverified,
@@ -386,4 +387,15 @@ describe("a reply already marked as possibly committed keeps that mark", () => {
     assert.isFalse(driverRefused("select_text", JSON.parse(line)));
     assert.isTrue(driverRefused("select_text", JSON.parse(reply({ code: "unknown_tool" }))));
   });
+});
+
+it("only a typed screen-locked refusal pauses the session", () => {
+  assert.isTrue(
+    driverScreenLocked(JSON.parse(reply({ code: "screen_locked", effect: "refused" }))),
+  );
+  assert.isTrue(driverScreenLocked(JSON.parse(reply({ refusal: { code: "screen_locked" } }))));
+  assert.isFalse(
+    driverScreenLocked(JSON.parse(reply({ code: "screen_locked", effect: "applied" }))),
+  );
+  assert.isFalse(driverScreenLocked(JSON.parse(reply({ code: "other" }))));
 });

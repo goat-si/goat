@@ -31,7 +31,7 @@ import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
 
 type Reports<EU, ED> = Pick<
   LeaseProxyOptions<EU, ED>,
-  "onTarget" | "onCursor" | "onHumanInput" | "onAgentInput"
+  "onTarget" | "onCursor" | "onHumanInput" | "onAgentInput" | "onPersonStop" | "onScreenLocked"
 >;
 type ThreadProxyOptions<EU, ED> = Omit<
   LeaseProxyOptions<EU, ED>,

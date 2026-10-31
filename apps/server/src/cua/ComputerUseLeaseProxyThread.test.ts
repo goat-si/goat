@@ -276,7 +276,7 @@ describe("thread lease proxy", () => {
         const interrupted = yield* h.next;
         assert.equal(interrupted.id, 1);
         assert.deepInclude(interrupted.result?.structuredContent, {
-          code: "interrupted",
+          code: "stopped_by_person",
           effect: "unverifiable",
         });
         assert.equal((yield* h.closed).controlId, "A");

@@ -226,6 +226,8 @@ export class ComputerUseLeases extends Context.Service<
     readonly appHolders?: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<AppHolder>>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
+    readonly stopAllIfCurrent?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
+    readonly screenLocked?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /**
      * Records the window an agent's admitted call named, or where its cursor is on it (see
      * withCursor), reported by that control's own proxy; false when not the thread's live one.
@@ -422,6 +424,7 @@ const make = Effect.gen(function* () {
         ) {
           const reused: ControlRecord = {
             ...nextTurn(existing),
+            ...(paused === "screen_locked" && existing.acted === true ? { acted: true } : {}),
             uses: existing.uses + 1,
             // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
             ...(Option.isSome(lease) ? {} : { expiresAt: controlExpiry(now) }),
@@ -593,6 +596,11 @@ const make = Effect.gen(function* () {
   };
 
   /** Every agent's input calls on this host, keyed by control id and call (#1235). */
+  const stopAllAt = (now: number) => {
+    foreground.clear();
+    return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
+  };
+
   const agentInputs = makeAgentInputLog();
   /**
    * Whether a proxy's report time is close to this server's clock, which the proxy shares on
@@ -732,6 +740,28 @@ const make = Effect.gen(function* () {
         Effect.map((now) => end(threadId, "stopped", now)),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
+    stopAllIfCurrent: (threadId, controlId) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now) => {
+          const record = controls.get(threadId);
+          if (
+            record?.controlId !== controlId ||
+            !acting(record) ||
+            DateTime.toEpochMillis(record.expiresAt) <= now
+          )
+            return false;
+          stopAllAt(now);
+          return true;
+        }),
+        Effect.tap((stopped) => (stopped ? changed : Effect.void)),
+      ),
+    screenLocked: Effect.fn("ComputerUseLeases.screenLocked")(function* (threadId, controlId) {
+      const record = yield* liveControl(threadId, controlId);
+      if (record === undefined || !acting(record)) return false;
+      if (paused === "screen_locked") return true;
+      yield* pause("screen_locked");
+      return true;
+    }),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,
@@ -799,10 +829,7 @@ const make = Effect.gen(function* () {
       else agentInputs.ended(key, report.at);
       return true;
     }),
-    stopAll: Effect.map(Clock.currentTimeMillis, (now) => {
-      foreground.clear();
-      return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
-    }).pipe(Effect.tap(() => changed)),
+    stopAll: Effect.map(Clock.currentTimeMillis, stopAllAt).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>

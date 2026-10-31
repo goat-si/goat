@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Constructs raw MCP JSON-RPC response lines.
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import {
+  type ActionOutcomeSafety,
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
   computerUseRefusalReason,
@@ -51,6 +52,11 @@ export const refusal = (
   const refused = {
     refused: computerUseRefusalReason(detail),
     detail,
+    ...(detail === "screen_locked"
+      ? { code: "screen_locked" }
+      : detail === "stopped" || detail === "stopped_all"
+        ? { code: "stopped_by_person" }
+        : {}),
     safety: refusalSafety(detail, call?.tool, call?.args),
   };
   return JSON.stringify(
@@ -73,7 +79,11 @@ export const refusal = (
 };
 
 export const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
-  reason === "private" ? "private_mode" : "waiting_for_human";
+  reason === "private"
+    ? "private_mode"
+    : reason === "screen_locked"
+      ? "screen_locked"
+      : "waiting_for_human";
 
 export const interruptionDetail = (cause: Interruption): ComputerUseRefusalDetail =>
   cause._tag === "end"
@@ -102,13 +112,24 @@ export const cutOff = (
   args?: unknown,
 ) => {
   const read = isReadOnlyCall(tool, args);
-  const safety = classifyActionOutcome({
+  const outcomeSafety = classifyActionOutcome({
     effect: read ? "read" : "write",
     status: "indeterminate",
     dispatched: true,
   });
+  const safety: ActionOutcomeSafety =
+    (cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")) ||
+    (cause._tag === "pause" && cause.reason === "screen_locked")
+      ? { ...outcomeSafety, retryClass: "never" }
+      : outcomeSafety;
   const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
   const detail = interruptionDetail(cause);
+  const code =
+    detail === "screen_locked"
+      ? "screen_locked"
+      : detail === "stopped" || detail === "stopped_all"
+        ? "stopped_by_person"
+        : "interrupted";
   const text =
     cause._tag === "pause"
       ? `${PAUSE_STATE[cause.reason]}. ${sentence} ${PAUSE_NEXT[cause.reason]}`
@@ -121,8 +142,17 @@ export const cutOff = (
     result: {
       content: [{ type: "text", text }],
       structuredContent: read
-        ? { code: "interrupted", detail, safety }
-        : { effect: "unverifiable", code: "interrupted", detail, safety },
+        ? {
+            code,
+            detail,
+            safety,
+          }
+        : {
+            effect: "unverifiable",
+            code,
+            detail,
+            safety,
+          },
       isError: true,
     },
   });

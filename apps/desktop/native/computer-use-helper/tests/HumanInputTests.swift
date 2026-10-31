@@ -52,7 +52,7 @@ struct HumanInputTests {
     check("each of the agent's keys is seen too", keys.count == 4, "\(keys)")
     check("the same key read twice is reported once", polled([0.105], until: 1.0) == [0.105])
 
-    // What the tap may see (D7: no keyboard), and what is not input.
+    // What pointer activity may report, and what is not pointer input.
     check(
       "keyboard events and releases are never tap input",
       tapped([(.keyDown, 0.0), (.keyUp, 0.1), (.flagsChanged, 0.2), (.leftMouseUp, 0.3), (.rightMouseUp, 0.4)])
@@ -69,6 +69,12 @@ struct HumanInputTests {
         && PointerTap.report(.leftMouseDown, userData: PointerTap.driverEventUserData, at: 0.30) == nil
         && PointerTap.report(.mouseMoved, userData: 0, at: 0.25) == 0.25
         && PointerTap.report(.leftMouseDown, userData: 42, at: 0.30) == 0.30)
+
+    check("physical Esc stops an active session", EscapeTap.shouldStop(type: .keyDown, keyCode: 53, userData: 0, active: true))
+    check("driver Esc does not stop", !EscapeTap.shouldStop(type: .keyDown, keyCode: 53, userData: PointerTap.driverEventUserData, active: true))
+    check("other keys do not stop", !EscapeTap.shouldStop(type: .keyDown, keyCode: 0, userData: 0, active: true))
+    check("Esc without an active session does not stop", !EscapeTap.shouldStop(type: .keyDown, keyCode: 53, userData: 0, active: false))
+    check("Esc key up does not stop", !EscapeTap.shouldStop(type: .keyUp, keyCode: 53, userData: 0, active: true))
 
     exit(failures == 0 ? 0 : 1)
   }

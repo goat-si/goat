@@ -493,7 +493,7 @@ private func interrupts() throws {
   interruptNativeMcp(["op": "hide", "reason": "capture"], session: capture.session)
   try capture.reply(0); try capture.clock.advance(200); try capture.reply(1)
   try capture.expectOutcome("settled", unavailable: false)
-  for reason in ["private", "ended", "human_input", "takeover"] {
+  for reason in ["private", "ended", "human_input", "takeover", "screen_locked"] {
     let h = Harness()
     try h.call(); h.ready()
     let other = Harness()

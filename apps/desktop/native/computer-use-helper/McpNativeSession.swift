@@ -547,6 +547,6 @@ final class McpNativeSession {
 /// never another's.
 func interruptNativeMcp(_ command: [String: Any], session: McpNativeSession?) {
   guard command["op"] as? String == "hide", let reason = command["reason"] as? String,
-    ["human_input", "takeover", "private", "ended"].contains(reason) else { return }
+    ["human_input", "takeover", "private", "screen_locked", "ended"].contains(reason) else { return }
   session?.interrupt()
 }

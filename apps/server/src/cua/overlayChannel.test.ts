@@ -64,6 +64,36 @@ describe("overlayChannel", () => {
     }),
   );
 
+  it.effect("advertises Escape only when its stop route is available", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const send = overlayChannel(
+        helper.socket,
+        () => undefined,
+        () => undefined,
+        true,
+      );
+      yield* send.post({ op: "show", pid: 4, windowId: 9, phase: "acting" });
+      assert.deepEqual(helper.lines[0]?.command, {
+        op: "show",
+        pid: 4,
+        windowId: 9,
+        phase: "acting",
+        escEnabled: true,
+      });
+    }),
+  );
+
+  it.effect("posts the screen lock notice without changing capture visibility", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const send = overlayChannel(helper.socket);
+      yield* send.post({ op: "status", message: "screen locked" });
+      assert.deepEqual(helper.lines[0]?.command, { op: "status", message: "screen locked" });
+      assert.isTrue(send.captureHideConfirmed());
+    }),
+  );
+
   it.effect("goes on after the timeout when the helper never answers", () =>
     Effect.gen(function* () {
       const helper = helperEnd(false);
@@ -113,6 +143,25 @@ describe("overlayChannel", () => {
         { source: "keyboard", ageMs: 120 },
         { source: "pointer", ageMs: 0 },
       ]);
+    }),
+  );
+
+  it.effect("reports a person's Escape stop on the helper channel", () =>
+    Effect.gen(function* () {
+      const helper = helperEnd(true);
+      const last = yield* Deferred.make<void>();
+      let stops = 0;
+      overlayChannel(
+        helper.socket,
+        () => Deferred.doneUnsafe(last, Effect.void),
+        () => {
+          stops += 1;
+        },
+      );
+      helper.socket.push(JSON.stringify({ personStop: "person_esc" }) + "\n");
+      helper.socket.push(JSON.stringify({ humanInput: { source: "pointer", ageMs: 0 } }) + "\n");
+      yield* Deferred.await(last);
+      assert.equal(stops, 1);
     }),
   );
 

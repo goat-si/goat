@@ -28,6 +28,186 @@ const shortForeground = () => {
 };
 
 describe("proxy lifecycle ownership across foreground expiry", () => {
+  it.effect("a typed screen lock pauses the control and rejects later calls", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ screenLock: true });
+      yield* h.push(active());
+      yield* h.applied;
+      yield* h.send(call(77, "list_apps"));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 77,
+          result: {
+            isError: true,
+            content: [],
+            structuredContent: { code: "screen_locked", effect: "refused" },
+          },
+        }),
+      );
+      assert.equal((yield* h.nextToProvider).id, 77);
+      yield* h.screenLockedReported;
+      yield* h.killed;
+      yield* h.push(active());
+      yield* h.applied;
+      assert.equal(yield* h.liveDrivers, 0);
+      yield* h.send(call(78, "list_apps"));
+      assert.deepInclude((yield* h.nextToProvider).result, {
+        isError: true,
+        structuredContent: {
+          refused: "screenLocked",
+          detail: "screen_locked",
+          code: "screen_locked",
+          safety: {
+            possibleCommit: false,
+            retryClass: "never",
+            writeStatus: "not_started",
+            code: "write_refused_terminal",
+          },
+        },
+      });
+      yield* h.push({ ...active(), interruptions: { count: 1, last: "screen_locked" } });
+      yield* h.applied;
+      assert.equal(yield* h.liveDrivers, 1);
+    }),
+  );
+
+  it.effect("a screen lock during the proxy's display proof pauses the session", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ screenLock: true, elsewhere: new Set() });
+      yield* h.push(active());
+      yield* h.send(call(82, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      const proof = yield* h.nextToDriver;
+      assert.deepEqual(proof.params, { name: "list_windows", arguments: {} });
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: proof.id,
+          result: { isError: true, content: [], structuredContent: { code: "screen_locked" } },
+        }),
+      );
+      yield* h.screenLockedReported;
+      yield* h.killed;
+      const answer = yield* h.nextToProvider;
+      assert.equal(answer.id, 82);
+      assert.deepInclude(answer.result, { isError: true });
+      assert.include(JSON.stringify(answer), '"detail":"screen_locked"');
+    }),
+  );
+
+  it.effect("a screen lock reported after cancellation still pauses the session", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ screenLock: true });
+      yield* h.push(active());
+      yield* h.send(call(80, "list_apps"));
+      yield* h.nextToDriver;
+      yield* h.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "notifications/cancelled",
+          params: { requestId: 80 },
+        }),
+      );
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 80,
+          result: { isError: true, content: [], structuredContent: { code: "screen_locked" } },
+        }),
+      );
+      yield* h.screenLockedReported;
+      yield* h.killed;
+      assert.equal(yield* h.providerQueued, 0);
+    }),
+  );
+
+  it.effect("Escape withholds a late driver reply while its stop report is in flight", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ personStop: true, personStopGate: gate });
+      yield* h.push(active());
+      yield* h.send(call(91, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.nextToDriver;
+      yield* h.escape;
+      yield* h.escapeReported;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 91,
+          result: { content: [{ type: "text", text: "late success" }] },
+        }),
+      );
+      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }));
+      assert.equal((yield* h.nextToProvider).method, "notifications/message");
+      yield* Deferred.succeed(gate, undefined);
+      yield* h.killed;
+      assert.include(JSON.stringify(yield* h.nextToProvider), '"code":"stopped_by_person"');
+    }),
+  );
+
+  it.effect("Escape stops the local driver when the server cannot accept the report", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ personStop: true, personStopAccepted: false });
+      yield* h.push(active());
+      yield* h.driverStarted;
+      yield* h.escape;
+      yield* h.escapeReported;
+      yield* h.killed;
+      yield* h.send(call(79, "list_apps"));
+      assert.deepInclude((yield* h.nextToProvider).result, {
+        isError: true,
+        structuredContent: {
+          refused: "userStoppedSession",
+          detail: "stopped",
+          code: "stopped_by_person",
+          safety: {
+            possibleCommit: false,
+            retryClass: "never",
+            writeStatus: "not_started",
+            code: "write_refused_terminal",
+          },
+        },
+      });
+    }),
+  );
+
+  it.effect("a person Stop all cuts the call off with a terminal typed result", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* h.push(active());
+      yield* h.send(call(81, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+      yield* h.nextToDriver;
+      yield* h.push({ state: "ended", reason: "stopped_all" });
+      yield* h.killed;
+      assert.deepInclude((yield* h.nextToProvider).result, {
+        isError: true,
+        structuredContent: {
+          code: "stopped_by_person",
+          detail: "stopped_all",
+          effect: "unverifiable",
+          safety: {
+            possibleCommit: true,
+            retryClass: "never",
+            writeStatus: "may_have_applied",
+            code: "write_indeterminate",
+          },
+        },
+      });
+    }),
+  );
+
+  it.effect("reports helper Escape from the active control", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ personStop: true });
+      yield* h.push(active());
+      yield* h.driverStarted;
+      yield* h.escape;
+      yield* h.escapeReported;
+    }),
+  );
+
   it.effect("Stop cuts off server-origin input and quarantines the late driver reply", () =>
     Effect.gen(function* () {
       const h = yield* harness({ humanInput: true });
