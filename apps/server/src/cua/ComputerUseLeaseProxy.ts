@@ -726,16 +726,15 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const browser = claims.gate(id, line, message, primitive?.authority);
       if (browser.refused !== undefined) return yield* sink.answer(browser.refused);
       ({ line, message, selected: selectedClaim } = browser);
+      const stale = () =>
+        personStop.pending() || isTerminalStop(finished, paused)
+          ? notSent(id)
+          : staleGeneration(id, message.method);
       if (
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(
-          personStop.pending() || isTerminalStop(finished, paused)
-            ? notSent(id)
-            : staleGeneration(id, message.method),
-          "not_started",
-        );
+        return yield* sink.answer(stale(), "not_started");
       // A call belongs to its admitted child; only a manifest refresh may replace it.
       let admitted = lifecycle.current;
       const refreshed =
@@ -747,12 +746,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(
-          personStop.pending() || isTerminalStop(finished, paused)
-            ? notSent(id)
-            : staleGeneration(id, message.method),
-          "not_started",
-        );
+        return yield* sink.answer(stale(), "not_started");
       const unsupported = yield* claims.unsupported(
         selectedClaim,
         batches.browserSupported,
