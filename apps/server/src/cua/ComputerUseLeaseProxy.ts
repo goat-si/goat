@@ -661,8 +661,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
-    // A pause or end the lease stream has taken but not applied yet, because a manifest refresh
-    // holds the lock (#1416), counts as applied: the call never reaches a child.
+    // A received pause or end fences calls before the lifecycle lock becomes available.
     let selectedForeground: ComputerUseForegroundGrant | undefined;
     let selectedClaim: SelectedClaim | undefined;
     const notSent = (requestId: JsonRpcId) =>
@@ -719,7 +718,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const pendingRefusal = personStop.refusal(id, message.method);
       if (pendingRefusal !== undefined) return yield* sink.answer(pendingRefusal);
       yield* Effect.raceFirst(Deferred.await(confirmed), Deferred.await(ended).pipe(Effect.asVoid));
-      // Before anything reaches the driver; a known pause, end or idle turn answers first.
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(refusal(id, message.method, "expired", SCREEN_CALL_EXPIRED));
