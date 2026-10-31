@@ -95,7 +95,7 @@ const afterEarlierInput = (
  * A cell's final error: when any of its calls may have committed, the cell as a whole may have,
  * so rerunning it would repeat that input. Pass every receipt, before any are cut for the reply.
  */
-export const cellErrorSafety = <
+const cellErrorSafety = <
   E extends {
     readonly safety?: ActionOutcomeSafety;
     readonly effectStarted?: boolean;
