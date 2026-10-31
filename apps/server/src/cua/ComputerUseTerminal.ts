@@ -24,7 +24,7 @@ export const mergeTerminal = (
   },
 ) => {
   // A person's Stop outranks a lock because it forbids retrying the turn; possible input only accumulates.
-  const reason =
+  const reason: ComputerUseTerminalReason | undefined =
     first.reason === "stopped_by_person" || second.reason === "stopped_by_person"
       ? "stopped_by_person"
       : (first.reason ?? second.reason);

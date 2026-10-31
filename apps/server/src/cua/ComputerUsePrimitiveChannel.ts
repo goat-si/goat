@@ -55,7 +55,7 @@ interface Pending {
   readonly request: ComputerUsePrimitiveRequest;
   readonly answer: Deferred.Deferred<ComputerUsePrimitiveReply>;
   sent: boolean;
-  terminal?: ComputerUseTerminalReason;
+  terminal?: ComputerUseTerminalReason | undefined;
   /** When its answer reached the server; a loaded server may resume the caller later. */
   answeredAt?: number;
 }
@@ -69,8 +69,8 @@ export const DRIVER_BIND_WAIT_MS = 10_000;
 export const PROXY_ANSWER_GRACE_MS = 1_000;
 
 interface Control {
-  terminal?: "stopped_by_person" | "screen_locked";
-  epoch: { reason?: ComputerUseTerminalReason };
+  terminal?: "stopped_by_person" | "screen_locked" | undefined;
+  epoch: { reason?: ComputerUseTerminalReason | undefined };
   maxAcceptedGeneration: number;
   maxCutoffGeneration: number;
   binding: { readonly connectionId: string; readonly generation: number } | undefined;

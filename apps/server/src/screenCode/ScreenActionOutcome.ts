@@ -148,12 +148,18 @@ export const cellTerminalError = (
     merged.possibleCommit,
   );
   if (terminal === undefined) return assessed;
+  const safety =
+    assessed.safety ??
+    classifyActionOutcome({
+      effect: merged.possibleCommit ? "write" : "read",
+      status: merged.possibleCommit ? "indeterminate" : "refused",
+      dispatched: merged.possibleCommit,
+    });
   return {
     ...assessed,
     ...terminal,
     safety: {
-      ...terminal.safety,
-      ...assessed.safety,
+      ...safety,
       possibleCommit: merged.possibleCommit,
       retryClass: "never",
     },

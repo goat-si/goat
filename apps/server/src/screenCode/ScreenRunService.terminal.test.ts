@@ -5,7 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ProviderInstanceId, ThreadId, type ScreenRunError } from "@goat/contracts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -61,7 +61,7 @@ it.live.each(["lock first", "stop first"])(
                 Deferred.succeed(entered, undefined).pipe(
                   Effect.andThen(Deferred.await(release)),
                   Effect.andThen(
-                    Effect.fail({
+                    Effect.fail<ScreenRunError>({
                       code: order === "lock first" ? "stopped_by_person" : "screen_locked",
                       effectStarted: true,
                       nextStep: "interrupted",

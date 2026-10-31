@@ -57,7 +57,7 @@ type ThreadProxyOptions<EU, ED> = Omit<
     current: {
       readonly connectionId: string;
       readonly generation: number;
-      readonly terminal?: "stopped_by_person" | "screen_locked";
+      readonly terminal?: "stopped_by_person" | "screen_locked" | undefined;
     },
   ) => Effect.Effect<void>;
   /** Runs after the supervisor has routed an update, without waiting for native teardown. */
@@ -93,9 +93,9 @@ interface Context {
   readonly wake: Queue.Queue<void>;
   deadline: number;
   ended?: LeaseEnd;
-  terminal: { reason?: ComputerUseTerminalReason };
+  terminal: { reason?: ComputerUseTerminalReason | undefined };
   driverGeneration?: number;
-  readonly driverTerminals: Map<number, { reason?: ComputerUseTerminalReason }>;
+  readonly driverTerminals: Map<number, { reason?: ComputerUseTerminalReason | undefined }>;
   /** Cuts off the driver's screen work when the lease stream drops; set once the proxy runs. */
   dropTransport?: () => void;
 }
@@ -115,7 +115,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   let transport: "connected" | "reconnecting" | "lost" = "connected";
   let sequence = 0;
   const seen = new Set<string>();
-  const controlTerminals = new Map<string, { reason?: ComputerUseTerminalReason }>();
+  const controlTerminals = new Map<string, { reason?: ComputerUseTerminalReason | undefined }>();
   /** The newest driver generation per control, so a control started again never reuses one. */
   const generations = new Map<string, number>();
   const handshake: Array<string> = [];

@@ -71,7 +71,7 @@ export const terminalSink = (
 
 export function makePersonStopFence() {
   let reason: "stopped_by_person" | "screen_locked" | undefined;
-  let epoch: { reason?: "stopped_by_person" | "screen_locked" } = {};
+  let epoch: { reason?: "stopped_by_person" | "screen_locked" | undefined } = {};
   let lockConfirmed = false;
   const latch = (value: "stopped_by_person" | "screen_locked") => {
     reason = mergeTerminal({ reason }, { reason: value }).reason;
