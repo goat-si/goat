@@ -51,6 +51,7 @@ private final class GoatWebSocketConnections: NSObject, URLSessionWebSocketDeleg
   private var tasksById: [Int: URLSessionWebSocketTask] = [:]
   private var idsByTaskIdentifier: [Int: Int] = [:]
   private var emittersById: [Int: GoatWebSocketEmitter] = [:]
+  private var requestedClosesById: [Int: (code: Int, reason: String)] = [:]
 
   // URLSession retains its delegate until invalidated, so teardown must
   // invalidate it or every module reload leaks this object. Only touched on `queue`.
@@ -96,6 +97,7 @@ private final class GoatWebSocketConnections: NSObject, URLSessionWebSocketDeleg
   func close(id: Int, code: Int, reason: String) {
     queue.async {
       guard let task = self.tasksById[id] else { return }
+      self.requestedClosesById[id] = (code, reason)
       let closeCode = URLSessionWebSocketTask.CloseCode(rawValue: code) ?? .normalClosure
       task.cancel(with: closeCode, reason: reason.data(using: .utf8))
     }
@@ -109,6 +111,7 @@ private final class GoatWebSocketConnections: NSObject, URLSessionWebSocketDeleg
       self.tasksById.removeAll()
       self.idsByTaskIdentifier.removeAll()
       self.emittersById.removeAll()
+      self.requestedClosesById.removeAll()
       self.activeSession?.invalidateAndCancel()
       self.activeSession = nil
     }
@@ -146,6 +149,7 @@ private final class GoatWebSocketConnections: NSObject, URLSessionWebSocketDeleg
     tasksById.removeValue(forKey: id)
     idsByTaskIdentifier.removeValue(forKey: taskIdentifier)
     emittersById.removeValue(forKey: id)
+    requestedClosesById.removeValue(forKey: id)
   }
 
   func urlSession(
@@ -179,6 +183,7 @@ private final class GoatWebSocketConnections: NSObject, URLSessionWebSocketDeleg
     didCompleteWithError error: Error?
   ) {
     queue.async {
+      // didCloseWith removes the entry, so a completion after it emits nothing.
       guard let id = self.idsByTaskIdentifier[task.taskIdentifier] else { return }
       if let error {
         var message = error.localizedDescription
@@ -188,8 +193,22 @@ private final class GoatWebSocketConnections: NSObject, URLSessionWebSocketDeleg
         self.emitLocked(id: id, event: "onError", payload: ["message": message])
         // No close frame arrived; 1006 is what a browser reports here.
         self.emitLocked(id: id, event: "onClose", payload: ["code": 1006, "reason": message])
+      } else {
+        // A client cancel(with:) can complete cleanly without didCloseWith.
+        let (code, reason) = self.cleanCloseLocked(id: id, task: task)
+        self.emitLocked(id: id, event: "onClose", payload: ["code": code, "reason": reason])
       }
       self.remove(id: id, taskIdentifier: task.taskIdentifier)
     }
+  }
+
+  // Must be called on `queue`.
+  private func cleanCloseLocked(id: Int, task: URLSessionTask) -> (Int, String) {
+    if let webSocketTask = task as? URLSessionWebSocketTask, webSocketTask.closeCode != .invalid {
+      let reason = webSocketTask.closeReason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+      return (webSocketTask.closeCode.rawValue, reason)
+    }
+    if let requested = requestedClosesById[id] { return (requested.code, requested.reason) }
+    return (1006, "")
   }
 }

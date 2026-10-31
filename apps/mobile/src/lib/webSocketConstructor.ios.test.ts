@@ -102,6 +102,35 @@ describe("iOS URLSession WebSocket constructor", () => {
     ),
   );
 
+  it.effect(
+    "a caller's close ends in one close event and drops the connection's later events",
+    () =>
+      testEffect(
+        Effect.gen(function* () {
+          native.setup();
+          const socket = (yield* Socket.WebSocketConstructor)("wss://host.test/ws");
+          const id = native.lastId();
+          const closed = vi.fn();
+          const messages = vi.fn();
+          socket.addEventListener("close", closed);
+          socket.addEventListener("message", messages);
+          native.emit("onOpen", { id });
+
+          socket.close(1000, "reconnect");
+          expect(socket.readyState).toBe(2);
+          // The native module reports a client close from URLSession's clean completion.
+          native.emit("onClose", { id, code: 1000, reason: "reconnect" });
+          native.emit("onClose", { id, code: 1000, reason: "reconnect" });
+          native.emit("onMessage", { id, data: "late", binary: false });
+
+          expect(socket.readyState).toBe(3);
+          expect(closed).toHaveBeenCalledTimes(1);
+          expect(closed).toHaveBeenCalledWith({ type: "close", code: 1000, reason: "reconnect" });
+          expect(messages).not.toHaveBeenCalled();
+        }),
+      ),
+  );
+
   it.effect("ignores a native open that lands after the caller closed a connecting socket", () =>
     testEffect(
       Effect.gen(function* () {
