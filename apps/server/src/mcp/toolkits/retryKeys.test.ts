@@ -141,7 +141,13 @@ const fixture = (options: { readonly sharedDatabase?: boolean } = {}) => {
         Effect.sync(() => {
           const sequence = record(input);
           return {
-            task: { id: input.id, lastRunStatus: "succeeded", runCount: sequence, nextRunAt: null },
+            task: {
+              id: input.id,
+              title: "Retry schedule",
+              lastRunStatus: "succeeded",
+              runCount: sequence,
+              nextRunAt: null,
+            },
             threadId: `scheduled-${sequence}`,
           } as never;
         }),
