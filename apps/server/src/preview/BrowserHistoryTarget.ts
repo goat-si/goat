@@ -28,7 +28,20 @@ export async function browserHistoryTarget(
         )
           return role;
         const name = element.getAttribute("aria-label")?.trim();
-        return name ? `${role}: ${name}` : role;
+        // Page-provided names can repeat typed secrets, so retain only fixed generic labels.
+        const safeNames = new Map([
+          ["save", "Save"],
+          ["cancel", "Cancel"],
+          ["close", "Close"],
+          ["submit", "Submit"],
+          ["ok", "OK"],
+          ["next", "Next"],
+          ["back", "Back"],
+          ["continue", "Continue"],
+          ["search", "Search"],
+        ]);
+        const safeName = name === undefined ? undefined : safeNames.get(name.toLowerCase());
+        return safeName === undefined ? role : `${role}: ${safeName}`;
       },
       page.frames().length === 1,
       { timeout: 1000 },

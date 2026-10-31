@@ -12,6 +12,8 @@ it("labels a click target without exposing a password field value", async () => 
     const password = await browserHistoryTarget(page, { selector: "input" });
     expect(password).toBe("textbox");
     expect(password).not.toContain("private-secret");
+    await page.setContent('<button aria-label="private-secret">Continue</button>');
+    expect(await browserHistoryTarget(page, { selector: "button" })).toBe("button");
   } finally {
     await browser.close();
   }
