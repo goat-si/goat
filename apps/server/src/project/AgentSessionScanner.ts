@@ -11,7 +11,7 @@ import {
   type AgentSessionImportSource,
   type AgentSessionProjectCandidate,
   type AgentSessionProjectGit,
-  type AgentSessionScanResult,
+  type AgentSessionScanInput,
   type ProviderInstanceConfig,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -31,6 +31,7 @@ import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { repositoryPathFromRemoteUrl } from "@goat/source-control-core/server/SourceControlProvider";
 
 import * as ServerConfig from "../config.ts";
+import * as ScanCompatibility from "./AgentSessionScanCompatibility.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
@@ -162,7 +163,7 @@ export type AgentSessionRecentThread =
 export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
-    readonly scan: Effect.Effect<AgentSessionScanResult, AgentSessionScanError>;
+    readonly scan: ScanCompatibility.ScanAgentSessions;
     readonly recentThreads: (
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
@@ -1339,8 +1340,7 @@ export const make = Effect.gen(function* () {
   });
 
   let cachedCandidates: ReadonlyArray<RawCandidate> | null = null;
-
-  const scan: AgentSessionScanner["Service"]["scan"] = Effect.gen(function* () {
+  const scan = Effect.fn("AgentSessionScanner.scan")(function* (input: AgentSessionScanInput) {
     const { candidates: raw, truncated } = yield* collectCandidates();
     cachedCandidates = raw;
 
@@ -1357,7 +1357,7 @@ export const make = Effect.gen(function* () {
     const directoryKeys = new Map<string, string>();
     const gitIdentities = new Map<string, AgentSessionProjectGit | null>();
 
-    for (const candidate of raw) {
+    for (const candidate of ScanCompatibility.filterCandidates(input, raw)) {
       const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
       const resolved = path.resolve(expanded);

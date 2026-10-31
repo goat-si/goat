@@ -95,7 +95,7 @@ const layerScannerTest = (input: ScannerTestInput) =>
 const runScan = (input: ScannerTestInput) =>
   Effect.gen(function* () {
     const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-    return yield* scanner.scan;
+    return yield* scanner.scan({ includePi: true });
   }).pipe(Effect.provide(layerScannerTest(input)));
 
 const runRecentThreadOutcomes = (input: ScannerTestInput & { readonly workspaceRoot: string }) =>
@@ -1314,7 +1314,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
 
         yield* Effect.gen(function* () {
           const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-          const scan = yield* scanner.scan;
+          const scan = yield* scanner.scan({ includePi: true });
           expect.soft(scan.candidates.map((candidate) => candidate.threadCount)).toEqual([4]);
           const outcomes = yield* Stream.runCollect(scanner.recentThreads(workspace));
           expect(
@@ -1477,7 +1477,7 @@ it.layer(NodeServices.layer)("AgentSessionScanner", (it) => {
 
               yield* Effect.gen(function* () {
                 const scanner = yield* AgentSessionScanner.AgentSessionScanner;
-                const scan = yield* scanner.scan;
+                const scan = yield* scanner.scan({ includePi: true });
                 expect(scan.candidates.map((candidate) => candidate.path)).toEqual([workspace]);
                 const replacementCwd =
                   replacement === "symlink alias"

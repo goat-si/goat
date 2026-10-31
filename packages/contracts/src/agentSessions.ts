@@ -20,7 +20,10 @@ export const AgentSessionImportSource = Schema.Struct({
 });
 export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
 
-export const AgentSessionScanInput = Schema.Struct({});
+export const AgentSessionScanInput = Schema.Struct({
+  // Older clients cannot decode Pi in the response's closed source union.
+  includePi: Schema.optionalKey(Schema.Boolean),
+});
 export type AgentSessionScanInput = typeof AgentSessionScanInput.Type;
 
 export const AgentSessionProjectGit = Schema.Struct({
