@@ -91,9 +91,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
       mode: "diff",
       baseObservationId: fallback.observationId,
     });
-    expect(afterFallback.indexedText).toBe(
-      `no change; numbers unchanged; latest full observation is ${fallback.observationId}`,
-    );
+    expect(afterFallback.indexedText).toBe(`no change; numbers unchanged`);
     const nextCell = { ...context, cellId: "next" };
     const nextFull = (yield* host.observe(
       { ...call("get_accessibility_tree", {}, ref), cellId: "next" },
@@ -112,9 +110,7 @@ it.effect("desktop observations use driver diffs and refresh unchanged row token
       },
       nextCell,
     )).value as Observed;
-    expect(nextDiff.indexedText).toBe(
-      `no change; numbers unchanged; latest full observation is ${nextFull.observationId}`,
-    );
+    expect(nextDiff.indexedText).toBe(`no change; numbers unchanged`);
     for (const observation of [diff, unchanged, afterFallback, nextDiff])
       expect(observation.indexedText).not.toContain("element_tokens");
     const retired = yield* host
@@ -522,9 +518,7 @@ it.effect(
         resetReason: "full read: too many rows moved",
       });
       const unchanged = yield* observe({ mode: "diff", baseObservationId: fallback.observationId });
-      expect(unchanged.indexedText).toBe(
-        `no change; numbers unchanged; latest full observation is ${fallback.observationId}; focused element is [1]`,
-      );
+      expect(unchanged.indexedText).toBe(`no change; numbers unchanged; focused element is [1]`);
     }),
 );
 
@@ -557,9 +551,7 @@ it.effect("changed rows followed by no change retain the full baseline", () =>
     const first = yield* observe({});
     const diff = yield* observe({ mode: "diff", baseObservationId: first.observationId });
     const unchanged = yield* observe({ mode: "diff", baseObservationId: diff.observationId });
-    expect(unchanged.indexedText).toBe(
-      `no change; numbers unchanged; latest full observation is ${first.observationId}`,
-    );
+    expect(unchanged.indexedText).toBe(`no change; numbers unchanged`);
   }),
 );
 
@@ -785,8 +777,7 @@ it.live.each([
     label: "no change",
     diff: "no change since s1",
     count: 1,
-    expected:
-      "after click: no change seen in this window; effect may be elsewhere, check before resending",
+    expected: "after click: no change in this window",
     observed: "no_change_seen",
   },
   {

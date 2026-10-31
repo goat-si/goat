@@ -227,7 +227,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       !('coordinate_space' in arg)
         ? { ...arg, regionId: seen.image.regionId }
         : arg;
-    const args = { ...withRegion, targetRef: ref };
+    const args = { ...withRegion, ...(!tab && __debug && ['get_window_state', 'get_accessibility_tree', 'screenshot'].includes(method) ? { debug: true } : {}), targetRef: ref };
     if (method === 'tab_evaluate') return __call(method, args);
     if (__inputs.has(method)) return __reply(method, [args]).then((reply) => done(reply, args));
     return __call(method, args).then((value) => {
@@ -394,9 +394,10 @@ const __target = (binding, note, owner, extraProps = {}) => {
       : page ? { after: arg.after, ...(seen.observation ? { baseObservationId: seen.observation.observationId } : {}) }
       : arg.query ? { mode: 'query', query: arg.query }
       : { ...base, ...(arg.interactiveOnly ? { interactiveOnly: true } : {}) };
+    const previous = seen.observation;
     let observation;
     try {
-      const value = (await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, targetRef: ref }])).v;
+      const value = (await __reply(tab ? 'observe' : 'get_accessibility_tree', [{ ...options, ...(!tab && __debug ? { debug: true } : {}), targetRef: ref }])).v;
       if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
       observation = page ? value : remember(value);
       // A page's elements join the read it continues, so numbers and names from every page resolve.
@@ -406,7 +407,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     catch (raw) { if (!page) seen.observation = undefined; throw __error(raw); }
     if (!tab && arg.screenshot) {
       try {
-        const image = (await __reply('screenshot', [{ targetRef: ref }])).v;
+        const image = (await __reply('screenshot', [{ ...(__debug ? { debug: true } : {}), targetRef: ref }])).v;
         if (seen.observation && image && image.observationId !== seen.observation.observationId) seen.observation = undefined;
         seen.image = image;
         seen.replaced = false;
@@ -414,7 +415,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
       catch (raw) { seen.observation = undefined; throw __error(raw); }
     }
     const { indexedText, elements: _elements, ...rest } = observation;
+    if (Array.isArray(rest.omitted) && previous && previous.targetRef?.id === observation.targetRef?.id && previous.targetGeneration === observation.targetGeneration && Array.isArray(previous.omitted))
+      rest.omitted = rest.omitted.map((item) => item.kind === 'frames' && item.detail && previous.omitted.some((old) => old.kind === 'frames' && old.detail === item.detail) ? { kind: 'frames' } : item);
     const shown = { text: indexedText, ...rest, ...(seen.image && arg.screenshot ? { image: seen.image } : {}) };
+    if (!__debug) for (const key of ['targetRef', 'targetGeneration', 'surfaceGeneration', 'phases'])
+      if (key in shown) Object.defineProperty(shown, key, { value: shown[key], enumerable: false });
     // Cells written before text read indexedText; it is not enumerable, so results do not carry it twice.
     Object.defineProperty(shown, 'indexedText', { value: indexedText, enumerable: false });
     Object.defineProperty(shown, 'ref', { value: (index) => {
