@@ -272,3 +272,60 @@ it.effect(
       expect(sent.filter((each) => each.tool === "get_window_state")).toHaveLength(reads);
     }),
 );
+
+it.effect("a driver restart seen through one app ends within for every app it drives", () =>
+  Effect.gen(function* () {
+    const connection = { id: "driver:1" };
+    const { host, sent } = fixture(
+      {
+        list_apps: {
+          apps: [
+            { pid: 42, name: "Editor", bundle_id: "org.example.Editor" },
+            { pid: 43, name: "Viewer", bundle_id: "org.example.Viewer" },
+          ],
+        },
+        list_windows: (args: { pid?: number }) => ({
+          windows: [
+            ...(args?.pid === undefined || args.pid === 42
+              ? [{ pid: 42, window_id: 7, title: "Document" }]
+              : []),
+            ...(args?.pid === undefined || args.pid === 43
+              ? [{ pid: 43, window_id: 8, title: "Viewer" }]
+              : []),
+          ],
+        }),
+        get_window_state: (args: { pid: number; window_id: number }) => ({
+          ...window(tree),
+          pid: args.pid,
+          window_id: args.window_id,
+        }),
+      },
+      connection,
+    );
+    const editor = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const viewer = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Viewer", window_id: 8 }),
+      context,
+    )).value as ScreenTargetRef;
+    const first = (yield* host.observe(call("get_window_state", { depth: 1 }, editor), context))
+      .value as ScreenObservation;
+    const second = (yield* host.observe(call("get_window_state", { depth: 1 }, viewer), context))
+      .value as ScreenObservation;
+    connection.id = "driver:2";
+    yield* host
+      .invoke(call("click", { elementRef: refOf(first, 2) }, editor), context)
+      .pipe(Effect.flip);
+    const reads = sent.filter((each) => each.tool === "get_window_state").length;
+    const stale = yield* host
+      .observe(
+        call("get_window_state", { within: 1, withinBase: second.observationId }, viewer),
+        context,
+      )
+      .pipe(Effect.flip);
+    expect((stale as ScreenRunError).code).toBe("stale_reference");
+    expect(sent.filter((each) => each.tool === "get_window_state")).toHaveLength(reads);
+  }),
+);
