@@ -27,7 +27,7 @@ interface BatchSlot {
   readonly index: number;
   readonly group: BatchGroup;
   state: "joined" | "ready" | "withdrawn";
-  markDispatched?: () => void;
+  markDispatched?: () => boolean;
   readonly outcome: Deferred.Deferred<ScreenHostDispatchResult, ScreenRunError>;
 }
 
@@ -152,7 +152,7 @@ export class BatchGroups {
           );
   }
 
-  ready(slot: BatchSlot, markDispatched: () => void) {
+  ready(slot: BatchSlot, markDispatched: () => boolean) {
     if (slot.state !== "joined") return;
     slot.state = "ready";
     slot.markDispatched = markDispatched;
@@ -172,7 +172,7 @@ export class BatchGroups {
       readonly dispatch: (
         calls: ReadonlyArray<ScreenHostCall>,
         /** Marks a member sent, right before it leaves; members never marked sent nothing. */
-        markDispatched: (index: number) => void,
+        markDispatched: (index: number) => boolean,
       ) => Effect.Effect<ReadonlyArray<Outcome>>;
       readonly notRun: NotRun;
     },
@@ -191,7 +191,7 @@ export class BatchGroups {
         ? []
         : yield* deps.dispatch(
             calls.filter((call) => call !== undefined),
-            (index) => group.slots.get(index)?.markDispatched?.(),
+            (index) => group.slots.get(index)?.markDispatched?.() ?? false,
           );
     let failed: number | undefined;
     for (let index = 0; index < group.size; index++) {

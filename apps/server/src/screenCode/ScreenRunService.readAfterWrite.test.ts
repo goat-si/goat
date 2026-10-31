@@ -6,6 +6,8 @@ import * as NodeURL from "node:url";
 import type { EnvironmentId, ProviderInstanceId, ScreenRunError, ThreadId } from "@goat/contracts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { context as desktopContext, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 import { screenActionSafety } from "./ScreenActionOutcome.ts";
 
 const invocation = {
@@ -134,5 +136,56 @@ it.live("a read refused before any input in its cell still says nothing was sent
     const error = yield* cellAfterPress("none");
     expect(error.safety).toMatchObject({ possibleCommit: false, code: "read_failed_pre_dispatch" });
     expect(error.nextStep).toBe(READ_REFUSED);
+    expect(error.evidence ?? []).not.toContain("first_failure:2:unavailable");
   }),
+);
+
+it.live(
+  "a refused batch member stays settled and identifies the first failure in the cell error",
+  () => {
+    const { host } = fixture({
+      click: new DriverError({
+        effect: "refused",
+        refusal: { code: "user_interacting", retry_after_ms: 750 },
+      }),
+    });
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service
+        .runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: desktopContext.invocation,
+          source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await app.observe(); const results = await Promise.allSettled([app.click('Apply'), app.click('Apply')]); throw results[1].reason;`,
+        })
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag !== "Failure") return;
+      const error = result.failure;
+      const first = error.receipts?.find((receipt) => receipt.method === "click");
+      expect(first).toMatchObject({
+        category: "refused",
+        journalState: "settled",
+        dispatched: false,
+      });
+      expect(error).toMatchObject({ code: "not_run" });
+      expect(error.nextStep).toContain(
+        `First failure: call ${first?.callId} user_interacting (nothing sent).`,
+      );
+      expect(error.evidence).toContain(`first_failure:${first?.callId}:user_interacting`);
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ app: host }),
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  },
 );

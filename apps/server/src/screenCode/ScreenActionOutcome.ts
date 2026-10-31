@@ -2,6 +2,7 @@ import type {
   ActionOutcomeSafety,
   ScreenEffectReceipt,
   ScreenHostCall,
+  ScreenJournalEntry,
   ScreenRunError,
   ScreenRunResult,
 } from "@goat/contracts";
@@ -127,3 +128,36 @@ export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
           result.journal.map((entry) => entry.receipt),
         ),
       };
+
+export const markUnawaited = (journal: ScreenJournalEntry[], callIds: readonly number[]): void => {
+  const unawaited = new Set(callIds);
+  for (let index = 0; index < journal.length; index++) {
+    const entry = journal[index];
+    if (!entry || !unawaited.has(entry.receipt.callId) || entry.receipt.journalState === "settled")
+      continue;
+    const dispatched = entry.receipt.dispatched;
+    journal[index] = {
+      ...entry,
+      receipt: {
+        ...entry.receipt,
+        category: dispatched ? "unknown_outcome" : "refused",
+        journalState: dispatched ? "unknown" : "settled",
+        safety: screenActionSafety(
+          entry.receipt,
+          dispatched ? "indeterminate" : "refused",
+          dispatched,
+        ),
+      },
+    };
+  }
+};
+
+export const firstScreenFailure = (
+  callId: number,
+  error: ScreenRunError,
+  safety: ActionOutcomeSafety,
+) => ({
+  callId,
+  code: error.code,
+  mayHaveSent: error.effectStarted || safety.possibleCommit,
+});

@@ -923,7 +923,13 @@ export const createDesktopTargetHost = (deps: {
       calls,
       (each, index) =>
         Effect.suspend(() => {
-          markDispatched(index);
+          if (!markDispatched(index))
+            return Effect.fail<ScreenRunError>({
+              code: "stopped",
+              callId: each.callId,
+              effectStarted: false,
+              nextStep: "Refresh the screen target and retry if appropriate.",
+            });
           return INPUT_METHODS.has(each.method)
             ? withWindow(each, invoke(each, context, true))
             : dispatch(each, context);

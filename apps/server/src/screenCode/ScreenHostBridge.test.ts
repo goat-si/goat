@@ -640,7 +640,7 @@ it.effect(
       const journal = bridge.takeCellImagesNow("r", "t", "c").journal;
       expect(journal.map((entry) => [entry.receipt.dispatched, entry.receipt.outcome])).toEqual([
         [true, { dispatch: "unknown", effect: "unknown" }],
-        [false, { dispatch: "unknown", effect: "unknown" }],
+        [false, { dispatch: "refused", effect: "unknown" }],
       ]);
       bridge.cutCellNow("r", "t", "c");
     }),
