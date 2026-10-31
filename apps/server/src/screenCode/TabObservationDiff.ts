@@ -12,7 +12,23 @@ export const hasFrameRefs = (draft: ScreenObservationDraft) =>
 const identity = (element: Element) =>
   JSON.stringify([element.role, element.name, nativeRef(element.driverToken)]);
 
-const comparableLine = (line: string) => line.trim().replace(/\[ref=[^\]]+\]/, "[ref]");
+const elementLine = (line: string) => {
+  const match = /^(\s*-\s*'?\w[\w-]*(?:\s+"(?:[^"\\]|\\.)*")?)((?:\s+\[[^\]]+\])*)/.exec(line);
+  if (!match) return { comparable: line.trim(), focused: false };
+  const attributes = match[2] ?? "";
+  const focused = /(?:^|\s)\[(?:active|focused)\](?=\s|$)/.test(attributes);
+  const normalized = attributes
+    .replace(/\s+\[(?:active|focused)\](?=\s|$)/g, "")
+    .replace(/\[ref=[^\]]+\]/, "[ref]");
+  return { comparable: `${match[1]}${normalized}${line.slice(match[0].length)}`.trim(), focused };
+};
+
+const comparableLine = (line: string) => {
+  const end = line.indexOf("\n");
+  return end < 0
+    ? elementLine(line).comparable
+    : `${elementLine(line.slice(0, end)).comparable}${line.slice(end)}`;
+};
 
 const rows = (draft: ScreenObservationDraft) => {
   const elements = new Map(draft.elements.map((element) => [element.driverToken, element]));
@@ -83,22 +99,44 @@ export const diffTabObservation = (
   }
   const count = (lines: string[]) => {
     const counts = new Map<string, number>();
-    for (const line of lines) counts.set(line.trim(), (counts.get(line.trim()) ?? 0) + 1);
+    for (const line of lines) {
+      const key = elementLine(line).comparable;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
     return counts;
   };
   const oldPlain = count(old.plain);
   const newPlain = count(next.plain);
   for (const line of old.plain) {
-    const key = line.trim();
+    const key = elementLine(line).comparable;
     const remaining = newPlain.get(key) ?? 0;
     if (remaining > 0) newPlain.set(key, remaining - 1);
     else removed.push(`- ${line}`);
   }
   for (const line of next.plain) {
-    const key = line.trim();
+    const key = elementLine(line).comparable;
     const remaining = oldPlain.get(key) ?? 0;
     if (remaining > 0) oldPlain.set(key, remaining - 1);
     else changed.push(`+ ${line}`);
+  }
+  const focused = (data: NonNullable<ReturnType<typeof rows>>) => {
+    // Containers of the focused element can keep [active]; the innermost, last marked row is the focus.
+    let last: string | undefined;
+    for (const [key, row] of data.byIdentity) {
+      if (elementLine(row.line.split("\n", 1)[0] ?? "").focused) last = key;
+    }
+    if (last !== undefined) return last;
+    return data.plain.some((line) => elementLine(line).focused) ? null : undefined;
+  };
+  const oldFocus = focused(old);
+  const newFocus = focused(next);
+  if (oldFocus !== newFocus) {
+    if (newFocus === undefined) changed.push("focus none");
+    else if (newFocus !== null) {
+      const row = next.byIdentity.get(newFocus);
+      const index = row && elements.find((element) => identity(element) === newFocus)?.index;
+      if (index !== undefined) changed.push(`focus [${index}]`);
+    }
   }
   return {
     text: [...removed, ...changed].join("\n") || `no change since ${baseObservationId}`,
