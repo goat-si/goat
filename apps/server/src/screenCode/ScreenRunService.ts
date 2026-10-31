@@ -27,7 +27,11 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
-import { terminalFailure, type ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
+import {
+  terminalFailure,
+  terminalState,
+  type ComputerUseTerminalReason,
+} from "../cua/ComputerUseTerminal.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
@@ -631,7 +635,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   receipts: cause.journal ?? cause.receipts ?? [],
                 };
                 const terminal = terminalFailure(
-                  { reason: cellTerminals.get(id), possibleCommit: false },
+                  terminalState(cellTerminals.get(id), false),
                   "list_apps",
                   {},
                 );

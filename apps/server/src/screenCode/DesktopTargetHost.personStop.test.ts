@@ -91,7 +91,11 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
           request: (request) => {
             if (stopped) {
               refusedReads++;
-              const failure = probeTerminalFailure(reason, request.tool, request.args);
+              const failure = probeTerminalFailure(
+                { reason, possibleCommit: false },
+                request.tool,
+                request.args,
+              );
               if (failure === undefined) return Effect.die("expected terminal failure");
               return Effect.fail(failure);
             }

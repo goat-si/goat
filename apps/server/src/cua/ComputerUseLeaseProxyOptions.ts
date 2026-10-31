@@ -41,7 +41,7 @@ import {
   terminalErrorState,
   terminalFailure,
   terminalReplyState,
-  type ComputerUseTerminalReason,
+  type ComputerUseTerminalState,
 } from "./ComputerUseTerminal.ts";
 import { type Envelope, parse, OWN_ID } from "./ComputerUseLeaseProtocol.ts";
 
@@ -85,10 +85,7 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
 export interface ReplyContext {
   readonly tool?: string | undefined;
   readonly request?: Envelope | undefined;
-  readonly terminalState?: () => {
-    readonly reason?: ComputerUseTerminalReason | undefined;
-    readonly possibleCommit?: boolean | undefined;
-  };
+  readonly terminalState?: () => ComputerUseTerminalState;
 }
 
 export interface ReplySink {

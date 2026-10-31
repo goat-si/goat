@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { mergeTerminal, terminalReplyState } from "./ComputerUseTerminal.ts";
+import { mergeTerminal, terminalFailure, terminalReplyState } from "./ComputerUseTerminal.ts";
 import {
   finalTerminalLine,
   makePersonStopFence,
@@ -235,7 +235,7 @@ it.effect("applies a late terminal latch after an outbound transformation", () =
               shaped,
               status,
               context?.request,
-              context?.terminalState?.() ?? {},
+              context?.terminalState?.() ?? { possibleCommit: false },
             ).line;
           }),
       },
@@ -277,4 +277,14 @@ it.effect("a dispatched read without input is not marked as possibly committed",
     );
     assert.include(written, '"possibleCommit":false');
   }),
+);
+
+it.each(["screen_locked", "stopped_by_person"] as const)(
+  "terminal failure keeps possible input for a read: %s",
+  (reason) => {
+    const failure = terminalFailure({ reason, possibleCommit: true }, "list_apps", {}, false);
+    assert.equal(failure?.code, reason);
+    assert.isTrue(failure?.safety?.possibleCommit);
+    assert.equal(failure?.safety?.retryClass, "never");
+  },
 );

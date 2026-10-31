@@ -766,7 +766,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
             shaped,
             undefined,
             context?.request,
-            context?.terminalState?.() ?? {},
+            context?.terminalState?.() ?? { possibleCommit: false },
           );
           process.stdout.write(final.line + "\n");
         }),

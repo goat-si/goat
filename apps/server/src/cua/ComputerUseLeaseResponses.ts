@@ -80,6 +80,29 @@ export const refusal = (
   );
 };
 
+export const terminalReplacement = (
+  id: JsonRpcId,
+  tool: string | undefined,
+  args: unknown,
+  state: ComputerUseTerminalState & { readonly reason: "stopped_by_person" | "screen_locked" },
+  dispatched: boolean,
+) => {
+  const cause: Interruption =
+    state.reason === "screen_locked"
+      ? { _tag: "pause", reason: "screen_locked" }
+      : { _tag: "end", reason: "stopped" };
+  return dispatched || state.possibleCommit
+    ? cutOff(id, tool, cause, args, state)
+    : refusal(
+        id,
+        "tools/call",
+        state.reason === "screen_locked" ? "screen_locked" : "stopped",
+        state.reason === "screen_locked"
+          ? PAUSE_MESSAGES.screen_locked
+          : LEASE_END_MESSAGES.stopped,
+      );
+};
+
 export const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
   reason === "private"
     ? "private_mode"

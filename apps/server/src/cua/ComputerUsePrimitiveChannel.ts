@@ -25,8 +25,7 @@ import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
-import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
-import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import { terminalReplacement } from "./ComputerUseLeaseResponses.ts";
 import {
   terminalFailure,
   mergeTerminal,
@@ -217,24 +216,13 @@ export const make = Effect.gen(function* () {
       : {
           result: resultOf(
             JSON.parse(
-              pending.sent || terminalState.possibleCommit
-                ? cutOff(
-                    pending.request.callId,
-                    terminalState.possibleCommit ? "click" : pending.request.tool,
-                    terminalState.reason === "screen_locked"
-                      ? { _tag: "pause", reason: "screen_locked" }
-                      : { _tag: "end", reason: "stopped_all" },
-                    pending.request.args,
-                    terminalState,
-                  )
-                : refusal(
-                    pending.request.callId,
-                    "tools/call",
-                    terminalState.reason === "screen_locked" ? "screen_locked" : "stopped",
-                    terminalState.reason === "screen_locked"
-                      ? PAUSE_MESSAGES.screen_locked
-                      : LEASE_END_MESSAGES.stopped,
-                  ),
+              terminalReplacement(
+                pending.request.callId,
+                pending.request.tool,
+                pending.request.args,
+                { ...terminalState, reason: terminalState.reason },
+                pending.sent,
+              ),
             ),
           ).result,
         }),

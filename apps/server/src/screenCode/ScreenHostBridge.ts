@@ -28,6 +28,7 @@ import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import {
   mergeTerminal,
   terminalFailure,
+  terminalState,
   type ComputerUseTerminalReason,
 } from "../cua/ComputerUseTerminal.ts";
 import {
@@ -259,13 +260,7 @@ export class ScreenHostBridge {
     )
       return deny(
         terminalFailure(
-          {
-            reason:
-              state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
-                ? state.cutoffReason
-                : undefined,
-            possibleCommit: false,
-          },
+          terminalState(state.cutoffReason, false),
           isScreenRead(call.method) ? "list_apps" : call.method,
           call.args,
         ) ?? {
@@ -632,7 +627,7 @@ export class ScreenHostBridge {
       const terminal =
         state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
           ? terminalFailure(
-              { reason: state.cutoffReason, possibleCommit: false },
+              terminalState(state.cutoffReason, false),
               isScreenRead(call.method) ? "list_apps" : call.method,
               call.args,
               dispatched,

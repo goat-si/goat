@@ -34,7 +34,19 @@ export const mergeTerminal = (
   };
 };
 
-export type ComputerUseTerminalState = ReturnType<typeof mergeTerminal>;
+export type ComputerUseTerminalState = {
+  readonly reason?: ComputerUseTerminalReason | undefined;
+  readonly possibleCommit: boolean;
+};
+
+export const terminalState = (reason: unknown, possibleCommit: boolean): ComputerUseTerminalState =>
+  mergeTerminal(
+    {
+      reason: reason === "stopped_by_person" || reason === "screen_locked" ? reason : undefined,
+      possibleCommit,
+    },
+    {},
+  );
 
 export const terminalFailure = (
   state: ComputerUseTerminalState,

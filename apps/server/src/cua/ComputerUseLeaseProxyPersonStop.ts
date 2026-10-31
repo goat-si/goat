@@ -11,7 +11,7 @@ import {
   isReadOnlyCall,
   type Interruption,
 } from "./ComputerUseLeaseMessages.ts";
-import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { terminalReplacement, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import type { OutstandingCall, ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import {
@@ -20,6 +20,7 @@ import {
   terminalReason,
   terminalReplyState,
   type ComputerUseTerminalReason,
+  type ComputerUseTerminalState,
 } from "./ComputerUseTerminal.ts";
 
 const decodeTerminal = Schema.decodeUnknownOption(
@@ -35,10 +36,7 @@ export const finalTerminalLine = (
   line: string,
   status: import("@goat/contracts").ComputerUsePrimitiveReply["status"] | undefined,
   message: Envelope | undefined,
-  terminal: {
-    readonly reason?: ComputerUseTerminalReason | undefined;
-    readonly possibleCommit?: boolean | undefined;
-  },
+  terminal: ComputerUseTerminalState,
 ): {
   line: string;
   status: import("@goat/contracts").ComputerUsePrimitiveReply["status"] | undefined;
@@ -61,20 +59,15 @@ export const finalTerminalLine = (
       (!merged.possibleCommit || reply.possibleCommit))
   )
     return { line, status };
-  const cause: Interruption =
-    reason === "screen_locked"
-      ? { _tag: "pause", reason: "screen_locked" }
-      : { _tag: "end", reason: "stopped" };
   const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
   return {
-    line: merged.possibleCommit
-      ? cutOff(message.id, tool, cause, message.params?.arguments, merged)
-      : refusal(
-          message.id,
-          message.method,
-          reason === "screen_locked" ? "screen_locked" : "stopped",
-          reason === "screen_locked" ? PAUSE_MESSAGES.screen_locked : LEASE_END_MESSAGES.stopped,
-        ),
+    line: terminalReplacement(
+      message.id,
+      tool,
+      message.params?.arguments,
+      { ...merged, reason },
+      merged.possibleCommit,
+    ),
     status: merged.possibleCommit ? "unknown_outcome" : "not_started",
   };
 };
