@@ -98,6 +98,7 @@ it.effect("gone never succeeds when a later driver read fails", () =>
     ).pipe(Effect.forkChild);
     yield* TestClock.adjust("500 millis");
     const result = yield* Fiber.join(fiber);
+    expect(reads).toBe(2);
     expect(
       result._tag === "Failure" ||
         (result._tag === "Success" && (result.value.value as { met: boolean }).met === false),
