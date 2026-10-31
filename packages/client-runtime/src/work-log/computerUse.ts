@@ -230,7 +230,12 @@ export function hasComputerUseHistory(item: OrchestrationV2TurnItem | undefined)
   const name = item.toolName.toLowerCase();
   const tool = resolveGoatMcpShippedToolId(name);
   if (tool === "goat_call") {
-    const target = goatCallTarget(item.input).path;
+    const envelope = record(item.input);
+    const input =
+      envelope?.server === "goat" && envelope.tool === "goat_call"
+        ? envelope.arguments
+        : item.input;
+    const target = goatCallTarget(input).path;
     if (typeof target !== "string") return false;
     const path = resolveAgentSurfaceEntry(target)?.path ?? target;
     return (
