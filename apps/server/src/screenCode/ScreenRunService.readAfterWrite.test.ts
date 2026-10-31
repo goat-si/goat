@@ -135,9 +135,8 @@ it.live("a read refused before any input in its cell still says nothing was sent
   Effect.gen(function* () {
     const error = yield* cellAfterPress("none");
     expect(error.safety).toMatchObject({ possibleCommit: false, code: "read_failed_pre_dispatch" });
-    expect(error.nextStep).toBe(
-      `First failure: call 2 unavailable (nothing sent). ${READ_REFUSED}`,
-    );
+    expect(error.nextStep).toBe(READ_REFUSED);
+    expect(error.evidence ?? []).not.toContain("first_failure:2:unavailable");
   }),
 );
 

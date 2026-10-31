@@ -418,6 +418,7 @@ export function createScreenRunSupervisor(deps: {
                           error,
                           taken.journal.map((entry) => entry.receipt),
                         );
+                        if (first.callId === error.callId) return safe;
                         return {
                           ...safe,
                           nextStep:

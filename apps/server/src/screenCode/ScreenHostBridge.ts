@@ -79,7 +79,7 @@ export interface ScreenHostDispatcher {
   readonly dispatchBatch?: (
     calls: ReadonlyArray<ScreenHostCall>,
     context: ScreenHostContext,
-    markDispatched: (index: number) => void,
+    markDispatched: (index: number) => boolean,
   ) => Effect.Effect<ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>>>;
 }
 
@@ -507,6 +507,7 @@ export class ScreenHostBridge {
       if (!bridge.dispatcher) return yield* Effect.fail(failure("unavailable", call.callId));
       const dispatcher = bridge.dispatcher;
       const markDispatched = () => {
+        if (state.closed || state.cutoff.signal.aborted) return false;
         callDispatched = true;
         state.effectsStarted++;
         settle(
@@ -516,6 +517,7 @@ export class ScreenHostBridge {
           [],
           screenActionSafety(call, "indeterminate", true),
         );
+        return true;
       };
       if (slot !== undefined) {
         state.batches.ready(slot, markDispatched);
@@ -533,14 +535,14 @@ export class ScreenHostBridge {
                 calls,
                 (each, index) =>
                   Effect.suspend(() => {
-                    mark(index);
+                    if (!mark(index)) return Effect.fail(failure("stopped", each.callId));
                     return dispatcher.dispatch(each, context);
                   }),
                 FAILED_CATEGORIES,
               ),
             notRun,
           });
-      } else markDispatched();
+      } else if (!markDispatched()) return yield* Effect.fail(failure("stopped", call.callId));
       const outcome = yield* slot === undefined
         ? dispatcher.dispatch(call, context)
         : Deferred.await(slot.outcome);
@@ -921,6 +923,7 @@ export class ScreenHostBridge {
   ): void {
     const state = this.cells.get(key(runId, turnId, cellId));
     if (!state) return;
+    this.cutCellNow(runId, turnId, cellId, "unawaited");
     markUnawaited(state.journal, callIds);
   }
 
