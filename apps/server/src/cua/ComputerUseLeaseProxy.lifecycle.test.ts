@@ -199,6 +199,35 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
     }),
   );
 
+  it.effect("a queued primitive after Escape keeps the terminal person stop", () =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({ personStop: true, personStopGate: gate });
+      yield* h.push(active());
+      const driver = yield* h.driverStarted;
+      yield* h.escape;
+      yield* h.escapeReported;
+      yield* h.killed;
+      yield* h.sendPrimitive({
+        state: "primitive-request",
+        requestId: "request:late-escape",
+        registrationId: "registration:one",
+        controlId: CONTROL,
+        connectionGeneration: driver.connectionId,
+        runId: "run:one",
+        turnId: "cell:one",
+        callId: 0,
+        deadlineMillis: 60000,
+        tool: "list_apps",
+        args: {},
+      });
+      const result = yield* h.primitiveReply;
+      assert.include(JSON.stringify(result), '"code":"stopped_by_person"');
+      assert.include(JSON.stringify(result), '"retryClass":"never"');
+      yield* Deferred.succeed(gate, undefined);
+    }),
+  );
+
   it.effect("Stop cuts off server-origin input and quarantines the late driver reply", () =>
     Effect.gen(function* () {
       const h = yield* harness({ humanInput: true });

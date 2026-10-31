@@ -80,7 +80,11 @@ import {
 import * as Transport from "./ComputerUseLeaseProxyTransport.ts";
 import { refreshDriverManifest } from "./ComputerUseLeaseProxyManifest.ts";
 import { makeUnansweredWatch } from "./ComputerUseLeaseProxyUnanswered.ts";
-import { forwardPersonStop, makePersonStopFence } from "./ComputerUseLeaseProxyPersonStop.ts";
+import {
+  forwardPersonStop,
+  isTerminalStop,
+  makePersonStopFence,
+} from "./ComputerUseLeaseProxyPersonStop.ts";
 import { startLeaseUpdates } from "./ComputerUseLeaseProxyUpdates.ts";
 import {
   type JsonRpcId,
@@ -687,6 +691,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         (now) => primitiveCurrent() && now < primitiveDeadline && !held() && !personStop.pending(),
       ),
     );
+    if (
+      message.method === "tools/call" &&
+      message.id != null &&
+      (personStop.pending() || isTerminalStop(finished, paused))
+    )
+      return yield* sink.answer(notSent(message.id), "not_started");
     if (expectedConnection !== undefined && lifecycle.current?.connectionId !== expectedConnection)
       return yield* sink.answer(staleGeneration(message.id ?? "", "tools/call"), "not_started");
     const id = message.id;

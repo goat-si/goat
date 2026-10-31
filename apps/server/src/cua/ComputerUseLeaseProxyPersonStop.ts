@@ -53,6 +53,9 @@ export function makePersonStopFence() {
   };
 }
 
+export const isTerminalStop = (finished: string | undefined, paused: string | undefined) =>
+  finished === "stopped" || finished === "stopped_all" || paused === "screen_locked";
+
 export const forwardPersonStop = Effect.fn("ComputerUseLeaseProxy.forwardPersonStop")(
   function* (input: {
     readonly events: Stream.Stream<void> | undefined;
