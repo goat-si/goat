@@ -355,11 +355,9 @@ export class ScreenHostBridge {
     )
       return deny({
         ...failure("invalid_argument", call.callId),
-        message: `screen.${call.method} acts on a target and was called without one; nothing was sent.`,
+        message: `screen.${call.method} needs a target; nothing was sent.`,
         nextStep:
-          call.method === "close_tab"
-            ? "Get the tab with screen.tab() or screen.openTab() and call tab.close()."
-            : "Get the target with screen.tab() or screen.app() and call the method on it.",
+          "Call it on a target from screen.tab() or screen.app(), as tab.close() for close_tab.",
       });
     if (call.targetRef) {
       let touched = this.turnTargets.get(turn);

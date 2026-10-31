@@ -984,22 +984,3 @@ it.effect(
       ]);
     }),
 );
-
-it.effect("a target method called without its target is refused unsent, naming the call form", () =>
-  Effect.gen(function* () {
-    const bridge = new ScreenHostBridge();
-    bridge.setDispatcher({
-      availability: () => Effect.succeed([]),
-      dispatch: () => Effect.succeed({ category: "confirmed" }),
-    });
-    const { targetRef: _target, ...untargeted } = call(1);
-    const result = yield* bridge.handle(
-      { ...untargeted, method: "close_tab", args: [{ tabId: "tab_1" }] },
-      context(),
-    );
-    const error = result && "error" in result ? result.error : undefined;
-    expect(error).toMatchObject({ code: "invalid_argument", effectStarted: false });
-    expect(error?.message).toContain("screen.close_tab");
-    expect(error?.nextStep).toContain("tab.close()");
-  }),
-);

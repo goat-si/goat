@@ -206,6 +206,20 @@ it.effect("a double click a dialog cut short after its first press is never conf
   }),
 );
 
+it.effect("a tab method called without its tab is refused unsent, naming the call form", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    // screen.close_tab({ tabId }) sends the raw method with no target, as the field report did.
+    const reply = yield* fixture.bridge.handle(
+      call("close_tab", 9, { tabId: fixture.tab.tabId }),
+      context,
+    );
+    expect(reply?.error).toMatchObject({ code: "invalid_argument", effectStarted: false });
+    expect(reply?.error?.message).toContain("screen.close_tab");
+    expect(reply?.error?.nextStep).toContain("tab.close()");
+  }),
+);
+
 it.effect("a fetch that failed in the page is a definite failure that changed nothing", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();

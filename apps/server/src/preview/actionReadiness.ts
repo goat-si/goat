@@ -100,18 +100,11 @@ export const revealFramesOf = async (handle: ElementHandle, deadline: number) =>
   }
 };
 
-/** The element a locator names now, held for the rest of the action. */
-export const pinTarget = async (target: Locator, deadline: number) => {
-  const handle = await target.elementHandle({ timeout: remaining(deadline) });
-  if (handle === null) throw targetChanged();
-  return handle;
-};
-
 /** Room for a field that renders just after the call; a selector that names nothing ends there. */
 const NO_MATCH_GRACE_MS = 1_000;
 
 /** Refuses, before any input, a selector that matches no element within the grace. */
-export const requireMatch = async (target: Locator, deadline: number) => {
+const requireMatch = async (target: Locator, deadline: number) => {
   if ((await target.count()) > 0) return;
   await target
     .first()
@@ -125,6 +118,14 @@ export const requireMatch = async (target: Locator, deadline: number) => {
           )
         : cause;
     });
+};
+
+/** The element a locator names now, held for the rest of the action. */
+export const pinTarget = async (target: Locator, deadline: number) => {
+  await requireMatch(target, deadline);
+  const handle = await target.elementHandle({ timeout: remaining(deadline) });
+  if (handle === null) throw targetChanged();
+  return handle;
 };
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
