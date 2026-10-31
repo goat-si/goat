@@ -45,31 +45,31 @@ export const requireMatch = async (target: Locator, timeoutMs: number) => {
   // A target already there needs no wait. After a miss it may still appear: the wait for it runs
   // to the deadline, and the 2 s grace starts only once the page has loaded.
   if ((await target.count()) > 0) return;
+  // The deadline passing first stays the wait's own timeout; only a spent grace is a miss.
   const attached = target
     .first()
     .waitFor({ state: "attached", timeout: left() })
-    .then(
-      () => true,
-      (cause: unknown) => {
-        if (isTimeout(cause)) return false;
-        throw cause;
-      },
-    );
+    .then(() => "found" as const);
+  void attached.catch(() => undefined);
+  let settled = false;
   let grace: ReturnType<typeof setTimeout> | undefined;
   const graceOver = target
     .page()
     .waitForLoadState("load", { timeout: left() })
     .then(
       () =>
-        new Promise<false>(
-          (resolve) => (grace = setTimeout(() => resolve(false), NO_MATCH_GRACE_MS)),
-        ),
+        new Promise<"missed">((resolve) => {
+          if (!settled) grace = setTimeout(() => resolve("missed"), NO_MATCH_GRACE_MS);
+        }),
       // A page that never loads leaves the answer to the wait for the target.
-      () => new Promise<false>(() => {}),
+      () => new Promise<never>(() => {}),
     );
-  const found = await Promise.race([attached, graceOver]).finally(() => clearTimeout(grace));
+  const outcome = await Promise.race([attached, graceOver]).finally(() => {
+    settled = true;
+    clearTimeout(grace);
+  });
   // The wait for the target, left running after a miss, ends by the deadline on its own.
-  if (!found)
+  if (outcome === "missed")
     throw new ServerBrowserOperationError(
       "PreviewAutomationInvalidSelectorError",
       "No element matches the selector, so no input was sent.",

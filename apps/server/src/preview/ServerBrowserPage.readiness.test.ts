@@ -1,5 +1,6 @@
-import { chromium, type Page } from "playwright-core";
-import { expect, it } from "vite-plus/test";
+import { chromium, type Locator, type Page } from "playwright-core";
+import { expect, it, vi } from "vite-plus/test";
+import { requireMatch } from "./actionReadiness.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
@@ -247,3 +248,46 @@ it("says it waited when the option never appears, and selects nothing", () =>
     ).rejects.toThrow('still has no option "z"');
     expect(await page.evaluate("s.value")).toBe("a");
   }));
+it("answers a timeout, not a missing target, when the deadline ends before the page loaded", () =>
+  fixture(async (page) => {
+    const release = Promise.withResolvers<void>();
+    await page.route("https://held.test/**", async (route) => {
+      await release.promise;
+      await route.abort();
+    });
+    try {
+      await page.setContent('<img src="https://held.test/slow.png">', {
+        waitUntil: "domcontentloaded",
+      });
+      const refused = await ServerBrowserPage.type(page, {
+        selector: "input",
+        text: "goat",
+        timeoutMs: 300,
+      }).catch((cause: unknown) => ServerBrowserPage.toOperationError(cause));
+      expect(refused).toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    } finally {
+      release.resolve();
+    }
+  }));
+
+it("leaves no grace timer behind when the target appears before the page loads", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const attached = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    const target = {
+      count: async () => 0,
+      first: () => ({ waitFor: () => attached.promise }),
+      page: () => ({ waitForLoadState: () => loaded.promise }),
+    };
+    const matching = requireMatch(target as unknown as Locator, 5_000);
+    attached.resolve();
+    await matching;
+    loaded.resolve();
+    await loaded.promise;
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
+});
