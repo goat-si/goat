@@ -26,6 +26,7 @@ export interface GuardElement {
   readonly nonValueLabel: string;
   readonly description: string;
   readonly placeholder: string;
+  readonly subrole: string;
   readonly identifier: string;
   readonly editable: boolean;
   /** A text field in a list or table that has keyboard focus: the item's name is being edited. */
@@ -439,6 +440,7 @@ export const inspectTreeElements = (
       nonValueLabel,
       description: string(entry.description) ?? "",
       placeholder: string(entry.placeholder) ?? "",
+      subrole: string(entry.subrole) ?? "",
       identifier,
       editable,
       editingCell,
@@ -467,11 +469,15 @@ const isPasteMenuItem = (element: GuardElement | undefined) =>
   bareRole(element.role) === "menuitem" &&
   (isPasteLabel(element.name) || isPasteLabel(element.rawLabel));
 
-const isNonComposer = (element: GuardElement | undefined): boolean => {
+/**
+ * A field where Enter searches: a search field by role or subrole, or a single-line text field
+ * a search word names. Anything else, a multi-line AXTextArea included, is treated as a composer.
+ */
+const isSearchField = (element: GuardElement | undefined): boolean => {
   if (element === undefined) return false;
   const bare = bareRole(element.role);
-  if (bare === "searchfield") return true;
-  if (bare !== "textfield" && bare !== "textarea") return false;
+  if (bare === "searchfield" || bareRole(element.subrole) === "searchfield") return true;
+  if (bare !== "textfield") return false;
   // Never match against the element's current value or tree-text fallback, since a user or agent
   // message inside an unlabeled composer can contain the word "search".
   const combined = [
@@ -533,7 +539,7 @@ const sendPolicy = (input: {
     )
       return send ? "allow" : "refuse_send";
   }
-  if (method === "press_key" && elementToken !== undefined && isEnter && !isNonComposer(element))
+  if (method === "press_key" && elementToken !== undefined && isEnter && !isSearchField(element))
     return send ? "allow" : "refuse_send";
   if (method === "type_text" && elementToken !== undefined && hasControlCharacter(args.text))
     return send ? "allow" : "refuse_send";

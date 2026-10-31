@@ -200,8 +200,9 @@ const byIndex = (observed: unknown, index: number): ScreenElementRef => {
   return found.ref;
 };
 
-// KakaoTalk's chat list window as the driver writes it: the search field's title is also
-// its value, and the composer is named by its description.
+// Chat-window fields as the driver writes them: a search field whose title is also its value,
+// one named only by a placeholder, one with a search subrole, and composers and multi-line fields
+// that must keep asking for send.
 const posing = 'hi\u2028  - [11] AXTextArea "Search"';
 const kakaoListState = (args: Record<string, unknown>) =>
   args.include_accessibility_tree === false
@@ -219,6 +220,10 @@ const kakaoListState = (args: Record<string, unknown>) =>
           '  - [10] AXTextField = "검색"',
           '  - [11] AXTextArea = "Search"',
           `  - [12] AXTextArea = "${posing}"`,
+          "  - [13] AXTextField [id=_NS:21]",
+          '  - [14] AXTextField = "근카스"',
+          "  - [15] AXTextArea",
+          '  - [16] AXTextArea "Search messages"',
           '  - [4] AXButton "전송"',
         ].join("\n"),
         elements: [
@@ -266,6 +271,29 @@ const kakaoListState = (args: Record<string, unknown>) =>
             frame: { x: 10, y: 500, w: 400, h: 30 },
           },
           {
+            element_index: 13,
+            role: "AXTextField",
+            label: "_NS:21",
+            identifier: "_NS:21",
+            placeholder: "Search chatrooms, participants",
+            frame: { x: 220, y: 40, w: 200, h: 28 },
+          },
+          {
+            element_index: 14,
+            role: "AXTextField",
+            subrole: "AXSearchField",
+            label: "근카스",
+            value: "근카스",
+            frame: { x: 220, y: 80, w: 200, h: 28 },
+          },
+          { element_index: 15, role: "AXTextArea", frame: { x: 10, y: 460, w: 400, h: 30 } },
+          {
+            element_index: 16,
+            role: "AXTextArea",
+            label: "Search messages",
+            frame: { x: 10, y: 420, w: 400, h: 30 },
+          },
+          {
             element_index: 4,
             role: "AXButton",
             label: "전송",
@@ -279,7 +307,7 @@ const kakaoListState = (args: Record<string, unknown>) =>
       };
 
 it.effect(
-  "Enter in a chat app's search field whose title equals its value needs no send, while composers, untitled fields and points near Send still refuse",
+  "Enter in a chat app's search field needs no send whether its title, placeholder or subrole names it, while composers, multi-line fields, untitled fields and points near Send still refuse",
   () =>
     Effect.gen(function* () {
       const { host, sent } = fixture({
@@ -293,17 +321,21 @@ it.effect(
       );
       const ref = bound.value as ScreenTargetRef;
       const observed = yield* host.observe(call("get_window_state", {}, ref), context);
-      const search = yield* host.invoke(
-        call("press_key", { key: "Enter", elementRef: byIndex(observed.value, 8) }, ref),
-        context,
-      );
-      expect(search.category).toBe("confirmed");
+      // Titled with its own value, named by a placeholder only, and by subrole.
+      for (const index of [8, 13, 14]) {
+        const search = yield* host.invoke(
+          call("press_key", { key: "Enter", elementRef: byIndex(observed.value, index) }, ref),
+          context,
+        );
+        expect(search.category).toBe("confirmed");
+      }
 
       yield* host.observe(call("screenshot", {}, ref), context);
       const before = sent.length;
-      // The composer, a field with only a search-like value, and a field whose title only
-      // another element's text claims.
-      for (const index of [9, 10, 11]) {
+      // The composer holding a draft, a field with only a search-like value, a field whose title
+      // only another element's text claims, an unlabeled AXTextArea, and a multi-line field
+      // titled like a search.
+      for (const index of [9, 10, 11, 15, 16]) {
         const refused = yield* host
           .invoke(
             call("press_key", { key: "Enter", elementRef: byIndex(observed.value, index) }, ref),
