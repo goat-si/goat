@@ -101,59 +101,62 @@ const withScreen = <A, E>(
   );
 };
 
-it.live("keeps a stored app usable across cells after rebinding its window and other apps", () => {
-  const { host } = desktopFixture({
-    list_apps: {
-      apps: [
-        { pid: 42, name: "Editor", bundle_id: "org.example.Editor" },
-        { pid: 43, name: "Other", bundle_id: "org.example.Other" },
-      ],
-    },
-    list_windows: {
-      windows: [
-        { pid: 42, window_id: 7, title: "First" },
-        { pid: 42, window_id: 8, title: "Second" },
-        { pid: 43, window_id: 9, title: "Other" },
-      ],
-    },
-  });
-  return Effect.gen(function* () {
-    const service = yield* ScreenRunService;
-    const first = yield* service.runCell({
-      ...request,
-      source:
-        "screen.state.app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return true;",
+it.effect(
+  "keeps a stored app usable across cells after rebinding its window and other apps",
+  () => {
+    const { host } = desktopFixture({
+      list_apps: {
+        apps: [
+          { pid: 42, name: "Editor", bundle_id: "org.example.Editor" },
+          { pid: 43, name: "Other", bundle_id: "org.example.Other" },
+        ],
+      },
+      list_windows: {
+        windows: [
+          { pid: 42, window_id: 7, title: "First" },
+          { pid: 42, window_id: 8, title: "Second" },
+          { pid: 43, window_id: 9, title: "Other" },
+        ],
+      },
     });
-    expect(first.status).toBe("completed");
-    const second = yield* service.runCell({
-      ...request,
-      source:
-        "const again = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); const other = await screen.app({bundle_id: 'org.example.Editor', window_id: 8}); await screen.app({bundle_id: 'org.example.Other', window_id: 9}); return [again.targetRef.id === screen.state.app.targetRef.id, other.targetRef.id !== again.targetRef.id];",
-    });
-    expect(second.value).toEqual([true, true]);
-    const third = yield* service.runCell({
-      ...request,
-      source:
-        "await screen.state.app.observe(); await screen.state.app.click('Apply'); return true;",
-    });
-    expect(third.status).toBe("completed");
-    expect(third.value).toBe(true);
-    yield* service.finishTurn({ ...request, reason: "test" });
-  }).pipe(
-    Effect.provide(
-      ScreenRunService.layerWithRuntime({
-        invocation: {
-          command: process.execPath,
-          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-        },
-        assetResolver: () => resolveScreenRuntimeAsset("dev"),
-        desktopHost: host,
-        dispatcher: createScreenDispatchRouter({ app: host }),
-      }).pipe(Layer.provide(NodeServices.layer)),
-    ),
-    Effect.provideService(ComputerUseCallApps, makeCallApps()),
-  );
-});
+    return Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const first = yield* service.runCell({
+        ...request,
+        source:
+          "screen.state.app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); return true;",
+      });
+      expect(first.status).toBe("completed");
+      const second = yield* service.runCell({
+        ...request,
+        source:
+          "const again = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); const other = await screen.app({bundle_id: 'org.example.Editor', window_id: 8}); await screen.app({bundle_id: 'org.example.Other', window_id: 9}); return [again.targetRef.id === screen.state.app.targetRef.id, other.targetRef.id !== again.targetRef.id];",
+      });
+      expect(second.value).toEqual([true, true]);
+      const third = yield* service.runCell({
+        ...request,
+        source:
+          "await screen.state.app.observe(); await screen.state.app.click('Apply'); return true;",
+      });
+      expect(third.status).toBe("completed");
+      expect(third.value).toBe(true);
+      yield* service.finishTurn({ ...request, reason: "test" });
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          desktopHost: host,
+          dispatcher: createScreenDispatchRouter({ app: host }),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+      Effect.provideService(ComputerUseCallApps, makeCallApps()),
+    );
+  },
+);
 
 it.live("a cell's row names the target it acted on even when its provider keeps a summary", () =>
   withScreen((callApps) =>
