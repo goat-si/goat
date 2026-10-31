@@ -545,6 +545,8 @@ export interface ProjectionStoreV2Shape {
     ReadonlyArray<ThreadId>,
     ProjectionStoreV2Error
   >;
+  /** Threads that are not deleted, archived ones included. */
+  readonly countThreads: () => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly listLaunchEdges: () => Effect.Effect<
     ReadonlyArray<LaunchEdges.ProjectionLaunchEdge>,
     ProjectionStoreV2Error
@@ -7086,6 +7088,13 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         .withTransaction(readShellSnapshotRows(options))
         .pipe(Effect.mapError(shellSnapshotReadError), Effect.flatMap(decodeShellSnapshot));
 
+    const countThreads = Effect.fn("ProjectionStore.countThreads")(function* () {
+      const rows = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM orchestration_v2_projection_threads WHERE deleted_at IS NULL
+      `;
+      return rows[0]?.count ?? 0;
+    }, Effect.mapError(shellSnapshotReadError));
+
     const listActiveSubagentThreadIds = Effect.fn("ProjectionStore.listActiveSubagentThreadIds")(
       function* () {
         const rows = yield* sql<{ readonly thread_id: string }>`
@@ -7301,6 +7310,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getReviewLedgerEntries,
       getShellSnapshot: readOnReader(getShellSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
+      countThreads: readOnReader(countThreads),
       listLaunchEdges: readOnReader(() =>
         LaunchEdges.selectLaunchEdges(sql).pipe(Effect.mapError(shellSnapshotReadError)),
       ),
@@ -7591,6 +7601,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           threads: visible.filter((thread) => thread.archivedAt === null),
           archivedThreads: visible.filter((thread) => thread.archivedAt !== null),
         };
+      }),
+      countThreads: Effect.fn("ProjectionStore.countThreads")(function* () {
+        const existing = (yield* Ref.get(replayState)).projections;
+        return [...existing.values()].filter(({ thread }) => thread.deletedAt === null).length;
       }),
       listActiveSubagentThreadIds: Effect.fn("ProjectionStore.listActiveSubagentThreadIds")(
         function* () {

@@ -458,6 +458,7 @@ export interface OrchestratorV2Shape {
     ReadonlyArray<ThreadId>,
     OrchestratorV2Error
   >;
+  readonly countThreads: () => Effect.Effect<number, OrchestratorV2Error>;
   /** Each active thread's parent and launcher, for walking launched threads cheaply. */
   readonly listLaunchEdges: () => Effect.Effect<
     ReadonlyArray<ProjectionLaunchEdge>,
@@ -13498,6 +13499,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           .pipe(Effect.mapError(shellProjectionError));
       },
     ),
+    countThreads: Effect.fn("OrchestratorV2.countThreads")(function () {
+      return projectionStore.countThreads().pipe(Effect.mapError(shellProjectionError));
+    }),
     listLaunchEdges: Effect.fn("OrchestratorV2.listLaunchEdges")(function () {
       return projectionStore.listLaunchEdges().pipe(Effect.mapError(shellProjectionError));
     }),

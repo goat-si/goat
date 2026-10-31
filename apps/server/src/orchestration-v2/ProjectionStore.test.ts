@@ -1593,6 +1593,7 @@ it.effect("lists every thread in the shell snapshot past SQLite's bound variable
     ]);
     assert.strictEqual(unscoped.threads.length, threadCount);
     assert.strictEqual(active.threads.length, threadCount);
+    assert.strictEqual(yield* store.countThreads(), threadCount);
   }).pipe(Effect.provide(layerTest)),
 );
 
