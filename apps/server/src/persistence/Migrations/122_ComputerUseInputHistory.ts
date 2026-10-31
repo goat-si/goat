@@ -24,4 +24,5 @@ export default Effect.gen(function* () {
   )`;
   yield* sql`CREATE INDEX computer_use_input_history_thread_time
     ON computer_use_input_history(thread_id, recorded_at, order_seq, id)`;
+  yield* sql`CREATE INDEX computer_use_input_history_order ON computer_use_input_history(order_seq)`;
 });

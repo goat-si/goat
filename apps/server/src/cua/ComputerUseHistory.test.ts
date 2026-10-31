@@ -6,7 +6,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Clock from "effect/Clock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
-import { historyStamp } from "./ComputerUseHistoryStamp.ts";
+import { historyStamp, initializeHistorySequence } from "./ComputerUseHistoryStamp.ts";
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history", (it) => {
   it.effect("records outcomes per thread with safe typed text", () =>
@@ -130,6 +130,30 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history
       assert.deepEqual(
         (yield* history.listForThread("thread:desktop-order")).map((row) => row.method),
         ["desktop", "browser"],
+      );
+    }),
+  );
+  it.effect("keeps equal-time completion order after a server restart", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* Clock.currentTimeMillis;
+      const previous = historyStamp(now);
+      yield* sql`INSERT INTO computer_use_input_history
+        (thread_id, recorded_at, order_seq, target_kind, method, verdict)
+        VALUES ('thread:restart-order', ${now}, ${previous.orderSeq + 100}, 'app', 'before-restart', 'sent')`;
+      yield* initializeHistorySequence();
+      const history = yield* makeComputerUseHistory;
+      yield* history.record({
+        threadId: "thread:restart-order",
+        target: { kind: "app" },
+        method: "after-restart",
+        verdict: "sent",
+        stamp: historyStamp(now),
+      });
+      assert.deepEqual(
+        (yield* history.listForThread("thread:restart-order")).map((row) => row.method),
+        ["after-restart", "before-restart"],
       );
     }),
   );
