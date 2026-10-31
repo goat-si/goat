@@ -437,7 +437,7 @@ const streamLayer = HttpRouter.add(
   }),
 );
 
-export const callLayer = HttpRouter.add(
+const callLayer = HttpRouter.add(
   "POST",
   `${COMPUTER_USE_LEASE_ROUTE}/calls`,
   Effect.gen(function* () {
