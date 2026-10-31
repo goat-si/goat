@@ -9,10 +9,19 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+const decodeSafety = Schema.decodeUnknownOption(
+  Schema.Struct({
+    structuredContent: Schema.Struct({
+      code: Schema.String,
+      safety: Schema.Struct({ possibleCommit: Schema.Boolean, retryClass: Schema.String }),
+    }),
+  }),
+);
 
-it.effect.each(["lock then stop", "lock then resume then stop", "stop then lock"])(
+it.effect.each(["lock then stop", "lock then resume then stop", "stop then lock", "nested stop"])(
   "a pending primitive merges %s",
   (order) =>
     Effect.gen(function* () {
@@ -92,7 +101,35 @@ it.effect.each(["lock then stop", "lock then resume then stop", "stop then lock"
           }),
           Effect.forkChild({ startImmediately: true }),
         );
-      yield* Stream.runHead(registered.requests);
+      const first = Option.getOrThrow(yield* Stream.runHead(registered.requests));
+      if (first.state !== "primitive-request") return assert.fail("expected primitive");
+      if (order === "nested stop") {
+        yield* channel.reply({
+          ...authority,
+          registrationId: registered.registrationId,
+          reply: {
+            ...first,
+            status: "unknown_outcome",
+            result: {
+              isError: true,
+              structuredContent: {
+                code: "screen_locked",
+                refusal: { code: "stopped_by_person" },
+                safety: { retryClass: "never", possibleCommit: true },
+              },
+            },
+          },
+        });
+        const answer = yield* Fiber.join(pending);
+        const decoded = decodeSafety(answer.result);
+        assert.isTrue(Option.isSome(decoded));
+        if (Option.isSome(decoded)) {
+          assert.equal(decoded.value.structuredContent.code, "stopped_by_person");
+          assert.isTrue(decoded.value.structuredContent.safety.possibleCommit);
+          assert.equal(decoded.value.structuredContent.safety.retryClass, "never");
+        }
+        return;
+      }
       hold = true;
       const stop = () =>
         notify({ kind: "stop", threadId, controlId, terminal: "stopped_by_person" });

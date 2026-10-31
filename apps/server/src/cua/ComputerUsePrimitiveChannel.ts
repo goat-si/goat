@@ -485,13 +485,11 @@ export const make = Effect.gen(function* () {
         deadlineFailure,
       ),
       Effect.map(({ answered }) => {
-        const merged = mergeTerminal(
-          mergeTerminal({ reason: pending.terminal }, epoch),
-          terminalReplyState(answered.result),
-        );
+        const reply = terminalReplyState(answered.result);
+        const merged = mergeTerminal(mergeTerminal({ reason: pending.terminal }, epoch), reply);
         const reason = merged.reason;
         const result =
-          reason !== undefined && terminalReplyReason(answered.result) !== reason
+          reason !== undefined && (reply.wireReason !== reason || !reply.terminalSafety)
             ? terminalReply(pending, reason, merged.possibleCommit)
             : answered;
         return input.authority === "claimBind"

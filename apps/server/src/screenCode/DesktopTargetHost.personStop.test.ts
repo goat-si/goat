@@ -8,8 +8,26 @@ import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { active, harness, CONTROL } from "../cua/ComputerUseLeaseProxy.testkit.ts";
-import { call, context, fixture } from "./DesktopTargetHost.testkit.ts";
+import { call, context, fixture, UnknownOutcome } from "./DesktopTargetHost.testkit.ts";
 const isScreenTargetRef = Schema.is(ScreenTargetRef);
+
+it.effect.each(["outer stop", "nested stop"])(
+  "desktop replies merge terminal codes when %s",
+  (order) =>
+    Effect.gen(function* () {
+      const outer = order === "outer stop" ? "stopped_by_person" : "screen_locked";
+      const nested = order === "outer stop" ? "screen_locked" : "stopped_by_person";
+      const { host } = fixture({
+        list_apps: new UnknownOutcome({ code: outer, refusal: { code: nested } }),
+      });
+      const result = yield* host.discover(call("list_apps"), context).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure.code).toBe("stopped_by_person");
+        expect(result.failure.safety?.retryClass).toBe("never");
+      }
+    }),
+);
 
 it.effect("Escape stays terminal through the desktop host while the stop report is pending", () =>
   Effect.gen(function* () {

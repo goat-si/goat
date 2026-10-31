@@ -16,22 +16,14 @@ import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import {
   mergeTerminal,
   terminalReason,
+  terminalReplyState,
   type ComputerUseTerminalReason,
 } from "./ComputerUseTerminal.ts";
 
 const decodeTerminal = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
-      result: Schema.Struct({
-        isError: Schema.Literal(true),
-        structuredContent: Schema.Struct({
-          code: Schema.Literals(["stopped_by_person", "screen_locked"]),
-          safety: Schema.Struct({
-            retryClass: Schema.Literal("never"),
-            possibleCommit: Schema.optionalKey(Schema.Boolean),
-          }),
-        }),
-      }),
+      result: Schema.Json,
     }),
   ),
 );
@@ -49,22 +41,17 @@ export const terminalSink = (
       if (message.method !== "tools/call" || message.id == null)
         return sink.answer(line, status, context);
       const already = decodeTerminal(line);
+      const reply = terminalReplyState(already._tag === "Some" ? already.value.result : undefined);
       const merged = mergeTerminal(
         { reason: terminalReason(terminal()), possibleCommit: dispatched() },
-        already._tag === "Some"
-          ? {
-              reason: already.value.result.structuredContent.code,
-              possibleCommit: already.value.result.structuredContent.safety.possibleCommit,
-            }
-          : {},
+        reply,
       );
       const reason = merged.reason;
       if (reason === undefined) return sink.answer(line, status, context);
       if (
-        already._tag === "Some" &&
-        already.value.result.structuredContent.code === reason &&
-        (!merged.possibleCommit ||
-          already.value.result.structuredContent.safety.possibleCommit === true)
+        reply.wireReason === reason &&
+        reply.terminalSafety &&
+        (!merged.possibleCommit || reply.possibleCommit)
       )
         return sink.answer(line, status, context);
       const cause: Interruption =

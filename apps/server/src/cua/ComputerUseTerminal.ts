@@ -67,29 +67,43 @@ const decodeTerminalReply = Schema.decodeUnknownOption(
   Schema.Struct({
     isError: Schema.Literal(true),
     structuredContent: Schema.Struct({
-      code: Schema.Literals(["stopped_by_person", "screen_locked"]),
-      safety: Schema.Struct({
-        retryClass: Schema.Literal("never"),
-        possibleCommit: Schema.optionalKey(Schema.Boolean),
-      }),
+      code: Schema.optionalKey(Schema.String),
+      refusal: Schema.optionalKey(Schema.Struct({ code: Schema.optionalKey(Schema.String) })),
+      safety: Schema.optionalKey(
+        Schema.Struct({
+          retryClass: Schema.optionalKey(Schema.String),
+          possibleCommit: Schema.optionalKey(Schema.Boolean),
+        }),
+      ),
     }),
   }),
 );
 
-export const terminalReplyReason = (value: unknown): ComputerUseTerminalReason | undefined => {
-  const decoded = decodeTerminalReply(value);
-  return decoded._tag === "Some" ? decoded.value.structuredContent.code : undefined;
-};
-
 export const terminalReplyState = (value: unknown) => {
   const decoded = decodeTerminalReply(value);
-  return decoded._tag === "Some"
-    ? {
-        reason: decoded.value.structuredContent.code,
-        possibleCommit: decoded.value.structuredContent.safety.possibleCommit,
-      }
-    : {};
+  if (decoded._tag === "None")
+    return {
+      reason: undefined,
+      possibleCommit: false,
+      wireReason: undefined,
+      terminalSafety: false,
+    };
+  const content = decoded.value.structuredContent;
+  const terminal = (code: string | undefined) =>
+    code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
+  const wireReason = terminal(content.code);
+  return {
+    ...mergeTerminal(
+      { reason: wireReason, possibleCommit: content.safety?.possibleCommit },
+      { reason: terminal(content.refusal?.code) },
+    ),
+    wireReason,
+    terminalSafety: content.safety?.retryClass === "never",
+  };
 };
+
+export const terminalReplyReason = (value: unknown): ComputerUseTerminalReason | undefined =>
+  terminalReplyState(value).reason;
 
 export const terminalReason = (
   latched: ComputerUseTerminalReason | undefined,

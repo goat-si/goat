@@ -38,6 +38,38 @@ it("merges an already typed terminal reply without dropping possible input", () 
   });
 });
 
+it.effect("the proxy sink merges nested Stop with an outer lock and keeps possible input", () =>
+  Effect.gen(function* () {
+    let output = "";
+    const sink = terminalSink(
+      {
+        answer: (line) =>
+          Effect.sync(() => {
+            output = line;
+          }),
+      },
+      { id: 1, method: "tools/call", params: { name: "click" } },
+      () => "screen_locked",
+      () => false,
+    );
+    yield* sink.answer(
+      JSON.stringify({
+        result: {
+          isError: true,
+          structuredContent: {
+            code: "screen_locked",
+            refusal: { code: "stopped_by_person" },
+            safety: { retryClass: "never", possibleCommit: true },
+          },
+        },
+      }),
+    );
+    assert.include(output, '"code":"stopped_by_person"');
+    assert.include(output, '"possibleCommit":true');
+    assert.notInclude(output, '"code":"screen_locked"');
+  }),
+);
+
 it("the proxy fence never downgrades a person's stop to a lock", () => {
   const first = makePersonStopFence();
   first.confirm({ state: "paused", controlId: "control", reason: "screen_locked" });

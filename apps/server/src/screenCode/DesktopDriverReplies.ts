@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { mergeTerminal } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -69,8 +70,16 @@ export const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | 
 const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
-  const said = refusalText(result, structured);
-  const driverCode = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  const nested = string(object(structured?.refusal)?.code);
+  const outer = string(structured?.code);
+  const terminal = (code: string | undefined) =>
+    code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
+  const merged = mergeTerminal({ reason: terminal(nested) }, { reason: terminal(outer) }).reason;
+  const driverCode = merged ?? nested ?? outer;
+  const said =
+    merged !== undefined && merged !== (nested ?? outer)
+      ? undefined
+      : refusalText(result, structured);
   if (
     (reply.status === "unknown_outcome" ||
       reply.status === "not_started" ||
