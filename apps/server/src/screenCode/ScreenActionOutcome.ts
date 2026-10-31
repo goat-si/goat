@@ -52,6 +52,12 @@ export const screenFailureSafety = (call: ScreenHostCall, error: ScreenRunError)
     error.code === "not_run" || error.code === "user_interacting" ? "reobserve" : "terminal",
   );
 
+export const screenReplyFailureSafety = (
+  call: ScreenHostCall,
+  safety: ActionOutcomeSafety | undefined,
+  dispatched: boolean,
+) => (isScreenRead(call.method) ? screenActionSafety(call, "indeterminate", dispatched) : safety);
+
 // What a refused call says of itself; true of that call only, never of the cell around it.
 const UNSENT = /(?:[,;]|\s+and)\s*(?:so\s+)?nothing was sent(?=[.;,]|$)|\s*\bNothing was sent\./gi;
 

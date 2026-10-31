@@ -30,6 +30,7 @@ import {
   isScreenRead,
   screenActionSafety,
   screenFailureSafety,
+  screenReplyFailureSafety,
   markUnawaited,
   firstScreenFailure,
 } from "./ScreenActionOutcome.ts";
@@ -572,14 +573,14 @@ export class ScreenHostBridge {
           catch: () => ({
             ...failure("downstream_failure", call.callId),
             effectStarted: callDispatched,
-            safety,
+            safety: screenReplyFailureSafety(call, safety, callDispatched),
           }),
         });
         if (bytes > context.limits.returnBytes)
           return yield* Effect.fail({
             ...failure("output_limit", call.callId),
             effectStarted: callDispatched,
-            safety,
+            safety: screenReplyFailureSafety(call, safety, callDispatched),
             limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
           });
       }
@@ -701,11 +702,10 @@ export class ScreenHostBridge {
         image.targetId !== metadata.targetId ||
         !isScreenImageSchema(image)
       ) {
-        settle("unverifiable");
         const error = {
           ...failure("downstream_failure", call.callId),
           effectStarted: callDispatched,
-          safety: result.success.safety,
+          safety: screenReplyFailureSafety(call, result.success.safety, callDispatched),
         };
         failCell(error);
         return refused(call, { ...error, safety: screenFailureSafety(call, error) });
@@ -758,11 +758,10 @@ export class ScreenHostBridge {
     const json = image ? JSON.stringify(value) : undefined;
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {
       state.truncated.push("return");
-      settle("unverifiable");
       const error = {
         ...failure("output_limit", call.callId),
         effectStarted: callDispatched,
-        safety: result.success.safety,
+        safety: screenReplyFailureSafety(call, result.success.safety, callDispatched),
         limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
       };
       failCell(error);
