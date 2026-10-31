@@ -118,7 +118,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   });
   const answerReconnecting = (id: JsonRpcId, method: string | undefined) =>
     options.output(refusal(id, method, "reconnecting", RECONNECTING));
-  const answerStopped = (id: JsonRpcId, method: string | undefined, given?: LeaseEnd) => {
+  const answerStopped = Effect.fn("ComputerUseLeaseProxyThread.answerStopped")((
+    id: JsonRpcId,
+    method: string | undefined,
+    given?: LeaseEnd,
+  ) => {
     const personStopped =
       (waiting === "stopped" || waiting === "stopped_all") && stoppedControls.size > 0;
     if (
@@ -151,7 +155,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       () => (knownStop ? "stopped_by_person" : undefined),
       () => false,
     ).answer(answer);
-  };
+  });
 
   const output = (context: Context, line: string, reply?: { readonly tool?: string | undefined }) =>
     Effect.suspend(() => {
