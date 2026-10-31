@@ -38,6 +38,20 @@ it("merges an already typed terminal reply without dropping possible input", () 
   });
 });
 
+it("does not classify ordinary successful data as a terminal reply", () => {
+  const data = { structuredContent: { code: "screen_locked" } };
+  assert.isUndefined(terminalReplyState(data, "settled").reason);
+});
+
+it("retains a terminal code when unrelated reply fields are malformed", () => {
+  const result = {
+    isError: true,
+    structuredContent: { code: "stopped_by_person", refusal: "bad", safety: null },
+  };
+  assert.equal(terminalReplyState(result).reason, "stopped_by_person");
+  assert.isFalse(terminalReplyState(result).terminalSafety);
+});
+
 it.effect("the proxy sink merges nested Stop with an outer lock and keeps possible input", () =>
   Effect.gen(function* () {
     let output = "";

@@ -65,23 +65,33 @@ export const terminalFailure = (
 
 const decodeTerminalReply = Schema.decodeUnknownOption(
   Schema.Struct({
-    isError: Schema.Literal(true),
+    isError: Schema.optionalKey(Schema.Boolean),
     structuredContent: Schema.Struct({
-      code: Schema.optionalKey(Schema.String),
-      refusal: Schema.optionalKey(Schema.Struct({ code: Schema.optionalKey(Schema.String) })),
-      safety: Schema.optionalKey(
-        Schema.Struct({
-          retryClass: Schema.optionalKey(Schema.String),
-          possibleCommit: Schema.optionalKey(Schema.Boolean),
-        }),
-      ),
+      code: Schema.optionalKey(Schema.Unknown),
+      refusal: Schema.optionalKey(Schema.Unknown),
+      safety: Schema.optionalKey(Schema.Unknown),
     }),
   }),
 );
+const decodeRefusal = Schema.decodeUnknownOption(
+  Schema.Struct({ code: Schema.optionalKey(Schema.Unknown) }),
+);
+const decodeSafety = Schema.decodeUnknownOption(
+  Schema.Struct({
+    retryClass: Schema.optionalKey(Schema.String),
+    possibleCommit: Schema.optionalKey(Schema.Boolean),
+  }),
+);
 
-export const terminalReplyState = (value: unknown) => {
+export const terminalReplyState = (
+  value: unknown,
+  status?: "settled" | "not_started" | "unknown_outcome",
+) => {
   const decoded = decodeTerminalReply(value);
-  if (decoded._tag === "None")
+  if (
+    decoded._tag === "None" ||
+    (decoded.value.isError !== true && status !== "not_started" && status !== "unknown_outcome")
+  )
     return {
       reason: undefined,
       possibleCommit: false,
@@ -89,21 +99,28 @@ export const terminalReplyState = (value: unknown) => {
       terminalSafety: false,
     };
   const content = decoded.value.structuredContent;
-  const terminal = (code: string | undefined) =>
+  const terminal = (code: unknown) =>
     code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
+  const refusal = decodeRefusal(content.refusal);
+  const safety = decodeSafety(content.safety);
   const wireReason = terminal(content.code);
   return {
     ...mergeTerminal(
-      { reason: wireReason, possibleCommit: content.safety?.possibleCommit },
-      { reason: terminal(content.refusal?.code) },
+      {
+        reason: wireReason,
+        possibleCommit: safety._tag === "Some" && safety.value.possibleCommit === true,
+      },
+      { reason: refusal._tag === "Some" ? terminal(refusal.value.code) : undefined },
     ),
     wireReason,
-    terminalSafety: content.safety?.retryClass === "never",
+    terminalSafety: safety._tag === "Some" && safety.value.retryClass === "never",
   };
 };
 
-export const terminalReplyReason = (value: unknown): ComputerUseTerminalReason | undefined =>
-  terminalReplyState(value).reason;
+export const terminalReplyReason = (
+  value: unknown,
+  status?: "settled" | "not_started" | "unknown_outcome",
+): ComputerUseTerminalReason | undefined => terminalReplyState(value, status).reason;
 
 export const terminalReason = (
   latched: ComputerUseTerminalReason | undefined,

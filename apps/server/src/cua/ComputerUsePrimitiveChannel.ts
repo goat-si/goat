@@ -478,14 +478,14 @@ export const make = Effect.gen(function* () {
         ({ answered, at }) =>
           mergeTerminal(
             mergeTerminal({ reason: pending.terminal }, epoch),
-            terminalReplyState(answered.result),
+            terminalReplyState(answered.result, answered.status),
           ).reason !== undefined ||
           at <= deadlineMillis ||
           answered.status === "not_started",
         deadlineFailure,
       ),
       Effect.map(({ answered }) => {
-        const reply = terminalReplyState(answered.result);
+        const reply = terminalReplyState(answered.result, answered.status);
         const merged = mergeTerminal(mergeTerminal({ reason: pending.terminal }, epoch), reply);
         const reason = merged.reason;
         const result =
@@ -863,7 +863,7 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
-          const replyTerminal = terminalReplyReason(input.reply.result);
+          const replyTerminal = terminalReplyReason(input.reply.result, input.reply.status);
           if (replyTerminal !== undefined) {
             latchWaiting(input.threadId, input.reply.controlId, replyTerminal);
             latch(record, replyTerminal);

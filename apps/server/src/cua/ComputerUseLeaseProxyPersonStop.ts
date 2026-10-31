@@ -41,7 +41,10 @@ export const terminalSink = (
       if (message.method !== "tools/call" || message.id == null)
         return sink.answer(line, status, context);
       const already = decodeTerminal(line);
-      const reply = terminalReplyState(already._tag === "Some" ? already.value.result : undefined);
+      const reply = terminalReplyState(
+        already._tag === "Some" ? already.value.result : undefined,
+        status,
+      );
       const merged = mergeTerminal(
         { reason: terminalReason(terminal()), possibleCommit: dispatched() },
         reply,
