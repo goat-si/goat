@@ -61,7 +61,9 @@ const COMPUTER_USE_APP_ICON_MAX_CHARS = 64 * 1024;
 export const ComputerUseApp = Schema.Struct({
   id: TrimmedNonEmptyString.check(Schema.isMaxLength(1024)),
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
-  executable: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
+  executables: Schema.optionalKey(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
+  ),
   icon: Schema.optionalKey(
     TrimmedNonEmptyString.check(
       Schema.isMaxLength(COMPUTER_USE_APP_ICON_MAX_CHARS),

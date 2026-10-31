@@ -7,10 +7,19 @@ describe("computer use app catalog", () => {
     const catalog = makeAppCatalog(async () => new Map());
     assert.deepEqual(
       await catalog(
-        [{ bundle_id: "com.example.App", name: "App", executable: "C:\\Shared\\host.exe" }],
+        [
+          { bundle_id: "com.example.App", name: "App", executable: "C:\\Shared\\host.exe" },
+          { bundle_id: "com.example.App", name: "App", executable: "C:\\Shared\\other.exe" },
+        ],
         [],
       ),
-      [{ id: "com.example.App", name: "App", executable: "C:\\Shared\\host.exe" }],
+      [
+        {
+          id: "com.example.App",
+          name: "App",
+          executables: ["C:\\Shared\\host.exe", "C:\\Shared\\other.exe"],
+        },
+      ],
     );
   });
   it("names exactly the requestable apps, sorted by name, and reads each icon once", async () => {

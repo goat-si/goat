@@ -475,7 +475,7 @@ describe("ComputerUseLeaseProxy", () => {
     Effect.gen(function* () {
       const h = yield* harness({ exitCode: 0 });
       yield* h.push(active());
-      yield* h.send(call(1, "get_window_state"));
+      yield* h.send(call(1, "get_window_state", { pid: 4, window_id: 9 }));
       assert.equal((yield* h.nextToDriver).id, 1);
       yield* h.driverExits;
       yield* h.nextToProvider;

@@ -265,6 +265,29 @@ export function cuaRequestableApps(
   return [...requestable].sort();
 }
 
+export function cuaRequestableCatalog(
+  apps: ReadonlyArray<CuaDriverListedApp>,
+  hostBundleIds: ReadonlyArray<string>,
+) {
+  const catalog = new Map<string, { name: string; executables: Set<string> }>();
+  for (const app of apps) {
+    const id = app.bundle_id?.trim() || app.executable?.trim() || app.name?.trim() || "";
+    if (!id || !cuaRequestableApps([app], hostBundleIds).includes(id)) continue;
+    const entry = catalog.get(id) ?? {
+      name: app.name?.trim() || id,
+      executables: new Set<string>(),
+    };
+    for (const executable of [app.executable?.trim(), app.bundle_executable?.trim()])
+      if (executable) entry.executables.add(executable);
+    catalog.set(id, entry);
+  }
+  return [...catalog].map(([id, entry]) => ({
+    id,
+    name: entry.name,
+    ...(entry.executables.size === 0 ? {} : { executables: [...entry.executables] }),
+  }));
+}
+
 /**
  * Adds the executable of every Linux app that shows a window and has no desktop entry, read
  * from /proc the way the driver attests it. Windowless processes (shells, servers) stay out, as
@@ -606,9 +629,7 @@ async function withBundleExecutables(
  * The app names an approval request may use on a host whose server runs the driver itself
  * (#1561): the same listing and identities the manifest is built from, read when asked.
  */
-export async function listCuaRequestableApplications(
-  input: CuaDriverListingInput,
-): Promise<ReadonlyArray<string>> {
+export async function listCuaRequestableApplicationListing(input: CuaDriverListingInput) {
   const { apps, host } = await listForHost(input);
   // On Linux the manifest grants only a desktop entry or an attested executable, and never this
   // process, so a name with neither, or GOAT's own, is not an app a request can be granted.
@@ -619,7 +640,16 @@ export async function listCuaRequestableApplications(
             app.pid !== process.pid && Boolean(app.bundle_id?.trim() || app.executable?.trim()),
         )
       : apps;
-  return cuaRequestableApps(grantable, host);
+  return {
+    apps: cuaRequestableApps(grantable, host),
+    catalog: cuaRequestableCatalog(grantable, host),
+  };
+}
+
+export async function listCuaRequestableApplications(
+  input: CuaDriverListingInput,
+): Promise<ReadonlyArray<string>> {
+  return (await listCuaRequestableApplicationListing(input)).apps;
 }
 
 /**

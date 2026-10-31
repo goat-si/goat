@@ -251,7 +251,12 @@ export interface CuaDriverOptions {
    */
   readonly requestListing?: (
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
-  ) => Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+  ) => Effect.Effect<
+    Option.Option<{
+      readonly apps: ReadonlyArray<string>;
+      readonly catalog: ReadonlyArray<ComputerUseApp>;
+    }>
+  >;
   readonly observeReadiness?: (
     mcp: CuaDriverMcpConfiguration,
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
@@ -463,7 +468,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       ? Effect.succeedNone
       : Effect.gen(function* () {
           const display = yield* freshProbe;
-          if (display.capability === "unavailable") return Option.none<ReadonlyArray<string>>();
+          if (display.capability === "unavailable")
+            return Option.none<{
+              readonly apps: ReadonlyArray<string>;
+              readonly catalog: ReadonlyArray<ComputerUseApp>;
+            }>();
           return yield* requestListing(display.environment);
         }).pipe(Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeedNone })),
     "5 seconds",
@@ -509,17 +518,24 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     enabled,
     listedApps: Effect.gen(function* () {
       if (!(yield* enabled)) return Option.none();
-      const apps = yield* options.listedApps ?? standaloneListing;
+      const apps = yield* (
+        options.listedApps ??
+          standaloneListing.pipe(Effect.map(Option.map((listing) => listing.apps)))
+      );
       return (yield* enabled) ? apps : Option.none();
     }),
     appCatalog: Effect.gen(function* () {
       if (!(yield* enabled)) return [];
       const catalog: ReadonlyArray<ComputerUseApp> =
         options.appCatalog === undefined
-          ? Option.getOrElse(yield* standaloneListing, () => []).map((id) => ({
-              id,
-              name: catalogName(id),
-            }))
+          ? Option.getOrElse(
+              Option.map(yield* standaloneListing, (listing) =>
+                listing.catalog.map((app) =>
+                  app.name === app.id ? { ...app, name: catalogName(app.id) } : app,
+                ),
+              ),
+              () => [],
+            )
           : Option.getOrElse(yield* options.appCatalog, () => []);
       return (yield* enabled) ? catalog : [];
     }),

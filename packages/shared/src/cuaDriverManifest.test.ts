@@ -17,6 +17,7 @@ import {
   cuaRequestableApps,
   cuaAppKey,
   isExcludedCuaApplication,
+  cuaRequestableCatalog,
   cuaDriverCapabilityManifest,
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
@@ -117,6 +118,20 @@ const PINNED_DRIVER_TOOLS = {
 } as const;
 
 describe("cuaDriverManifest", () => {
+  it("preserves every requestable executable alias with its bundle identity", () => {
+    expect(
+      cuaRequestableCatalog(
+        [
+          { bundle_id: "com.example.Editor", name: "Editor", executable: "/opt/editor" },
+          { bundle_id: "com.example.Editor", name: "Editor", executable: "/opt/editor-alt" },
+          { bundle_id: "com.apple.Passwords", name: "Passwords", executable: "/opt/vault" },
+        ],
+        [],
+      ),
+    ).toEqual([
+      { id: "com.example.Editor", name: "Editor", executables: ["/opt/editor", "/opt/editor-alt"] },
+    ]);
+  });
   it("records the tool set of the pinned driver version", () => {
     expect(PINNED_DRIVER_TOOLS.verified).toContain(CUA_DRIVER_VERSION);
   });

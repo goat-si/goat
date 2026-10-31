@@ -347,7 +347,13 @@ it.effect(
           requestListing: (display) =>
             Effect.sync(() => {
               asked.push(display);
-              return Option.some(["python3", "org.gnome.Calculator"]);
+              return Option.some({
+                apps: ["python3", "org.gnome.Calculator"],
+                catalog: [
+                  { id: "python3", name: "python3" },
+                  { id: "org.gnome.Calculator", name: "Calculator" },
+                ],
+              });
             }),
         },
       );
@@ -366,4 +372,30 @@ it.effect(
       Effect.provideService(HostProcess.Environment, {}),
       Effect.scoped,
     ),
+);
+
+it.effect("a standalone listing keeps executable aliases paired with bundle ids", () =>
+  Effect.gen(function* () {
+    const service = yield* CuaDriver.make(
+      () => Effect.die("unused"),
+      Effect.succeed({ capability: "available", reason: "fixture", environment: [] }),
+      {
+        requestListing: () =>
+          Effect.succeed(
+            Option.some({
+              apps: ["com.example.App", "/opt/app"],
+              catalog: [{ id: "com.example.App", name: "App", executables: ["/opt/app"] }],
+            }),
+          ),
+      },
+    );
+    expect(yield* service.appCatalog).toEqual([
+      { id: "com.example.App", name: "App", executables: ["/opt/app"] },
+    ]);
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest({ enableCua: true })),
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.Environment, {}),
+    Effect.scoped,
+  ),
 );

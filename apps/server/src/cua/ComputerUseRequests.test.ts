@@ -75,7 +75,7 @@ it.effect("refuses a denied bundle requested by its executable path before appro
       undefined,
       "person",
       undefined,
-      [{ id: "com.example.Blocked", name: "Blocked", executable: "C:\\Shared\\host.exe" }],
+      [{ id: "com.example.Blocked", name: "Blocked", executables: ["C:\\Shared\\host.exe"] }],
     ),
   ),
 );

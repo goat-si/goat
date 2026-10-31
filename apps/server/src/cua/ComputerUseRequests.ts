@@ -96,7 +96,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         catalog.some(
           (entry) =>
             (cuaAppKey(entry.name) === cuaAppKey(app) ||
-              (entry.executable !== undefined && cuaAppKey(entry.executable) === cuaAppKey(app))) &&
+              entry.executables?.some((executable) => cuaAppKey(executable) === cuaAppKey(app)) ===
+                true) &&
             denied.has(cuaAppKey(entry.id)),
         ),
     );
@@ -158,7 +159,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         catalog.some(
           (entry) =>
             (cuaAppKey(entry.name) === cuaAppKey(app) ||
-              (entry.executable !== undefined && cuaAppKey(entry.executable) === cuaAppKey(app))) &&
+              entry.executables?.some((executable) => cuaAppKey(executable) === cuaAppKey(app)) ===
+                true) &&
             isExcludedCuaApplication(entry.id),
         ),
     );

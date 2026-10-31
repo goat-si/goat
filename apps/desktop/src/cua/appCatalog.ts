@@ -32,14 +32,23 @@ export function makeAppCatalog(readIcons: AppIconReader) {
     listed: ReadonlyArray<CuaDriverListedApp>,
     hostBundleIds: ReadonlyArray<string>,
   ): Promise<ReadonlyArray<ComputerUseApp>> => {
-    const requestable = new Set(cuaRequestableApps(listed, hostBundleIds));
-    const entries = new Map<string, { name: string; executable: string | undefined }>();
+    const entries = new Map<
+      string,
+      { name: string; executable: string | undefined; executables: Set<string> }
+    >();
     for (const app of listed) {
       const id = app.bundle_id?.trim() || app.executable?.trim() || "";
-      if (!id || !requestable.has(id) || entries.has(id)) continue;
+      if (!id || !cuaRequestableApps([app], hostBundleIds).includes(id)) continue;
+      const executable = app.executable?.trim() || app.bundle_executable?.trim() || undefined;
+      const existing = entries.get(id);
+      if (existing !== undefined) {
+        if (executable !== undefined) existing.executables.add(executable);
+        continue;
+      }
       entries.set(id, {
         name: app.name?.trim() || id,
-        executable: app.executable?.trim() || app.bundle_executable?.trim() || undefined,
+        executable,
+        executables: new Set(executable === undefined ? [] : [executable]),
       });
     }
     const sorted = [...entries]
@@ -50,12 +59,12 @@ export function makeAppCatalog(readIcons: AppIconReader) {
       const read = await readIcons(unread).catch(() => new Map<string, string>());
       for (const app of unread) icons.set(app.id, read.get(app.id));
     }
-    return sorted.map(({ id, name, executable }) => {
+    return sorted.map(({ id, name, executables }) => {
       const icon = icons.get(id);
       return {
         id,
         name,
-        ...(executable === undefined ? {} : { executable }),
+        ...(executables.size === 0 ? {} : { executables: [...executables] }),
         ...(icon === undefined ? {} : { icon }),
       };
     });
