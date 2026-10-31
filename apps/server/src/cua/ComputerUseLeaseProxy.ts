@@ -871,6 +871,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       sink.captureTarget?.();
       selectedForeground = admission.selectedForeground;
       reservationId = admission.reservationId;
+      if (reservationId !== undefined) sink.setReservation?.(reservationId);
       permissionDeadline = admission.deadline;
       if (!stillCurrent() || admission.refused !== undefined) {
         if (reservationId !== undefined)

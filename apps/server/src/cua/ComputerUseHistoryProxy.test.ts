@@ -83,6 +83,7 @@ it.effect("reports one sent click and does not report a read", () =>
     yield* h.nextToProvider;
     assert.deepInclude(yield* Queue.take(reports), {
       verdict: "sent",
+      reservationId: "ticket:1",
       app: { id: "fixture.app", name: "Fixture" },
     });
     yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
@@ -104,6 +105,7 @@ it.effect("reports a server admission refusal without dispatch", () =>
     yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
     yield* h.nextToProvider;
     assert.deepInclude(yield* Queue.take(reports), {
+      type: "proxyRefusal",
       verdict: "refused",
       refusalCode: "target_busy",
     });

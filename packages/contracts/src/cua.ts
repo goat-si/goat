@@ -267,8 +267,9 @@ export const ComputerUseLeaseDriverEnded = Schema.Struct({
 export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
 
 export const ComputerUseLeaseCallOutcome = Schema.Struct({
-  type: Schema.Literal("callOutcome"),
+  type: Schema.Literals(["callOutcome", "proxyRefusal"]),
   controlId: TrimmedNonEmptyString,
+  reservationId: Schema.optionalKey(TrimmedNonEmptyString),
   tool: TrimmedNonEmptyString,
   app: Schema.optionalKey(
     Schema.Struct({ id: TrimmedNonEmptyString, name: TrimmedNonEmptyString }),

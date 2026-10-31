@@ -94,7 +94,11 @@ export const historySink = (
   };
   const call = { ...(tool === undefined ? {} : { tool }), args: message.params?.arguments };
   let recorded = false;
-  const recordOutcome = (line: string, status?: string) => {
+  let reservationId: string | undefined;
+  const recordOutcome = Effect.fn("ComputerUseHistoryProxy.recordOutcome")((
+    line: string,
+    status?: string,
+  ) => {
     if (recorded) return Effect.void;
     recorded = true;
     captureTarget();
@@ -104,14 +108,23 @@ export const historySink = (
       line,
       status,
     );
-    return outcome === undefined || options.onCallOutcome === undefined
+    const report =
+      outcome === undefined
+        ? undefined
+        : reservationId !== undefined
+          ? { ...outcome, reservationId }
+          : outcome.verdict === "refused"
+            ? ({ ...outcome, type: "proxyRefusal" } satisfies ComputerUseLeaseCallOutcome)
+            : undefined;
+    return report === undefined || options.onCallOutcome === undefined
       ? Effect.void
-      : Effect.forkIn(Effect.ignoreCause(options.onCallOutcome(outcome)), scope).pipe(
-          Effect.asVoid,
-        );
-  };
+      : Effect.forkIn(Effect.ignoreCause(options.onCallOutcome(report)), scope).pipe(Effect.asVoid);
+  });
   return {
     captureTarget,
+    setReservation: (id) => {
+      reservationId = id;
+    },
     recordOutcome,
     answer: (line, status, context) =>
       recordOutcome(line, status).pipe(Effect.andThen(sink.answer(line, status, context))),

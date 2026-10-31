@@ -77,6 +77,7 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
 
 export interface ReplySink {
   readonly captureTarget?: () => void;
+  readonly setReservation?: (reservationId: string) => void;
   readonly recordOutcome?: (line: string, status?: "unknown_outcome") => Effect.Effect<void>;
   readonly answer: (
     line: string,

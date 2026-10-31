@@ -50,6 +50,7 @@ import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThr
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
+import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
 import { recordCallOutcome } from "./ComputerUseHistoryReport.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -213,16 +214,45 @@ export const reportLayer = HttpRouter.add(
     }
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     if ("type" in value) {
-      if (!(yield* leases.ownsControl(threadId, value.controlId)))
-        return HttpServerResponse.empty({ status: 409 });
       const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
       if (Option.isNone(sql)) return HttpServerResponse.empty({ status: 503 });
       const history = yield* makeComputerUseHistory.pipe(
         Effect.provideService(SqlClient.SqlClient, sql.value),
       );
-      // The shared thread credential cannot attest that the target field is non-secret.
-      const saved = yield* recordCallOutcome(history, threadId, value, false).pipe(Effect.option);
-      return HttpServerResponse.empty({ status: Option.isSome(saved) ? 204 : 503 });
+      if (value.type === "proxyRefusal") {
+        if (
+          value.verdict !== "refused" ||
+          value.reservationId !== undefined ||
+          !(yield* leases.ownsControl(threadId, value.controlId))
+        )
+          return HttpServerResponse.empty({ status: 409 });
+        const saved = yield* recordCallOutcome(
+          history,
+          threadId,
+          {
+            ...value,
+            targetLabel:
+              value.targetLabel === undefined
+                ? "Reported by proxy"
+                : `Reported by proxy: ${value.targetLabel}`,
+          },
+          false,
+        ).pipe(Effect.option);
+        return HttpServerResponse.empty({ status: Option.isSome(saved) ? 204 : 503 });
+      }
+      if (value.reservationId === undefined) return HttpServerResponse.empty({ status: 409 });
+      const saved = yield* history
+        .settle({
+          threadId,
+          controlId: value.controlId,
+          reservationId: value.reservationId,
+          verdict: value.verdict,
+          ...(value.refusalCode === undefined ? {} : { refusalCode: value.refusalCode }),
+        })
+        .pipe(Effect.option);
+      return HttpServerResponse.empty({
+        status: Option.isNone(saved) ? 503 : saved.value ? 204 : 409,
+      });
     }
     if ("humanInput" in value) {
       const outcome = yield* leases.humanInput(
@@ -368,7 +398,7 @@ const streamLayer = HttpRouter.add(
   }),
 );
 
-const callLayer = HttpRouter.add(
+export const callLayer = HttpRouter.add(
   "POST",
   `${COMPUTER_USE_LEASE_ROUTE}/calls`,
   Effect.gen(function* () {
@@ -393,7 +423,44 @@ const callLayer = HttpRouter.add(
         encodeAdmission({ status: "refused", detail: "pointer_locked" }),
         { contentType: "application/json", headers: { "cache-control": "no-store" } },
       );
-    const result = yield* leases.callReservation(threadId, call.value).pipe(Effect.option);
+    const result = yield* Effect.gen(function* () {
+      const result = yield* leases.callReservation(threadId, call.value);
+      if (
+        call.value.action === "reserve" &&
+        result.status === "admitted" &&
+        result.reservationId !== null
+      ) {
+        const reservationId = result.reservationId;
+        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isNone(sql)) {
+          yield* leases.callReservation(threadId, {
+            action: "release",
+            controlId: call.value.controlId,
+            connectionId: call.value.connectionId,
+            reservationId: result.reservationId,
+            notSent: true,
+          });
+          return yield* Effect.fail("history_unavailable");
+        }
+        const history = yield* makeComputerUseHistory.pipe(
+          Effect.provideService(SqlClient.SqlClient, sql.value),
+        );
+        yield* recordAdmittedCall(history, threadId, call.value, result.reservationId).pipe(
+          Effect.catchCause((cause) =>
+            leases
+              .callReservation(threadId, {
+                action: "release",
+                controlId: call.value.controlId,
+                connectionId: call.value.connectionId,
+                reservationId,
+                notSent: true,
+              })
+              .pipe(Effect.andThen(Effect.failCause(cause))),
+          ),
+        );
+      }
+      return result;
+    }).pipe(Effect.uninterruptible, Effect.option);
     // The session is still accepted; GOAT could not read the authority that judges the call.
     if (Option.isNone(result)) return HttpServerResponse.empty({ status: 503 });
     return HttpServerResponse.text(encodeAdmission(result.value), {

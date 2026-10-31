@@ -9,6 +9,7 @@ type Target =
 
 type HistoryInput = {
   readonly threadId: string;
+  readonly reservation?: { readonly id: string; readonly controlId: string };
   readonly target: Target;
   readonly method: string;
   readonly targetLabel?: string;
@@ -54,10 +55,26 @@ export const makeComputerUseHistory = Effect.gen(function* () {
     const typedLength = input?.length ?? typed?.length ?? null;
     const typedText = typed?.length === typedLength ? (typed?.text ?? null) : null;
     yield* sql`INSERT INTO computer_use_input_history
-      (thread_id, recorded_at, target_kind, app_id, app_name, tab_host, method, target_label, verdict, refusal_code, typed_length, typed_text)
+      (thread_id, recorded_at, target_kind, app_id, app_name, tab_host, method, target_label, verdict, refusal_code, typed_length, typed_text, reservation_id, control_id)
       VALUES (${entry.threadId}, ${now}, ${entry.target.kind}, ${entry.target.kind === "app" ? (entry.target.id ?? null) : null},
         ${entry.target.kind === "app" ? (entry.target.name ?? null) : null}, ${entry.target.kind === "tab" ? entry.target.host : null},
-        ${entry.method}, ${entry.targetLabel ?? null}, ${entry.verdict}, ${entry.refusalCode ?? null}, ${typedLength}, ${typedText})`;
+        ${entry.method}, ${entry.targetLabel ?? null}, ${entry.verdict}, ${entry.refusalCode ?? null}, ${typedLength}, ${typedText},
+        ${entry.reservation?.id ?? null}, ${entry.reservation?.controlId ?? null})`;
+  });
+  const settle = Effect.fn("ComputerUseHistory.settle")(function* (input: {
+    readonly threadId: string;
+    readonly controlId: string;
+    readonly reservationId: string;
+    readonly verdict: "sent" | "refused" | "unknown_outcome";
+    readonly refusalCode?: string;
+  }) {
+    const rows = yield* sql<{ readonly id: number }>`UPDATE computer_use_input_history
+      SET verdict = ${input.verdict}, refusal_code = ${input.verdict === "refused" ? (input.refusalCode ?? null) : null},
+        outcome_reported = 1
+      WHERE thread_id = ${input.threadId} AND control_id = ${input.controlId}
+        AND reservation_id = ${input.reservationId} AND outcome_reported = 0
+      RETURNING id`;
+    return rows.length === 1;
   });
   const listForThread = Effect.fn("ComputerUseHistory.listForThread")(function* (
     threadId: string,
@@ -82,5 +99,5 @@ export const makeComputerUseHistory = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     yield* sql`DELETE FROM computer_use_input_history WHERE recorded_at < ${now - RETENTION_MS}`;
   });
-  return { record, listForThread, prune: prune() };
+  return { record, settle, listForThread, prune: prune() };
 });
