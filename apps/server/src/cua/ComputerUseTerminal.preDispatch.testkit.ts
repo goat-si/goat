@@ -188,6 +188,16 @@ const supervisor = (kind: "reserved" | "notReady" | "transportLost") => (input: 
     return replaceWithTerminal(terminalReplyState(answer.result));
   });
 
+const reconnecting = (input: Input) =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push({ state: "reconnecting" });
+    yield* h.send(call(1, "list_apps"));
+    const answer = JSON.stringify(yield* h.next);
+    assert.include(answer, '"detail":"reconnecting"');
+    return finalize(answer, input);
+  });
+
 const duplicate = (input: Input) =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
@@ -516,6 +526,7 @@ export const preDispatchSites: ReadonlyArray<{
   readonly implicitReason?: ComputerUseTerminalReason;
   readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
 }> = [
+  { name: "ComputerUseLeaseProxyThread.reconnecting", undispatched: true, run: reconnecting },
   { name: "ComputerUseLeaseProxy.cancelledPrimitive", undispatched: true, run: cancelledPrimitive },
   {
     name: "ComputerUseLeaseProxy.duplicateId",
