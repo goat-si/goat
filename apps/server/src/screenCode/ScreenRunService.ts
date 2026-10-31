@@ -194,7 +194,6 @@ interface ScreenRuntimeOptions {
   readonly assetResolver?: () => Effect.Effect<{ path: string; sha256: string }, ScreenRunError>;
   readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
 }
-
 const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntimeOptions = {}) {
   const invocation = options.invocation ?? (yield* resolveSelfInvocation());
   const siteNotes = Option.getOrUndefined(yield* Effect.serviceOption(SiteNotes.SiteNotes));
