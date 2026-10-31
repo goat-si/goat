@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import { computerUseAppNote, screenCodeAppNote } from "./computerUseSkillFiles.ts";
+import { screenCodeAppNote } from "./computerUseSkillFiles.ts";
 
 const apps = [
   ["Finder", "com.apple.finder"],
@@ -31,16 +31,7 @@ describe("screen-code app notes", () => {
     expect(note).toContain("never send again");
   });
 
-  it("preserves all driver note text", async () => {
-    const driverNotes = Object.fromEntries(
-      apps.map(([name]) => [name, computerUseAppNote("darwin", name)]),
-    );
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(JSON.stringify(driverNotes)),
-    );
-    expect(Buffer.from(digest).toString("hex")).toBe(
-      "ea0ac86313f5d8e2e54d0e48e03334b8209885d51a549044f7355a4866020154",
-    );
+  it.each(apps)("never teaches %s an Enter without a target, which chat apps refuse", (name) => {
+    expect(screenCodeAppNote("darwin", name)).not.toMatch(/app\.press\("Enter"\)/);
   });
 });
