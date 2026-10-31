@@ -53,6 +53,11 @@ import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseSt
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
+import {
+  awaitHistory,
+  refusalHistoryKey,
+  scheduleHistory,
+} from "./ComputerUseHistoryBackground.ts";
 import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -247,11 +252,15 @@ export const reportLayer = HttpRouter.add(
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     if ("type" in value) {
       const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
-      if (Option.isNone(sql)) return HttpServerResponse.empty({ status: 503 });
+      if (Option.isNone(sql)) {
+        yield* Effect.logWarning("Computer use history storage unavailable");
+        return HttpServerResponse.empty({ status: 503 });
+      }
       const history = yield* makeComputerUseHistory.pipe(
         Effect.provideService(SqlClient.SqlClient, sql.value),
       );
       if (value.reservationId === undefined) return HttpServerResponse.empty({ status: 409 });
+      yield* awaitHistory(value.reservationId);
       const saved = yield* history
         .settle({
           threadId,
@@ -260,7 +269,12 @@ export const reportLayer = HttpRouter.add(
           verdict: value.verdict,
           ...(value.refusalCode === undefined ? {} : { refusalCode: value.refusalCode }),
         })
-        .pipe(Effect.option);
+        .pipe(
+          Effect.tapError((cause) =>
+            Effect.logWarning("Computer use history settlement failed", { cause }),
+          ),
+          Effect.option,
+        );
       return HttpServerResponse.empty({
         status: Option.isNone(saved) ? 503 : saved.value ? 204 : 409,
       });
@@ -445,11 +459,22 @@ export const callLayer = HttpRouter.add(
           : yield* leases.callReservation(threadId, call.value);
       if (call.value.action === "reserve" && result.status === "refused") {
         const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
-        if (Option.isNone(sql)) return yield* Effect.fail("history_unavailable");
-        const history = yield* makeComputerUseHistory.pipe(
-          Effect.provideService(SqlClient.SqlClient, sql.value),
-        );
-        yield* recordAdmittedCall(history, threadId, call.value, { refusalCode: result.detail });
+        if (Option.isNone(sql))
+          yield* Effect.logWarning("Computer use history storage unavailable");
+        else {
+          const history = yield* makeComputerUseHistory.pipe(
+            Effect.provideService(SqlClient.SqlClient, sql.value),
+          );
+          yield* scheduleHistory(
+            refusalHistoryKey(
+              threadId,
+              call.value.controlId,
+              call.value.connectionId,
+              call.value.callId,
+            ),
+            recordAdmittedCall(history, threadId, call.value, { refusalCode: result.detail }),
+          );
+        }
       }
       if (
         call.value.action === "reserve" &&
@@ -458,34 +483,17 @@ export const callLayer = HttpRouter.add(
       ) {
         const reservationId = result.reservationId;
         const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
-        if (Option.isNone(sql)) {
-          yield* leases.callReservation(threadId, {
-            action: "release",
-            controlId: call.value.controlId,
-            connectionId: call.value.connectionId,
-            reservationId: result.reservationId,
-            notSent: true,
-          });
-          return yield* Effect.fail("history_unavailable");
+        if (Option.isNone(sql))
+          yield* Effect.logWarning("Computer use history storage unavailable");
+        else {
+          const history = yield* makeComputerUseHistory.pipe(
+            Effect.provideService(SqlClient.SqlClient, sql.value),
+          );
+          yield* scheduleHistory(
+            reservationId,
+            recordAdmittedCall(history, threadId, call.value, { reservationId }),
+          );
         }
-        const history = yield* makeComputerUseHistory.pipe(
-          Effect.provideService(SqlClient.SqlClient, sql.value),
-        );
-        yield* recordAdmittedCall(history, threadId, call.value, {
-          reservationId: result.reservationId,
-        }).pipe(
-          Effect.catchCause((cause) =>
-            leases
-              .callReservation(threadId, {
-                action: "release",
-                controlId: call.value.controlId,
-                connectionId: call.value.connectionId,
-                reservationId,
-                notSent: true,
-              })
-              .pipe(Effect.andThen(Effect.failCause(cause))),
-          ),
-        );
       }
       return result;
     }).pipe(Effect.uninterruptible, Effect.option);

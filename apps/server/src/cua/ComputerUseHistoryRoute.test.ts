@@ -12,6 +12,7 @@ import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { callLayer, reportLayer } from "./ComputerUseLeaseRoute.ts";
 import { database, fixture, serviceLayer } from "./ComputerUseCallReservations.testkit.ts";
+import { awaitHistory, refusalHistoryKey } from "./ComputerUseHistoryBackground.ts";
 
 it.effect("accepts outcomes only for the authenticated thread and its control", () =>
   Effect.scoped(
@@ -103,6 +104,7 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       )
         return assert.fail("missing reservation");
       const ticket = response.reservationId;
+      yield* awaitHistory(ticket);
       const pending = yield* history.listForThread(f.a);
       assert.equal(pending.length, 1);
       assert.equal(pending[0]?.verdict, "unknown_outcome");
@@ -145,6 +147,7 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
         ),
       );
       assert.equal(denied.status, 200);
+      yield* awaitHistory(refusalHistoryKey(f.a, replacement.controlId, "driver:2", "denied"));
       const rejected = yield* history.listForThread(f.a);
       assert.equal(rejected[0]?.verdict, "refused");
       assert.equal(rejected[0]?.refusalCode, "pointer_locked");

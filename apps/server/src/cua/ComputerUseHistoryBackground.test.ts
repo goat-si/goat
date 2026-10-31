@@ -1,0 +1,28 @@
+import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { awaitHistory, scheduleHistory } from "./ComputerUseHistoryBackground.ts";
+
+it.effect("does not wait for a blocked history write and lets settlement await it", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    yield* scheduleHistory(
+      "ticket:blocked",
+      Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))),
+    );
+    yield* Deferred.await(started);
+    const waiting = yield* awaitHistory("ticket:blocked").pipe(Effect.forkChild);
+    assert.isFalse(yield* Deferred.isDone(release));
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(waiting);
+  }),
+);
+
+it.effect("settlement can continue after a history write fails", () =>
+  Effect.gen(function* () {
+    yield* scheduleHistory("ticket:failed", Effect.fail("storage unavailable"));
+    yield* awaitHistory("ticket:failed");
+  }),
+);

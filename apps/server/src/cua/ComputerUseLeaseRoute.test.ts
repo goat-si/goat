@@ -876,7 +876,6 @@ describe("computer use lease route", () => {
           Layer.provideMerge(
             Layer.mergeAll(
               ServerSettings.layerTest(),
-              historyDatabase,
               Layer.mock(McpSessionRegistry.McpSessionRegistry)({
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
               }),
