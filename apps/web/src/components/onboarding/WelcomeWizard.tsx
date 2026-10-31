@@ -632,12 +632,12 @@ function PairingForm({
           </div>
           <CollapsiblePanel>
             <p className="pt-3 text-sm text-muted-foreground">
-              Run this on the computer with your code.
+              On the computer with your code, start GOAT or run{" "}
+              <code className="font-mono">goat serve</code>, then run:
             </p>
             <CommandBlock command="goat pair" className="mt-2" />
             <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              Start GOAT first, or run <code className="font-mono">goat serve</code>. Add{" "}
-              <code className="font-mono">--tailscale</code> to use your tailnet.
+              On a tailnet, run <code className="font-mono">goat pair --tailscale</code> instead.
             </p>
           </CollapsiblePanel>
         </Collapsible>
