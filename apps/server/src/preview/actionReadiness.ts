@@ -41,12 +41,12 @@ const NO_MATCH_GRACE_MS = 2_000;
 export const requireMatch = async (target: Locator, timeoutMs: number) => {
   const ends = performance.now() + timeoutMs;
   const left = () => Math.max(1, Math.floor(ends - performance.now()));
-  // A target already there needs no wait; only a miss waits for the page to finish loading.
+  // A target already there needs no wait. After a miss it may still appear: the wait for it runs
+  // to the deadline, and the 2 s grace starts only once the page has loaded.
   if ((await target.count()) > 0) return;
-  await target.page().waitForLoadState("load", { timeout: left() });
-  const found = await target
+  const attached = target
     .first()
-    .waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, left()) })
+    .waitFor({ state: "attached", timeout: left() })
     .then(
       () => true,
       (cause: unknown) => {
@@ -54,6 +54,20 @@ export const requireMatch = async (target: Locator, timeoutMs: number) => {
         throw cause;
       },
     );
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  const graceOver = target
+    .page()
+    .waitForLoadState("load", { timeout: left() })
+    .then(
+      () =>
+        new Promise<false>(
+          (resolve) => (grace = setTimeout(() => resolve(false), NO_MATCH_GRACE_MS)),
+        ),
+      // A page that never loads leaves the answer to the wait for the target.
+      () => new Promise<false>(() => {}),
+    );
+  const found = await Promise.race([attached, graceOver]).finally(() => clearTimeout(grace));
+  // The wait for the target, left running after a miss, ends by the deadline on its own.
   if (!found)
     throw new ServerBrowserOperationError(
       "PreviewAutomationInvalidSelectorError",
