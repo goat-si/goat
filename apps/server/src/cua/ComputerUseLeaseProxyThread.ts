@@ -330,7 +330,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         },
         input: Stream.fromQueue(context.input),
         primitiveRequests: Stream.fromQueue(context.primitiveInput),
-        onDriverStarted: (driver) => {
+        onDriverStarted: Effect.fn("ComputerUseLeaseProxyThread.driverStarted")((driver) => {
           const previous =
             context.driverGeneration === undefined
               ? undefined
@@ -346,7 +346,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             Math.max(generations.get(context.controlId) ?? -1, driver.generation),
           );
           return options.onControlDriverStarted?.(context.controlId, driver) ?? Effect.void;
-        },
+        }),
         onDriverCutoff: (driver) => {
           if (driver.terminal !== undefined) {
             const latch = context.driverTerminals.get(driver.generation);

@@ -737,6 +737,12 @@ export const make = Effect.gen(function* () {
           registered === undefined ? undefined : control(registered, current.controlId);
         beganRecord ??= record;
         beganEpoch ??= record?.epoch;
+        const capturedFailure = terminalFailure(
+          terminalReason(beganEpoch?.reason),
+          input.tool,
+          input.args,
+        );
+        if (capturedFailure !== undefined) return yield* Effect.fail(capturedFailure);
         const binding = record?.binding;
         if (registered !== undefined && record !== undefined && binding !== undefined) {
           if (deadlineMillis - now < MIN_CALL_MS)

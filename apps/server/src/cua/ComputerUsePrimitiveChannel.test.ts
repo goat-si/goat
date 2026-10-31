@@ -103,7 +103,7 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
       ),
     controlState: () => Effect.sync(() => state),
     subscribe: PubSub.subscribe(signals),
-    onAuthorityChange: (listener) => {
+    onAuthorityChange: (listener: typeof notify) => {
       notify = listener;
       return () => {};
     },
