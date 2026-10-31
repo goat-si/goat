@@ -746,7 +746,7 @@ const make = Effect.gen(function* () {
           const record = controls.get(threadId);
           if (
             record?.controlId !== controlId ||
-            !acting(record) ||
+            record.ended !== undefined ||
             DateTime.toEpochMillis(record.expiresAt) <= now
           )
             return false;

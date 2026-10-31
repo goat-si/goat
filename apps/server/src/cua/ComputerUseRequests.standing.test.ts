@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -149,6 +150,60 @@ it.effect.each(["end", "stop all", "person esc", "disable"] as const)(
         );
       }),
     ),
+);
+
+it.effect("a delayed Escape after turn end revokes session approval", () =>
+  withHarness(({ orchestrator, worker }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        const control = yield* leases.control(threadId, yield* leases.active(threadId));
+        const gate = yield* Deferred.make<void>();
+        const report = yield* Deferred.await(gate).pipe(
+          Effect.andThen(
+            stopComputerUseFromHelper(Option.some(leases), handoffs, threadId, control.controlId),
+          ),
+          Effect.forkChild,
+        );
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE thread_id = ${threadId}`;
+        assert.isTrue(yield* leases.turnEnded(threadId));
+        yield* Deferred.succeed(gate, undefined);
+        assert.isTrue((yield* Fiber.join(report)).stopped);
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("continue-after-esc"),
+          threadId,
+          messageId: MessageId.make("message:continue-after-esc"),
+          text: "Continue",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        assert.isFalse(
+          (yield* stopComputerUseFromHelper(
+            Option.some(leases),
+            handoffs,
+            threadId,
+            control.controlId,
+          )).stopped,
+        );
+      }),
+    ),
+  ),
 );
 
 it.effect("a person's named app receives a session admission after a prior approval", () =>
