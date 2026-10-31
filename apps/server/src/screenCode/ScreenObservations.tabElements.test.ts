@@ -155,6 +155,80 @@ describe("tab observation elements", () => {
     }
   });
 
+  it("reports a changed value and new focus without the container's focus-only change", () => {
+    const observations = new ScreenObservations();
+    const first = observe(
+      observations,
+      '- generic [active] [ref=e1]:\n  - textbox "Name" [ref=e2]: A',
+    );
+    const second = observe(
+      observations,
+      '- generic [ref=e1]:\n  - textbox "Name" [focused] [ref=e2]: AB',
+      { base: first },
+    );
+    expect(second.indexedText.split("\n")).toEqual([
+      '~   - textbox "Name" [focused] [1]: AB',
+      "focus [1]",
+    ]);
+  });
+
+  it("reports focus moves and loss without resending rows", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- button "A" [active] [ref=e1]\n- button "B" [ref=e2]');
+    const second = observe(observations, '- button "B" [focused] [ref=e2]\n- button "A" [ref=e1]', {
+      base: first,
+    });
+    expect(second.indexedText).toBe("focus [1]");
+    expect(second.elements.map((e) => e.index)).toEqual([1, 0]);
+    const third = observe(observations, '- button "B" [ref=e2]\n- button "A" [ref=e1]', {
+      base: second,
+    });
+    expect(third.indexedText).toBe("focus none");
+    const fourth = observe(observations, '- button "B" [ref=e2]\n- button "A" [ref=e1]', {
+      base: third,
+    });
+    expect(fourth.indexedText).toBe(`no change since ${third.observationId}`);
+  });
+
+  it("keeps focus-like text in values and child text as content", () => {
+    const observations = new ScreenObservations();
+    const first = observe(
+      observations,
+      '- textbox "State [active]" [ref=e1]: State [active]\n- generic "Label" [ref=e2]:\n  - text: State [active]',
+    );
+    const second = observe(
+      observations,
+      '- textbox "State [active]" [ref=e1]: State\n- generic "Label" [ref=e2]:\n  - text: State',
+      { base: first },
+    );
+    expect(second.indexedText.split("\n")).toEqual([
+      '~ - textbox "State [active]" [0]: State',
+      '~ - generic "Label" [1]:',
+      "  - text: State",
+    ]);
+  });
+
+  it("does not report a number for focus on an unnumbered element", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- button "A" [active] [ref=e1]\n- generic');
+    const second = observe(observations, '- button "A" [ref=e1]\n- generic [focused]', {
+      base: first,
+    });
+    expect(second.indexedText).toBe(`no change since ${first.observationId}`);
+    const third = observe(observations, '- button "A" [ref=e1]\n- generic', { base: second });
+    expect(third.indexedText).toBe("focus none");
+  });
+
+  it("treats markers in quoted names as names, not focus", () => {
+    const observations = new ScreenObservations();
+    const first = observe(observations, '- button "State [active]" [ref=e1]');
+    const second = observe(observations, '- button "State" [ref=e1]', { base: first });
+    expect(second.indexedText.split("\n")).toEqual([
+      '- - button "State [active]" [0]',
+      '+ - button "State" [1]',
+    ]);
+  });
+
   it("reports one changed row across snapshot generations and resolves current refs", () => {
     const observations = new ScreenObservations();
     const first = observe(
