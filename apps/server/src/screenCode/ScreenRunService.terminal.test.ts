@@ -417,7 +417,7 @@ it.live.each([
   "finish turn then stop",
 ])("outbound terminal after final collection: %s", (order) =>
   Effect.gen(function* () {
-    const entered = yield* Deferred.make<void, unknown>();
+    const entered = yield* Deferred.make<void, string>();
     const release = yield* Deferred.make<void>();
     yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
     const clock = yield* Clock.Clock;
@@ -497,7 +497,7 @@ it.live.each([
             }),
           }),
         ),
-        Effect.tapCause((e) => Deferred.fail(entered, e)),
+        Effect.tapCause(() => Deferred.fail(entered, "cell failed before finalization")),
         Effect.result,
         Effect.forkChild,
       );
