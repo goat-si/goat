@@ -28,7 +28,7 @@ const invocation = {
 
 it.live("a late Stop for an old control does not fence a newer control's unfinished cell", () =>
   Effect.gen(function* () {
-    const firstEntered = yield* Deferred.make<void>();
+    const firstEntered = yield* Deferred.make<void, string>();
     const secondEntered = yield* Deferred.make<void, string>();
     const release = yield* Deferred.make<void>();
     yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));

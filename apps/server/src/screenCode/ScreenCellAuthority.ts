@@ -10,7 +10,7 @@ export const makeCellAuthority = (leases: ComputerUseLeases["Service"] | undefin
       ? leases
           .currentControl(ThreadId.make(threadId))
           .pipe(Effect.map((control) => Option.getOrUndefined(control)?.controlId))
-      : Effect.succeed(undefined);
+      : Effect.void;
   return {
     get: (id: string) => cells.get(id)?.cellId,
     begin: (id: string, cellId: string, threadId: string) =>
