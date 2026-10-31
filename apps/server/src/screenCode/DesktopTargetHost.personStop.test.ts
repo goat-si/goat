@@ -2,11 +2,14 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
+import { ScreenTargetRef } from "@goat/contracts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { active, harness, CONTROL } from "../cua/ComputerUseLeaseProxy.testkit.ts";
 import { call, context, fixture } from "./DesktopTargetHost.testkit.ts";
+const isScreenTargetRef = Schema.is(ScreenTargetRef);
 
 it.effect("Escape stays terminal through the desktop host while the stop report is pending", () =>
   Effect.gen(function* () {
@@ -91,6 +94,7 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
         },
         context,
       );
+      if (!isScreenTargetRef(bound.value)) return yield* Effect.die("expected bound target");
       const result = yield* host
         .invoke(
           { ...call("click", { x: 1, y: 2, verify: true }, bound.value), deadlineMillis: 30000 },
@@ -99,6 +103,10 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
         .pipe(Effect.result);
       expect(refusedReads).toBeGreaterThan(0);
       expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") expect(result.failure.code).toBe(reason);
+      if (result._tag === "Failure") {
+        expect(result.failure.code).toBe(reason);
+        expect(result.failure.safety?.possibleCommit).toBe(true);
+        expect(result.failure.safety?.retryClass).toBe("never");
+      }
     }),
 );

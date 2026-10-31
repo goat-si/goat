@@ -4,6 +4,25 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { waitForOutcome, windowClosure } from "./DesktopWindowClosure.ts";
 import { diffInputWindows, parseWindowList } from "./DesktopWindows.ts";
+import { terminalFailure } from "../cua/ComputerUseTerminal.ts";
+
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "window closure keeps a terminal %s read failure",
+  (reason) =>
+    Effect.gen(function* () {
+      const failure = terminalFailure(reason, "list_windows", {});
+      if (failure === undefined) return yield* Effect.die("missing terminal failure");
+      const result = yield* waitForOutcome({
+        status: "satisfied",
+        gone: true,
+        list: () => Effect.fail(failure),
+        target: { pid: 42, windowId: 7 },
+        cellDeadlineMillis: 3000,
+      }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.code).toBe(reason);
+    }),
+);
 
 const listing = (windows: unknown, extra: Record<string, unknown> = {}) => ({ windows, ...extra });
 const complete = (ids: unknown) => ({ enumeration_complete: true, authoritative_window_ids: ids });

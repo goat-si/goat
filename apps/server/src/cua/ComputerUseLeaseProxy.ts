@@ -989,7 +989,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     (sink, id, request) =>
       terminalSink(
         sink,
-        { id, method: "tools/call", params: { name: request.tool, arguments: request.args } },
+        { id, method: "tools/call", params: { name: request.tool } },
         personStop.capture(),
         () => false,
       ),

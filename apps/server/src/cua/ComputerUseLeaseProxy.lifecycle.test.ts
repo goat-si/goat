@@ -1,5 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ThreadId } from "@goat/contracts";
+import { ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Layer from "effect/Layer";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -702,8 +704,8 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
     });
     yield* h.push(active());
     const driver = yield* h.driverStarted;
-    const req = (n: number, deadlineMillis: number) => ({
-      state: "primitive-request" as const,
+    const req = (n: number, deadlineMillis: number): ComputerUsePrimitiveRequest => ({
+      state: "primitive-request",
       requestId: "round6:" + n,
       registrationId: "registration:one",
       controlId: CONTROL,
@@ -720,11 +722,25 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
     assert.equal(reservation.action, "reserve");
     const signals = yield* Round6PubSub.unbounded<void>();
     const threadId = ThreadId.make("round6:thread");
-    const leases = Round6Leases.ComputerUseLeases.of({
-      currentControl: () => Effect.succeedSome({ controlId: CONTROL }),
-      controlState: () => Effect.succeed({ _tag: "active" }),
-      subscribe: Round6PubSub.subscribe(signals),
-    });
+    const expiresAt = DateTime.makeUnsafe(60000);
+    const leases = yield* Round6Leases.ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(Round6Leases.ComputerUseLeases)({
+          proxy: undefined,
+          onAuthorityChange: undefined,
+          currentControl: () => Effect.succeedSome({ controlId: CONTROL, threadId, expiresAt }),
+          controlState: () =>
+            Effect.succeed({
+              _tag: "active",
+              expiresAt,
+              interruptions: { count: 0, last: "takeover" },
+              apps: undefined,
+              wakeAt: 60000,
+            }),
+          subscribe: Round6PubSub.subscribe(signals),
+        }),
+      ),
+    );
     const channel = yield* Round6Channel.make.pipe(
       Effect.provideService(Round6Leases.ComputerUseLeases, leases),
     );
@@ -759,6 +775,8 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
       })
       .pipe(Effect.forkChild);
     const queued = Option.getOrThrow(yield* Stream.runHead(registered.requests));
+    if (queued.state !== "primitive-request")
+      return yield* Effect.die("expected primitive request");
     yield* h.sendPrimitive(queued);
     if (kind === "escape") {
       yield* h.escape;
