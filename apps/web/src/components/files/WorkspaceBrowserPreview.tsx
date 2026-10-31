@@ -4,7 +4,7 @@ import { useAssetUrlRefresh, useAssetUrlState } from "~/assets/assetUrls";
 import { Spinner } from "~/components/ui/spinner";
 
 import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
-import { refreshedRevision, workspacePreviewAssetResource } from "./filePreviewMode";
+import { refreshedRevision, workspaceAssetResource } from "./filePreviewMode";
 
 /**
  * HTML runs in a sandboxed frame with an opaque origin, so a page cannot reach
@@ -20,19 +20,30 @@ export function WorkspaceBrowserPreview(props: {
   readonly workspaceMutationId: string | null;
   readonly refreshRequestId: number;
 }) {
-  const resource = workspacePreviewAssetResource({
+  const pdf = isPdfPreviewFile(props.absolutePath);
+  const resource = workspaceAssetResource({
+    kind: pdf ? "media-file" : "workspace-file",
     threadRef: props.threadRef,
     draft: props.draft,
     workspaceRoot: props.workspaceRoot,
     absolutePath: props.absolutePath,
   });
-  const assetUrl = useAssetUrlState(props.environmentId, resource);
+  const workspaceRevision = refreshedRevision(props.workspaceMutationId, props.refreshRequestId);
+  const assetUrl = useAssetUrlState(
+    props.environmentId,
+    resource,
+    pdf ? workspaceRevision : undefined,
+  );
   const refreshAssetUrl = useAssetUrlRefresh(props.environmentId, resource);
-  const revision = refreshedRevision(props.workspaceMutationId, props.refreshRequestId);
+  const fileRevision = pdf && assetUrl._tag === "Success" ? assetUrl.fileRevision : undefined;
+  const revision = refreshedRevision(
+    fileRevision ?? props.workspaceMutationId,
+    props.refreshRequestId,
+  );
   const revisionSuffix =
     revision === null
       ? ""
-      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}workspace-revision=${encodeURIComponent(revision)}`;
+      : `${assetUrl._tag === "Success" && assetUrl.url.includes("?") ? "&" : "?"}${fileRevision !== undefined ? "file" : "workspace"}-revision=${encodeURIComponent(revision)}`;
 
   if (assetUrl._tag === "Failure") {
     return (
@@ -41,7 +52,10 @@ export function WorkspaceBrowserPreview(props: {
       </div>
     );
   }
-  if (assetUrl._tag !== "Success") {
+  if (
+    assetUrl._tag !== "Success" ||
+    (pdf && assetUrl.fileRevision === undefined && assetUrl.waiting)
+  ) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground">
         <Spinner size="lg" />
@@ -53,7 +67,7 @@ export function WorkspaceBrowserPreview(props: {
       src={`${assetUrl.url}${revisionSuffix}`}
       documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${revision}`}
       title={props.title}
-      pdf={isPdfPreviewFile(props.absolutePath)}
+      pdf={pdf}
       onRetry={refreshAssetUrl}
       threadRef={props.threadRef}
     />
