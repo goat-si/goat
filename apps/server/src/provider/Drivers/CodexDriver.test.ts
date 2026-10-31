@@ -54,6 +54,7 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-codex-driver-maintenance-",
 }).pipe(
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(Layer.succeed(HostProcess.Environment, { PATH: "" })),
   Layer.provideMerge(IdAllocator.layer),
   Layer.provideMerge(McpProviderSessions.layer),
   Layer.provideMerge(
@@ -836,7 +837,9 @@ it.layer(layerTest)("CodexDriver", (it) => {
             homePath: NodePath.join(tempDir, "codex-home"),
           },
         }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, metadataSpawner));
-        const capabilities = yield* instance.snapshot.resolveMaintenance();
+        const capabilities = yield* instance.snapshot
+          .resolveMaintenance()
+          .pipe(Effect.provideService(HostProcess.Environment, { PATH: "" }));
         const latestVersion = yield* resolveLatestProviderVersion(capabilities).pipe(
           Effect.provideServiceEffect(
             ProviderLatestVersions.ProviderLatestVersions,
