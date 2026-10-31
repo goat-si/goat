@@ -131,3 +131,82 @@ it.effect.each(["lock then stop", "lock then resume then stop", "stop then lock"
       assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
     }),
 );
+
+it.effect("a later control does not inherit the old control's Stop", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:other-control");
+    const signals = yield* PubSub.unbounded<void>();
+    let current = "A";
+    let notify: Parameters<
+      NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+    >[0] = () => {};
+    const expiresAt = DateTime.makeUnsafe(60000);
+    const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          currentControl: () =>
+            Effect.sync(() => Option.some({ controlId: current, threadId, expiresAt })),
+          controlState: () =>
+            Effect.succeed({
+              _tag: "active",
+              expiresAt,
+              interruptions: { count: 0, last: "screen_locked" },
+              apps: undefined,
+              wakeAt: 60000,
+            }),
+          subscribe: PubSub.subscribe(signals),
+          onAuthorityChange: (listener) => {
+            notify = listener;
+            return () => {};
+          },
+        }),
+      ),
+    );
+    const channel = yield* PrimitiveChannel.make.pipe(
+      Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+    );
+    const authority = { threadId, attachmentGeneration: "a", proxyChannelToken: "token" };
+    yield* channel.issue({ ...authority, expiresAt: 60000 });
+    const registered = yield* channel.registerStream({
+      ...authority,
+      proxyInstanceId: "p",
+      kind: "thread",
+    });
+    if (registered.status !== "registered") return assert.fail("expected registration");
+    notify({ kind: "stop", threadId, controlId: "A", terminal: "stopped_by_person" });
+    current = "B";
+    yield* channel.reportControlReady({
+      ...authority,
+      registrationId: registered.registrationId,
+      controlId: "B",
+      connectionId: "B:1",
+      driverGeneration: 1,
+    });
+    const pending = yield* channel
+      .request({
+        threadId,
+        runId: "run",
+        turnId: "turn",
+        callId: 2,
+        deadlineMillis: 30000,
+        tool: "list_apps",
+        args: {},
+      })
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    const request = Option.getOrThrow(
+      yield* registered.requests.pipe(
+        Stream.filter((event) => event.state === "primitive-request"),
+        Stream.runHead,
+      ),
+    );
+    if (request.state !== "primitive-request") return assert.fail("expected primitive");
+    yield* channel.reply({
+      ...authority,
+      registrationId: registered.registrationId,
+      reply: { ...request, status: "settled", result: { content: [] } },
+    });
+    const answer = yield* Fiber.join(pending);
+    assert.equal(answer.status, "settled");
+    assert.notInclude(JSON.stringify(answer), "stopped_by_person");
+  }),
+);
