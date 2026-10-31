@@ -431,6 +431,22 @@ const retainPairingTitles = (
   });
 };
 
+/** A window read retires the driver's earlier tokens, so the observation and every ref from it go. */
+export const retireObservation = (bound: BoundWindow, observations: ScreenObservations) => {
+  observations.evictTarget(bound.ref.id);
+  delete bound.observationId;
+  delete bound.snapshotId;
+  delete bound.diffBaseline;
+  delete bound.fullObservationId;
+  delete bound.structuralDiff;
+  delete bound.lastReadCut;
+  delete bound.pages;
+  delete bound.elementsByToken;
+  delete bound.rows;
+  delete bound.fullRows;
+  delete bound.lastTree;
+};
+
 export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(function* (
   deps: DesktopObserveDeps,
   bound: BoundWindow,
@@ -517,18 +533,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
   // answer is unusable; only a driver naming another window makes the binding stale.
   const retire = () => {
     retired = true;
-    observations.evictTarget(bound.ref.id);
-    delete bound.observationId;
-    delete bound.snapshotId;
-    delete bound.diffBaseline;
-    delete bound.fullObservationId;
-    delete bound.structuralDiff;
-    delete bound.lastReadCut;
-    delete bound.pages;
-    delete bound.elementsByToken;
-    delete bound.rows;
-    delete bound.fullRows;
-    delete bound.lastTree;
+    retireObservation(bound, observations);
   };
   let limit: number = READ_BOUNDS[0];
   yield* settleCaptureIfNeeded(capture, bound, call.deadlineMillis);

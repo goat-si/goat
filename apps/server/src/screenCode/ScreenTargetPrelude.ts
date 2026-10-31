@@ -461,6 +461,8 @@ const __target = (binding, note, owner, extraProps = {}) => {
     };
   };
   const wait = async (wanted, timeoutMs) => {
+    // An app gone wait reads the window, which retires the earlier refs on the host too.
+    if (!tab && wanted && wanted.gone === true) seen.observation = undefined;
     const reply = await __checked('wait_for', { ...condition(wanted, timeoutMs), targetRef: ref });
     const met = tab ? reply.v && reply.v.status === 'met' : reply.v && reply.v.met === true;
     __remember({ call: 'waitFor', met });

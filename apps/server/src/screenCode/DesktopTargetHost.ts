@@ -73,7 +73,7 @@ import {
   withHolders,
 } from "./DesktopWindows.ts";
 import { noteHops } from "./DesktopHops.ts";
-import { runDesktopObserve } from "./DesktopObserveLatency.ts";
+import { retireObservation, runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
@@ -748,6 +748,7 @@ export const createDesktopTargetHost = (deps: {
           pid: bound.pid,
           windowId: bound.windowId,
           deadline: call.deadlineMillis,
+          retire: () => retireObservation(bound, observations),
           read: (readArgs) =>
             boundRequest(bound, "nothing", "get_window_state", readArgs, call, context),
         });
