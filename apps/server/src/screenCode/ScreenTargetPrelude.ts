@@ -82,11 +82,31 @@ const __flush = () => {
     group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
   }
 };
+// A used handle has already become its ref, so one anywhere in outgoing arguments, own or inherited, would reach no element.
+const __carriesHandle = (root) => {
+  const seen = new Set();
+  const pending = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== 'object' || seen.has(value)) continue;
+    // Arguments too large to check are refused rather than sent unchecked.
+    if (seen.size >= 10000 || 'elementHandle' in value) return true;
+    seen.add(value);
+    for (const each of Array.isArray(value) ? value : Object.values(value)) pending.push(each);
+  }
+  return false;
+};
+const __refuseHandles = (value) => {
+  if (__carriesHandle(value))
+    throw new ScreenError('stale_reference', 'Pass an element handle as the target argument itself; nothing was sent.', true);
+};
 const __reply = (method, args) => {
+  __refuseHandles(args);
   if (__queued.length > 0) __flush();
   return __send(method, args);
 };
 const __enqueue = (method, arg) => new Promise((resolve, reject) => {
+  __refuseHandles(arg);
   if (__queued.length === 0) Promise.resolve().then(() => { if (__queued.length > 0) __flush(); });
   __queued.push({ method, arg, resolve, reject });
 });
@@ -139,6 +159,7 @@ const __only = (what, given, allowed) => {
 const __winPt = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) &&
   Array.isArray(arg.window) && arg.window.length === 2;
+const __handles = new WeakMap();
 const __legacy = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) && !__winPt(arg) &&
   ('ref' in arg || 'elementRef' in arg || 'point' in arg || 'x' in arg || 'selector' in arg || 'targetRef' in arg ||
@@ -197,6 +218,10 @@ const __target = (binding, note, owner, extraProps = {}) => {
 
   };
   const checkEmptyTarget = (target) => {
+    if (target !== null && typeof target === 'object' && __handles.has(target)) return;
+    // A copied handle (JSON, spread, screen.values) loses its binding; refusing it keeps it from passing as options.
+    if (target !== null && typeof target === 'object' && 'elementHandle' in target)
+      throw new ScreenError('stale_reference', 'This element handle is a copy; take obs.ref(n) from a current observation in this cell.', true);
     if (target === undefined || target === null ||
         (typeof target === 'number' && !Number.isFinite(target)) ||
         (typeof target === 'object' && !Array.isArray(target) &&
@@ -206,6 +231,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const element = (target) => {
     checkEmptyTarget(target);
+    const held = typeof target === 'object' && target !== null ? __handles.get(target) : undefined;
+    if (held) {
+      if (held.targetId !== ref.id) throw new ScreenError('stale_reference', 'This element belongs to another target.', true);
+      return { ref: held };
+    }
     const observation = seen.observation;
     if (!observation)
       throw new ScreenError(
@@ -268,6 +298,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   // unseen, so it is refused before any read or input.
   const checkTarget = (target) => {
     checkEmptyTarget(target);
+    if (target !== null && typeof target === 'object' && __handles.has(target)) return;
     if (target === null || typeof target !== 'object' || Array.isArray(target) || __legacy(target)) return;
     __only('A target', target, __winPt(target) ? ['window'] : ['role', 'name', 'id']);
   };
@@ -349,6 +380,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const shown = { text: indexedText, ...rest, ...(seen.image && arg.screenshot ? { image: seen.image } : {}) };
     // Cells written before text read indexedText; it is not enumerable, so results do not carry it twice.
     Object.defineProperty(shown, 'indexedText', { value: indexedText, enumerable: false });
+    Object.defineProperty(shown, 'ref', { value: (index) => {
+      const found = observation.elements.find((item) => item.index === index);
+      if (!found) throw new ScreenError('stale_reference', 'No [' + index + '] in this observation.', true);
+      const handle = Object.freeze({ elementHandle: observation.observationId + ':' + index });
+      __handles.set(handle, Object.freeze({ ...found.ref }));
+      return handle;
+    }});
     __remember({ call: 'observe', mode: shown.mode, text: String(indexedText).slice(0, 4000) });
     return shown;
   };
@@ -446,7 +484,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       // An object naming no element is the options, so a misspelt key is refused rather than aimed at.
       const targetIsSendOpts =
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
-        !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
+        !('name' in target) && !('role' in target) && !('id' in target) && !('elementHandle' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
       const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs']);
       if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))
@@ -593,6 +631,16 @@ const __target = (binding, note, owner, extraProps = {}) => {
     bringToFront: () => call('bring_to_front'),
     endForeground: () => call('end_foreground'),
   };
+  // A handle counts only as a whole argument: any other one, a copy or one inside options, is refused before normalizing could drop it.
+  for (const key of Object.keys(surface)) {
+    const method = surface[key];
+    if (typeof method !== 'function') continue;
+    surface[key] = (...args) => {
+      if (args.some((arg) => !(arg !== null && typeof arg === 'object' && __handles.has(arg)) && __carriesHandle(arg)))
+        throw new ScreenError('stale_reference', 'Pass an element handle from obs.ref(n) itself as the target argument; a copy or a handle inside other arguments is refused, and nothing was sent.', true);
+      return method(...args);
+    };
+  }
   Object.defineProperties(surface, {
     generation: { get: () => ref.generation, enumerable: true },
     targetRef: { get: () => ref, enumerable: true },

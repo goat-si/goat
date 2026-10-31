@@ -3,14 +3,15 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/24";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/25";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Never resend an input. Stop from the person ends the cell at once.`;
 
-const COMMON = `type Target = number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
+const COMMON = `type ElementHandle = { readonly elementHandle: string }; // a copy is refused
+type Target = ElementHandle | number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
@@ -36,7 +37,8 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 // Diff text uses + added, ~ changed and - removed rows; unchanged rows keep the numbers they had in the previous observation.
-interface Observation extends ReadTime { effect?: string; // first post-input diff: window evidence, not proof of the intended effect
+// obs.ref(n) holds an element across awaits; refused unsent (stale_reference) after the target is read again (observe({after}) pages keep it). Bare numbers always mean the latest observation.
+interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?: string; // first post-input diff: window evidence, not proof of the intended effect
   text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
   targetGeneration: number; surfaceGeneration: number; // control and document generations; a change retires refs
