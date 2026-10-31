@@ -255,3 +255,78 @@ it.effect("an allowed popup receives clipboard instrumentation", () =>
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+const pendingPopup = Effect.gen(function* () {
+  const f = yield* popupSetup;
+  const popupReady = f.page.waitForEvent("popup");
+  yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
+  const popup = yield* Effect.promise(() => popupReady);
+  yield* Effect.promise(() => popup.waitForURL(`${f.blocked}/blocked`));
+  const found = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+    Stream.mapEffect(() => f.service.sessions),
+    Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
+    Stream.runHead,
+  );
+  if (found._tag === "None") return yield* Effect.die("popup not adopted");
+  const tabId = PreviewTabId.make(found.value.find((view) => view.tabId !== f.tabId)!.tabId);
+  f.sent.length = 0;
+  yield* f.end;
+  yield* Effect.promise(() => popup.goto(`${f.allowed}/safe`));
+  const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+  const end = yield* activity.begin(threadId, "next-run");
+  yield* Effect.addFinalizer(() => end);
+  const nextScope = { ...scope, thread: { ...scope.thread, runId: RunId.make("next-run") } };
+  const press = () =>
+    f.broker.invoke({ scope: nextScope, tabId, operation: "press", input: { key: "Enter" } });
+  return { ...f, popup, press };
+});
+
+it.effect("a later run installs popup protection before its first key input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* pendingPopup;
+      const press = f.popup.keyboard.press.bind(f.popup.keyboard);
+      const input = vi.spyOn(f.popup.keyboard, "press").mockImplementation((...args) => {
+        f.sent.push("agent-key");
+        return press(...args);
+      });
+      yield* f.press();
+      expect(f.sent.indexOf("Page.addScriptToEvaluateOnNewDocument")).toBeGreaterThanOrEqual(0);
+      expect(f.sent.indexOf("agent-key")).toBeGreaterThan(
+        f.sent.indexOf("Page.addScriptToEvaluateOnNewDocument"),
+      );
+      input.mockRestore();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a later run cannot type when deferred private-mode setup finds a focused password", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* pendingPopup;
+      yield* Effect.promise(() => f.popup.setContent('<input id="secret" type="password">'));
+      yield* Effect.promise(() => f.popup.locator("#secret").focus());
+      const input = vi.spyOn(f.popup.keyboard, "press");
+      const result = yield* f.press().pipe(Effect.result);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "privateMode", dispatched: false },
+      });
+      expect(input).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a failed deferred setup refuses the first input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* pendingPopup;
+      const setup = vi.spyOn(f.popup, "addInitScript").mockRejectedValue(new Error("setup failed"));
+      const input = vi.spyOn(f.popup.keyboard, "press");
+      const result = yield* f.press().pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      expect(input).not.toHaveBeenCalled();
+      setup.mockRestore();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
