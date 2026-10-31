@@ -14,7 +14,11 @@ import {
 } from "@goat/contracts";
 import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { makeProxyCallScope } from "./ComputerUseLeaseProxyPointBasis.ts";
-import { finalTerminalLine, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
+import {
+  finalTerminalLine,
+  makePersonStopFence,
+  terminalSink,
+} from "./ComputerUseLeaseProxyPersonStop.ts";
 import { forwardPrimitiveRequests } from "./ComputerUseLeaseProxyOptions.ts";
 import { call } from "./ComputerUseLeaseProxy.testkit.ts";
 import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
@@ -38,6 +42,17 @@ const finalize = (line: string, input: Input) => {
   );
   return replaceWithTerminal(terminalReplyState(parse(final.line)?.result, "not_started"));
 };
+
+const personFence = (reason: ComputerUseTerminalReason) => (input: Input) =>
+  Effect.sync(() => {
+    const fence = makePersonStopFence();
+    if (reason === "stopped_by_person") fence.beginStop();
+    else
+      fence.beginLock({ result: { isError: true, structuredContent: { code: "screen_locked" } } });
+    const line = fence.refusal(1, "tools/call");
+    if (line === undefined) throw new Error("expected person-stop refusal");
+    return finalize(line, input);
+  });
 
 const automation = (kind: "finished" | "paused") => (input: Input) =>
   Effect.gen(function* () {
@@ -273,6 +288,17 @@ const fencedCell = (input: Input) =>
   });
 
 export const preDispatchSites = [
+  {
+    name: "ComputerUseLeaseProxyPersonStop.lockRefusal",
+    undispatched: true,
+    run: personFence("screen_locked"),
+  },
+  {
+    name: "ComputerUseLeaseProxyPersonStop.stopRefusal",
+    undispatched: true,
+    implicitReason: "stopped_by_person" as const,
+    run: personFence("stopped_by_person"),
+  },
   { name: "ScreenHostBridge.fencedCell", undispatched: true, run: fencedCell },
   {
     name: "ComputerUseLeaseProxyRefusal.automationFinished",

@@ -31,11 +31,7 @@ import {
   unsentCallRefusal,
   unsentOutcome,
 } from "./ComputerUseLeaseResponses.ts";
-import {
-  finalTerminalLine,
-  makePersonStopFence,
-  terminalSink,
-} from "./ComputerUseLeaseProxyPersonStop.ts";
+import { finalTerminalLine, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import {
   primitiveReplySink,
   rememberDriverReply,
@@ -574,17 +570,6 @@ const batchRefusal = (kind: "unverifiable" | "tooMany" | "invalidLine"): Driver 
     assert.include(outcome.refused, kind === "tooMany" ? "too many" : "cannot be verified");
     return finalFresh(outcome.refused, input);
   });
-const personFence: Driver = sync((input) => {
-  const fence = makePersonStopFence();
-  for (const reason of input.reasons) {
-    if (reason === "stopped_by_person") fence.beginStop();
-    else
-      fence.beginLock({ result: { isError: true, structuredContent: { code: "screen_locked" } } });
-  }
-  const line = fence.refusal(1, "tools/call");
-  if (line === undefined) throw new Error("expected person-stop fence refusal");
-  return finalFresh(line, input);
-});
 const proxyRefusal =
   (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>, detail: string): Driver =>
   (input) =>
@@ -606,9 +591,9 @@ const sites: ReadonlyArray<{
   readonly name: string;
   readonly run: Driver;
   readonly undispatched?: boolean;
+  readonly implicitReason?: ComputerUseTerminalReason;
 }> = [
   ...preDispatchSites,
-  { name: "ComputerUseLeaseProxyPersonStop.refusal", undispatched: true, run: personFence },
   {
     name: "ComputerUseBatchIdentity.unverifiable",
     undispatched: true,
@@ -972,7 +957,7 @@ it.effect.each(matrix)(
       const actual = yield* site.run({ possible, reasons: order.reasons });
       assert.equal(
         actual.reason,
-        order.reasons.includes("stopped_by_person") ? "stopped_by_person" : "screen_locked",
+        replaceWithTerminal("none", site.implicitReason, ...order.reasons).reason,
       );
       assert.equal(actual.possibleCommit, possible);
     }),
