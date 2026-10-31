@@ -227,7 +227,7 @@ export const desktopQuery = (value: unknown): DesktopQuery | undefined => {
 /** The substring the driver filters by; a role alone filters a bounded read here. */
 export const driverQuery = (query: DesktopQuery) => query.text ?? query.name ?? query.id;
 
-const bareRole = (role: string) => role.toLowerCase().replace(/^ax/, "");
+export const bareRole = (role: string) => role.toLowerCase().replace(/^ax/, "");
 const has = (haystack: string | undefined, needle: string) =>
   (haystack ?? "").toLowerCase().includes(needle.toLowerCase());
 /** Every field the query names matches this one element. */
@@ -244,10 +244,11 @@ export const matchesQuery = (row: DesktopRow, query: DesktopQuery) =>
 export const queryOmission = (
   state: Record<string, unknown>,
   matched: number,
-  /** The driver filtered the read, so names GOAT takes from text under an element were not there. */
   filtered = false,
+  covered = 0,
 ): NonNullable<ScreenObservation["omitted"]> => {
-  if (state.truncated === true) {
+  if (matched > 0 && state.truncated !== true) return [];
+  if (matched > 0) {
     const reason = string(state.truncation_reason)?.slice(0, 40) ?? "element limit";
     return [
       {
@@ -256,23 +257,27 @@ export const queryOmission = (
       },
     ];
   }
-  if (filtered && matched === 0)
-    return [
-      {
-        kind: "budget",
-        detail:
-          "Not found in the driver's filtered read; names taken from text under an element were not searched.",
-      },
-    ];
-  return state.elements_complete === true || matched > 0
-    ? []
-    : [
-        {
-          kind: "budget",
-          detail:
-            "Not found in what was read; compacted or skipped parts of the window were not searched.",
-        },
-      ];
+  const read = filtered
+    ? "driver filtered; lifted names are absent"
+    : "not driver filtered; names include child text";
+  const next =
+    filtered || state.truncated === true
+      ? "Try observe({depth: 2}) then observe({within: n})."
+      : "Try a different field.";
+  return [
+    {
+      kind: "budget",
+      detail: `No match among ${covered} elements (${read}); compared role, name, row text, accessibility id. ${next}`,
+    },
+    ...(state.truncated === true
+      ? [
+          {
+            kind: "budget" as const,
+            detail: `Search stopped early (${string(state.truncation_reason)?.slice(0, 40) ?? "element limit"}); absence is unproven.`,
+          },
+        ]
+      : []),
+  ];
 };
 /** What a full read walked when the whole window would not fit. */
 export const boundedReadDetail = (limit: number) =>

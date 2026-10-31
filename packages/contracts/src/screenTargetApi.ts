@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/28";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/29";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
@@ -48,6 +48,7 @@ interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?:
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
   resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
+  rolesPresent?: string[]; // up to 32 sorted bare roles searched on an app role-query miss
   warnings?: string[]; // app driver notes and warnings, including focus restoration
   otherWindows?: { window_id: number; title: string }[]; // apps: the app's other windows on screen, as this cell listed them
   title?: string; url?: string; image?: Shot } // image: with screenshot: true

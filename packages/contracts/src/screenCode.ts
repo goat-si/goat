@@ -317,6 +317,7 @@ export const ScreenObservation = Schema.Struct({
     ).check(Schema.isMaxLength(16)),
   ),
   incompleteSearch: Schema.optionalKey(Schema.Boolean),
+  rolesPresent: Schema.optionalKey(Schema.Array(text(200)).check(Schema.isMaxLength(32))),
   /** Host time of this read in total and by step; left out when it would not fit the reply. */
   ms: Schema.optionalKey(natural),
   phases: Schema.optionalKey(ScreenReadPhases),

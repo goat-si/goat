@@ -163,6 +163,7 @@ export interface ScreenObservationDraft {
   readonly tabDocumentKnown?: boolean;
   /** Regions the source left out, such as frames it could not read. */
   readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
+  readonly rolesPresent?: readonly string[];
   /** The window's screen bounds, for app reads: elements outside them go before visible ones. */
   readonly viewport?: Viewport;
   /** Each element's screen frame by index, for that cut; the elements' own frames are window points. */
@@ -606,6 +607,7 @@ export class ScreenObservations {
       scope,
       ...(omittedNow().length === 0 ? {} : { omitted: omittedNow() }),
       ...(mode === "query" ? { incompleteSearch: !draft.complete || truncated } : {}),
+      ...(draft.rolesPresent === undefined ? {} : { rolesPresent: draft.rolesPresent }),
       complete: draft.complete && !truncated,
       loading: draft.loading,
       ...(title === undefined ? {} : { title }),
