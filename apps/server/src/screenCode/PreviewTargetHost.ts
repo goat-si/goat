@@ -23,7 +23,7 @@ import { cellReadInput, cellScope, observePreviewTarget } from "./PreviewTargetR
 import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
-import { previewTargetFailure } from "./PreviewTargetFailures.ts";
+import { previewActionFailure, previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { dispatchTabExtra } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
@@ -202,32 +202,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         },
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       })
-      .pipe(
-        Effect.mapError((error) => {
-          const safety = classifyBrowserActionOutcome({
-            operation,
-            status: "failed",
-            errorTag: error._tag,
-            ...(error._tag === "PreviewAutomationControlInterruptedError"
-              ? { controlReason: error.reason }
-              : {}),
-            ...("dispatched" in error && error.dispatched !== undefined
-              ? { dispatched: error.dispatched }
-              : {}),
-          });
-          const failure = previewTargetFailure(error, operation);
-          return {
-            ...failure,
-            code: safety.possibleCommit
-              ? ("unknown_outcome" as const)
-              : failure.code === "target_ambiguous" || failure.code === "invalid_argument"
-                ? failure.code
-                : ("downstream_failure" as const),
-            effectStarted: safety.possibleCommit,
-            safety,
-          };
-        }),
-      );
+      .pipe(Effect.mapError((error) => previewActionFailure(error, operation)));
   const dispatch: ScreenHostDispatcher["dispatch"] = Effect.fn("PreviewTargetHost.dispatch")(
     function* (call, context) {
       const calledAt = yield* Clock.currentTimeMillis;

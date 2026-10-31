@@ -895,6 +895,8 @@ export class PreviewAutomationExecutionError extends Schema.TaggedError<PreviewA
       Schema.Literals(["no_candidate", "not_permitted", "unavailable"]),
     ),
     unloadedTab: Schema.optional(Schema.Struct({ tabId: PreviewTabId, loadError: Schema.String })),
+    /** Why a tab's fetch got no response it could read: CORS, the page's CSP, DNS or the network. */
+    fetchFailure: Schema.optional(Schema.Literals(["cors", "csp", "dns", "network"])),
   },
 ) {
   override get message(): string {
@@ -913,11 +915,15 @@ export class PreviewAutomationInvalidSelectorError extends Schema.TaggedError<Pr
     selectorLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     staleRef: Schema.optional(Schema.Boolean),
     matchCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(2))),
+    /** The selector matched no element once the page had loaded. */
+    noMatch: Schema.optional(Schema.Boolean),
   },
 ) {
   override get message(): string {
     if (this.staleRef)
       return "This element ref is stale. Navigation, dialogs, and new snapshots replace refs; take a fresh snapshot and use its refs.";
+    if (this.noMatch)
+      return `Preview automation ${this.operation}: the selector matches no element, so nothing was sent. Take a fresh snapshot and use its refs, or wait for the element first.`;
     if (this.matchCount !== undefined)
       return `Preview automation ${this.operation}: the selector matches ${this.matchCount} elements; input needs one. Narrow it (text=..., a parent, ">> nth=0" for the first) or use a snapshot ref.`;
     if (this.selectorKind !== undefined && this.selectorLength !== undefined) {
@@ -1065,14 +1071,7 @@ export const PreviewAutomationError = Schema.Union([
 ]);
 export type PreviewAutomationError = typeof PreviewAutomationError.Type;
 
-export const PreviewUrlResolution = Schema.Struct({
-  requestedUrl: Schema.String,
-  resolvedUrl: Schema.String,
-  resolutionKind: Schema.Literals(["direct", "direct-private-network"]),
-  environmentId: EnvironmentId,
-});
-export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
-
 export * from "./previewAutomationInputHold.ts";
 export * from "./previewAutomationPrimitives.ts";
 export * from "./previewAutomationSession.ts";
+export * from "./previewUrlResolution.ts";

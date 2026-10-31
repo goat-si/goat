@@ -7,6 +7,7 @@ import {
   type PointerReporter,
   targetLocator,
 } from "./ServerBrowserPage.ts";
+import { requireMatch } from "./actionReadiness.ts";
 
 type TargetInput = {
   readonly locator?: string | undefined;
@@ -33,6 +34,8 @@ export const pointBefore = async <Input extends TargetInput>(
       ends - Date.now(),
       gate.deadline === undefined ? Infinity : gate.deadline - performance.now(),
     );
+  // A target that matches nothing is refused here, before the pointer waits out its whole budget.
+  if (left() > 0) await requireMatch(locator, left());
   const box =
     left() > 0
       ? await locator.boundingBox({ timeout: Math.max(1, left()) }).catch(() => null)
