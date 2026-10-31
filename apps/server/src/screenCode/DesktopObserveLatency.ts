@@ -872,7 +872,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
           timing,
           rawBudget,
         ),
-        ...readReceipt(call, observation.truncated || filtered),
+        ...readReceipt(call, observation.truncated || raw.cut || filtered),
       };
     }
   }
