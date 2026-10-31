@@ -69,6 +69,7 @@ export const PROXY_ANSWER_GRACE_MS = 1_000;
 
 interface Control {
   terminal?: "stopped_by_person" | "screen_locked";
+  epoch: { reason?: ComputerUseTerminalReason };
   maxAcceptedGeneration: number;
   maxCutoffGeneration: number;
   binding: { readonly connectionId: string; readonly generation: number } | undefined;
@@ -296,6 +297,7 @@ export const make = Effect.gen(function* () {
     let record = value.controls.get(controlId);
     if (record === undefined) {
       record = {
+        epoch: {},
         maxAcceptedGeneration: -1,
         maxCutoffGeneration: -1,
         binding: undefined,
@@ -306,11 +308,16 @@ export const make = Effect.gen(function* () {
     }
     return record;
   };
+  const latch = (record: Control, reason: ComputerUseTerminalReason) => {
+    if (record.epoch.reason !== undefined && record.epoch.reason !== reason) record.epoch = {};
+    record.terminal = reason;
+    record.epoch.reason = reason;
+  };
   const unsubscribe = leases.onAuthorityChange?.((change) => {
     if (change.terminal === undefined) return;
     const registered = attachments.get(change.threadId)?.registration;
     if (registered === undefined) return;
-    control(registered, change.controlId).terminal = change.terminal;
+    latch(control(registered, change.controlId), change.terminal);
     wake();
   });
   if (unsubscribe !== undefined) yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
@@ -354,9 +361,9 @@ export const make = Effect.gen(function* () {
           "reason" in state &&
           (state.reason === "stopped" || state.reason === "stopped_all")
         )
-          record.terminal ??= "stopped_by_person";
+          latch(record, "stopped_by_person");
         if (record !== undefined && state._tag === "paused" && state.reason === "screen_locked")
-          record.terminal ??= "screen_locked";
+          latch(record, "screen_locked");
         if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         // A proxy still starting registers as a thread proxy, so its attachment waits for it.
         if (registered?.kind !== "control" && keepsRegistration(state)) {
@@ -564,7 +571,7 @@ export const make = Effect.gen(function* () {
             undefined,
             current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
           );
-        if (terminal !== undefined) control(registered, current.controlId).terminal = terminal;
+        if (terminal !== undefined) latch(control(registered, current.controlId), terminal);
       }
       const requests = Stream.merge(
         Stream.merge(Stream.fromQueue(queue), Stream.fromQueue(cancellations)),
@@ -638,6 +645,7 @@ export const make = Effect.gen(function* () {
           return false;
         clear(registered, record);
         if (record.terminal === "screen_locked") delete record.terminal;
+        record.epoch = record.terminal === undefined ? {} : { reason: record.terminal };
         record.maxAcceptedGeneration = input.driverGeneration;
         record.binding = { connectionId: input.connectionId, generation: input.driverGeneration };
         wake();
@@ -663,7 +671,7 @@ export const make = Effect.gen(function* () {
         )
           return false;
         if (input.terminal !== undefined && input.driverGeneration >= record.maxAcceptedGeneration)
-          record.terminal ??= input.terminal;
+          latch(record, input.terminal);
         record.maxCutoffGeneration = input.driverGeneration;
         if (record.binding !== undefined && record.binding.generation <= input.driverGeneration)
           clear(registered, record);
@@ -685,11 +693,12 @@ export const make = Effect.gen(function* () {
       // The call belongs to the control it began under; a successor never inherits it.
       let began: string | undefined;
       let beganRecord: Control | undefined;
+      let beganEpoch: Control["epoch"] | undefined;
       // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const previousFailure = terminalFailure(
-          terminalReason(beganRecord?.terminal),
+          terminalReason(beganEpoch?.reason),
           input.tool,
           input.args,
         );
@@ -727,6 +736,7 @@ export const make = Effect.gen(function* () {
         const record =
           registered === undefined ? undefined : control(registered, current.controlId);
         beganRecord ??= record;
+        beganEpoch ??= record?.epoch;
         const binding = record?.binding;
         if (registered !== undefined && record !== undefined && binding !== undefined) {
           if (deadlineMillis - now < MIN_CALL_MS)
@@ -788,7 +798,7 @@ export const make = Effect.gen(function* () {
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
           const replyTerminal = terminalReplyReason(input.reply.result);
-          if (replyTerminal !== undefined) record.terminal ??= replyTerminal;
+          if (replyTerminal !== undefined) latch(record, replyTerminal);
           if (replyTerminal !== undefined && replyTerminal === record.terminal) {
             pending.terminal = replyTerminal;
             pending.answeredAt = now;
