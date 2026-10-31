@@ -363,7 +363,12 @@ it.effect("clears a turn fence and ignores visits after the turn ends", () =>
       yield* Deferred.await(ended);
       yield* Effect.promise(() => page.goto("https://example.com/"));
       yield* Effect.promise(() => page.goto("https://safe.example/"));
-      expect((yield* broker.invoke(claim).pipe(Effect.result))._tag).toBe("Success");
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const endNext = yield* activity.begin(scope.thread.threadId, "next-run");
+      expect((yield* broker.invoke({ ...claim, runId: "next-run" }).pipe(Effect.result))._tag).toBe(
+        "Success",
+      );
+      yield* endNext;
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -552,7 +557,7 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
 it.effect("refuses claim on a blocked tab and permits it in a later run after leaving", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker, tabId } = yield* ready;
+      const { broker, tabId, end } = yield* ready;
       const settings = yield* ServerSettings.ServerSettingsService;
       yield* settings.updateSettings({ blockedBrowserHosts: ["example.com"] });
       const page = contexts.at(-1)!.page;
@@ -567,9 +572,13 @@ it.effect("refuses claim on a blocked tab and permits it in a later run after le
       expect(sameRun._tag).toBe("Failure");
       if (sameRun._tag === "Failure")
         expect(sameRun.failure).toMatchObject({ reason: "blocked_url" });
+      yield* end;
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const endNext = yield* activity.begin(scope.thread.threadId, "next-run");
       expect((yield* broker.invoke({ ...claim, runId: "next-run" }).pipe(Effect.result))._tag).toBe(
         "Success",
       );
+      yield* endNext;
     }),
   ).pipe(Effect.provide(layer)),
 );
