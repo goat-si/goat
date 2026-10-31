@@ -5,6 +5,7 @@ import {
   ThreadId,
   type ComputerUsePrimitiveReply,
   type ComputerUsePrimitiveRequest,
+  type ComputerUseCallAdmission,
   type ScreenHostCall,
   type ScreenRunError,
 } from "@goat/contracts";
@@ -532,13 +533,13 @@ const claimUnsupported: Driver = (input) =>
   });
 const admissionRefusal = (scope: boolean): Driver =>
   sync((input) => {
-    const decision = scope
+    const decision: ComputerUseCallAdmission = scope
       ? {
-          status: "admitted" as const,
+          status: "admitted",
           reservationId: null,
           permissions: { apps: ["approved"], validUntilMillis: 60_000 },
         }
-      : { status: "refused" as const, detail: "screen_shared" as const };
+      : { status: "refused", detail: "screen_shared" };
     const admitted = proxyCallAdmission(
       1,
       proxyMessage("click", { pid: 55, window_id: 7 }),

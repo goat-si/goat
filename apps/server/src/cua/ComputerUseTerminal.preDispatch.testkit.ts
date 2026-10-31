@@ -296,7 +296,7 @@ export const preDispatchSites = [
   {
     name: "ComputerUseLeaseProxyPersonStop.stopRefusal",
     undispatched: true,
-    implicitReason: "stopped_by_person" as const,
+    implicitReason: "stopped_by_person" satisfies ComputerUseTerminalReason,
     run: personFence("stopped_by_person"),
   },
   { name: "ScreenHostBridge.fencedCell", undispatched: true, run: fencedCell },
