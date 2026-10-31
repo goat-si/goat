@@ -16,7 +16,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
-import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
+import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { screenRunLimits } from "./ScreenRunLimits.ts";
@@ -537,15 +537,20 @@ it.live("desktop private authority notification cuts an active screen cell", () 
       NonNullable<ComputerUseLeases["Service"]["onAuthorityChange"]>
     >[0];
     let notify: AuthorityListener | undefined;
-    const leases = {
-      currentControl: () => Effect.succeedNone,
-      onAuthorityChange: (listener: AuthorityListener) => {
-        notify = listener;
-        return () => {
-          notify = undefined;
-        };
-      },
-    } as ComputerUseLeases["Service"];
+    const leases = yield* ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () => Effect.succeedNone,
+          onAuthorityChange: (listener: AuthorityListener) => {
+            notify = listener;
+            return () => {
+              notify = undefined;
+            };
+          },
+        }),
+      ),
+    );
     const layer = ScreenRunService.layerWithRuntime({
       leases,
       invocation: {
@@ -637,15 +642,20 @@ it.live("Stop during slow tab cleanup fails a cell that caught its dispatched in
       NonNullable<ComputerUseLeases["Service"]["onAuthorityChange"]>
     >[0];
     let notify: AuthorityListener | undefined;
-    const leases = {
-      currentControl: () => Effect.succeedNone,
-      onAuthorityChange: (listener: AuthorityListener) => {
-        notify = listener;
-        return () => {
-          notify = undefined;
-        };
-      },
-    } as ComputerUseLeases["Service"];
+    const leases = yield* ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () => Effect.succeedNone,
+          onAuthorityChange: (listener: AuthorityListener) => {
+            notify = listener;
+            return () => {
+              notify = undefined;
+            };
+          },
+        }),
+      ),
+    );
     const tabHost = yield* makePreviewTargetHost(broker);
     return yield* Effect.gen(function* () {
       const service = yield* ScreenRunService;
