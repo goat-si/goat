@@ -26,11 +26,12 @@ const evCall = (...[method, args, ref]: Parameters<typeof call>) => ({
   deadlineMillis: 500000,
 });
 
+// A verified input re-reads windows a few times while nothing new shows; the clock passes them.
 const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
   Effect.gen(function* () {
     const fiber = yield* host.invoke(c, context).pipe(Effect.forkChild);
     yield* Effect.yieldNow;
-    yield* TestClock.adjust("60 millis");
+    yield* TestClock.adjust("1 second");
     return yield* Fiber.join(fiber);
   });
 

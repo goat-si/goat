@@ -39,6 +39,9 @@ const SETTLE_MS = 60;
 // input returns; those inputs re-read windows a few times.
 const OPENING_POLL_MS = 100;
 const OPENING_POLLS = 4;
+// A verified input can open a window of its own process late (a chat from a search result), so
+// its listing is read again a few times while nothing new shows.
+const VERIFY_POLLS = 3;
 const COMPLETED_WRITE = classifyActionOutcome({
   effect: "write",
   status: "completed",
@@ -421,7 +424,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       (authoritativeIds(preRaw, pid) === undefined || authoritativeIds(postRaw, pid) !== undefined)
     );
   };
-  const rereads = opening || closing ? OPENING_POLLS : 0;
+  const rereads = opening || closing ? OPENING_POLLS : deps.verify === true ? VERIFY_POLLS : 0;
   for (let polls = 0; polls < rereads; polls++) {
     if (changed()) break;
     const now = yield* Clock.currentTimeMillis;

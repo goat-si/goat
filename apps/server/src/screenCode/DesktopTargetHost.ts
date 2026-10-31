@@ -35,7 +35,7 @@ import {
 } from "./DesktopInputGuards.ts";
 import { aimOf, type Placed, type Rect } from "./DesktopFrames.ts";
 import { waitForOutcome } from "./DesktopWindowClosure.ts";
-import { windowIntentOf } from "./DesktopWindowIntent.ts";
+import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import {
   annotatePointerResult,
   applyDesktopPointerArgs,
@@ -72,6 +72,7 @@ import { noteHops } from "./DesktopHops.ts";
 import { runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
+import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
 
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
@@ -110,6 +111,8 @@ export interface BoundWindow {
   pages?: DesktopPages;
   /** Rows of the current observation and its pages, for watched-element evidence and action checks. */
   rows?: ReadonlyArray<DesktopRow>;
+  /** Those rows when a whole, uncut read gave them and no call has gone to the window since. */
+  fullRows?: TreeBaseline;
   boundWindows?: ReadonlyArray<WindowEntry> | undefined;
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
@@ -580,6 +583,9 @@ export const createDesktopTargetHost = (deps: {
     boundRequest,
     listWindows: (bound: BoundWindow, call: ScreenHostCall, context: ScreenHostContext) =>
       request("list_windows", { pid: bound.pid }, call, context),
+    knownWindows: (bound: BoundWindow, context: ScreenHostContext) =>
+      cellTrackers.get(cellKey(context))?.tracker.latest(bound.pid) ??
+      (bound.boundInCellId === context.cellId ? bound.boundWindows : undefined),
     jpegScreenshots: isMac,
     modelFit:
       isMac &&
@@ -606,10 +612,17 @@ export const createDesktopTargetHost = (deps: {
     context: ScreenHostContext,
     inBatch = false,
   ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
-    if (call.method === "launch_app" && !call.targetRef)
+    if (call.method === "launch_app" && !call.targetRef) {
+      // The process a launch reaches is known only after it, so no earlier read compares.
+      for (const each of targets.values()) delete each.fullRows;
       return yield* launch(call, callArgs(call.args), context);
+    }
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(fail("stale_reference"));
+    // Any call here may change this process's windows, so only an input right after a read of its
+    // own window compares with it; another binding's input on the process voids that read too.
+    const baseline = bound.fullRows;
+    for (const each of targets.values()) if (each.pid === bound.pid) delete each.fullRows;
     if (call.method === "select_text")
       return yield* selectText(bound, callArgs(call.args), call, context);
     const withInputEvidence = (
@@ -655,7 +668,24 @@ export const createDesktopTargetHost = (deps: {
           onSettled: () => {
             delete bound.needsSettleBeforeCapture;
           },
-        });
+        }).pipe(
+          Effect.flatMap((result) =>
+            confirmByTree(
+              result,
+              baseline,
+              runDesktopObserve(
+                observeDeps,
+                bound,
+                { ...call, method: "get_window_state", args: {} },
+                context,
+                {},
+              ).pipe(Effect.map(() => bound.fullRows)),
+              call.deadlineMillis,
+              windowIntentOf(tool, forwarded, acted) === "close" ||
+                hitCloseButton(tool, result.value),
+            ),
+          ),
+        );
       });
     if (call.method === "invoke_menu") {
       const tracker = trackerFor(context, bound.connectionGeneration);

@@ -49,7 +49,7 @@ import {
 } from "./DesktopObserveRead.ts";
 import { buildScreenshotCapture, treeWindowBasis } from "./DesktopTargetPoints.ts";
 import { cleanActionText, isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
-import { checkWindowReplyState } from "./DesktopWindows.ts";
+import { checkWindowReplyState, otherWindowsOf, type WindowEntry } from "./DesktopWindows.ts";
 import {
   observationReplyBudget,
   type ScreenHostContext,
@@ -318,6 +318,11 @@ export interface DesktopObserveDeps {
     call: ScreenHostCall,
     context: ScreenHostContext,
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  /** The bound process's windows as this cell last listed them, at its bind or after an input. */
+  readonly knownWindows: (
+    bound: BoundWindow,
+    context: ScreenHostContext,
+  ) => ReadonlyArray<WindowEntry> | undefined;
   readonly jpegScreenshots: boolean;
   readonly modelFit: boolean;
   /** The host's latest target generation, and its update when a sheet's parent takes over. */
@@ -444,6 +449,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
 ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
   const { observations } = deps;
   const capture = call.method === "screenshot";
+  // Any read starts the tree baseline over; only a whole read below sets it again.
+  delete bound.fullRows;
   if (!capture && args.after !== undefined)
     return yield* observePage(deps, bound, call, context, args);
   const startedAt = yield* Clock.currentTimeMillis;
@@ -521,6 +528,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     delete bound.pages;
     delete bound.elementsByToken;
     delete bound.rows;
+    delete bound.fullRows;
   };
   let limit: number = READ_BOUNDS[0];
   yield* settleCaptureIfNeeded(capture, bound, call.deadlineMillis);
@@ -605,7 +613,13 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     ? (boundsOf(state.window_bounds) ??
       bound.boundWindows?.find((w) => w.window_id === expectedWindowId)?.bounds)
     : bound.windowBounds;
-  const warningBytes = warnings.length ? Buffer.byteLength(JSON.stringify({ warnings })) : 0;
+  // The app's other windows on screen, such as a chat an input opened, as this cell listed them.
+  const otherWindows = capture
+    ? []
+    : otherWindowsOf(deps.knownWindows(bound, context), [bound.windowId, expectedWindowId]);
+  const warningBytes =
+    (warnings.length ? Buffer.byteLength(JSON.stringify({ warnings })) : 0) +
+    (otherWindows.length ? Buffer.byteLength(JSON.stringify({ otherWindows })) : 0);
   const rawBudget = observationReplyBudget(call, context.limits, warningBytes);
   // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the tree's
   // observation, rows and frames stay and the reply's tree is not read at all. Any other read
@@ -680,6 +694,22 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       isDiff && !numbersChanged && bound.rows
         ? retainPairingTitles(bound.rows, tree.shown, rows)
         : tree.shown;
+    // Only a whole read compares: a cut, filtered or degraded one drops rows the window still has.
+    if (
+      !capture &&
+      query === undefined &&
+      !interactive &&
+      !filtered &&
+      state.truncated !== true &&
+      state.degraded !== true &&
+      limit === READ_BOUNDS[0] &&
+      bound.rows.length > 0
+    )
+      bound.fullRows = {
+        rows: bound.rows,
+        windowId: expectedWindowId,
+        connectionGeneration: bound.connectionGeneration,
+      };
     bound.elementsByToken = inspectTreeElements(
       tree.elements,
       tree.rows,
@@ -787,6 +817,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
             ...observation,
             ...(snapshotId === undefined ? {} : { snapshot: snapshotId }),
             ...(warnings.length ? { warnings } : {}),
+            ...(otherWindows.length ? { otherWindows } : {}),
           },
           timing,
           rawBudget,
