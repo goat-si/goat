@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import { mergeTerminal } from "./ComputerUseTerminal.ts";
-import { makePersonStopFence } from "./ComputerUseLeaseProxyPersonStop.ts";
+import { makePersonStopFence, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 
 it("merges terminal reasons and possible input monotonically", () => {
   assert.deepEqual(mergeTerminal({}, { reason: "screen_locked" }), {
@@ -52,4 +53,28 @@ it.each(["lock then resume then stop", "lock then stop", "stop then lock"])(
       fence.confirm({ state: "paused", controlId: "control", reason: "screen_locked" });
     assert.equal(previous(), "stopped_by_person");
   },
+);
+
+it.effect("an answered call releases its epoch and another control remains independent", () =>
+  Effect.gen(function* () {
+    const first = makePersonStopFence();
+    const second = makePersonStopFence();
+    const captured = first.capture();
+    first.confirm({ state: "paused", controlId: "first", reason: "screen_locked" });
+    const sink = terminalSink(
+      { answer: () => Effect.void },
+      { id: 1, method: "tools/call" },
+      captured,
+      () => false,
+    );
+    yield* sink.answer("{}");
+    first.activate(
+      { state: "active", controlId: "first", expiresAt: "2030-01-01T00:00:00Z" },
+      "screen_locked",
+      0,
+    );
+    first.confirm({ state: "ended", reason: "stopped" });
+    assert.equal(captured(), "screen_locked");
+    assert.isUndefined(second.terminal());
+  }),
 );

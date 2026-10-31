@@ -129,6 +129,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       id: JsonRpcId;
       method: string;
       cancelled: boolean;
+      answering?: boolean;
     }
   >();
   const clientRequests = new Map<string, { context: Context; id: JsonRpcId }>();
@@ -195,6 +196,14 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     ).answer(answer);
   });
 
+  const pruneEpochs = (context: Context) => {
+    for (const [generation, epoch] of context.driverTerminals)
+      if (
+        generation !== context.driverGeneration &&
+        ![...owners.values()].some((owner) => owner.context === context && owner.latch === epoch)
+      )
+        context.driverTerminals.delete(generation);
+  };
   const output = (context: Context, line: string, reply?: { readonly tool?: string | undefined }) =>
     Effect.suspend(() => {
       const message = parse(line);
@@ -229,8 +238,13 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         if (context.replayIds.delete(key)) return Effect.void;
         const owner = owners.get(key);
         if (owner?.context !== context) return Effect.void;
-        owners.delete(key);
-        if (owner.cancelled) return Effect.void;
+        if (owner.answering) return Effect.void;
+        if (owner.cancelled) {
+          owners.delete(key);
+          pruneEpochs(context);
+          return Effect.void;
+        }
+        owner.answering = true;
         setup.remember(owner.method, message);
         const safety = replySafety(line);
         return terminalSink(
@@ -239,7 +253,16 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           () => owner.latch.reason,
           () =>
             safety._tag === "None" || safety.value.result.structuredContent.safety.possibleCommit,
-        ).answer(line, undefined, reply);
+        )
+          .answer(line, undefined, reply)
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                if (owners.get(key) === owner) owners.delete(key);
+                pruneEpochs(context);
+              }),
+            ),
+          );
       }
       return options.output(line, reply);
     });
@@ -371,6 +394,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           }
           context.driverGeneration = driver.generation;
           context.driverTerminals.set(driver.generation, context.terminal);
+          pruneEpochs(context);
           generations.set(
             context.controlId,
             Math.max(generations.get(context.controlId) ?? -1, driver.generation),
@@ -394,7 +418,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           context.updates.length = 0;
         },
         onCancelledRequestSettled: (key) => {
-          if (owners.get(key)?.context === context) owners.delete(key);
+          if (owners.get(key)?.context === context) {
+            owners.delete(key);
+            pruneEpochs(context);
+          }
         },
         onLeaseUpdateApplied: Effect.fn("ComputerUseLeaseProxyThread.appliedUpdate")(
           function* (applied) {
@@ -441,7 +468,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             if (owner.context === context) clientRequests.delete(key);
           for (const [key, owner] of owners) {
             if (owner.context !== context) continue;
-            owners.delete(key);
+            if (owner.answering) continue;
             if (!owner.cancelled)
               yield* answerStopped(
                 owner.id,
@@ -451,6 +478,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
                 owner.latch,
                 true,
               );
+            if (owners.get(key) === owner) owners.delete(key);
+            pruneEpochs(context);
           }
           yield* Deferred.succeed(context.closed, undefined);
         }),
