@@ -47,9 +47,12 @@ it.live("records trusted normal typing only with consent outside secret protecti
           };
           await page.setContent('<button id="save" aria-label="Save">Save</button>');
           const targetLabel = await browserHistoryTarget(page, { selector: "#save" });
-          await record(tab, "click", () => ServerBrowserPage.click(page, { selector: "#save" }), {
-            ...(targetLabel === undefined ? {} : { targetLabel }),
-          });
+          await record(
+            tab,
+            "click",
+            () => ServerBrowserPage.click(page, { selector: "#save" }),
+            targetLabel === undefined ? {} : { targetLabel },
+          );
           await page.setContent(
             '<input id="normal"><input id="password" type="password" value="private-secret"><div id="edit" contenteditable="true"></div>',
           );
