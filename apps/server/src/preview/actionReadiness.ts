@@ -44,14 +44,17 @@ export const requireMatch = async (target: Locator, timeoutMs: number) => {
   const ends = performance.now() + timeoutMs;
   if ((await target.count()) > 0) return;
   // Each wait is awaited whole, so none outlives the call: while the page loads the target is
-  // looked for in short slices, and once it has loaded, for what is left of the grace.
+  // looked for in short slices, and once it has loaded, for what is left of the grace. The load
+  // state comes from Playwright's lifecycle tracking, which a stuck page script cannot hold up.
   for (let graceLeft = NO_MATCH_GRACE_MS; ;) {
-    const left = Math.floor(ends - performance.now());
     const loaded = await target
       .page()
-      .evaluate("document.readyState === 'complete'")
-      .catch(() => false);
-    const slice = Math.max(1, Math.min(left, loaded ? graceLeft : LOADING_SLICE_MS));
+      .waitForLoadState("load", { timeout: 1 })
+      .then(
+        () => true,
+        () => false,
+      );
+    const slice = Math.min(remaining(ends), loaded ? Math.max(1, graceLeft) : LOADING_SLICE_MS);
     const started = performance.now();
     const found = await target
       .first()

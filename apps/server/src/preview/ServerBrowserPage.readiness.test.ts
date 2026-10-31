@@ -1,5 +1,5 @@
 import { chromium, type Locator, type Page } from "playwright-core";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { requireMatch } from "./actionReadiness.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
@@ -277,14 +277,46 @@ it("leaves none of its waits running once the target appears before the page loa
     return work.finally(() => running--);
   };
   const neverLoads = new Promise<void>(() => {});
+  // The page never loads: a short timeout runs out at once, a long one outlasts the test.
+  const timedOut = () => Object.assign(new Error("timed out"), { name: "TimeoutError" });
   const target = {
     count: async () => 0,
     first: () => ({ waitFor: () => track(Promise.resolve()) }),
     page: () => ({
-      waitForLoadState: () => track(neverLoads),
+      waitForLoadState: (_state: string, options: { timeout: number }) =>
+        track(options.timeout <= 1 ? Promise.reject(timedOut()) : neverLoads),
       evaluate: () => track(Promise.resolve(false)),
     }),
   };
   await requireMatch(target as unknown as Locator, 5_000);
   expect(running).toBe(0);
+});
+it("never starts a look for the target with time that the load-state read already used", async () => {
+  vi.useFakeTimers({ toFake: ["performance"] });
+  try {
+    const looks: Array<number> = [];
+    const timedOut = () => Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    // Reading the page's load state takes 200 ms of a 100 ms budget.
+    const slowRead = async () => {
+      vi.advanceTimersByTime(200);
+      throw timedOut();
+    };
+    const target = {
+      count: async () => 0,
+      first: () => ({
+        waitFor: async ({ timeout }: { timeout: number }) => {
+          looks.push(timeout);
+          throw timedOut();
+        },
+      }),
+      page: () => ({ waitForLoadState: slowRead, evaluate: slowRead }),
+    };
+    const refused = await requireMatch(target as unknown as Locator, 100).catch(
+      (cause: unknown) => cause,
+    );
+    expect(refused).toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    expect(looks).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
