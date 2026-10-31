@@ -12,21 +12,19 @@ import {
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 
 export function makePersonStopFence() {
-  let personStop = false;
-  let screenLock = false;
+  let reason: "stopped_by_person" | "screen_locked" | undefined;
   let lockConfirmed = false;
   return {
-    pending: () => personStop || screenLock,
-    terminal: (): "stopped_by_person" | "screen_locked" | undefined =>
-      screenLock ? "screen_locked" : personStop ? "stopped_by_person" : undefined,
+    pending: () => reason !== undefined,
+    terminal: () => reason,
     beginStop: () => {
-      if (personStop) return false;
-      personStop = true;
+      if (reason !== undefined) return false;
+      reason = "stopped_by_person";
       return true;
     },
     beginLock: (message: unknown) => {
-      if (screenLock || !driverScreenLocked(message)) return false;
-      screenLock = true;
+      if (reason !== undefined || !driverScreenLocked(message)) return false;
+      reason = "screen_locked";
       return true;
     },
     confirm: (update: ComputerUseLeaseUpdate | undefined) => {
@@ -37,7 +35,7 @@ export function makePersonStopFence() {
       paused: ComputerUsePauseReason | undefined,
       interruptionsSeen: number | undefined,
     ) => {
-      if (screenLock && !lockConfirmed) {
+      if (reason === "screen_locked" && !lockConfirmed) {
         const sawLock =
           update.interruptions?.last === "screen_locked" &&
           update.interruptions.count > (interruptionsSeen ?? 0);
@@ -45,15 +43,15 @@ export function makePersonStopFence() {
         lockConfirmed = true;
       }
       if (paused === "screen_locked") {
-        screenLock = false;
+        if (reason === "screen_locked") reason = undefined;
         lockConfirmed = false;
       }
       return true;
     },
     refusal: (id: JsonRpcId, method: string | undefined) =>
-      screenLock
+      reason === "screen_locked"
         ? refusal(id, method, "screen_locked", PAUSE_MESSAGES.screen_locked)
-        : personStop
+        : reason === "stopped_by_person"
           ? refusal(id, method, "stopped", LEASE_END_MESSAGES.stopped)
           : undefined,
   };
