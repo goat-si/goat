@@ -93,11 +93,52 @@ function isIgnoredReleaseNoteLine(line: string): boolean {
 interface ExtractedReleaseNoteItems {
   readonly items: ReadonlyArray<string>;
   readonly totalItems: number;
+  readonly intro?: string;
+  readonly stats?: string;
+}
+
+/**
+ * Reads a generated summary (`scripts/generate-release-notes.ts`): a `v1.2.3 · N changes…`
+ * header, a highlights paragraph, and fix bullets. PR numbers are left to the GitHub page.
+ */
+function extractReleaseNoteSummary(summary: string): ExtractedReleaseNoteItems {
+  let stats: string | undefined;
+  let intro = "";
+  let totalItems = 0;
+  const items: string[] = [];
+  for (const rawLine of stripMarkup(summary).split("\n")) {
+    const line = rawLine.trim().replace(/\s+/g, " ");
+    if (line === "" || /^#{1,6}\s+/.test(line)) continue;
+    if (stats === undefined && /^v\S+ · /.test(line)) {
+      stats = truncateReleaseNoteItem(line.slice(line.indexOf(" · ") + 3));
+      continue;
+    }
+    const text = line
+      .replace(/^[-*]\s+/, "")
+      .replace(/\s*\((?:#\d+(?:,\s*)?)+\)\.?$/, "")
+      .trim();
+    totalItems += 1;
+    if (/^[-*]\s+/.test(line)) {
+      if (items.length < MAX_RELEASE_NOTE_ITEMS_PER_GROUP)
+        items.push(truncateReleaseNoteItem(text));
+    } else if (intro.length < MAX_RELEASE_NOTE_ITEM_LENGTH) {
+      intro = truncateReleaseNoteItem(intro ? `${intro} ${text}` : text);
+    }
+  }
+  return {
+    items,
+    totalItems,
+    ...(intro ? { intro } : {}),
+    ...(stats ? { stats } : {}),
+  };
 }
 
 function extractReleaseNoteItems(note: string | null | undefined): ExtractedReleaseNoteItems {
   if (!note) return { items: [], totalItems: 0 };
 
+  // Generated summaries fold GitHub's full list under this exact <details> block.
+  const summaryEnd = note.search(/<details>\s*<summary>\s*Full changelog\s*<\/summary>/i);
+  if (summaryEnd >= 0) return extractReleaseNoteSummary(note.slice(0, summaryEnd));
   const items: string[] = [];
   let totalItems = 0;
   for (const rawLine of stripMarkup(note).split("\n")) {
@@ -117,6 +158,15 @@ function extractReleaseNoteItems(note: string | null | undefined): ExtractedRele
   return { items: items.toReversed(), totalItems };
 }
 
+// The update feed dates only the offered version; prerelease versions carry their UTC build day.
+const PRERELEASE_BUILD_DAY = /-(?:nightly|preview)\.(\d{4})(\d{2})(\d{2})\.\d+$/;
+
+function resolveReleasedAt(version: string, offeredVersion: string, releaseDate?: string) {
+  if (version === offeredVersion && releaseDate) return releaseDate;
+  const day = PRERELEASE_BUILD_DAY.exec(version);
+  return day ? `${day[1]}-${day[2]}-${day[3]}` : undefined;
+}
+
 interface NormalizedDesktopUpdateReleaseNotes {
   readonly releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote>;
   readonly omittedReleaseCount: number;
@@ -127,6 +177,7 @@ export function normalizeDesktopUpdateReleaseNotes(
   releaseNotes: unknown,
   fallbackVersion: string,
   channel: DesktopUpdateChannel,
+  releaseDate?: string,
 ): NormalizedDesktopUpdateReleaseNotes {
   const rawNotes = (
     typeof releaseNotes === "string"
@@ -137,13 +188,17 @@ export function normalizeDesktopUpdateReleaseNotes(
   ).filter((entry) => resolveDefaultDesktopUpdateChannel(entry.version) === channel);
 
   const normalizedNotes = rawNotes.flatMap((entry) => {
-    const { items, totalItems } = extractReleaseNoteItems(entry.note);
+    const { items, totalItems, intro, stats } = extractReleaseNoteItems(entry.note);
     if (totalItems === 0) return [];
+    const releasedAt = resolveReleasedAt(entry.version, fallbackVersion, releaseDate);
     return [
       {
         version: entry.version,
         items,
         totalItems,
+        ...(intro ? { intro } : {}),
+        ...(stats ? { stats } : {}),
+        ...(releasedAt ? { releasedAt } : {}),
       },
     ];
   });

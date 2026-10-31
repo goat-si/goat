@@ -28,6 +28,7 @@ describe("normalizeDesktopUpdateReleaseNotes", () => {
       releaseNotes: [
         {
           version: "0.0.36-nightly.20260828.1213",
+          releasedAt: "2026-08-28",
           items: [
             "fix(opencode): handle child approvals, stops, and model catalogs by @human in #8480",
             "fix(web): keep long task drawers usable on small screens by @human in #8313",
@@ -60,6 +61,61 @@ describe("normalizeDesktopUpdateReleaseNotes", () => {
     });
   });
 
+  it("reads a generated summary as a note and skips the folded full list", () => {
+    const fixes = Array.from({ length: 9 }, (_, index) => `- Fix ${index + 1} (#${index + 1})`);
+    const result = normalizeDesktopUpdateReleaseNotes(
+      [
+        "**v1.2.4** · 12 changes from 3 contributors",
+        "## Highlights",
+        "Link machines (beta).",
+        "## Fixes",
+        ...fixes,
+        "<details>",
+        "<summary>Full changelog</summary>",
+        "* fix: raw entry by @human in https://github.com/goat-si/goat/pull/1",
+        "</details>",
+      ].join("\n"),
+      "1.2.4",
+      "latest",
+      "2026-10-29T10:00:00.000Z",
+    );
+
+    expect(result.releaseNotes).toEqual([
+      {
+        version: "1.2.4",
+        releasedAt: "2026-10-29T10:00:00.000Z",
+        stats: "12 changes from 3 contributors",
+        intro: "Link machines (beta).",
+        items: fixes.slice(0, 8).map((_, index) => `Fix ${index + 1}`),
+        totalItems: 10,
+      },
+    ]);
+  });
+
+  it("bounds generated summary items, highlights and stats while counting every change", () => {
+    const fixes = Array.from({ length: 12 }, (_, index) => `Fix ${index + 1}: ${"x".repeat(300)}`);
+    const [release] = normalizeDesktopUpdateReleaseNotes(
+      [
+        `**v1.2.4** · ${"stats ".repeat(60)}`,
+        "## Highlights",
+        "h".repeat(300),
+        "Another highlight.",
+        "## Fixes",
+        ...fixes.map((fix) => `- ${fix}`),
+        "<details><summary>Full changelog</summary>",
+        "- Full release entry",
+        "</details>",
+      ].join("\n"),
+      "1.2.4",
+      "latest",
+    ).releaseNotes;
+
+    expect(release).toMatchObject({ version: "1.2.4", totalItems: 14 });
+    expect(release?.items).toEqual(fixes.slice(0, 8).map((fix) => `${fix.slice(0, 217)}...`));
+    expect(release?.intro).toBe(`${"h".repeat(217)}...`);
+    expect(release?.stats).toHaveLength(220);
+  });
+
   it("does not count Markdown or HTML section headings as changes", () => {
     const changes = Array.from({ length: 8 }, (_, index) => `Change ${index + 1}`);
     const result = normalizeDesktopUpdateReleaseNotes(
@@ -77,6 +133,35 @@ describe("normalizeDesktopUpdateReleaseNotes", () => {
     expect(result.releaseNotes).toEqual([
       { version: "1.2.4", items: changes.toReversed(), totalItems: 8 },
       { version: "1.2.3", items: changes.toReversed(), totalItems: 8 },
+    ]);
+  });
+
+  it("reads handwritten notes with their own <details> as a list", () => {
+    const result = normalizeDesktopUpdateReleaseNotes(
+      "- Older fix\n- Newer fix\n<details><summary>Logs</summary>\n- hidden\n</details>",
+      "1.2.3",
+      "latest",
+    );
+
+    expect(result.releaseNotes).toEqual([
+      { version: "1.2.3", items: ["hidden", "Logs", "Newer fix", "Older fix"], totalItems: 4 },
+    ]);
+  });
+
+  it("dates the offered release from the feed and older nightlies by their build day", () => {
+    const result = normalizeDesktopUpdateReleaseNotes(
+      [
+        { version: "0.0.41-nightly.20260914.1707", note: "- Nightly change 2" },
+        { version: "0.0.41-nightly.20260913.1700", note: "- Nightly change 1" },
+      ],
+      "0.0.41-nightly.20260914.1707",
+      "nightly",
+      "2026-09-14T18:30:00.000Z",
+    );
+
+    expect(result.releaseNotes.map(({ releasedAt }) => releasedAt)).toEqual([
+      "2026-09-14T18:30:00.000Z",
+      "2026-09-13",
     ]);
   });
 
