@@ -730,10 +730,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(staleGeneration(id, message.method), "not_started");
-      // The child this call was admitted under. A pause, takeover or narrowed approval while it
-      // waits replaces the child, and the call belongs to what was cut off, never to the next one.
-      // Only the manifest refresh may replace it for the call.
+        return yield* sink.answer(
+          personStop.pending() || isTerminalStop(finished, paused)
+            ? notSent(id)
+            : staleGeneration(id, message.method),
+          "not_started",
+        );
+      // A call belongs to its admitted child; only a manifest refresh may replace it.
       let admitted = lifecycle.current;
       const refreshed =
         options.manifestStamp === undefined || lifecycle.current === undefined || !active()
@@ -744,7 +747,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(staleGeneration(id, message.method), "not_started");
+        return yield* sink.answer(
+          personStop.pending() || isTerminalStop(finished, paused)
+            ? notSent(id)
+            : staleGeneration(id, message.method),
+          "not_started",
+        );
       const unsupported = yield* claims.unsupported(
         selectedClaim,
         batches.browserSupported,
