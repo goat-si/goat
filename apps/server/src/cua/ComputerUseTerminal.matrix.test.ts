@@ -492,6 +492,8 @@ const refusalBase: Parameters<typeof refuseProxyCall>[0] = {
   foreground: () => [],
   listApps: Effect.void,
 };
+const proxyMessage = (name: string, args: object) =>
+  parse(JSON.stringify({ id: 1, method: "tools/call", params: { name, arguments: args } })) ?? {};
 const proxyRefusal =
   (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>, detail: string): Driver =>
   (input) =>
@@ -554,7 +556,7 @@ const sites: ReadonlyArray<{
     undispatched: true,
     run: proxyRefusal(
       {
-        message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
+        message: proxyMessage("click", { pid: 55 }),
         apps: () => new Set(["approved"]),
       },
       "app_not_allowed",
@@ -565,7 +567,7 @@ const sites: ReadonlyArray<{
     undispatched: true,
     run: proxyRefusal(
       {
-        message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
+        message: proxyMessage("click", { pid: 55 }),
         apps: () => new Set(["approved"]),
         listed: new Map([[55, { id: "other", name: "Other" }]]),
       },
@@ -577,11 +579,7 @@ const sites: ReadonlyArray<{
     undispatched: true,
     run: proxyRefusal(
       {
-        message: {
-          id: 1,
-          method: "tools/call",
-          params: { name: "bring_to_front", arguments: { pid: 55, window_id: 7 } },
-        },
+        message: proxyMessage("bring_to_front", { pid: 55, window_id: 7 }),
         listed: new Map([[55, { id: "other", name: "Other" }]]),
         shared: () => true,
       },
@@ -593,11 +591,7 @@ const sites: ReadonlyArray<{
     undispatched: true,
     run: proxyRefusal(
       {
-        message: {
-          id: 1,
-          method: "tools/call",
-          params: { name: "bring_to_front", arguments: { pid: 55, window_id: 7 } },
-        },
+        message: proxyMessage("bring_to_front", { pid: 55, window_id: 7 }),
         listed: new Map([[55, { id: "other", name: "Other" }]]),
       },
       "foreground_not_approved",
