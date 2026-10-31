@@ -398,6 +398,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           call.method,
           arg,
           () => observations.index.invalidatePoints(bound.ref.id),
+          () => observations.index.invalidateTarget(bound.ref.id),
           (operation, input, documentGeneration) =>
             invoke(bound, context, operation, input, undefined, documentGeneration),
           upload,

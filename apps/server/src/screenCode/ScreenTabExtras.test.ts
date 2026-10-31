@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   PreviewAutomationExecutionError,
+  PreviewAutomationTimeoutError,
   PreviewTabId,
   type EnvironmentId,
   type ProviderInstanceId,
@@ -12,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as NodeURL from "node:url";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
-import { actionErrorContext } from "./PreviewTargetHost.testkit.ts";
+import { actionErrorContext, browserFixture } from "./PreviewTargetHost.testkit.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
@@ -81,6 +82,51 @@ const formTab = {
   ownedByCaller: false,
   controlGeneration: 0,
 };
+
+it.effect("failed tab inputs retire observed refs while failed logs preserve them", () =>
+  Effect.gen(function* () {
+    for (const [method, args] of [
+      ["tab_evaluate", { expression: "1" }],
+      ["tab_dialog", { action: "accept" }],
+      ["tab_upload", { selector: "#file", files: ["/tmp/example.txt"] }],
+      ["tab_fill_secret", { secretRef: "ref", selector: "#password" }],
+      ["tab_logs", {}],
+    ] as const) {
+      const fixture = yield* browserFixture(true);
+      const ref = (yield* fixture.observe()).elements[0]!.ref;
+      fixture.state.failure = new PreviewAutomationTimeoutError(actionErrorContext);
+      expect((yield* fixture.dispatch(method, args))?.outcome).toBe("error");
+      fixture.state.failure = undefined;
+      const click = yield* fixture.dispatch("click", { ref });
+      if (method === "tab_logs") expect(click?.outcome).toBe("ok");
+      else {
+        expect(click?.error?.code).toBe("stale_reference");
+        expect(fixture.requests.filter((request) => request.operation === "click")).toHaveLength(0);
+      }
+    }
+  }),
+);
+
+it.effect("successful tab inputs record dispatch without claiming a confirmed effect", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture(true);
+    for (const [method, args] of [
+      ["tab_evaluate", { expression: "1" }],
+      ["tab_dialog", { action: "accept" }],
+      ["tab_upload", { selector: "#file", files: ["/tmp/example.txt"] }],
+      ["tab_fill_secret", { secretRef: "ref", selector: "#password" }],
+    ] as const) {
+      expect((yield* fixture.dispatch(method, args))?.outcome).toBe("ok");
+    }
+    const receipts = fixture.bridge
+      .takeCellImagesNow("run", "turn", "cell")
+      .journal.filter((entry) => entry.receipt.method.startsWith("tab_"))
+      .map((entry) => entry.receipt.outcome);
+    expect(receipts).toEqual(
+      Array.from({ length: 4 }, () => ({ dispatch: "confirmed", effect: "unknown" })),
+    );
+  }),
+);
 
 it.live("tab logs forwards an inclusive since to the preview service", () => {
   const calls: unknown[] = [];
