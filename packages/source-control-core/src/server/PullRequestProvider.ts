@@ -311,6 +311,11 @@ export interface PullRequestProviderApi {
    * definition's `publicHost` can be read from a project with no checkout of its repository.
    */
   readonly readsPublicHostWithoutCheckout?: boolean;
+  /**
+   * Absent means every host detected as this kind is read. A host it refuses is listed as one that
+   * cannot be browsed here, and nothing is sent for it.
+   */
+  readonly servesHost?: (host: string) => boolean;
 
   readonly getViewer: (input: {
     readonly cwd: string;
@@ -361,6 +366,16 @@ export interface PullRequestProviderApi {
   readonly getChangeRequest: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestDetail, PullRequestProviderError>;
+
+  /**
+   * For a provider that holds change request reads of its own: called when the service drops its
+   * reads, so a refresh or a finished turn reaches the host. No scope forgets everything; a scope
+   * without a number forgets the repository's change requests.
+   */
+  readonly forgetChangeRequestReads?: (scope?: {
+    readonly repository: string;
+    readonly number?: number;
+  }) => Effect.Effect<void>;
 
   readonly getChangeRequestPreview?: (
     input: ProviderRepositoryRef & { readonly number: number },
