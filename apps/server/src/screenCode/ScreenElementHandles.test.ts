@@ -206,13 +206,22 @@ it.live("a handle nested in any outgoing call is refused before it reaches the h
           () => { let reads = 0; const bag = { key: 'a', targetRef: app.targetRef }; Object.defineProperty(bag, 'x', { enumerable: true, get: () => (reads++ ? { elementHandle: 'smuggled' } : { ok: 1 }) }); return screen.press_key(bag); },
           () => app.scroll(1, held),
           () => app.scroll('Save', held),
+          () => {
+            let reads = 0;
+            const disguised = new Proxy({ key: 'Enter', targetRef: app.targetRef, elementHandle: 'o1:1' }, {
+              has: (t, k) => k === 'elementHandle' ? false : k in t,
+              ownKeys: (t) => reads++ < 1 ? ['key', 'targetRef'] : Reflect.ownKeys(t),
+            });
+            return screen.press_key(disguised);
+          },
+          () => app.press('Enter', new Proxy({ verify: { ...held } }, { getPrototypeOf: () => Object.prototype })),
         ])
           try { await send(); outcome.push('sent'); } catch (e) { outcome.push([e.code, e.nothingSent]); }
         return outcome.map((each) => Array.isArray(each) ? [each[0] === 'stale_reference' || each[0] === 'invalid_argument', each[1]] : each);`,
     });
     expect(result).toMatchObject({
       status: "completed",
-      value: Array.from({ length: 18 }, () => [true, true]),
+      value: Array.from({ length: 20 }, () => [true, true]),
     });
     expect(
       sent.filter((entry) => ["press_key", "type_text", "scroll"].includes(entry.tool)),
