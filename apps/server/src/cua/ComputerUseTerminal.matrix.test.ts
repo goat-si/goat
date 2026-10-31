@@ -546,6 +546,46 @@ const sites: ReadonlyArray<{
     run: proxyRefusal({ tokenFirstRefuses: () => true }),
   },
   {
+    name: "ComputerUseLeaseProxyRefusal.scopeResolve",
+    undispatched: true,
+    run: proxyRefusal({
+      message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
+      apps: () => new Set(["approved"]),
+    }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.scopeRefuse",
+    undispatched: true,
+    run: proxyRefusal({
+      message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
+      apps: () => new Set(["approved"]),
+      listed: new Map([[55, { id: "other", name: "Other" }]]),
+    }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.screenShared",
+    undispatched: true,
+    run: proxyRefusal({
+      message: {
+        id: 1,
+        method: "tools/call",
+        params: { name: "move_mouse", arguments: { x: 1, y: 1 } },
+      },
+      shared: () => true,
+    }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.foreground",
+    undispatched: true,
+    run: proxyRefusal({
+      message: {
+        id: 1,
+        method: "tools/call",
+        params: { name: "type_text", arguments: { text: "a" } },
+      },
+    }),
+  },
+  {
     name: "ComputerUseLeaseResponses.unsentCallRefusal.ending",
     undispatched: true,
     run: unsent({ ...unsentBase, finished: "expired" }),
