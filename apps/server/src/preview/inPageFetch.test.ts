@@ -1,3 +1,5 @@
+import * as NodeHttp from "node:http";
+import type * as NodeNet from "node:net";
 import {
   chromium,
   type Browser,
@@ -126,6 +128,8 @@ describe("inPageFetch privacy", () => {
       };
     }),
     context: () => ({ cookies: async () => [] }),
+    on: () => undefined,
+    off: () => undefined,
   });
 
   it("never touches a private tab", async () => {
@@ -165,6 +169,8 @@ describe("inPageFetch privacy", () => {
           dispose: async () => disposed.resolve(),
         }),
         context: () => ({ cookies: async () => [] }),
+        on: () => undefined,
+        off: () => undefined,
       };
       // Queued as the server queues tab work: the next action waits for the fetch to settle.
       const fetching = control
@@ -326,6 +332,46 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       error instanceof Error ? error.message : String(error),
     );
     expect(failure).not.toContain("ApiScopedValue456");
+  });
+
+  it("says whether a failed fetch was refused by CORS, by DNS or by the network", async () => {
+    // A real server: Playwright adds CORS headers to the responses it fulfills itself.
+    const server = NodeHttp.createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end("<p>local</p>");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await using _server = {
+      [Symbol.asyncDispose]: () => new Promise((done) => server.close(done)),
+    };
+    const port = (server.address() as NodeNet.AddressInfo).port;
+    await page.goto(`http://127.0.0.1:${port}/`);
+    await page.route("https://gone.example/**", (route) => route.abort("namenotresolved"));
+    await page.route("https://closed.example/**", (route) => route.abort("connectionrefused"));
+    const failures = await Promise.all(
+      [`http://localhost:${port}/data`, "https://gone.example/", "https://closed.example/"].map(
+        (url) =>
+          inPageFetch(page, control, { url }).then(
+            () => undefined,
+            (error: unknown) => error,
+          ),
+      ),
+    );
+    expect(failures).toMatchObject([
+      {
+        tag: "PreviewAutomationExecutionError",
+        detail: { fetchFailure: "cors" },
+        message: expect.stringContaining("CORS"),
+      },
+      {
+        detail: { fetchFailure: "dns" },
+        message: expect.stringContaining("ERR_NAME_NOT_RESOLVED"),
+      },
+      {
+        detail: { fetchFailure: "network" },
+        message: expect.stringContaining("ERR_CONNECTION_REFUSED"),
+      },
+    ]);
   });
 
   it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {

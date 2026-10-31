@@ -158,6 +158,9 @@ const pageResult = (
 const contextDestroyed = (cause: unknown) =>
   cause instanceof Error && cause.message.includes("Execution context was destroyed");
 
+/** Reads of one document: a navigation, or frames that come and go as rotating ads do. */
+const MAX_ATTEMPTS = 4;
+
 /** Resolves on the first frame navigation since it was created, bounded by the read's deadline. */
 const watchNavigation = (page: Page) => {
   let seen = false;
@@ -194,14 +197,20 @@ export const pageRead = (
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
     const tracker = attachNetworkTracker(page);
     const deadline = Date.now() + (input.timeoutMs ?? 10_000);
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const navigation = watchNavigation(page);
       const documentId = tracker.state().documentId;
       const initialUrl = page.url();
+      // The secret readers refuse a changed frame list; a changed secret value is refused below.
+      let framesMoved = false;
+      const framesChanged = () => {
+        framesMoved = true;
+        return readFailure("pageChanged");
+      };
       try {
         const { read } = await openReaders(page, cdp);
         const before = await read().catch(() => {
-          throw readFailure("pageChanged");
+          throw framesChanged();
         });
         if (before.some((values) => values === undefined)) throw readFailure("pageChanged");
         const cookiesBefore = await tabCookies(page);
@@ -231,7 +240,7 @@ export const pageRead = (
         )) as Pick<Rendered, "url" | "title" | "loading">;
         rendered = { ...rendered, ...head, loading: rendered.loading || head.loading };
         const after = await read(before).catch(() => {
-          throw readFailure("pageChanged");
+          throw framesChanged();
         });
         if (JSON.stringify(before) !== JSON.stringify(after)) throw readFailure("pageChanged");
         const network = tracker.state();
@@ -288,9 +297,15 @@ export const pageRead = (
       } catch (cause) {
         // A replaced document can destroy its context before its navigation event arrives here.
         const destroyed = contextDestroyed(cause);
-        if (!destroyed && tracker.state().documentId === documentId && page.url() === initialUrl)
+        if (
+          !destroyed &&
+          !framesMoved &&
+          tracker.state().documentId === documentId &&
+          page.url() === initialUrl
+        )
           throw cause;
-        if (attempt === 1 || Date.now() >= deadline) throw readFailure("pageChanged");
+        if (attempt === MAX_ATTEMPTS - 1 || Date.now() >= deadline)
+          throw readFailure("pageChanged");
         if (destroyed) await navigation.next(Math.max(1, deadline - Date.now()));
         await page
           .waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) })

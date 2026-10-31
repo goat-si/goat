@@ -31,6 +31,35 @@ const expired = () =>
     beforeInput,
   );
 
+/** How long a selector may match nothing on a loaded page before an action refuses it. */
+const NO_MATCH_GRACE_MS = 2_000;
+
+/**
+ * Refuses a target that still matches nothing a short grace after its page loaded, rather than
+ * spending the whole wait on it; a target that exists but is not ready yet keeps the full wait.
+ */
+export const requireMatch = async (target: Locator, timeoutMs: number) => {
+  const ends = performance.now() + timeoutMs;
+  const left = () => Math.max(1, Math.floor(ends - performance.now()));
+  await target.page().waitForLoadState("load", { timeout: left() });
+  const found = await target
+    .first()
+    .waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, left()) })
+    .then(
+      () => true,
+      (cause: unknown) => {
+        if (isTimeout(cause)) return false;
+        throw cause;
+      },
+    );
+  if (!found)
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationInvalidSelectorError",
+      "No element matches the selector, so no input was sent.",
+      { noMatch: true },
+    );
+};
+
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */
 export const actionDeadline = (timeoutMs: number, requestDeadline: number | undefined) =>
   Math.min(requestDeadline ?? Number.POSITIVE_INFINITY, performance.now() + timeoutMs);
@@ -102,6 +131,7 @@ export const revealFramesOf = async (handle: ElementHandle, deadline: number) =>
 
 /** The element a locator names now, held for the rest of the action. */
 export const pinTarget = async (target: Locator, deadline: number) => {
+  await requireMatch(target, remaining(deadline));
   const handle = await target.elementHandle({ timeout: remaining(deadline) });
   if (handle === null) throw targetChanged();
   return handle;

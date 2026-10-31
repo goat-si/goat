@@ -197,6 +197,27 @@ it.effect("a refused preview call is never marked dispatched", () =>
   }),
 );
 
+it.effect(
+  "a target method called without its targetRef is refused as an invalid argument naming the target's own method, not as a missing target",
+  () =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Effect.succeed({ category: "confirmed", evidence: ["test"] }),
+      });
+      const { targetRef: _targetRef, ...untargeted } = call(1);
+      const result = yield* bridge.handle(
+        { ...untargeted, method: "close_tab", args: [{ tabId: "tab_1" }] },
+        context(),
+      );
+      const error = result && "error" in result ? result.error : undefined;
+      expect(error).toMatchObject({ code: "invalid_argument", effectStarted: false });
+      expect(error?.nextStep).toContain("tab.close()");
+      expect(error?.nextStep).toContain("targetRef");
+    }),
+);
+
 it.effect("discard and finishTurn release cell and target state", () =>
   Effect.gen(function* () {
     const bridge = new ScreenHostBridge();

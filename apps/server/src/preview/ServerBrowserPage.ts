@@ -26,6 +26,7 @@ import {
   actionDeadline,
   pinTarget,
   remaining,
+  requireMatch,
   revealFramesOf,
   waitUntilSelectable,
   waitUntilWritable,
@@ -258,7 +259,11 @@ const targetChanged = () =>
 
 /** The target's element, after Playwright's wait for it; a detached target is a changed one. */
 export const elementOf = async (locator: Locator, timeout: number) => {
-  const handle = await locator.elementHandle({ timeout });
+  const ends = performance.now() + timeout;
+  await requireMatch(locator, timeout);
+  const handle = await locator.elementHandle({
+    timeout: Math.max(1, Math.floor(ends - performance.now())),
+  });
   if (handle === null) throw targetChanged();
   return handle;
 };

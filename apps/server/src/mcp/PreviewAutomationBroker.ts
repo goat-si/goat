@@ -252,6 +252,16 @@ const secretFailureOf = (detail: unknown): { readonly secretFailure?: SecretFail
   return isSecretFailure(value) ? { secretFailure: value } : {};
 };
 
+type FetchFailure = "cors" | "dns" | "network";
+/** The server browser names why a tab's fetch got no readable response. */
+const fetchFailureOf = (detail: unknown): { readonly fetchFailure?: FetchFailure } => {
+  const value =
+    typeof detail === "object" && detail !== null && "fetchFailure" in detail
+      ? detail.fetchFailure
+      : undefined;
+  return value === "cors" || value === "dns" || value === "network" ? { fetchFailure: value } : {};
+};
+
 /** The server browser names the tab an open made whose page never connected. */
 const openFailureOf = (detail: unknown) => {
   if (typeof detail !== "object" || detail === null) return {};
@@ -373,6 +383,11 @@ const classifyResponseError = (
         error.detail !== null &&
         "staleRef" in error.detail &&
         error.detail.staleRef === true;
+      const noMatch =
+        typeof error.detail === "object" &&
+        error.detail !== null &&
+        "noMatch" in error.detail &&
+        error.detail.noMatch === true;
       const matchCount =
         typeof error.detail === "object" && error.detail !== null && "matchCount" in error.detail
           ? error.detail.matchCount
@@ -381,6 +396,7 @@ const classifyResponseError = (
         ...context,
         ...remoteDiagnostics,
         ...(staleRef ? { staleRef } : {}),
+        ...(noMatch ? { noMatch } : {}),
         ...(Number.isSafeInteger(matchCount) && Number(matchCount) >= 2
           ? { matchCount: Number(matchCount) }
           : {}),
@@ -447,6 +463,7 @@ const classifyResponseError = (
           ? {
               reason: error.message.slice(0, MAX_REASON_CHARS),
               ...secretFailureOf(hostDetail),
+              ...fetchFailureOf(hostDetail),
               ...openFailureOf(hostDetail),
             }
           : {}),

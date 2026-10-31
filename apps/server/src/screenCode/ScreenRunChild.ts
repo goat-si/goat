@@ -156,6 +156,42 @@ export async function runScreenChild(
     return bytes.length <= 1024 ? value : new TextDecoder().decode(bytes.slice(0, 1021));
   };
   const emit = (frame: unknown) => output.write(`${JSON.stringify(frame)}\n`);
+  /** Why a call never left the cell, as a host receipt the guest turns into a ScreenError. */
+  const limited = (
+    code: ScreenRunError["code"],
+    name: "callsPerCell" | "pendingCalls" | "argBytes",
+    message: string,
+  ) =>
+    JSON.stringify({
+      code,
+      effectStarted: false,
+      message: `${name} limit ${currentLimits[name]}: ${message}`,
+      limit: { name, maximum: currentLimits[name] },
+    } satisfies ScreenRunError);
+  const CALLS_SPENT = "this cell has made its last call; continue in a new cell.";
+  const PENDING_FULL =
+    "that many calls already wait for answers in this cell, so this one was not sent. Await some before starting more.";
+  const refusal = (method: string, argsJson: string, member: boolean): string | undefined => {
+    if (!admitted)
+      return JSON.stringify({
+        code: "stopped",
+        effectStarted: false,
+        message: "The cell has ended, so this call was not sent.",
+      } satisfies ScreenRunError);
+    if (!methods.includes(method as (typeof methods)[number]))
+      return JSON.stringify({
+        code: "invalid_argument",
+        effectStarted: false,
+        message: "Not a screen method; nothing was sent.",
+      } satisfies ScreenRunError);
+    if (++callCount > currentLimits.callsPerCell)
+      return limited("call_limit", "callsPerCell", CALLS_SPENT);
+    if (!member && pendingPlaces >= currentLimits.pendingCalls)
+      return limited("pending_limit", "pendingCalls", PENDING_FULL);
+    if (screenBytes(argsJson) > currentLimits.argBytes)
+      return limited("text_limit", "argBytes", "these arguments are too large; nothing was sent.");
+    return undefined;
+  };
   const initialize = () => {
     const host = vm.newFunction("__host", (methodHandle, argsHandle) => {
       const promise = vm.newPromise();
@@ -177,14 +213,9 @@ export async function runScreenChild(
         batch?.size === group.size &&
         typeof batch.index === "number" &&
         group.first + batch.index === nextCallId + 1;
-      if (
-        !admitted ||
-        !methods.includes(method as (typeof methods)[number]) ||
-        ++callCount > currentLimits.callsPerCell ||
-        (!member && pendingPlaces >= currentLimits.pendingCalls) ||
-        screenBytes(argsJson) > currentLimits.argBytes
-      ) {
-        const error = vm.newString("screen call refused");
+      const refused = refusal(method, argsJson, member);
+      if (refused !== undefined) {
+        const error = vm.newString(refused);
         promise.reject(error);
         error.dispose();
         return promise.handle;
@@ -238,7 +269,16 @@ export async function runScreenChild(
             typeof entry[1] === "string" &&
             screenBytes(entry[1]) <= currentLimits.argBytes,
         );
-      if (!fits) return vm.false;
+      if (!fits) {
+        // A group refused for a limit says which; any other refusal stays a plain one.
+        const reason =
+          admitted && callCount + calls.length > currentLimits.callsPerCell
+            ? limited("call_limit", "callsPerCell", CALLS_SPENT)
+            : admitted && pendingPlaces >= currentLimits.pendingCalls
+              ? limited("pending_limit", "pendingCalls", PENDING_FULL)
+              : undefined;
+        return reason === undefined ? vm.false : vm.newString(reason);
+      }
       group = { first: nextCallId + 1, size: calls.length, place: { remaining: calls.length } };
       pendingPlaces++;
       return vm.true;

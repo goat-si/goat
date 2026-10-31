@@ -258,6 +258,20 @@ it("refuses a changed secret even when its new value appeared in page text durin
     expect(await page.evaluate("window.activeReadObservers")).toBe(0);
   }));
 
+it("reads again instead of refusing when a frame comes or goes during the read, as rotating ads do", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Portal news</main>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    await page.evaluate(
+      "(() => { const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); })()",
+    );
+    const result = await reading;
+    expect(result.text).toContain("Portal news");
+    expect(await page.evaluate("window.activeReadObservers")).toBe(0);
+  }));
+
 it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
     let started = () => {};
