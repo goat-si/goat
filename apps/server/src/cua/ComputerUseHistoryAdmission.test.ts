@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
@@ -35,5 +36,10 @@ it.effect("does not persist typed secrets supplied in desktop target metadata", 
     assert.equal(rows[0]?.typedLength, 14);
     assert.isNull(rows[0]?.typedText);
     assert.notInclude(JSON.stringify(rows), "private-secret");
+    const sql = yield* SqlClient.SqlClient;
+    assert.notInclude(
+      JSON.stringify(yield* sql`SELECT * FROM computer_use_input_history`),
+      "private-secret",
+    );
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
