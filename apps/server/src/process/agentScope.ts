@@ -19,13 +19,16 @@ import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 
 const AGENT_SLICE = "app-goat-agents.slice";
-// The parents of both agent families (app-goat-agents.slice and the per-home
-// app-t3code-agents-<hash>.slice); they compete with the server's unit or scope under app.slice.
-const AGENTS_PARENT_SLICES = ["app-goat.slice", "app-t3code.slice"];
-// Low weights yield CPU and disk to the server under contention, where the user manager
-// has those controllers: current systemd delegates cpu, rarely io. TasksMax keeps agents
-// below logind's 33% per-user task limit, leaving forks for the server.
-const AGENTS_PARENT_PROPERTIES = ["CPUWeight=10", "IOWeight=10", "TasksMax=25%"];
+// Both agent families compete with the server's unit or scope under app.slice: restart-surviving
+// terminals run under app-goat.slice, per-home agent scopes under app-t3code.slice. Low weights yield
+// CPU and disk to the server where the user manager has those controllers (cpu usually, io rarely).
+// Their task caps share upstream's single 25% budget, below logind's 33% per-user limit, so agents
+// in both families together still leave forks for the server.
+const AGENTS_PARENT_LIMITS = [
+  { slice: "app-t3code.slice", tasksMax: 20 },
+  { slice: "app-goat.slice", tasksMax: 5 },
+] as const;
+export const AGENTS_TASKS_MAX_PERCENT = 25;
 
 export function ownedAgentSlice(stateDir: string): string {
   const hash = NodeCrypto.createHash("sha256").update(stateDir).digest("hex").slice(0, 12);
@@ -201,8 +204,8 @@ export const make = Effect.gen(function* () {
       });
       const limits = agentSliceMemoryLimits(NodeOS.totalmem());
       yield* setProperties(AGENT_SLICE, [`MemoryHigh=${limits.high}`, `MemoryMax=${limits.max}`]);
-      for (const slice of AGENTS_PARENT_SLICES)
-        yield* setProperties(slice, AGENTS_PARENT_PROPERTIES);
+      for (const { slice, tasksMax } of AGENTS_PARENT_LIMITS)
+        yield* setProperties(slice, ["CPUWeight=10", "IOWeight=10", `TasksMax=${tasksMax}%`]);
       yield* Effect.logInfo("Agent scopes are on", {
         slice: AGENT_SLICE,
         ...limits,
