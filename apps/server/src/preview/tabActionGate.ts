@@ -24,6 +24,7 @@ export const tabActionGate = (
   deadline: number,
   signal?: AbortSignal,
   destination?: string,
+  observe = false,
 ) => {
   if (!signal) throw new BrowserControlInterrupted("The agent action has no cancellation signal.");
   const generation = tab.control.generation;
@@ -34,7 +35,7 @@ export const tabActionGate = (
     signal,
     controlGeneration: () => {
       ServerBrowserScreen.assertScreenExpectation(tab, request);
-      tab.control.assertAgentMayDispatch();
+      if (!observe) tab.control.assertAgentMayDispatch();
       tab.control.assertObservedGeneration(generation);
     },
     isFenced: () => fence.isFenced(tab, request.runId),

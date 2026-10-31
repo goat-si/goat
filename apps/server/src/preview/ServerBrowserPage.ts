@@ -510,6 +510,7 @@ const captureFullPage = async (cdp: CDPSession) => {
 
 type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly agentSessionId?: string | undefined;
+  readonly actionChannel?: import("./actionChannel.ts").ActionChannel | undefined;
   readonly page: Page;
   readonly cdp: CDPSession;
   /** Headless pages render at the scale the server set; a desktop page at its display's. */
@@ -600,6 +601,7 @@ const capture = async (
               refs: new Map(),
             }).accessibilityTree,
             captureImage,
+            input.actionChannel,
           )
         : Promise.resolve(undefined);
     screenshot = await image;

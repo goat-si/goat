@@ -2,6 +2,7 @@ import type { PreviewAutomationReloadInput } from "@goat/contracts";
 import type { CDPSession, Page } from "playwright-core";
 
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import type { ActionChannel } from "./actionChannel.ts";
 import { BrowserControlInterrupted, type SessionControl } from "./SessionControl.ts";
 
 /** Real Chromium history, including same-document entries whose response is null. */
@@ -13,6 +14,7 @@ const navigateHistory = async (
   timeout: number,
   assertControl: () => void,
   assertDestination: (url?: string) => Promise<void>,
+  channelFor: (destination?: string) => ActionChannel,
 ) => {
   const options = {
     timeout: input.timeoutMs ?? timeout,
@@ -23,10 +25,10 @@ const navigateHistory = async (
     await assertDestination();
     assertControl();
     ServerBrowserPage.invalidateRefs(page);
-    await page.reload(options);
+    await channelFor().call(() => page.reload(options));
     return;
   }
-  let dispatch = () => cdp.send("Page.reload", { ignoreCache: true });
+  let dispatch = () => channelFor().send("Page.reload", { ignoreCache: true });
   if (operation !== "reload") {
     const history = await cdp.send("Page.getNavigationHistory");
     const index = history.currentIndex + (operation === "back" ? -1 : 1);
@@ -38,7 +40,7 @@ const navigateHistory = async (
       );
     }
     const entryId = entry.id;
-    dispatch = () => cdp.send("Page.navigateToHistoryEntry", { entryId });
+    dispatch = () => channelFor(entry.url).send("Page.navigateToHistoryEntry", { entryId });
     await assertDestination(entry.url);
   }
   await assertDestination();
@@ -46,7 +48,13 @@ const navigateHistory = async (
   ServerBrowserPage.invalidateRefs(page);
   // Install the waiter before sending CDP: an acknowledgement alone does not
   // prove that Electron's guest page actually committed a navigation.
-  await Promise.all([page.waitForNavigation(options), dispatch()]);
+  const waiting = page.waitForNavigation(options);
+  try {
+    await Promise.all([waiting, dispatch()]);
+  } catch (cause) {
+    void waiting.catch(() => undefined);
+    throw cause;
+  }
 };
 
 /**
@@ -65,6 +73,7 @@ export const guardedHistoryNavigation = async <
   readonly recordAction: <A>(tab: Tab, action: string, run: () => Promise<A>) => Promise<A>;
   readonly status: (tab: Tab) => Promise<Status>;
   readonly assertDestination: (url?: string) => Promise<void>;
+  readonly channelFor: (destination?: string) => ActionChannel;
 }): Promise<Status> => {
   const { tab, operation } = input;
   const generation = tab.control.generation;
@@ -84,6 +93,7 @@ export const guardedHistoryNavigation = async <
         input.timeoutMs,
         assertControl,
         input.assertDestination,
+        input.channelFor,
       ),
     );
     assertControl();

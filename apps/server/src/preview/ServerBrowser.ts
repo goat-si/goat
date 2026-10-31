@@ -95,6 +95,8 @@ import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrows
 import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
+import { guardedNavigate } from "./ServerBrowserNavigate.ts";
+import { makeActionChannel } from "./actionChannel.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import {
@@ -312,6 +314,7 @@ interface ServerTab {
   closing: boolean;
   recording: Recording | null;
   initialNavigation: Promise<void> | null;
+  initialNavigationSent: boolean;
   navigationGeneration: number;
   /** Moves on every main-frame navigation, same-document routes and reloads included. */
   documentGeneration: number;
@@ -459,7 +462,11 @@ const make = Effect.gen(function* () {
       });
   };
 
-  const resolveDialog = async (tab: ServerTab, input: PreviewAutomationDialogInput) => {
+  const resolveDialog = async (
+    tab: ServerTab,
+    input: PreviewAutomationDialogInput,
+    channel?: import("./actionChannel.ts").ActionChannel,
+  ) => {
     const dialog = tab.dialog;
     if (!dialog)
       throw new ServerBrowserPage.ServerBrowserOperationError(
@@ -467,8 +474,8 @@ const make = Effect.gen(function* () {
         "No dialog is pending.",
         { beforeInput: true },
       );
-    if (input.accept) await dialog.accept(input.promptText);
-    else await dialog.dismiss();
+    const answer = () => (input.accept ? dialog.accept(input.promptText) : dialog.dismiss());
+    await (channel ? channel.call(answer) : answer());
     if (tab.dialog === dialog) tab.dialog = null;
     ServerBrowserPage.invalidateRefs(tab.page);
     broadcastControl(tab);
@@ -670,6 +677,7 @@ const make = Effect.gen(function* () {
       recording: null,
       recordingStart: null,
       initialNavigation: null,
+      initialNavigationSent: false,
       navigationGeneration: 0,
       documentGeneration: 0,
       abortedNavigation: null,
@@ -790,13 +798,31 @@ const make = Effect.gen(function* () {
       ((!adopted && !desktop) || isPdfAssetUrl(snapshot.navStatus.url))
     ) {
       const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
-      tab.initialNavigation = (
-        (desktop || adopted) && page.url() === snapshot.navStatus.url
-          ? page.reload(options)
-          : page.goto(snapshot.navStatus.url, options)
-      ).then(constVoid, (cause: unknown) => {
-        throw ServerBrowserPage.toOperationError(cause, NAVIGATION_TIMEOUT_MS);
+      const initialUrl = snapshot.navStatus.url;
+      const activeRun = blockedTabs.capture(tab.threadId);
+      const generation = tab.control.generation;
+      const initialChannel = makeActionChannel({
+        page,
+        cdp,
+        signal: new AbortController().signal,
+        controlGeneration: () => {
+          tab.control.assertAgentMayDispatch();
+          tab.control.assertObservedGeneration(generation);
+        },
+        isFenced: () => blockedTabs.isFenced(tab, activeRun?.runId),
+        blockedFrame: () => blockedTabs.blockedFrame(tab, activeRun?.runId, initialUrl),
       });
+      const initial = () => {
+        tab.initialNavigationSent = true;
+        return (desktop || adopted) && page.url() === initialUrl
+          ? page.reload(options)
+          : page.goto(initialUrl, options);
+      };
+      tab.initialNavigation = Promise.resolve()
+        .then(() => (tab.control.agentId !== null ? initialChannel.call(initial) : initial()))
+        .then(constVoid, (cause: unknown) => {
+          throw ServerBrowserPage.toOperationError(cause, NAVIGATION_TIMEOUT_MS);
+        });
 
       if (tab.control.agentId !== null) tab.control.track(tab.initialNavigation);
       else void tab.initialNavigation.catch(constVoid);
@@ -1261,62 +1287,31 @@ const make = Effect.gen(function* () {
     return `${target.protocol ?? "http"}://localhost:${target.port}${path.startsWith("/") || path === "" ? path : `/${path}`}`;
   };
 
-  const navigate = async (
+  const startRecording = (
     tab: ServerTab,
-    url: string,
-    readiness: "load" | "domContentLoaded" | "none",
-    timeout: number,
-  ) => {
-    const navigation = tab.page.goto(url, {
-      timeout,
-      waitUntil:
-        readiness === "domContentLoaded"
-          ? "domcontentloaded"
-          : readiness === "none"
-            ? "commit"
-            : "load",
-    });
-    if (readiness === "none") {
-      tab.control.track(navigation);
-      return;
-    }
-    await navigation.catch((cause: unknown) => {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      if (message.includes("Download is starting")) {
-        throw new ServerBrowserPage.ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          `${url} is a file this browser cannot show, so it was downloaded instead. goat_call {path:"preview.status"} lists it under downloads.`,
-        );
-      }
-      if (/ERR_[A-Z_]+/.test(message)) {
-        throw new ServerBrowserPage.ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          `Navigation to ${url} failed: ${ServerBrowserPage.parseNetError(message).description}`,
-        );
-      }
-      throw ServerBrowserPage.toOperationError(cause, timeout);
-    });
-  };
-
-  const startRecording = (tab: ServerTab, deadlineMs?: number): Promise<Recording> => {
+    channel: import("./actionChannel.ts").ActionChannel,
+    deadlineMs?: number,
+  ): Promise<Recording> => {
     const { run, answer } = queueCaptureBy(deadlineMs)(tab, async () => {
       if (tab.recording) return tab.recording;
       secretFill.assertPixels(tab, tab.threadId);
-      const encoder = await contexts.scratchPage();
+      const encoder = await channel.call(() => contexts.scratchPage());
       let session: CDPSession | null = null;
       try {
-        await encoder.evaluate(recordingEncoderScript(recordingFrameRate));
+        await channel.call(() => encoder.evaluate(recordingEncoderScript(recordingFrameRate)));
         // Seed idle pages before returning so an immediate stop has a frame to encode.
         const firstFrame = await ServerBrowserPage.captureViewport(tab.cdp, {
           format: "jpeg",
           quality: RECORDING_SCREENCAST.quality,
         });
-        await encoder.evaluate(
-          ([data, width]) =>
-            (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-          [firstFrame, tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width] as const,
+        await channel.call(() =>
+          encoder.evaluate(
+            ([data, width]) =>
+              (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
+            [firstFrame, tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width] as const,
+          ),
         );
-        const opened = await tab.page.context().newCDPSession(tab.page);
+        const opened = await channel.newCDPSession(tab.page);
         session = opened;
         const framesInFlight = new Set<Promise<void>>();
         opened.on("Page.screencastFrame", (frame) => {
@@ -1326,11 +1321,15 @@ const make = Effect.gen(function* () {
               .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
               .catch(constVoid);
           const cssWidth = tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth;
-          const delivered: Promise<void> = encoder
-            .evaluate(
-              ([data, width]) =>
-                (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
-              [frame.data, cssWidth] as const,
+          const delivered: Promise<void> = Promise.resolve()
+            .then(() =>
+              channel.call(() =>
+                encoder.evaluate(
+                  ([data, width]) =>
+                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
+                  [frame.data, cssWidth] as const,
+                ),
+              ),
             )
             .then(async (accepted) => {
               if (!accepted) await opened.send("Page.stopScreencast");
@@ -1344,7 +1343,7 @@ const make = Effect.gen(function* () {
             });
           framesInFlight.add(delivered);
         });
-        await opened.send("Page.startScreencast", RECORDING_SCREENCAST);
+        await channel.sendFor(opened)("Page.startScreencast", RECORDING_SCREENCAST);
         if (tab.closing) throw new Error("The tab closed while the recording started.");
         const recording: Recording = {
           encoder,
@@ -1607,8 +1606,8 @@ const make = Effect.gen(function* () {
           );
         return tab.control.agent(
           request.agentSessionId,
-          async () => {
-            let navigationSent = !existing && url !== undefined && tab.initialNavigation !== null;
+          async (signal) => {
+            let navigationSent = !existing && url !== undefined && tab.initialNavigationSent;
             if (navigationSent) tab.control.dispatchGate()();
             await checkOpenBlocked(
               () => blockedTabs.assertTab(tab, request.runId, url),
@@ -1623,12 +1622,19 @@ const make = Effect.gen(function* () {
               if (url) {
                 tab.control.dispatchGate()();
                 navigationSent = true;
-                await navigate(tab, url, "load", navigationTimeout);
+                await guardedNavigate(
+                  tab,
+                  url,
+                  "load",
+                  navigationTimeout,
+                  tabActionGate(tab, request, blockedTabs, deadlineMs, signal, url).channel,
+                );
               }
             } else {
               await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
                 throw unloadedOpen(tab.tabId, cause);
               });
+              navigationSent = tab.initialNavigationSent;
             }
             const reveal = open.open ?? open.show;
             if (reveal !== false) {
@@ -1732,7 +1738,14 @@ const make = Effect.gen(function* () {
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
       ServerBrowserScreen.assertScreenExpectation(tab, request);
-      await resolveDialog(tab, input as PreviewAutomationDialogInput);
+      const channel = tabActionGate(
+        tab,
+        request,
+        blockedTabs,
+        deadlineMs,
+        new AbortController().signal,
+      ).channel;
+      await resolveDialog(tab, input as PreviewAutomationDialogInput, channel);
       return statusWithTitle(tab, request.agentSessionId);
     }
     const agentSessionId = request.agentSessionId!;
@@ -1789,7 +1802,15 @@ const make = Effect.gen(function* () {
     await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = (destination?: string) =>
-      tabActionGate(tab, request, blockedTabs, deadlineMs, signal, destination);
+      tabActionGate(
+        tab,
+        request,
+        blockedTabs,
+        deadlineMs,
+        signal ?? new AbortController().signal,
+        destination,
+        signal === undefined,
+      );
     switch (request.operation) {
       case "back":
       case "forward":
@@ -1803,16 +1824,18 @@ const make = Effect.gen(function* () {
           recordAction,
           status: (current) => statusWithTitle(current, request.agentSessionId),
           assertDestination: (url) => blockedTabs.assertTab(tab, request.runId, url),
+          channelFor: (destination) => actionGate(destination).channel,
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
         await blockedTabs.assertTab(tab, request.runId, resolveNavigationUrl(navigateInput));
         await recordAction(tab, "navigate", () =>
-          navigate(
+          guardedNavigate(
             tab,
             resolveNavigationUrl(navigateInput),
             navigateInput.readiness ?? "load",
             navigateInput.timeoutMs ?? request.timeoutMs,
+            actionGate(resolveNavigationUrl(navigateInput)).channel,
           ),
         );
         return statusWithTitle(tab, request.agentSessionId);
@@ -1846,6 +1869,7 @@ const make = Effect.gen(function* () {
           tab.control,
           input as import("@goat/contracts").PreviewAutomationReadInput,
           (text) => tab.diagnostics.mask(text),
+          actionGate().channel,
         ).then(ServerBrowserScreen.recheck(tab, request));
       case "snapshot": {
         return withScreencastsPaused(
@@ -1856,6 +1880,7 @@ const make = Effect.gen(function* () {
               renderScale: tab.desktop ? "display" : RENDER_SCALE,
               ...(input as PreviewAutomationSnapshotInput),
               agentSessionId: request.agentSessionId,
+              actionChannel: actionGate().channel,
               captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
               timeoutMs: deadlineMs - performance.now(),
             }),
@@ -1958,7 +1983,7 @@ const make = Effect.gen(function* () {
           ServerBrowserScreen.recheck(tab, request),
         );
       case "recordingStart": {
-        const recording = await startRecording(tab, deadlineMs);
+        const recording = await startRecording(tab, actionGate().channel, deadlineMs);
         return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
       }
     }

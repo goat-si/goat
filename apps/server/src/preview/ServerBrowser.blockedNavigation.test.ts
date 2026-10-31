@@ -28,6 +28,7 @@ import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -629,15 +630,34 @@ it.effect.each([
       const f = yield* fixture;
       yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      const probe = yield* Effect.promise(() => f.page.context().newCDPSession(f.page));
+      const protocol = vi.spyOn(
+        Object.getPrototypeOf(probe) as { send: typeof probe.send },
+        "send",
+      );
+      yield* Effect.addFinalizer(() => Effect.sync(() => protocol.mockRestore()));
       const evaluate = vi.spyOn(f.page, "evaluate");
       const evaluateHandle = vi.spyOn(f.page, "evaluateHandle");
       const navigate = vi.spyOn(f.page, "goto");
+      const locator = vi.spyOn(f.page, "locator");
+      const inputCommands = [
+        vi.spyOn(f.page.mouse, "click"),
+        vi.spyOn(f.page.mouse, "down"),
+        vi.spyOn(f.page.mouse, "up"),
+        vi.spyOn(f.page.mouse, "move"),
+        vi.spyOn(f.page.mouse, "wheel"),
+        vi.spyOn(f.page.keyboard, "press"),
+        vi.spyOn(f.page.keyboard, "insertText"),
+      ];
       const hits = f.hits.length;
       const result = yield* f.call(f.tabId, operation, input).pipe(Effect.result);
       blocked(result);
+      expect(protocol).not.toHaveBeenCalled();
       expect(evaluate).not.toHaveBeenCalled();
       expect(evaluateHandle).not.toHaveBeenCalled();
       expect(navigate).not.toHaveBeenCalled();
+      expect(locator).not.toHaveBeenCalled();
+      for (const command of inputCommands) expect(command).not.toHaveBeenCalled();
       expect(f.hits).toHaveLength(hits);
     }),
   ).pipe(Effect.provide(layer)),
@@ -667,6 +687,274 @@ it.effect("recordingStop can finish an active recording after a tab is fenced", 
       expect((yield* f.call(f.tabId, "recordingStop", {}).pipe(Effect.result))._tag).toBe(
         "Success",
       );
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a cut while snapshot waits prevents annotation on the page", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(resume).pipe(Effect.tap(() => Effect.sync(latch.resolve))),
+      );
+      const original = f.page.ariaSnapshot.bind(f.page);
+      vi.spyOn(f.page, "ariaSnapshot").mockImplementation(async (options) => {
+        const tree = await original(options);
+        Deferred.doneUnsafe(entered, Effect.void);
+        await latch.promise;
+        return tree;
+      });
+      const snapshot = yield* f
+        .call(f.tabId, "snapshot", { annotate: true, captureImage: true })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      const evaluation = vi.spyOn(f.page, "evaluate");
+      const taking = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkChild);
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(snapshot);
+      yield* Fiber.join(taking);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      expect(
+        evaluation.mock.calls.filter(([script]) => String(script).includes("goat-ref-overlay")),
+      ).toHaveLength(0);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a cut while page read waits prevents starting its observer script", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(resume).pipe(Effect.tap(() => Effect.sync(latch.resolve))),
+      );
+      const context = f.page.context();
+      const cookies = context.cookies.bind(context);
+      vi.spyOn(context, "cookies").mockImplementation(async (...args) => {
+        const values = await cookies(...args);
+        Deferred.doneUnsafe(entered, Effect.void);
+        await latch.promise;
+        return values;
+      });
+      const body = f.page.locator("body");
+      const locator = f.page.locator.bind(f.page);
+      vi.spyOn(f.page, "locator").mockImplementation((selector, options) =>
+        selector === "body" ? body : locator(selector, options),
+      );
+      const rendered = vi.spyOn(body, "evaluate");
+      const reading = yield* f.call(f.tabId, "read", {}).pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      const taking = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkChild);
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(reading);
+      yield* Fiber.join(taking);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      expect(rendered).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a fence that changes during dialog admission prevents the answer", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const dialogReady = f.page.waitForEvent("dialog");
+      const script = f.page.evaluate("confirm('continue?')");
+      void script.catch(() => undefined);
+      const dialog = yield* Effect.promise(() => dialogReady);
+      const accept = vi.spyOn(dialog, "accept");
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const original = Object.getOwnPropertyDescriptor(f.settings, "getSettings");
+      if (!original) return yield* Effect.die("missing settings descriptor");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => Object.defineProperty(f.settings, "getSettings", original)),
+      );
+      const delayed = f.settings.getSettings.pipe(
+        Effect.tap(() =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(resume))),
+        ),
+      );
+      Object.defineProperty(f.settings, "getSettings", { ...original, value: delayed });
+      const answering = yield* f
+        .call(f.tabId, "dialog", { accept: true })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* f.settings.updateSettings({ blockedBrowserHosts: ["localhost", "127.0.0.1"] });
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(answering);
+      if (accept.mock.calls.length === 0) yield* Effect.promise(() => dialog.dismiss());
+      yield* Effect.promise(() => script);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      expect(accept).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a host blocked during navigation admission receives no request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const descriptor = Object.getOwnPropertyDescriptor(f.settings, "getSettings");
+      if (!descriptor) return yield* Effect.die("missing settings descriptor");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => Object.defineProperty(f.settings, "getSettings", descriptor)),
+      );
+      let calls = 0;
+      const delayed = f.settings.getSettings.pipe(
+        Effect.tap(() => {
+          calls += 1;
+          return calls === 3
+            ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(resume)))
+            : Effect.void;
+        }),
+      );
+      Object.defineProperty(f.settings, "getSettings", { ...descriptor, value: delayed });
+      const goto = vi.spyOn(f.page, "goto");
+      const navigating = yield* f
+        .call(f.tabId, "navigate", { url: `${f.allowed}/after-fence` })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* f.settings.updateSettings({ blockedBrowserHosts: ["localhost", "127.0.0.1"] });
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(navigating);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      expect(goto).not.toHaveBeenCalled();
+      expect(f.hits.some((hit) => hit.endsWith("/after-fence"))).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a cut while recording prepares its encoder sends no setup script", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(resume).pipe(Effect.tap(() => Effect.sync(latch.resolve))),
+      );
+      const original = ServerBrowserContexts.prototype.scratchPage;
+      let encoder: import("playwright-core").Page | undefined;
+      const spy = vi
+        .spyOn(ServerBrowserContexts.prototype, "scratchPage")
+        .mockImplementation(async function (this: ServerBrowserContexts) {
+          encoder = await original.call(this);
+          Deferred.doneUnsafe(entered, Effect.void);
+          await latch.promise;
+          return encoder;
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+      const starting = yield* f
+        .call(f.tabId, "recordingStart", {})
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      if (!encoder) return yield* Effect.die("missing recording encoder");
+      const evaluation = vi.spyOn(encoder, "evaluate");
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      const taking = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkChild);
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(starting);
+      yield* Fiber.join(taking);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      expect(evaluation).not.toHaveBeenCalled();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a host blocked during new-tab preparation receives no navigation command", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(resume).pipe(Effect.tap(() => Effect.sync(latch.resolve))),
+      );
+      const originalContext = ServerBrowserContexts.prototype.contextFor;
+      let goto: ReturnType<typeof vi.spyOn> | undefined;
+      const contextSpy = vi
+        .spyOn(ServerBrowserContexts.prototype, "contextFor")
+        .mockImplementation(async function (this: ServerBrowserContexts, ...args) {
+          const context = await originalContext.apply(this, args);
+          const originalPage = context.newPage.bind(context);
+          vi.spyOn(context, "newPage").mockImplementation(async () => {
+            const page = await originalPage();
+            goto = vi.spyOn(page, "goto");
+            const viewport = page.setViewportSize.bind(page);
+            vi.spyOn(page, "setViewportSize").mockImplementation(async (size) => {
+              await viewport(size);
+              Deferred.doneUnsafe(entered, Effect.void);
+              await latch.promise;
+            });
+            return page;
+          });
+          return context;
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => contextSpy.mockRestore()));
+      const opening = yield* f.broker
+        .invoke({
+          scope,
+          operation: "open",
+          input: { url: `${f.allowed}/new-fenced`, reuseExistingTab: false, show: false },
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* f.settings.updateSettings({ blockedBrowserHosts: ["localhost", "127.0.0.1"] });
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(opening);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(goto).toBeDefined();
+      expect(goto).not.toHaveBeenCalled();
     }),
   ).pipe(Effect.provide(layer)),
 );
