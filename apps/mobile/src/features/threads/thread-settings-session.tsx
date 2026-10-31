@@ -320,12 +320,10 @@ export function ThreadSettingsSessionProvider(
     if (descriptor?.type === "select") {
       if (!change) return;
       if (change.prompt !== props.prompt) props.onPromptChange(change.prompt);
-      if (!("modelOptions" in change)) return;
     }
-    const next =
-      change && "modelOptions" in change
-        ? (change.modelOptions ?? [])
-        : applyProviderOptionSelection(descriptors, { id, value });
+    const next = change
+      ? (change.modelOptions ?? [])
+      : applyProviderOptionSelection(descriptors, { id, value });
     if (next) props.onUpdateOptionSelections(next);
   };
 
