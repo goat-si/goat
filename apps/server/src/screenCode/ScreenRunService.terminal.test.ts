@@ -163,7 +163,7 @@ it.live.each(["stopped_by_person", "screen_locked"] as const)(
     }),
 );
 
-it.live.each(["lock", "stop", "lock then stop", "stop then lock"])(
+it.live.each(["lock", "stop", "lock then stop", "stop then lock", "lock then resume then stop"])(
   "successful end-cell collection must preserve a terminal cutoff: %s",
   (order) =>
     Effect.gen(function* () {
@@ -233,7 +233,10 @@ it.live.each(["lock", "stop", "lock then stop", "stop then lock"])(
           controlId: "control",
           terminal: reason,
         });
-      if (order === "lock" || order === "lock then stop") emit("screen_locked");
+      if (order === "lock" || order === "lock then stop" || order === "lock then resume then stop")
+        emit("screen_locked");
+      if (order === "lock then resume then stop")
+        yield* service.controlChanged({ kind: "resume", threadId: "thread", controlId: "control" });
       if (order !== "lock") emit("stopped_by_person");
       if (order === "stop then lock") emit("screen_locked");
       yield* Deferred.succeed(release, undefined);

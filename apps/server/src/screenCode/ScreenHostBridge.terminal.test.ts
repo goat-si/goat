@@ -37,23 +37,25 @@ const call = (callId: number): ScreenHostCall => ({
   deadlineMillis: 60000,
 });
 
-it.effect.each(["lock first", "stop first"])(
+it.effect.each(["lock first", "stop first", "lock then next cell then stop"])(
   "a cell fence keeps person Stop over a lock: %s",
   (order) =>
     Effect.gen(function* () {
       const bridge = new ScreenHostBridge();
-      bridge.cutCellNow(
-        "r",
-        "t",
-        "c",
-        order === "lock first" ? "screen_locked" : "stopped_by_person",
-      );
-      bridge.cutCellNow(
-        "r",
-        "t",
-        "c",
-        order === "lock first" ? "stopped_by_person" : "screen_locked",
-      );
+      const lockFirst = order !== "stop first";
+      bridge.cutCellNow("r", "t", "c", lockFirst ? "screen_locked" : "stopped_by_person");
+      if (order === "lock then next cell then stop") {
+        bridge.setDispatcher({
+          availability: () => Effect.succeed([]),
+          dispatch: () => Effect.succeed({ category: "confirmed", value: [] }),
+        });
+        const later = yield* bridge.handle(
+          { ...call(2), cellId: "later", method: "list_apps" },
+          { ...context(), cellId: "later" },
+        );
+        expect(later?.outcome).not.toBe("error");
+      }
+      bridge.cutCellNow("r", "t", "c", lockFirst ? "stopped_by_person" : "screen_locked");
       const answer = yield* bridge.handle(call(1), context());
       expect(answer?.outcome).toBe("error");
       if (answer?.outcome === "error") {
