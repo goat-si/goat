@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { toOperationError } from "./ServerBrowserPage.ts";
 import type { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import type { HistoryStamp } from "../cua/ComputerUseHistoryStamp.ts";
 
 type History = Effect.Success<typeof makeComputerUseHistory>;
 
@@ -19,6 +20,7 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
     readonly threadId: string;
     readonly url: string;
     readonly action: string;
+    readonly stamp?: HistoryStamp;
     readonly verdict: "sent" | "refused" | "unknown_outcome";
     readonly refusalCode?: string;
     readonly targetLabel?: string;
@@ -31,6 +33,7 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
   const host = hostOf(input.url);
   yield* history.record({
     threadId: input.threadId,
+    ...(input.stamp === undefined ? {} : { stamp: input.stamp }),
     target: { kind: "tab", host },
     method: input.action,
     verdict: input.verdict,

@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { isHistoryRead } from "./agentInputLog.ts";
 import type { makeComputerUseHistory } from "./ComputerUseHistory.ts";
+import type { HistoryStamp } from "./ComputerUseHistoryStamp.ts";
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
 const roles = new Map([
@@ -26,6 +27,7 @@ export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCa
   threadId: ThreadId,
   call: Extract<ComputerUseCallReservation, { action: "reserve" }>,
   outcome: { readonly reservationId: string } | { readonly refusalCode: string },
+  stamp?: HistoryStamp,
 ) {
   if (isHistoryRead(call.name, call.args)) return;
   const args = isRecord(call.args) ? call.args : {};
@@ -36,6 +38,7 @@ export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCa
   const appId = call.app ?? call.appLabel?.bundleId;
   yield* history.record({
     threadId,
+    ...(stamp === undefined ? {} : { stamp }),
     ...("reservationId" in outcome
       ? { reservation: { id: outcome.reservationId, controlId: call.controlId } }
       : {}),

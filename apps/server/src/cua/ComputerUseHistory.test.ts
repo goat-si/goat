@@ -3,8 +3,10 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Clock from "effect/Clock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
+import { historyStamp } from "./ComputerUseHistoryStamp.ts";
 
 it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history", (it) => {
   it.effect("records outcomes per thread with safe typed text", () =>
@@ -90,6 +92,44 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history
       assert.deepEqual(
         second.map((entry) => entry.method),
         ["first"],
+      );
+    }),
+  );
+  it.effect("orders desktop settlement by completion when timestamps tie", () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const history = yield* makeComputerUseHistory;
+      const now = yield* Clock.currentTimeMillis;
+      const admission = historyStamp(now);
+      const click = historyStamp(now);
+      const settlement = historyStamp(now);
+      yield* history.record({
+        threadId: "thread:desktop-order",
+        target: { kind: "app" },
+        method: "desktop",
+        verdict: "unknown_outcome",
+        stamp: admission,
+        reservation: { id: "ticket:desktop-order", controlId: "control:desktop-order" },
+      });
+      yield* history.record({
+        threadId: "thread:desktop-order",
+        target: { kind: "tab", host: "example.test" },
+        method: "browser",
+        verdict: "sent",
+        stamp: click,
+      });
+      assert.isTrue(
+        yield* history.settle({
+          threadId: "thread:desktop-order",
+          controlId: "control:desktop-order",
+          reservationId: "ticket:desktop-order",
+          verdict: "sent",
+          stamp: settlement,
+        }),
+      );
+      assert.deepEqual(
+        (yield* history.listForThread("thread:desktop-order")).map((row) => row.method),
+        ["desktop", "browser"],
       );
     }),
   );

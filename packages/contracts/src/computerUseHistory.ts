@@ -3,6 +3,7 @@ import { ThreadId } from "./baseSchemas.ts";
 
 export const ComputerUseHistoryCursor = Schema.Struct({
   recordedAt: Schema.Int,
+  orderSeq: Schema.optionalKey(Schema.Int),
   id: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
 });
 export const ComputerUseHistoryInput = Schema.Struct({
@@ -15,6 +16,7 @@ export const ComputerUseHistoryEntry = Schema.Struct({
   id: Schema.Int,
   threadId: Schema.String,
   recordedAt: Schema.Int,
+  orderSeq: Schema.optionalKey(Schema.Int),
   targetKind: Schema.Literals(["app", "tab"]),
   appId: Schema.NullOr(Schema.String),
   appName: Schema.NullOr(Schema.String),

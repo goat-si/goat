@@ -7,6 +7,7 @@ export default Effect.gen(function* () {
     id INTEGER PRIMARY KEY,
     thread_id TEXT NOT NULL,
     recorded_at INTEGER NOT NULL,
+    order_seq INTEGER NOT NULL DEFAULT 0,
     target_kind TEXT NOT NULL CHECK (target_kind IN ('app', 'tab')),
     app_id TEXT,
     app_name TEXT,
@@ -22,5 +23,5 @@ export default Effect.gen(function* () {
     outcome_reported INTEGER NOT NULL DEFAULT 0
   )`;
   yield* sql`CREATE INDEX computer_use_input_history_thread_time
-    ON computer_use_input_history(thread_id, recorded_at)`;
+    ON computer_use_input_history(thread_id, recorded_at, order_seq, id)`;
 });

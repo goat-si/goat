@@ -7,6 +7,7 @@ import { pushBounded } from "./boundedBuffer.ts";
 import { browserFailure, recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
 import type { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import { scheduleHistory } from "../cua/ComputerUseHistoryBackground.ts";
+import { historyStamp, type HistoryStamp } from "../cua/ComputerUseHistoryStamp.ts";
 
 type Tab = {
   readonly threadId: string;
@@ -19,6 +20,7 @@ export function makeBrowserHistoryRecordAction(
   history: Effect.Success<typeof makeComputerUseHistory>,
   fork: (effect: Effect.Effect<void>) => unknown,
   serverScope: Scope.Scope,
+  now: () => number = () => Date.now(),
 ) {
   return <A>(
     tab: Tab,
@@ -41,10 +43,13 @@ export function makeBrowserHistoryRecordAction(
     };
     pushBounded(tab.actionTimeline, event, 50);
     const url = details?.url ?? tab.page.url();
-    const record = (outcome: {
-      verdict: "sent" | "refused" | "unknown_outcome";
-      refusalCode?: string;
-    }) =>
+    const record = (
+      outcome: {
+        verdict: "sent" | "refused" | "unknown_outcome";
+        refusalCode?: string;
+      },
+      stamp: HistoryStamp,
+    ) =>
       Effect.gen(function* () {
         const finishRetention = details?.finishRetention;
         const evidence =
@@ -52,6 +57,7 @@ export function makeBrowserHistoryRecordAction(
         const keep = outcome.verdict === "sent" && evidence;
         yield* recordBrowserAction(history, {
           threadId: tab.threadId,
+          stamp,
           url: action === "back" || action === "forward" ? tab.page.url() : url,
           action,
           ...(details?.targetLabel === undefined ? {} : { targetLabel: details.targetLabel }),
@@ -60,14 +66,17 @@ export function makeBrowserHistoryRecordAction(
           ...(keep ? { keepTypedText: true, normalField: true, secretProtected: false } : {}),
         });
       });
-    const schedule = (outcome: {
-      verdict: "sent" | "refused" | "unknown_outcome";
-      refusalCode?: string;
-    }) => {
+    const schedule = (
+      outcome: {
+        verdict: "sent" | "refused" | "unknown_outcome";
+        refusalCode?: string;
+      },
+      stamp: HistoryStamp,
+    ) => {
       fork(
         scheduleHistory(
           browserHistoryPrefix(tab.threadId) + event.id,
-          record(outcome),
+          record(outcome, stamp),
           serverScope,
         ),
       );
@@ -75,15 +84,17 @@ export function makeBrowserHistoryRecordAction(
     return execute().then(
       (result) => {
         event.status = "succeeded";
-        event.completedAt = new Date().toISOString();
-        schedule({ verdict: "sent" });
+        const completed = now();
+        event.completedAt = new Date(completed).toISOString();
+        schedule({ verdict: "sent" }, historyStamp(completed));
         return result;
       },
       (cause: unknown) => {
         event.status = "failed";
-        event.completedAt = new Date().toISOString();
+        const completed = now();
+        event.completedAt = new Date(completed).toISOString();
         event.error = tab.diagnostics.firstLine(cause);
-        schedule(browserFailure(cause));
+        schedule(browserFailure(cause), historyStamp(completed));
         throw cause;
       },
     );

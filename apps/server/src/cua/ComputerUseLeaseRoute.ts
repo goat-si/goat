@@ -54,6 +54,7 @@ import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseSt
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
+import { historyStamp } from "./ComputerUseHistoryStamp.ts";
 import {
   awaitHistory,
   claimHistoryTicket,
@@ -272,6 +273,7 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
         const reservationId = value.reservationId;
         if (!(yield* claimHistoryTicket(reservationId, threadId, value.controlId)))
           return HttpServerResponse.empty({ status: 409 });
+        const stamp = historyStamp(yield* Clock.currentTimeMillis);
         yield* scheduleHistory(
           settlementHistoryKey(reservationId),
           awaitHistory(reservationId).pipe(
@@ -280,6 +282,7 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
                 threadId,
                 controlId: value.controlId,
                 reservationId,
+                stamp,
                 verdict: value.verdict,
                 ...(value.refusalCode === undefined ? {} : { refusalCode: value.refusalCode }),
               }),
@@ -484,6 +487,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
               : outsideManifest
                 ? { status: "refused", detail: "outside_manifest" }
                 : yield* leases.callReservation(threadId, call.value);
+        const stamp = historyStamp(yield* Clock.currentTimeMillis);
         if (call.value.action === "reserve" && result.status === "refused") {
           const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
           if (Option.isNone(sql))
@@ -499,7 +503,13 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                 call.value.connectionId,
                 call.value.callId,
               ),
-              recordAdmittedCall(history, threadId, call.value, { refusalCode: result.detail }),
+              recordAdmittedCall(
+                history,
+                threadId,
+                call.value,
+                { refusalCode: result.detail },
+                stamp,
+              ),
               serverScope,
             );
           }
@@ -520,7 +530,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
             yield* registerHistoryTicket(reservationId, threadId, call.value.controlId);
             yield* scheduleHistory(
               reservationId,
-              recordAdmittedCall(history, threadId, call.value, { reservationId }),
+              recordAdmittedCall(history, threadId, call.value, { reservationId }, stamp),
               serverScope,
             );
           }

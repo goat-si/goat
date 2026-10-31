@@ -137,7 +137,7 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
             entries,
             nextCursor:
               last !== undefined && entries.length === (input.limit ?? 100)
-                ? { recordedAt: last.recordedAt, id: last.id }
+                ? { recordedAt: last.recordedAt, id: last.id, orderSeq: last.orderSeq }
                 : null,
           };
         }),
