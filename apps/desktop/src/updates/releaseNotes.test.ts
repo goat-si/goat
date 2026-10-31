@@ -72,7 +72,7 @@ describe("normalizeDesktopUpdateReleaseNotes", () => {
         ...fixes,
         "<details>",
         "<summary>Full changelog</summary>",
-        "* fix: raw entry by @human in https://github.com/pingdotgg/t3code/pull/1",
+        "* fix: raw entry by @human in https://github.com/goat-si/goat/pull/1",
         "</details>",
       ].join("\n"),
       "1.2.4",
