@@ -4,6 +4,8 @@ import type { EnvironmentId, ThreadId } from "@goat/contracts";
 import { useCallback, useState } from "react";
 import { Modal, View } from "react-native";
 import { Button } from "../../components/ui/Button";
+import { Menu } from "../../components/ui/Menu";
+import { IconButton } from "../../components/ui/IconButton";
 import { AppText } from "../../components/ui/AppText";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { ThreadComputerUseHistory } from "./ThreadComputerUseHistory";
@@ -41,4 +43,23 @@ export function useThreadHistoryMenu(environmentId: EnvironmentId, threadId: Thr
         </Modal>
       ) : null,
   };
+}
+
+export function ThreadInspectorHistory(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const history = useThreadHistoryMenu(props.environmentId, props.threadId);
+  if (history.actions.length === 0) return null;
+  return (
+    <>
+      <Menu
+        actions={history.actions}
+        onPressAction={({ nativeEvent }) => history.select(nativeEvent.event)}
+      >
+        <IconButton icon="ellipsis" accessibilityLabel="Thread actions" />
+      </Menu>
+      {history.dialog}
+    </>
+  );
 }

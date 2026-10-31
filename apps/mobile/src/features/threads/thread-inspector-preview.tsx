@@ -9,11 +9,8 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { type ReactNode } from "react";
 import { View } from "react-native";
 
-import { IconButton } from "../../components/ui/IconButton";
-import { SheetHeader } from "../../components/ui/SheetHeader";
 import { NativeInspectorContent } from "../../native/NativeInspectorContent";
 import { createV5StackNavigator } from "../../native/createV5StackNavigator";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { WorkspaceSlotOptionsContext } from "../../native/v5-workspace-context";
 import { useMobileNavigationTheme } from "../../lib/useMobileNavigationTheme";
 import { DevicePreviewScreen } from "../devices/DevicePreviewRouteScreen";
@@ -26,34 +23,9 @@ import {
   type ThreadInspectorTarget,
 } from "./thread-inspector-navigation";
 
-export interface ThreadInspectorPresentation {
-  readonly onClose: () => void;
-  readonly onMaximize?: () => void;
-}
-
-export function ThreadInspectorHeader(
-  props: ThreadInspectorPresentation & { readonly title: string },
-) {
-  return (
-    <>
-      <NativeStackScreenOptions options={{ headerShown: true, headerTransparent: true }} />
-      <SheetHeader
-        title={props.title}
-        onClose={props.onClose}
-        accessibilityLabel="Close thread preview"
-        trailing={
-          props.onMaximize ? (
-            <IconButton
-              icon="arrow.up.left.and.arrow.down.right"
-              accessibilityLabel="Maximize thread"
-              onPress={props.onMaximize}
-            />
-          ) : undefined
-        }
-      />
-    </>
-  );
-}
+export { ThreadInspectorHeader } from "./ThreadInspectorHeader";
+export type { ThreadInspectorPresentation } from "./ThreadInspectorHeader";
+import type { ThreadInspectorPresentation } from "./ThreadInspectorHeader";
 
 const PreviewStack = createV5StackNavigator<{
   Thread: { readonly environmentId: string; readonly threadId: string };

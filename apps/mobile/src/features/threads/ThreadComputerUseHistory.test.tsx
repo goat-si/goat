@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 const permission = vi.hoisted(() => ({ allowed: true, request: vi.fn() }));
 import { EnvironmentId, OrchestrationV2TurnItemJson, ThreadId } from "@goat/contracts";
@@ -15,6 +15,11 @@ vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => permissio
 import { createNativeMemoryHarness, renderNative } from "../../testing/memoryNativeHarness";
 import { Pressable, Text } from "react-native";
 import { useThreadHistoryMenu } from "./useThreadHistoryMenu";
+import { ThreadInspectorHeader } from "./ThreadInspectorHeader";
+vi.mock("../../native/StackHeader", () => ({ NativeStackScreenOptions: () => null }));
+vi.mock("../../components/ui/SheetHeader", () => ({
+  SheetHeader: (props: { trailing?: ReactNode }) => <>{props.trailing}</>,
+}));
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 import { ThreadComputerUseHistoryView } from "./ThreadComputerUseHistoryView";
@@ -205,5 +210,44 @@ it.each([false, true])("isolates history after switching threads, delayed=%s", a
   } finally {
     await view.unmount();
     harness.dispose();
+  }
+});
+
+it("opens the inspected child thread history and hides the menu without permission", async () => {
+  permission.allowed = true;
+  permission.request
+    .mockReset()
+    .mockResolvedValue({ _tag: "Success", value: { entries: [], nextCursor: null } });
+  const harness = createNativeMemoryHarness();
+  const view = renderNative(
+    harness,
+    <ThreadInspectorHeader
+      title="Child"
+      onClose={() => {}}
+      environmentId={EnvironmentId.make("environment:a")}
+      threadId={ThreadId.make("child")}
+    />,
+  );
+  try {
+    await view.render();
+    await view.click("Thread actions");
+    await view.click("Computer use history");
+    await view.click("Show input history");
+    expect(permission.request.mock.calls[0]?.[0].input.threadId).toBe("child");
+    expect(view.container.textContent).toContain("No input history.");
+    permission.allowed = false;
+    await view.rerender(
+      <ThreadInspectorHeader
+        title="Child"
+        onClose={() => {}}
+        environmentId={EnvironmentId.make("environment:a")}
+        threadId={ThreadId.make("child")}
+      />,
+    );
+    expect(view.container.textContent).not.toContain("Computer use history");
+  } finally {
+    await view.unmount();
+    harness.dispose();
+    permission.allowed = true;
   }
 });

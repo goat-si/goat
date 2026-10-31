@@ -191,6 +191,8 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
       {props.inspectorPresentation ? (
         <ThreadInspectorHeader
           title={selectedThread?.title ?? "Thread"}
+          environmentId={environmentId}
+          threadId={threadIdRaw === null ? null : ThreadId.make(threadIdRaw)}
           {...props.inspectorPresentation}
         />
       ) : null}
