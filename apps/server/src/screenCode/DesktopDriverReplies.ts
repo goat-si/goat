@@ -88,6 +88,9 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   );
   const merged = state.reason;
   const driverCode = merged ?? nested ?? outer;
+  const safety = state.possibleCommit
+    ? terminalFailure(state, "list_apps", {}, true)?.safety
+    : undefined;
   const said =
     merged !== undefined && merged !== (nested ?? outer)
       ? undefined
@@ -108,9 +111,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
             : "The person stopped computer use; do not retry this turn."),
       ),
       effectStarted: reply.status === "unknown_outcome" || state.possibleCommit,
-      ...(state.possibleCommit
-        ? { safety: terminalFailure(state, "list_apps", {}, true)?.safety }
-        : {}),
+      ...(safety === undefined ? {} : { safety }),
       ...refusalOf(structured),
     };
   if (reply.status === "unknown_outcome")
