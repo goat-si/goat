@@ -57,6 +57,30 @@ const COMPUTER_USE_APP_BUNDLE_IDS: Readonly<Record<string, string>> = {
   "com.apple.textedit": "TextEdit",
 };
 
+const SCREEN_CODE_APP_NOTES: Readonly<
+  Partial<Record<NodeJS.Platform, Readonly<Record<string, string>>>>
+> = {
+  darwin: {
+    Finder:
+      'Finder: rows open with `app.click(n, { action: "open" })`; use arrow keys to select after selecting one item. If opening a folder fails, read the window title to confirm whether it moved before trying again; never resend blindly.',
+    "System Settings":
+      'System Settings: click a sidebar row to open its pane; `app.press("cmd+[")` goes back. Panes load lazily: wait for a control of the new pane, such as `app.waitFor({ name: "Software Update" })`, before acting. Never change privacy, security or account switches unless the person asked for that exact change.',
+    KakaoTalk: [
+      "KakaoTalk: open a chat by double-clicking its row in the list by number or handle (`app.click(row, { count: 2 })`), then observe that its chat window opened before going on. Enter is refused here except as a requested send, and point clicks are refused, so neither opens a chat.",
+      "Opening a chat marks its messages read for the sender. When only reading, use the chat list previews and do not open the chat.",
+      'In a chat, use `app.observe({ query: { role: "AXTextArea" } })` to find the message field (labelled "Enter a message" or "Enter public message", or a translation) and its id, distinguishing it from message bubbles. Type with `app.type(text, { id })` and check the draft.',
+      'Sending goes to other people: confirm the recipient and the text with the person first. Use `app.press("Enter", { id }, { send: true })` only when the person asked to send that message to that chat.',
+      "After sending, observe the chat and confirm the field is empty and the newest bubble contains the exact text before claiming success. If unconfirmed, say so and never send again.",
+    ].join("\n"),
+    TextEdit:
+      'TextEdit: a new document is saved to iCloud as soon as it exists. Close your own document with `app.press("cmd+w")`, click the save sheet Delete button (`{ id: "DontSaveButton" }`), then check the folder.',
+    Preview:
+      'Preview: zoom shortcuts work in the background: command-plus, command-minus, and `app.press("cmd+9")` to fit. PDF text is drawn, not in the tree; use `app.screenshot()` to read it.',
+    Safari:
+      'Safari: setting the address field does not load the page. Use the GOAT browser, or `app.menu(["File", "Open Location"])`, then type the URL into the field it shows and press Enter on that field (`app.press("Enter", field)`).',
+  },
+};
+
 const frontmatter = [
   "---",
   "name: computer-use",
@@ -97,6 +121,21 @@ export function computerUseAppNote(
 ): string | undefined {
   if (appName === undefined) return undefined;
   const notes = COMPUTER_USE_APP_NOTES[platform];
+  if (notes === undefined) return undefined;
+  const bundle = appName.toLowerCase();
+  const name = Object.hasOwn(COMPUTER_USE_APP_BUNDLE_IDS, bundle)
+    ? COMPUTER_USE_APP_BUNDLE_IDS[bundle]
+    : appName;
+  return name !== undefined && Object.hasOwn(notes, name) ? notes[name] : undefined;
+}
+
+/** The screen-code guidance for one app, by name or bundle id. */
+export function screenCodeAppNote(
+  platform: NodeJS.Platform,
+  appName: string | undefined,
+): string | undefined {
+  if (appName === undefined) return undefined;
+  const notes = SCREEN_CODE_APP_NOTES[platform];
   if (notes === undefined) return undefined;
   const bundle = appName.toLowerCase();
   const name = Object.hasOwn(COMPUTER_USE_APP_BUNDLE_IDS, bundle)
