@@ -26,11 +26,12 @@ const evCall = (...[method, args, ref]: Parameters<typeof call>) => ({
   deadlineMillis: 500000,
 });
 
+// A verified input re-reads windows a few times while nothing new shows; the clock passes them.
 const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
   Effect.gen(function* () {
     const fiber = yield* host.invoke(c, context).pipe(Effect.forkChild);
     yield* Effect.yieldNow;
-    yield* TestClock.adjust("60 millis");
+    yield* TestClock.adjust("1 second");
     return yield* Fiber.join(fiber);
   });
 
@@ -185,7 +186,7 @@ it.live(
 );
 
 it.effect(
-  "T41 same-frame replacement and T41c paged lifted row: replacement stays observed-only, and paged lifted row emits no element_state",
+  "T41 same-frame replacement and T41c paged lifted row: a value the acted element changed confirms the click, and paged lifted row emits no element_state",
   () =>
     Effect.gen(function* () {
       // 1. Same-frame replacement: same role/label/frame, different value -> observed:element_state, never confirmed.
@@ -238,7 +239,7 @@ it.effect(
       const delBtn = obs.elements.find((e) => e.index === 1);
       if (!delBtn) throw new Error("Missing Delete button");
       const clicked = yield* invokeEv(host, evCall("click", { elementRef: delBtn.ref }, ref));
-      expect(clicked.category).toBe("unverifiable");
+      expect(clicked.category).toBe("confirmed");
       expect(clicked.evidence).toContain('observed:element_state:value "item-a"→"item-b"');
 
       // 2. Paged lifted row: over-budget read puts lifted row on the second page, while a native row with the same label exists.

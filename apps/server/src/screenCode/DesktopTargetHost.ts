@@ -72,6 +72,7 @@ import { noteHops } from "./DesktopHops.ts";
 import { runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
+import { confirmByTree } from "./DesktopTreeEffect.ts";
 
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
@@ -110,6 +111,8 @@ export interface BoundWindow {
   pages?: DesktopPages;
   /** Rows of the current observation and its pages, for watched-element evidence and action checks. */
   rows?: ReadonlyArray<DesktopRow>;
+  /** Those rows when a full read gave them and no input has gone to the window since. */
+  fullRows?: ReadonlyArray<DesktopRow>;
   boundWindows?: ReadonlyArray<WindowEntry> | undefined;
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
@@ -580,6 +583,9 @@ export const createDesktopTargetHost = (deps: {
     boundRequest,
     listWindows: (bound: BoundWindow, call: ScreenHostCall, context: ScreenHostContext) =>
       request("list_windows", { pid: bound.pid }, call, context),
+    knownWindows: (bound: BoundWindow, context: ScreenHostContext) =>
+      cellTrackers.get(cellKey(context))?.tracker.latest(bound.pid) ??
+      (bound.boundInCellId === context.cellId ? bound.boundWindows : undefined),
     jpegScreenshots: isMac,
     modelFit:
       isMac &&
@@ -620,6 +626,8 @@ export const createDesktopTargetHost = (deps: {
       verify: boolean,
     ) =>
       Effect.suspend(() => {
+        const baseline = bound.fullRows;
+        delete bound.fullRows;
         bound.needsSettleBeforeCapture = true;
         delete bound.inputDrivenAt;
         const driven = (at: number) => void (bound.inputDrivenAt = at);
@@ -655,7 +663,22 @@ export const createDesktopTargetHost = (deps: {
           onSettled: () => {
             delete bound.needsSettleBeforeCapture;
           },
-        });
+        }).pipe(
+          Effect.flatMap((result) =>
+            confirmByTree(
+              result,
+              baseline,
+              runDesktopObserve(
+                observeDeps,
+                bound,
+                { ...call, method: "get_window_state", args: {} },
+                context,
+                {},
+              ).pipe(Effect.map(() => bound.fullRows)),
+              call.deadlineMillis,
+            ),
+          ),
+        );
       });
     if (call.method === "invoke_menu") {
       const tracker = trackerFor(context, bound.connectionGeneration);

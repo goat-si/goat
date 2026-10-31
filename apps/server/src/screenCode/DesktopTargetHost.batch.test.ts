@@ -301,7 +301,7 @@ it.live(
 );
 
 it.live(
-  "a batched click that asks to verify reads the windows around itself, and one that does not reads none",
+  "a batched click that asks to verify reads the windows around itself until one opens, and one that does not reads none",
   () => {
     const { host, sent } = fixture({ click: { effect: "unverifiable" } });
     return Effect.gen(function* () {
@@ -312,6 +312,9 @@ it.live(
         "click",
         "list_windows",
         "click",
+        "list_windows",
+        "list_windows",
+        "list_windows",
         "list_windows",
       ]);
       yield* finish;

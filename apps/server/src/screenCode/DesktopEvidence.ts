@@ -39,6 +39,9 @@ const SETTLE_MS = 60;
 // input returns; those inputs re-read windows a few times.
 const OPENING_POLL_MS = 100;
 const OPENING_POLLS = 4;
+// A verified input can open a window of its own process late (a chat from a search result), so
+// its listing is read again a few times while nothing new shows.
+const VERIFY_POLLS = 3;
 const COMPLETED_WRITE = classifyActionOutcome({
   effect: "write",
   status: "completed",
@@ -421,7 +424,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       (authoritativeIds(preRaw, pid) === undefined || authoritativeIds(postRaw, pid) !== undefined)
     );
   };
-  const rereads = opening || closing ? OPENING_POLLS : 0;
+  const rereads = opening || closing ? OPENING_POLLS : deps.verify === true ? VERIFY_POLLS : 0;
   for (let polls = 0; polls < rereads; polls++) {
     if (changed()) break;
     const now = yield* Clock.currentTimeMillis;
@@ -468,11 +471,17 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       ...hopsPhase(call),
     },
   };
+  // The acted element's own state changed between the reads around the input: the tree shows it.
+  const elementChanged =
+    !closing &&
+    elDiff.length > 0 &&
+    (base?.category === "unverifiable" || base?.category === "suspected_noop");
   const upgrade =
-    proven &&
-    base?.category !== "confirmed" &&
-    base?.category !== "refused" &&
-    base?.category !== "suspected_noop";
+    elementChanged ||
+    (proven &&
+      base?.category !== "confirmed" &&
+      base?.category !== "refused" &&
+      base?.category !== "suspected_noop");
   // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
   const unproven = closing && !closedByClose && base?.category === "confirmed";
   return {

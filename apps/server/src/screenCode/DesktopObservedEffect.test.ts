@@ -1,12 +1,21 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
+import type { ScreenHostCall, ScreenObservation, ScreenTargetRef } from "@goat/contracts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-import { NotStarted, context, fixture, goat2WindowState } from "./DesktopTargetHost.testkit.ts";
+import {
+  NotStarted,
+  call,
+  context,
+  fixture,
+  goat2WindowState,
+} from "./DesktopTargetHost.testkit.ts";
 
 it.live("verifyState advances the baseline and cannot imply a no-op for earlier input", () => {
   let reads = 0;
@@ -140,4 +149,89 @@ it.live.each(["batch", "refused"] as const)(
       ),
     );
   },
+);
+
+type Host = ReturnType<typeof fixture>["host"];
+
+/** A KakaoTalk-like window: a sidebar, the open screen's heading and its list rows. */
+const sidebarRead = (snapshot: string, heading: string, rows: readonly string[]) => {
+  const labels = ["KakaoTalk", "friends", "chatrooms", heading, ...rows];
+  const roles = ["AXWindow", "AXButton", "AXButton", "AXStaticText", ...rows.map(() => "AXRow")];
+  return {
+    pid: 42,
+    window_id: 7,
+    snapshot_id: snapshot,
+    elements_complete: true,
+    tree_markdown: labels
+      .map((label, index) => `${index === 0 ? "" : "  "}- [${index}] ${roles[index]} "${label}"`)
+      .join("\n"),
+    elements: labels.map((label, index) => ({
+      role: roles[index],
+      element_index: index,
+      element_token: `${snapshot}:${index}`,
+      label,
+      ...(roles[index] === "AXButton" ? { actions: ["AXPress"] } : {}),
+    })),
+  };
+};
+
+/** One input with the test clock moved past the settle its evidence read waits for. */
+const settled = (host: Host, input: ScreenHostCall) =>
+  Effect.gen(function* () {
+    const fiber = yield* host.invoke(input, context).pipe(Effect.forkChild);
+    yield* Effect.yieldNow;
+    yield* TestClock.adjust("1 second");
+    return yield* Fiber.join(fiber);
+  });
+
+const sidebarClick = (after: ReturnType<typeof sidebarRead>, observeFirst = true) =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const { host, sent } = fixture({
+      click: { effect: "suspected_noop" },
+      get_window_state: () =>
+        reads++ === 0 ? sidebarRead("s1", "Friends", ["Kim", "Lee"]) : after,
+    });
+    const ref = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const seen = observeFirst
+      ? ((yield* host.observe(call("get_window_state", {}, ref), context))
+          .value as ScreenObservation)
+      : undefined;
+    const chats = seen?.elements.find((element) => element.name === "chatrooms");
+    const out = yield* settled(host, {
+      ...call("click", chats ? { elementRef: chats.ref } : { x: 10, y: 10 }, ref),
+      deadlineMillis: 10_000,
+    });
+    return { out, reads: sent.filter((each) => each.tool === "get_window_state").length };
+  });
+
+it.effect(
+  "a sidebar switch the driver calls suspected_noop is confirmed by the bound window's tree diff",
+  () =>
+    Effect.gen(function* () {
+      const { out, reads } = yield* sidebarClick(
+        sidebarRead("s2", "Chats", ["Team room", "Family"]),
+      );
+      expect(out.category).toBe("confirmed");
+      expect(out.evidence?.some((line) => line.startsWith("observed:tree_changed:"))).toBe(true);
+      expect(out.safety?.writeStatus).not.toBe("not_applied");
+      expect(reads).toBe(2);
+    }),
+);
+
+it.effect(
+  "a suspected_noop stays one when the tree did not change or no read came before the input",
+  () =>
+    Effect.gen(function* () {
+      const unchanged = yield* sidebarClick(sidebarRead("s2", "Friends", ["Kim", "Lee"]));
+      expect(unchanged.out.category).toBe("suspected_noop");
+      expect(unchanged.reads).toBe(2);
+      // Without a read before the input there is nothing to compare, so nothing is read after it.
+      const unread = yield* sidebarClick(sidebarRead("s2", "Chats", ["Team room"]), false);
+      expect(unread.out.category).toBe("suspected_noop");
+      expect(unread.reads).toBe(0);
+    }),
 );

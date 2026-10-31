@@ -114,15 +114,35 @@ it.effect(
       });
       const { ref, element } = yield* bound(host);
       yield* host.invoke(at(10_000, call("press_key", { key: "Enter" }, ref)), context);
-      yield* host.invoke(
-        at(10_000, call("click", { elementRef: element("All Clear"), verify: true }, ref)),
-        context,
+      yield* answersAfterWindowReads(
+        host.invoke(
+          at(10_000, call("click", { elementRef: element("All Clear"), verify: true }, ref)),
+          context,
+        ),
       );
       const inputs = sent.filter((each) => each.tool === "press_key" || each.tool === "click");
       expect(inputs[0]?.args).toMatchObject({ post_action_wait: "none" });
       expect(inputs[1]?.args).not.toHaveProperty("post_action_wait");
     }),
 );
+
+// A verified input whose windows did not change reads them again a few times, 100 ms apart.
+const answersAfterWindowReads = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.gen(function* () {
+    const fiber = yield* effect.pipe(Effect.forkChild);
+    yield* TestClock.adjust("299 millis");
+    expect(fiber.pollUnsafe()).toBeUndefined();
+    yield* TestClock.adjust("1 millis");
+    return yield* Fiber.join(fiber);
+  });
+const aroundVerifiedInput = (input: string) => [
+  "list_windows",
+  input,
+  "list_windows",
+  "list_windows",
+  "list_windows",
+  "list_windows",
+];
 
 it.effect("a key without modifiers that asks to verify reads the windows around it", () =>
   Effect.gen(function* () {
@@ -133,14 +153,10 @@ it.effect("a key without modifiers that asks to verify reads the windows around 
     });
     const { ref } = yield* bound(host);
     const first = sent.length;
-    const done = yield* answersWithoutSettle(
+    const done = yield* answersAfterWindowReads(
       host.invoke(at(10_000, call("press_key", { key: "Enter", verify: true }, ref)), context),
     );
-    expect(sent.slice(first).map((each) => each.tool)).toEqual([
-      "list_windows",
-      "press_key",
-      "list_windows",
-    ]);
+    expect(sent.slice(first).map((each) => each.tool)).toEqual(aroundVerifiedInput("press_key"));
     expect((done.value as { windows?: { bound?: string } }).windows?.bound).toBe("present");
   }),
 );
@@ -155,17 +171,13 @@ it.effect("a click that asks to verify reads the windows around the input", () =
     });
     const { ref, element } = yield* bound(host);
     const first = sent.length;
-    const done = yield* answersWithoutSettle(
+    const done = yield* answersAfterWindowReads(
       host.invoke(
         at(10_000, call("click", { elementRef: element("All Clear"), verify: true }, ref)),
         context,
       ),
     );
-    expect(sent.slice(first).map((each) => each.tool)).toEqual([
-      "list_windows",
-      "click",
-      "list_windows",
-    ]);
+    expect(sent.slice(first).map((each) => each.tool)).toEqual(aroundVerifiedInput("click"));
     expect(sent.find((each) => each.tool === "click")?.args).not.toHaveProperty("verify");
     expect(done.category).toBe("unverifiable");
     expect((done.value as { windows?: { bound?: string } }).windows?.bound).toBe("present");
@@ -328,7 +340,7 @@ it.effect("an input's result carries its total and per-phase host time", () =>
     const timed = (each: ScreenHostCall) =>
       Effect.gen(function* () {
         const fiber = yield* host.invoke(each, context).pipe(Effect.forkChild);
-        yield* TestClock.adjust("200 millis");
+        yield* TestClock.adjust("1 second");
         return ((yield* Fiber.join(fiber)).value as { _timing?: unknown })._timing;
       });
     const ref = (yield* host
@@ -353,12 +365,13 @@ it.effect("an input's result carries its total and per-phase host time", () =>
     expect(
       yield* timed(at(10_000, call("click", { elementRef: named("All Clear") }, ref))),
     ).toEqual({ ms: 7, phases: { driverMs: 7 } });
-    // The reads before and after the input run side by side, so each phase costs its slowest read.
+    // The reads before and after the input run side by side, so each phase costs its slowest read;
+    // with no window opened, the listing is read three more times, 100 ms apart.
     expect(
       yield* timed(
         at(10_000, call("click", { elementRef: named("Secondary Functions"), verify: true }, ref)),
       ),
-    ).toEqual({ ms: 73, phases: { preMs: 3, driverMs: 7, settleMs: 60, postMs: 3 } });
+    ).toEqual({ ms: 379, phases: { preMs: 3, driverMs: 7, settleMs: 60, postMs: 309 } });
     expect(yield* timed(at(10_000, call("press_key", { key: "Escape" }, ref)))).toEqual({
       ms: 5,
       phases: { driverMs: 5 },
