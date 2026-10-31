@@ -34,6 +34,8 @@ export const mergeTerminal = (
   };
 };
 
+export type ComputerUseTerminalState = ReturnType<typeof mergeTerminal>;
+
 export const terminalFailure = (
   reason: ComputerUseTerminalReason | undefined,
   tool: string,

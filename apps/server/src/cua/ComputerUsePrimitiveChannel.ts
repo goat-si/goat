@@ -32,8 +32,8 @@ import {
   mergeTerminal,
   terminalReason,
   terminalErrorState,
-  terminalReplyReason,
   terminalReplyState,
+  type ComputerUseTerminalState,
   type ComputerUseTerminalReason,
 } from "./ComputerUseTerminal.ts";
 
@@ -208,21 +208,20 @@ export const make = Effect.gen(function* () {
   };
   const terminalReply = (
     pending: Pending,
-    terminal: Control["terminal"],
-    possibleCommit = false,
+    terminalState: ComputerUseTerminalState,
   ): ComputerUsePrimitiveReply => ({
     ...pending.request,
-    status: pending.sent || possibleCommit ? "unknown_outcome" : "not_started",
-    ...(terminal === undefined
+    status: pending.sent || terminalState.possibleCommit ? "unknown_outcome" : "not_started",
+    ...(terminalState.reason === undefined
       ? {}
       : {
           result: resultOf(
             JSON.parse(
-              pending.sent || possibleCommit
+              pending.sent || terminalState.possibleCommit
                 ? cutOff(
                     pending.request.callId,
-                    possibleCommit ? "click" : pending.request.tool,
-                    terminal === "screen_locked"
+                    terminalState.possibleCommit ? "click" : pending.request.tool,
+                    terminalState.reason === "screen_locked"
                       ? { _tag: "pause", reason: "screen_locked" }
                       : { _tag: "end", reason: "stopped_all" },
                     pending.request.args,
@@ -230,8 +229,8 @@ export const make = Effect.gen(function* () {
                 : refusal(
                     pending.request.callId,
                     "tools/call",
-                    terminal === "screen_locked" ? "screen_locked" : "stopped",
-                    terminal === "screen_locked"
+                    terminalState.reason === "screen_locked" ? "screen_locked" : "stopped",
+                    terminalState.reason === "screen_locked"
                       ? PAUSE_MESSAGES.screen_locked
                       : LEASE_END_MESSAGES.stopped,
                   ),
@@ -239,12 +238,10 @@ export const make = Effect.gen(function* () {
           ).result,
         }),
   });
-  const settle = (pending: Pending, terminal?: Control["terminal"]) => {
-    pending.terminal = mergeTerminal({ reason: pending.terminal }, { reason: terminal }).reason;
-    return Deferred.doneUnsafe(
-      pending.answer,
-      Exit.succeed(terminalReply(pending, pending.terminal)),
-    );
+  const settle = (pending: Pending, state: ComputerUseTerminalState) => {
+    const merged = mergeTerminal({ reason: pending.terminal }, state);
+    pending.terminal = merged.reason;
+    return Deferred.doneUnsafe(pending.answer, Exit.succeed(terminalReply(pending, merged)));
   };
   const cancelDelivered = (registration: Registration, pending: Pending) => {
     if (pending.sent)
@@ -259,7 +256,7 @@ export const make = Effect.gen(function* () {
     for (const [id, pending] of control.pending) {
       control.pending.delete(id);
       cancelDelivered(registration, pending);
-      settle(pending, control.terminal);
+      settle(pending, mergeTerminal({ reason: control.terminal }, {}));
     }
   };
   const close = (attachment: Attachment) => {
@@ -272,7 +269,7 @@ export const make = Effect.gen(function* () {
       control.abandoned.clear();
       for (const pending of control.pending.values()) {
         cancelDelivered(registration, pending);
-        settle(pending, control.terminal);
+        settle(pending, mergeTerminal({ reason: control.terminal }, {}));
       }
       control.pending.clear();
     }
@@ -500,7 +497,7 @@ export const make = Effect.gen(function* () {
           (reply.wireReason !== reason ||
             !reply.terminalSafety ||
             (merged.possibleCommit && !reply.possibleCommit))
-            ? terminalReply(pending, reason, merged.possibleCommit)
+            ? terminalReply(pending, merged)
             : answered;
         return input.authority === "claimBind"
           ? { ...result, driverGeneration: binding.generation + 1 }
@@ -539,7 +536,7 @@ export const make = Effect.gen(function* () {
           for (const [id, pending] of record.pending) {
             record.pending.delete(id);
             cancelDelivered(kept, pending);
-            settle(pending, record.terminal);
+            settle(pending, mergeTerminal({ reason: record.terminal }, {}));
           }
       else if (previous !== undefined) yield* close(previous) ?? Effect.void;
       attachments.set(input.threadId, {
@@ -876,10 +873,11 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
-          const replyTerminal = mergeTerminal(
-            { reason: terminalReplyReason(input.reply.result, input.reply.status) },
+          const replyState = mergeTerminal(
+            terminalReplyState(input.reply.result, input.reply.status),
             terminalErrorState(input.reply.error),
-          ).reason;
+          );
+          const replyTerminal = replyState.reason;
           if (replyTerminal !== undefined) {
             latchWaiting(input.threadId, input.reply.controlId, replyTerminal);
             latch(record, replyTerminal);
@@ -894,7 +892,7 @@ export const make = Effect.gen(function* () {
             return true;
           }
           if (record.terminal !== undefined) {
-            settle(pending, record.terminal);
+            settle(pending, mergeTerminal({ reason: record.terminal }, replyState));
             return true;
           }
           pending.answeredAt = now;
@@ -916,7 +914,7 @@ export const make = Effect.gen(function* () {
               if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
                 if (value.registration) cancelDelivered(value.registration, pending);
-                settle(pending, record.terminal);
+                settle(pending, mergeTerminal({ reason: record.terminal }, {}));
               }
           }
       }),
