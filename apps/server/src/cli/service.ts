@@ -275,6 +275,13 @@ export const offerServiceDuringOnboarding = Effect.gen(function* () {
     );
     return "skipped" as const;
   }
+  // Both streams must be terminals: redirected stdout would hide the prompt.
+  if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+    yield* Console.log(
+      "Not a terminal, so background setup was skipped. Run `goat service install` to set it up.",
+    );
+    return "skipped" as const;
+  }
   const platform = yield* HostProcess.Platform;
   const reachability = isGoatConnectEnabled() ? "GOAT Connect" : "your network and Tailscale";
   const wanted = yield* Prompt.run(

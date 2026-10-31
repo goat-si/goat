@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
+  SERVER_BROWSER_AUTOMATION_CLIENT_ID,
   PreviewAutomationClientDisconnectedError,
   PreviewAutomationMalformedResponseError,
   PreviewAutomationNoAvailableHostError,
@@ -17,6 +18,8 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
+
+import { PreviewBrowserRootError } from "../preview/PreviewBrowserHost.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 
 const makeBroker = PreviewAutomationBroker.make.pipe(Effect.provide(NodeServices.layer));
@@ -288,6 +291,49 @@ it.effect("announces a live replacement stream before delivering requests", () =
   ),
 );
 
+it.effect.each([
+  {
+    clientId: SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+    shown: true,
+    message: "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:4719/",
+  },
+  {
+    clientId: "client-1",
+    shown: false,
+    message: "page.goto: net::ERR_CONNECTION_REFUSED at http://localhost:4719/",
+  },
+  {
+    clientId: SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+    shown: true,
+    message: new PreviewBrowserRootError().message,
+  },
+])("preserves server browser failure guidance ($clientId)", ({ clientId, shown, message }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(yield* broker.connect(makeHost({ clientId }), SERVER_BROWSER));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationExecutionError",
+            message,
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "open", input: {} })
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("PreviewAutomationExecutionError");
+      expect(error.message.includes(message.slice(0, 500))).toBe(shown);
+    }),
+  ),
+);
+
 it.effect("distinguishes malformed remote failures", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -535,7 +581,7 @@ it.effect("prefers the live tab owner for new sessions without moving existing l
       const connections = new Map<string, string>();
       for (const clientId of ["owner", "other"]) {
         const requests = requestsFrom(
-          yield* broker.connect(makeHost({ clientId })),
+          yield* broker.connect(makeHost({ clientId }), SERVER_BROWSER),
           (connectionId) => connections.set(clientId, connectionId),
         );
         yield* Stream.runForEach(requests, (request) =>

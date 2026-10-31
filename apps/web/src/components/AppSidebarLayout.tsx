@@ -40,6 +40,7 @@ import {
 } from "../panelAnimations";
 import { BackgroundThreadAnnouncer } from "./BackgroundThreadAnnouncer";
 import LegacyThreadSidebar from "./LegacySidebar";
+import { HistorySwipeNavigation } from "./HistorySwipeNavigation";
 import ThreadSidebar from "./Sidebar";
 import { SettingsSearchShortcut } from "./settings/SettingsSearchShortcut";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
@@ -490,7 +491,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         style={sidebarProviderStyle}
       >
         <DestinationRailVisibleContext value={railVisible}>
-          <SidebarBrandWidthProbe onWidthChange={setBrandWidth} />
+          <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
           <ProjectProjectionRetention />
           {railVisible ? <DestinationRail /> : null}
           <Sidebar
@@ -544,6 +545,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarControl onCollapsedBrandWidthChange={setCollapsedBrandWidth} />
         {isOnSettings ? <SettingsSearchShortcut /> : null}
         <BackgroundThreadAnnouncer />
+        {isElectron ? <HistorySwipeNavigation /> : null}
       </SidebarProvider>
     </PanelAnimationSuppressionProvider>
   );

@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import type { ServerInstallation } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { CLI_NPM_PACKAGE_NAME, cliNpmExecCommand, cliNpmPackageUrl } from "@goat/shared/cliRelease";
-import { isCommandAvailable } from "@goat/shared/shell";
+import { resolveCommandPath } from "@goat/shared/shell";
 
 import packageJson from "../../package.json" with { type: "json" };
 
@@ -215,7 +215,7 @@ const resolveInstallLauncher = Effect.gen(function* () {
 });
 
 /**
- * Uses `t3` on PATH, the originating package runner, or this install's absolute launcher path.
+ * Uses this install's `goat` on PATH, the originating runner, or its absolute launcher path.
  * Arguments are quoted for POSIX shells or PowerShell on Windows.
  */
 export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand")(function* (
@@ -227,7 +227,16 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
     [prefix, ...args.map((arg) => hostShellWord(platform, arg))].join(" ");
   const command = yield* resolveCliCommand(subcommand);
   if (command !== `goat ${subcommand}`) return { command: withArgs(command), launcher: false };
-  if (yield* isCommandAvailable("goat")) return { command: withArgs(command), launcher: false };
+  const onPath = yield* resolveCommandPath("goat");
+  if (onPath !== null) {
+    const shim = (yield* HostProcess.Environment).GOAT_CLI_PATH?.trim();
+    const fs = yield* FileSystem.FileSystem;
+    const real = (file: string) => fs.realPath(file).pipe(Effect.orElseSucceed(() => null));
+    const shimReal = shim ? yield* real(shim) : null;
+    if (shimReal === null || shimReal === (yield* real(onPath))) {
+      return { command: withArgs(command), launcher: false };
+    }
+  }
   const launcher = yield* resolveInstallLauncher;
   if (Option.isNone(launcher)) return { command: withArgs(command), launcher: false };
   // PowerShell runs a quoted path only through the call operator.
@@ -244,8 +253,9 @@ export const resolveHostCliCommand = Effect.fn("invocation.resolveHostCliCommand
  */
 export const resolveRootCliCommand = Effect.fn("invocation.resolveRootCliCommand")(function* (
   subcommand: string,
+  args: ReadonlyArray<string> = [],
 ) {
-  const { command, launcher } = yield* resolveHostCliCommand(subcommand);
+  const { command, launcher } = yield* resolveHostCliCommand(subcommand, args);
   if (launcher) return `sudo ${command}`;
   const executablePath = yield* HostProcess.ExecutablePath;
   const systemNode = ROOT_PATH_DIRECTORIES.some((directory) =>

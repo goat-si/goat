@@ -199,8 +199,11 @@ is quick too: the whole-repository check and typecheck plus the same tests besid
 full test suites and the jobs the summary lists run with the `ci:full` label, a manual `goat-ci`
 run, and the full runs on `dev`, so a local pass does not promise a green full run.
 
-The steps run side by side, so a run takes about as long as its slowest step, usually knip's
-exports pass at about 10 s. When the files are exactly those of the last passing run, it prints that
+The steps run side by side within a budget of one per two cores and per 6 GiB of available memory.
+Pass `--concurrency <n>` or set `CHECK_CHANGED_CONCURRENCY` to change the limit (`1` runs steps
+one by one). A step that runs past `--timeout <seconds>` or `CHECK_CHANGED_TIMEOUT` (default 900)
+is killed with its child processes and reported as `TIMEOUT`. When the files are exactly those
+of the last passing run, it prints that
 run's summary instead of running again. Any change to a file, the install, or a generated file runs
 the checks again.
 
