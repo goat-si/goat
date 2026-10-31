@@ -175,7 +175,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const providerSink: ReplySink = {
     answer: (line, _status, context) => options.output(line, context),
   };
-  /** Why the last child was cut off, for a call that was waiting when it happened. */
   let lastInterruption: Interruption = { _tag: "end", reason: "helper_restarted" };
   /**
    * Retains each generation's calls through native closure so cancellation can suppress its
@@ -253,7 +252,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
 
