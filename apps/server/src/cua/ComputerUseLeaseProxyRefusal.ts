@@ -79,6 +79,7 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
 interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
+  readonly claimApproved?: boolean;
   readonly finished: () => LeaseEnd | undefined;
   readonly paused: () => "human_input" | "takeover" | "private" | undefined;
   readonly idle: () => boolean;

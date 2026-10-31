@@ -41,14 +41,17 @@ import {
 } from "effect/http";
 
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import * as BrowserOriginGrants from "../preview/BrowserOriginGrantsLayer.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
+import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
+import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -102,10 +105,12 @@ export const leaseUpdates = (input: {
     Effect.gen(function* () {
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       const settings = yield* ServerSettings.ServerSettingsService;
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       // The proxy reading this exited, crashed or lost its connection: its app leases end (D17).
       yield* leases.streamOpened(input.controlId);
       yield* Effect.addFinalizer(() => leases.releaseApps(input.threadId, input.controlId));
       const wake = yield* Queue.sliding<void>(1);
+      if (Option.isSome(grants)) yield* watchClaimChanges(grants.value.changes, wake);
       const subscription = yield* leases.subscribe;
       yield* PubSub.take(subscription).pipe(
         Effect.andThen(Queue.offer(wake, undefined)),
@@ -145,6 +150,13 @@ export const leaseUpdates = (input: {
           yield* Queue.take(wake);
           continue;
         }
+        const snapshot = Option.isSome(grants)
+          ? yield* grants.value.snapshotFor(input.threadId)
+          : undefined;
+        const browserClaimVersion = snapshot?.revision ?? 0;
+        const browserClaimBindings = snapshot?.bindings ?? [];
+        const browserClaims = snapshot?.claims ?? [];
+        const claimedBrowserPids = snapshot?.pids ?? [];
         yield* Queue.offer(
           queue,
           state.idle === true
@@ -164,6 +176,10 @@ export const leaseUpdates = (input: {
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
+                ...(browserClaimVersion === 0 ? {} : { browserClaimVersion }),
+                ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
+                ...(browserClaims.length === 0 ? {} : { browserClaims }),
+                ...(claimedBrowserPids.length === 0 ? {} : { claimedBrowserPids }),
               },
         );
         const remaining = state.wakeAt - (yield* Clock.currentTimeMillis);
@@ -202,6 +218,23 @@ export const reportLayer = HttpRouter.add(
     const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
     if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
     const value = report.value;
+    if ("browserClaimsSupported" in value || "browserClaimEnded" in value) {
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
+      const result = yield* (
+        "browserClaimsSupported" in value
+          ? value.browserClaimsSupported
+            ? Effect.void
+            : grants.value.setDriverCapability(false)
+          : grants.value.end(
+              threadId,
+              value.browserClaimEnded.claimId,
+              value.browserClaimEnded.claimGeneration,
+              value.browserClaimEnded.reason,
+            )
+      ).pipe(Effect.option);
+      return HttpServerResponse.empty({ status: Option.isSome(result) ? 204 : 503 });
+    }
     if ("driverEnded" in value) {
       const connections = yield* Effect.serviceOption(
         ComputerUseAgentConnections.ComputerUseAgentConnections,
@@ -395,6 +428,17 @@ const callLayer = HttpRouter.add(
         encodeAdmission({ status: "refused", detail: "pointer_locked" }),
         { contentType: "application/json", headers: { "cache-control": "no-store" } },
       );
+    if (call.value.action === "reserve") {
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      const snapshot = Option.isSome(grants)
+        ? yield* grants.value.snapshotFor(threadId)
+        : { claims: [], bindings: [] };
+      if (!serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot))
+        return HttpServerResponse.text(
+          encodeAdmission({ status: "refused", detail: "outside_manifest" }),
+          { contentType: "application/json", headers: { "cache-control": "no-store" } },
+        );
+    }
     const result = yield* leases.callReservation(threadId, call.value).pipe(Effect.option);
     // The session is still accepted; GOAT could not read the authority that judges the call.
     if (Option.isNone(result)) return HttpServerResponse.empty({ status: 503 });

@@ -43,7 +43,7 @@ import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
-import { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
+import { refreshDesktopManifest, listenBrowserManifestRequests } from "./DesktopCuaManifest.ts";
 import { agentRouteFailure } from "./agentRouteProbe.ts";
 import {
   captureCheckFailure,
@@ -81,6 +81,7 @@ export {
 } from "./DesktopCuaNative.ts";
 
 interface OwnedHost {
+  readonly manifestPath: string | undefined;
   readonly host: NativeHost;
   readonly abort: AbortController;
   readonly started: Promise<EmbeddedDriverConnection>;
@@ -107,16 +108,13 @@ export class DesktopCuaDriver extends Context.Service<
     readonly grants: Effect.Effect<DesktopCuaGrants, ComputerUseHelperError>;
   }
 >()("@goat/desktop/cua/DesktopCuaDriver") {}
-
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const settle = (promise: Promise<unknown>) =>
   promise.then(
     () => undefined,
     () => undefined,
   );
-
 const VERIFICATION_STEPS = 7;
-
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -251,7 +249,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     publisher,
     () => closed,
   );
-
   const restartHost = Effect.gen(function* () {
     const request = owned ? currentRequest : undefined;
     currentRequest = undefined;
@@ -260,7 +257,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
   });
   const restart = mutex.withPermits(1)(restartHost);
-
   const driverPath = () => bundledDriverPath(environment);
 
   /**
@@ -338,7 +334,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     (environment.platform === "darwin" || environment.platform === "win32")
       ? () => native.helperApps(engine.bundle, environment.platform, signal)
       : undefined;
-
   const handleAppsRequest = makeAppsRequestHandler({
     publisher,
     native,
@@ -350,7 +345,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     hostBundleIds,
     helperListing,
   });
-
   const spawn = Effect.fn("desktop.cua.spawn")(function* (engine: Engine, scope: CuaManifestScope) {
     // Which app macOS charges the grants to, so a log shows who held them.
     yield* Effect.logInfo("Starting Cua Driver", {
@@ -411,6 +405,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
     }
     const entry: OwnedHost = {
+      manifestPath: scope === "agents" ? manifestPath : undefined,
       host,
       abort: new AbortController(),
       started: Promise.resolve().then(() => host.start()),
@@ -759,7 +754,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       ),
       Effect.withSpan("desktop.cua.reprove"),
     );
-
   const handleRequest = Effect.fn("desktop.cua.request")(function* (
     request: DesktopCuaDriverRequest,
   ) {
@@ -907,7 +901,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       yield* stop;
     }),
   );
-
   const grantTarget = Effect.gen(function* () {
     const chosen = environment.platform === "darwin" ? yield* engine() : undefined;
     return cuaGrantTarget({
@@ -933,6 +926,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     listen: Effect.gen(function* () {
       yield* Stream.runForEach(publisher.cuaAppsRequests, handleAppsRequest).pipe(
         Effect.forkScoped,
+      );
+      yield* listenBrowserManifestRequests(
+        publisher.cuaManifestRequests,
+        () => (owned && !owned.cleanup ? owned.manifestPath : undefined),
+        mutex,
       );
       yield* requests
         .handle(publisher.cuaRequests, handleRequest, mutex.withPermits(1), () => {

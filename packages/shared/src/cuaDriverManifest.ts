@@ -59,6 +59,17 @@ export const CUA_DRIVER_ALLOWED_TOOLS = [
   "set_agent_cursor_theme",
 ] as const;
 
+const CUA_DRIVER_CLAIM_TOOLS = [
+  "get_browser_state",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_pointer",
+  "browser_select",
+  "browser_dialog",
+  "browser_prepare",
+] as const;
+
 /**
  * Every other tool the pinned driver offers, with why agents never get it. Undeclared tools are
  * refused by the driver too; this list is the reviewed record, and a test keeps it disjoint
@@ -393,9 +404,24 @@ export function missingCuaDriverApplications(
 export function cuaDriverCapabilityManifest(input: {
   readonly applications: ReadonlyArray<CuaDriverAdmittedApp>;
   readonly tools?: ReadonlyArray<string>;
+  readonly browserClaimsSupported?: boolean;
+  readonly browser?: {
+    readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+    readonly origins: ReadonlyArray<string>;
+  };
 }): string {
   const q = (value: string) => JSON.stringify(value);
-  const tools: ReadonlyArray<string> = input.tools ?? CUA_DRIVER_ALLOWED_TOOLS;
+  const browser =
+    input.browserClaimsSupported === true &&
+    input.browser !== undefined &&
+    input.browser.existingProfiles.length > 0 &&
+    input.browser.origins.length > 0
+      ? input.browser
+      : undefined;
+  const tools: ReadonlyArray<string> = [
+    ...(input.tools ?? CUA_DRIVER_ALLOWED_TOOLS),
+    ...(browser === undefined ? [] : CUA_DRIVER_CLAIM_TOOLS),
+  ];
   const terminate = tools.includes("kill_app") ? ['      terminate: "driver_launched"'] : [];
   const app = (entry: CuaDriverAdmittedApp) => [
     typeof entry === "string"
@@ -409,6 +435,18 @@ export function cuaDriverCapabilityManifest(input: {
     "resources:",
     "  desktop:",
     "    display: true",
+    ...(browser === undefined
+      ? []
+      : [
+          "  browser:",
+          "    existing_profiles:",
+          ...browser.existingProfiles.flatMap(({ pid, windowId }) => [
+            "      - pid: " + pid,
+            "        window_id: " + windowId,
+          ]),
+          "    origins:",
+          ...browser.origins.map((origin) => "      - " + q(origin)),
+        ]),
     ...(input.applications.length === 0
       ? ["  apps: []"]
       : ["  apps:", ...input.applications.flatMap(app)]),
@@ -417,6 +455,69 @@ export function cuaDriverCapabilityManifest(input: {
     ...tools.map((tool) => "    - " + q(tool)),
     "",
   ].join("\n");
+}
+
+export interface CuaBrowserResources {
+  readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+  readonly origins: ReadonlyArray<string>;
+}
+
+/** Changes only the generated browser resource and its allow-list entries. */
+export function updateCuaDriverBrowserManifest(text: string, browser: CuaBrowserResources): string {
+  const generated = cuaDriverCapabilityManifest({
+    applications: [],
+    tools: [],
+    browserClaimsSupported: true,
+    browser,
+  });
+  const browserMatch = /^  browser:\n(?: {4,}[^\n]*\n)*/m;
+  const block = generated.match(browserMatch)?.[0] ?? "";
+  const withoutBrowser = text.replace(browserMatch, "");
+  const appMarker = /^  apps:(?: \[\])?\n/m;
+  if (!appMarker.test(withoutBrowser)) throw new Error("Manifest has no canonical apps section.");
+  let updated = withoutBrowser.replace(appMarker, (marker) => block + marker);
+  const toolSection = /^  tools:\n(?:    - [^\n]*\n)*/m;
+  const section = updated.match(toolSection)?.[0];
+  if (section === undefined) throw new Error("Manifest has no canonical tool list.");
+  const claimLines = new Set(CUA_DRIVER_CLAIM_TOOLS.map((tool) => `    - ${JSON.stringify(tool)}`));
+  const kept = section.split("\n").filter((line) => !claimLines.has(line));
+  if (kept.at(-1) === "") kept.pop();
+  if (block !== "") kept.push(...claimLines);
+  updated = updated.replace(toolSection, kept.join("\n") + "\n");
+  return updated;
+}
+
+interface BrowserManifestFiles {
+  readonly readFile: (path: string) => Promise<string>;
+  readonly writeFile: (path: string, text: string) => Promise<void>;
+  readonly rename: (from: string, to: string) => Promise<void>;
+  readonly remove: (path: string) => Promise<void>;
+}
+
+/** The temporary file shares the manifest directory, so rename replaces it atomically. */
+export async function publishCuaDriverBrowserManifest(
+  path: string,
+  browser: CuaBrowserResources,
+  files?: BrowserManifestFiles,
+): Promise<string> {
+  const { createHash, randomUUID } = await import("node:crypto");
+  const { dirname, join } = await import("node:path");
+  const fs = await import("node:fs/promises");
+  const io: BrowserManifestFiles = files ?? {
+    readFile: (name) => fs.readFile(name, "utf8"),
+    writeFile: (name, text) => fs.writeFile(name, text, { flag: "wx", mode: 0o600 }),
+    rename: fs.rename,
+    remove: (name) => fs.rm(name, { force: true }),
+  };
+  const text = updateCuaDriverBrowserManifest(await io.readFile(path), browser);
+  const temporary = join(dirname(path), `.manifest-${randomUUID()}.yaml`);
+  await io.writeFile(temporary, text);
+  try {
+    await io.rename(temporary, path);
+  } finally {
+    await io.remove(temporary);
+  }
+  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 const LIST_APPS_TIMEOUT_MS = 15_000;

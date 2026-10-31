@@ -773,7 +773,7 @@ describe("computer use lease route", () => {
         const received: Array<ComputerUseCallReservation> = [];
         const invocation: McpThreadInvocationScope = {
           environmentId: EnvironmentId.make("environment:test"),
-          capabilities: new Set(),
+          capabilities: new Set<never>(),
           issuedAt: 0,
           requestNamespace: "test",
           client: undefined,
@@ -857,7 +857,7 @@ describe("computer use lease route", () => {
         const received: Array<{ threadId: ThreadId; call: ComputerUseCallReservation }> = [];
         const invocation: McpThreadInvocationScope = {
           environmentId: EnvironmentId.make("environment:test"),
-          capabilities: new Set(),
+          capabilities: new Set<never>(),
           issuedAt: 0,
           requestNamespace: "test",
           client: undefined,
