@@ -563,6 +563,25 @@ const sites: ReadonlyArray<{
     ),
   },
   {
+    name: "ComputerUseLeaseProxyRefusal.foregroundBeforeScopeResolve",
+    undispatched: true,
+    run: proxyRefusal(
+      {
+        message: proxyMessage("click", { pid: 55, delivery_mode: "foreground" }),
+        apps: () => new Set(["approved"]),
+      },
+      "foreground_not_approved",
+    ),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.batchMissing",
+    undispatched: true,
+    run: proxyRefusal(
+      { message: proxyMessage("run_steps", { app_scope: { apps: ["missing"] }, steps: [] }) },
+      "app_not_allowed",
+    ),
+  },
+  {
     name: "ComputerUseLeaseProxyRefusal.scopeRefuse",
     undispatched: true,
     run: proxyRefusal(
