@@ -48,7 +48,9 @@ const finalize = (line: string, input: Input) => {
     { id: 1, method: "tools/call", params: { name: "list_apps" } },
     replaceWithTerminal("none", ...input.reasons),
   );
-  return replaceWithTerminal(terminalReplyState(parse(final.line)?.result, "not_started"));
+  const state = terminalReplyState(parse(final.line)?.result, "not_started");
+  assert.isTrue(state.terminalSafety);
+  return replaceWithTerminal(state);
 };
 
 const personFence = (reason: ComputerUseTerminalReason) => (input: Input) =>
@@ -484,6 +486,7 @@ const channelRefusal =
       }
       const answer = yield* Fiber.join(pending);
       if (answer._tag !== "Failure") return yield* Effect.die("expected channel refusal");
+      assert.equal(answer.failure.safety?.retryClass, "never");
       return replaceWithTerminal(answer.failure);
     });
 
