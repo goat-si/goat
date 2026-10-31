@@ -65,9 +65,11 @@ import {
   computerUseObservedApp,
   computerUseRun,
   computerUseRunStatus,
+  hasComputerUseHistory,
 } from "@goat/client-runtime/work-log/computer-use";
 import { ReplCodeText } from "./ReplCodeText";
 import { ThreadComputerUseCard } from "./ThreadComputerUseCard";
+import { ThreadComputerUseHistoryForItem } from "./ThreadComputerUseHistory";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { GoatWordmark } from "../../components/GoatWordmark";
@@ -914,7 +916,8 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
     row.projectedItem.item.type === "notification"
       ? notificationChildThreadId(row.projectedItem.item.source)
       : undefined;
-  const canExpand = row.canExpand && notifiedSubagentThreadId === undefined;
+  const hasHistory = hasComputerUseHistory(row.projectedItem.item);
+  const canExpand = (row.canExpand || hasHistory) && notifiedSubagentThreadId === undefined;
   const reasoning = row.projectedItem.item.type === "reasoning" ? row.projectedItem.item : null;
   const fetchedItem = fetchedDetail.data?.item ?? null;
   const isRead = toolGroupAction(row.workEntry) === "read";
@@ -1155,6 +1158,14 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
           status={computerUseRunStatus(row.workEntry.toolLifecycleStatus)}
           row={row.projectedItem}
           environmentId={props.environmentId}
+        />
+      ) : null}
+      {expanded && hasHistory && !computerUse ? (
+        <ThreadComputerUseHistoryForItem
+          key={`${props.environmentId}:${row.projectedItem.sourceThreadId}`}
+          environmentId={props.environmentId}
+          threadId={row.projectedItem.sourceThreadId}
+          item={row.projectedItem.item}
         />
       ) : null}
       {expanded &&

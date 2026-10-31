@@ -738,6 +738,34 @@ function v2Item(type: string, fields: Record<string, unknown>) {
   } as never;
 }
 
+it("shows input history for a browser-only work entry", async () => {
+  const item = {
+    id: "browser-action",
+    type: "dynamic_tool",
+    toolName: "goat.preview_click",
+    input: { selector: "button" },
+    output: { ok: true },
+  };
+  await using screen = await renderTimeline([
+    work("context-info", { label: "Session started", tone: "info" }),
+    work(item.id, {
+      runId: null,
+      label: item.toolName,
+      tone: "tool",
+      itemType: item.type,
+      toolTitle: item.toolName,
+      toolLifecycleStatus: "completed",
+      toolData: { input: item.input, output: item.output },
+      structuredPayload: v2Item("dynamic_tool", item),
+      projectedItem: v2Item("dynamic_tool", item),
+    }),
+  ]);
+  await click(screen.button(/^Received 1 update/));
+  await vi.waitFor(() => expect(screen.text()).toContain("Clicked in the preview browser"));
+  await click(screen.button(/preview/i));
+  expect(screen.text()).toContain("Show input history");
+});
+
 describe("GOAT MCP timeline tools", () => {
   it("renders GOAT MCP dynamic tools with their pretty name", async () => {
     const item = {

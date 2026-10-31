@@ -1,8 +1,58 @@
 import { expect, it, vi } from "vite-plus/test";
+import { EnvironmentId, OrchestrationV2TurnItemJson, ThreadId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+vi.mock(import("@effect/atom-react"), async (original) => ({
+  ...(await original()),
+  useAtomValue: () => true,
+}));
+vi.mock("@goat/client-runtime/state/computer-use-history", () => ({
+  createComputerUseHistoryCommand: () => ({ permissionAtom: () => null }),
+}));
+vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: null }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 import { createNativeMemoryHarness, renderNative } from "../../testing/memoryNativeHarness";
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 import { ThreadComputerUseHistoryView } from "./ThreadComputerUseHistoryView";
+import { ThreadComputerUseHistoryForItem } from "./ThreadComputerUseHistory";
+
+it("mounts input history for a browser-only work entry", async () => {
+  const item = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson)({
+    id: "browser-action",
+    type: "dynamic_tool",
+    threadId: "thread:a",
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+    parentItemId: null,
+    ordinal: 0,
+    status: "completed",
+    title: null,
+    toolName: "goat.preview_click",
+    input: {},
+    startedAt: null,
+    completedAt: null,
+    updatedAt: "2026-10-29T00:00:00.000Z",
+  });
+  const harness = createNativeMemoryHarness();
+  const view = renderNative(
+    harness,
+    <ThreadComputerUseHistoryForItem
+      item={item}
+      environmentId={EnvironmentId.make("environment:a")}
+      threadId={ThreadId.make("thread:a")}
+    />,
+  );
+  try {
+    await view.render();
+    expect(view.container.textContent).toContain("Show input history");
+  } finally {
+    await view.unmount();
+    harness.dispose();
+  }
+});
 
 it("loads and pages newest-first input history with refusal details", async () => {
   const base = {

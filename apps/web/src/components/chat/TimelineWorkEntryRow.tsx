@@ -28,6 +28,7 @@ import {
   computerUseObservedApp,
   computerUseRun,
   computerUseRunStatus,
+  hasComputerUseHistory,
 } from "@goat/client-runtime/work-log/computer-use";
 import { claudeSkillInvocation } from "@goat/shared/toolActivity";
 import { memo, use, useState, type KeyboardEvent } from "react";
@@ -55,6 +56,7 @@ import { formatUpcomingTimestamp } from "../../timestampFormat";
 import { FetchedToolOutput, V2ItemInspector, fileChangeDiffTarget } from "./V2ItemInspector";
 import { FileChangeInlineDiff } from "./FileChangeInlineDiff";
 import { ComputerUseRunCard } from "./ComputerUseRunCard";
+import { ComputerUseHistorySection } from "./ComputerUseHistorySection";
 import { fileChangeTargetPaths } from "@goat/client-runtime/work-log/file-change-diff";
 import { fileChangeRowLabel } from "./fileChangeInlineDiff.logic";
 import { fileChangeLineCounts } from "@goat/client-runtime/work-log/line-counts";
@@ -400,8 +402,10 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     plainOutput !== undefined &&
     workEntry.projectedItem !== undefined &&
     turnItemNeedsDetailFetch(workEntry.projectedItem.item);
+  const hasHistory = hasComputerUseHistory(workEntry.projectedItem?.item);
   const canExpandProjectedItem =
-    plainOutput !== undefined
+    hasHistory ||
+    (plainOutput !== undefined
       ? Boolean(plainOutput || viewedImage || workEntry.questionAnswer || plainOutputFetches)
       : workEntry.projectedItem === undefined
         ? canExpand
@@ -411,7 +415,7 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
               viewedImage ||
               workEntry.questionAnswer ||
               turnItemHasDetail(workEntry.projectedItem.item),
-            );
+            ));
   const iconWrapperClass = cn(
     "flex size-4 items-center justify-center",
     showWarningIndicator
@@ -623,6 +627,15 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
           projectedItem={workEntry.projectedItem}
           environmentId={ctx.activeThreadEnvironmentId}
         />
+      ) : null}
+      {expanded && hasHistory && !computerUse && workEntry.projectedItem ? (
+        <div className="ms-7 mt-1 mb-1.5">
+          <ComputerUseHistorySection
+            key={`${ctx.activeThreadEnvironmentId}:${workEntry.projectedItem.sourceThreadId}`}
+            environmentId={ctx.activeThreadEnvironmentId}
+            threadId={workEntry.projectedItem.sourceThreadId}
+          />
+        </div>
       ) : null}
       {expanded && viewedImage && threadRef ? (
         <WorkLogDetails kind="media">
