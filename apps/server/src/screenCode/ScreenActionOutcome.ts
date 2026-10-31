@@ -2,6 +2,7 @@ import type {
   ActionOutcomeSafety,
   ScreenEffectReceipt,
   ScreenHostCall,
+  ScreenHostReply,
   ScreenRunError,
   ScreenRunResult,
   ScreenJournalEntry,
@@ -80,6 +81,35 @@ export const callTerminalError = (
     call.args,
     dispatched || merged.possibleCommit,
   );
+};
+
+export const finalScreenReply = (
+  reply: ScreenHostReply | undefined,
+  call: ScreenHostCall,
+  cutoff: string | undefined,
+  journal: readonly ScreenJournalEntry[],
+): ScreenHostReply | undefined => {
+  if (reply === undefined) return undefined;
+  const existing = reply.error ?? { code: "stopped", effectStarted: false, nextStep: "Stopped." };
+  const possibleInput = journal.some(
+    (entry) =>
+      entry.receipt.callId === call.callId && entry.receipt.safety?.possibleCommit === true,
+  );
+  const terminal = callTerminalError(
+    { ...existing, effectStarted: existing.effectStarted || possibleInput },
+    cutoff,
+    call,
+    possibleInput,
+  );
+  if (terminal === undefined) return reply;
+  return {
+    t: "reply",
+    runId: reply.runId,
+    cellId: reply.cellId,
+    callId: reply.callId,
+    outcome: "error",
+    error: { ...existing, ...terminal },
+  };
 };
 
 // What a refused call says of itself; true of that call only, never of the cell around it.

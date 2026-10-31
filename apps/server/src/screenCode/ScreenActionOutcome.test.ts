@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import type { ScreenRunResult } from "@goat/contracts";
 
-import { cellResultSafety, cellTerminalError, screenActionSafety } from "./ScreenActionOutcome.ts";
+import {
+  cellResultSafety,
+  cellTerminalError,
+  screenActionSafety,
+  finalScreenReply,
+} from "./ScreenActionOutcome.ts";
 
 const result = (receipts: ScreenRunResult["journal"][number]["receipt"][]): ScreenRunResult => ({
   runId: "r",
@@ -51,4 +56,31 @@ it("a cell whose earlier write committed may have committed as a whole, so it is
   expect(
     cellResultSafety(result([receipt("tab_status", true), receipt("read_page", true)])).error,
   ).not.toHaveProperty("safety");
+});
+
+it("the final screen reply merges a late cutoff and preserves possible input", () => {
+  const call = {
+    t: "call",
+    runId: "r",
+    turnId: "t",
+    cellId: "c",
+    callId: 1,
+    method: "click",
+    args: {},
+    deadlineMillis: 1000,
+  } satisfies import("@goat/contracts").ScreenHostCall;
+  const reply = {
+    t: "reply",
+    runId: "r",
+    cellId: "c",
+    callId: 1,
+    outcome: "ok",
+  } satisfies import("@goat/contracts").ScreenHostReply;
+  const final = finalScreenReply(reply, call, "stopped_by_person", [
+    { sequence: 1, truncated: false, receipt: receipt("click", true) },
+  ]);
+  expect(final).toMatchObject({
+    outcome: "error",
+    error: { code: "stopped_by_person", safety: { retryClass: "never", possibleCommit: true } },
+  });
 });
