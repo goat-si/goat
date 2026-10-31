@@ -7253,6 +7253,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
             if (validatedMemory) yield* retainMemory(threadId, memoryContext!, turnInput);
             const start = threadStatuses.starting(threadId);
+            // Completion can remove the old context while turn/start is in flight.
+            const previousTurns = new Map([
+              ...(yield* Ref.get(settledTurns)),
+              ...(yield* Ref.get(activeTurns)),
+            ]);
             const started = yield* client
               .request("turn/start", turnStartParams)
               .pipe(Effect.tapError(() => Effect.sync(start.failed)));
@@ -7260,12 +7265,16 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             // Codex folds input into a turn that is still running. If that turn
             // belongs to another attempt, adopting it would leave this run
             // waiting on events routed to that attempt forever (#489).
-            const owner = (yield* Ref.get(activeTurns)).get(started.turn.id);
+            const owner =
+              previousTurns.get(started.turn.id) ??
+              (yield* Ref.get(activeTurns)).get(started.turn.id);
             if (owner !== undefined && owner.input.attemptId !== turnInput.attemptId) {
               return yield* toProtocolError(
                 `Codex continued native turn ${started.turn.id}, which still belongs to an earlier run. Stop that turn and retry.`,
               );
             }
+            if ((yield* Ref.get(pendingRootTurns)).get(threadId)?.attemptId !== turnInput.attemptId)
+              return;
             yield* registerRootTurn({
               turnInput,
               nativeTurnId: started.turn.id,
