@@ -221,7 +221,8 @@ export const reportLayer = HttpRouter.add(
         "browserClaimsSupported" in value
           ? value.browserClaimsSupported
             ? Effect.void
-            : grants.value.setDriverCapability(false)
+            : // Its own driver cannot scope origins: only this thread's claims end with it.
+              grants.value.stop(threadId)
           : grants.value.end(
               threadId,
               value.browserClaimEnded.claimId,
@@ -411,12 +412,20 @@ const callLayer = HttpRouter.add(
         encodeAdmission({ status: "refused", detail: "pointer_locked" }),
         { contentType: "application/json", headers: { "cache-control": "no-store" } },
       );
-    if (call.value.action === "reserve") {
+    // Judged again at validation, the proxy's last step before it sends: a claim can end while
+    // the proxy reports its input, and the proxy's own copy of its claims can trail that.
+    const judged =
+      call.value.action === "reserve"
+        ? call.value
+        : call.value.action === "validate"
+          ? yield* leases.reservedCall(threadId, call.value)
+          : undefined;
+    if (judged !== undefined) {
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const snapshot = Option.isSome(grants)
         ? yield* grants.value.snapshotFor(threadId)
         : { claims: [], bindings: [] };
-      if (!serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot))
+      if (!serverAdmitsBrowserCall(judged.name, judged.args, snapshot))
         return HttpServerResponse.text(
           encodeAdmission({ status: "refused", detail: "outside_manifest" }),
           { contentType: "application/json", headers: { "cache-control": "no-store" } },

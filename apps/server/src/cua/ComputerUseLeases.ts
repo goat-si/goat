@@ -204,6 +204,11 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       call: ComputerUseCallReservation,
     ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
+    /** The call a validation would confirm, as it was reserved; undefined for none. */
+    readonly reservedCall: (
+      threadId: ThreadId,
+      call: Extract<ComputerUseCallReservation, { action: "validate" }>,
+    ) => Effect.Effect<{ readonly name: string; readonly args: unknown } | undefined>;
     /** A control's proxy went away; the apps its calls leased are free at once (D17). */
     readonly releaseApps: (threadId: ThreadId, controlId: string) => Effect.Effect<void>;
     /** A lease stream for this control opened: its proxy is there (D17). */
@@ -724,6 +729,7 @@ const make = Effect.gen(function* () {
       settle,
     }),
     callReservation: calls.reserve,
+    reservedCall: (threadId, call) => Effect.sync(() => reservations.lookup(threadId, call)),
     releaseApps: calls.releaseApps,
     streamOpened: calls.streamOpened,
     appHolders: calls.appHolders,

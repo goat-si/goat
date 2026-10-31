@@ -109,6 +109,7 @@ describe("lease proxy cross-process primitive gate", () => {
               agentReports.push(report.state);
               return true;
             }),
+          reservedCall: () => Effect.succeed({ name: "click", args: {} }),
           setTarget: () => Effect.succeed(true),
           streamOpened: () => Effect.void,
           releaseApps: () => Effect.void,

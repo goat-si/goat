@@ -72,6 +72,7 @@ const fixture = Effect.fnUntraced(function* () {
     stop: () => Effect.die("unused"),
     setTarget: () => Effect.die("unused"),
     callReservation: () => Effect.die("unused"),
+    reservedCall: () => Effect.die("unused"),
     releaseApps: () => Effect.void,
     streamOpened: () => Effect.void,
     foregroundApprovalEpoch: Effect.die("unused"),
@@ -876,6 +877,7 @@ describe("computer use lease route", () => {
                     received.push({ threadId: owner, call });
                     return { status: "admitted", reservationId: "reservation:test" } as const;
                   }),
+                reservedCall: () => Effect.succeed({ name: "type_text", args: { pid: 42 } }),
               }),
             ),
           ),

@@ -131,6 +131,7 @@ const fixture = Effect.fnUntraced(function* (
     stop: () => unused,
     setTarget: () => unused,
     callReservation: () => unused,
+    reservedCall: () => unused,
     releaseApps: () => Effect.void,
     streamOpened: () => Effect.void,
     foregroundApprovalEpoch: unused,

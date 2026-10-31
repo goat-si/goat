@@ -104,31 +104,56 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     if (!manifestApplied(yield* deps.confirm(sha), sha))
       return yield* new BrowserManifestNotApplied();
   });
+  let writes = 0;
+  const confirming = new Set<Deferred.Deferred<void>>();
   const write = (value: Union) =>
-    writeLock.withPermits(1)(advance.pipe(Effect.andThen(deps.publish(value))));
+    writeLock.withPermits(1)(
+      Effect.sync(() => ++writes).pipe(
+        Effect.tap(() => advance),
+        Effect.flatMap((written) =>
+          deps.publish(value).pipe(Effect.map((sha) => ({ sha, written }))),
+        ),
+      ),
+    );
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
-    yield* confirm(yield* write(value));
+    yield* confirm((yield* write(value)).sha);
   });
-  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
-    const sha = yield* write(value);
-    // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
-    // restarted: its old browser windows and origins must not outlive the claims that named them.
-    yield* confirm(sha).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Browser manifest shrink was not confirmed; restarting the driver", {
+  /**
+   * Narrowing never fails or waits on the driver, but a driver that may keep a wider manifest is
+   * restarted so it stops counting. Only the latest write can be judged: a newer one carries its
+   * own confirmation, and its union already leaves out what this one removed.
+   */
+  const fenceUnless = (written: number | undefined, cause: unknown) =>
+    written !== undefined && written !== writes
+      ? Effect.void
+      : Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
           cause,
         }).pipe(
           Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
           Effect.flatMap((fenced) =>
-            fenced
-              ? Effect.void
-              : Effect.logError("Browser manifest shrink was not confirmed and no fence exists"),
+            fenced ? Effect.void : Effect.logError("No driver fence is available"),
           ),
+        );
+  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
+    const result = yield* write(value).pipe(Effect.result);
+    if (result._tag === "Failure") return yield* fenceUnless(undefined, result.failure);
+    const { sha, written } = result.success;
+    const done = yield* Deferred.make<void>();
+    confirming.add(done);
+    yield* confirm(sha).pipe(
+      Effect.catch((cause) => fenceUnless(written, cause)),
+      Effect.ensuring(
+        Effect.sync(() => confirming.delete(done)).pipe(
+          Effect.andThen(Deferred.succeed(done, undefined)),
         ),
       ),
       Effect.forkDetach({ startImmediately: true }),
     );
   });
+  /** Waits for every narrowing confirmation already started. */
+  const settled = Effect.suspend(() =>
+    Effect.forEach([...confirming], (done) => Deferred.await(done), { discard: true }),
+  );
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
   // The bind's driver target, kept off LiveTabClaim so people and agents never see it.
@@ -374,11 +399,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       return signals;
     });
     for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
-    yield* shrink(union()).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not publish stopped browser claims", { cause }),
-      ),
-    );
+    yield* shrink(union());
   });
   const end = Effect.fn("BrowserOriginGrants.end")(
     (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
@@ -486,6 +507,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     snapshotFor,
     claimsFor,
     claimedPids,
+    settled,
     revision: SubscriptionRef.get(version),
     changes: SubscriptionRef.changes(version),
   };

@@ -364,3 +364,92 @@ it.effect("restarts the driver when it will not confirm a narrower manifest", ()
     assert.deepEqual(yield* service.claimsFor(threadId), []);
   }),
 );
+
+const attachedGrants = (deps: {
+  readonly publish: (union: unknown) => Effect.Effect<string, Error>;
+  readonly confirm: (sha: string) => Effect.Effect<unknown, Error>;
+  readonly fence: () => Effect.Effect<boolean>;
+}) =>
+  Effect.gen(function* () {
+    const service = yield* makeUnconfirmedGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      ...deps,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target-1",
+          tabId: "tab-" + input.windowId,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    for (const windowId of [7, 8]) {
+      const request = yield* service.request({
+        threadId,
+        pid: 42,
+        windowId,
+        origin: windowId === 7 ? "https://example.test" : "https://other.test",
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return yield* Effect.die("expected pending request");
+      const answer = yield* service.answer(request.claimId, true);
+      if (answer.agentResult.status !== "attached") return yield* Effect.die("expected attached");
+    }
+    return { service, threadId };
+  });
+
+const applied = (sha: string) => ({
+  capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null },
+});
+
+it.effect("restarts the driver when a narrower manifest cannot be written", () =>
+  Effect.gen(function* () {
+    let failWrites = false;
+    let fences = 0;
+    const { service, threadId } = yield* attachedGrants({
+      publish: () =>
+        failWrites
+          ? Effect.fail(new ManifestConfirmationMismatch())
+          : Effect.succeed("c".repeat(64)),
+      confirm: (sha) => Effect.succeed(applied(sha)),
+      fence: () => Effect.sync(() => ++fences > 0),
+    });
+    failWrites = true;
+    yield* service.revoke(threadId, "https://example.test");
+    yield* service.settled;
+    assert.equal(fences, 1);
+    assert.lengthOf(yield* service.claimsFor(threadId), 1);
+  }),
+);
+
+it.effect("a narrowing superseded by a newer applied manifest does not restart the driver", () =>
+  Effect.gen(function* () {
+    let written = 0;
+    let fences = 0;
+    let holdFirstShrink = false;
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const { service, threadId } = yield* attachedGrants({
+      publish: () => Effect.sync(() => String(++written).padStart(64, "0")),
+      confirm: (sha) =>
+        holdFirstShrink && sha === String(written).padStart(64, "0") && written === 3
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              // By the time it reads the driver, a newer manifest is the one applied.
+              Effect.map(() => applied(String(written).padStart(64, "0"))),
+            )
+          : Effect.succeed(applied(sha)),
+      fence: () => Effect.sync(() => ++fences > 0),
+    });
+    holdFirstShrink = true;
+    yield* service.revoke(threadId, "https://example.test");
+    yield* Deferred.await(entered);
+    yield* service.revoke(threadId, "https://other.test");
+    yield* Deferred.succeed(release, undefined);
+    yield* service.settled;
+    assert.equal(fences, 0);
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
+  }),
+);
