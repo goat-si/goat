@@ -45,7 +45,19 @@ const __remember = (entry) => {
   __screenResults.push(entry);
   if (__screenResults.length > 64) __screenResults.shift();
 };
+// The bytes that leave are the bytes checked: a handle in them would reach no element.
+const __jsonCarriesHandle = (json) => {
+  let found = false;
+  JSON.parse(json, (key, value) => {
+    if (key === 'elementHandle') found = true;
+    return value;
+  });
+  return found;
+};
+const __handleRefusal = () =>
+  new ScreenError('stale_reference', 'Pass an element handle from obs.ref(n) itself as the target argument; a copy, or a handle anywhere else, is refused and nothing was sent.', true);
 const __sendJson = async (method, json) => {
+  if (json !== undefined && __jsonCarriesHandle(json)) throw __handleRefusal();
   let out;
   try { out = await __host(method, json); }
   catch (raw) { throw __error(raw); }
@@ -72,6 +84,10 @@ const __flush = () => {
       jsons = group.map((entry, index) =>
         JSON.stringify([group.length > 1 ? { ...entry.arg, batch: { index, size: group.length } } : entry.arg]));
     } catch (raw) { for (const entry of group) entry.reject(__error(raw)); continue; }
+    if (jsons.some((json) => json !== undefined && __jsonCarriesHandle(json))) {
+      for (const entry of group) entry.reject(__handleRefusal());
+      continue;
+    }
     if (group.length > 1) {
       const admitted = __hostGroup(JSON.stringify(group.map((entry, index) => [entry.method, jsons[index]])));
       if (admitted !== true) {
@@ -82,24 +98,45 @@ const __flush = () => {
     group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
   }
 };
-// A used handle has already become its ref, so one anywhere in outgoing arguments, own or inherited, would reach no element.
-const __carriesHandle = (root) => {
+// Arguments are plain data, so what is checked is what gets sent: no accessors, hidden or symbol
+// keys, functions or class instances. A handle is accepted only where handleOk says, as a whole value.
+const __argProblem = (root, handleOk) => {
   const seen = new Set();
-  const pending = [root];
+  const pending = [[root, handleOk]];
   while (pending.length > 0) {
-    const value = pending.pop();
+    const [value, allowed] = pending.pop();
+    if (typeof value === 'function' || typeof value === 'symbol') return 'shape';
     if (value === null || typeof value !== 'object' || seen.has(value)) continue;
-    // Arguments too large to check are refused rather than sent unchecked.
-    if (seen.size >= 10000 || 'elementHandle' in value) return true;
+    if (__handles.has(value)) {
+      if (allowed) continue;
+      return 'handle';
+    }
+    if ('elementHandle' in value) return 'handle';
+    if (seen.size >= 10000) return 'shape';
     seen.add(value);
-    for (const each of Array.isArray(value) ? value : Object.values(value)) pending.push(each);
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== Array.prototype && proto !== null) return 'shape';
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key === 'symbol') return 'shape';
+      if (key === 'elementHandle') return 'handle';
+      const field = Object.getOwnPropertyDescriptor(value, key);
+      if (!('value' in field)) return 'shape';
+      if (!field.enumerable && !(Array.isArray(value) && key === 'length')) return 'shape';
+      pending.push([field.value, false]);
+    }
   }
-  return false;
+  return undefined;
 };
-const __refuseHandles = (value) => {
-  if (__carriesHandle(value))
-    throw new ScreenError('stale_reference', 'Pass an element handle as the target argument itself; nothing was sent.', true);
+const __checkArgs = (args, targetSlots = []) => {
+  for (let index = 0; index < args.length; index++) {
+    const problem = __argProblem(args[index], targetSlots.includes(index));
+    if (problem === 'handle')
+      throw new ScreenError('stale_reference', 'Pass an element handle from obs.ref(n) itself as the target argument; a copy, or a handle anywhere else, is refused and nothing was sent.', true);
+    if (problem === 'shape')
+      throw new ScreenError('invalid_argument', 'Arguments are plain data: objects, arrays, strings, numbers and booleans, without getters, functions or class instances; nothing was sent.', true);
+  }
 };
+const __refuseHandles = (value) => __checkArgs([value]);
 const __reply = (method, args) => {
   __refuseHandles(args);
   if (__queued.length > 0) __flush();
@@ -631,14 +668,26 @@ const __target = (binding, note, owner, extraProps = {}) => {
     bringToFront: () => call('bring_to_front'),
     endForeground: () => call('end_foreground'),
   };
-  // A handle counts only as a whole argument: any other one, a copy or one inside options, is refused before normalizing could drop it.
+  // Each method's arguments are checked before normalizing could drop anything; a handle only fills a target slot.
+  const targetSlots = { click: [0], hover: [0], type: [1], press: [1], scroll: [0], setValue: [0], drag: [0, 1], selectText: [0], fillSecret: [0], upload: [0] };
   for (const key of Object.keys(surface)) {
     const method = surface[key];
     if (typeof method !== 'function') continue;
     surface[key] = (...args) => {
-      if (args.some((arg) => !(arg !== null && typeof arg === 'object' && __handles.has(arg)) && __carriesHandle(arg)))
-        throw new ScreenError('stale_reference', 'Pass an element handle from obs.ref(n) itself as the target argument; a copy or a handle inside other arguments is refused, and nothing was sent.', true);
-      return method(...args);
+      // Methods see a JSON snapshot of every other argument, so nothing can change or hide between check and send.
+      const slots = targetSlots[key] ?? [];
+      __checkArgs(args, slots);
+      const plain = args.map((arg, index) => {
+        if (arg === null || typeof arg !== 'object') return arg;
+        if (__handles.has(arg) && slots.includes(index)) return arg;
+        let copy;
+        try { copy = JSON.parse(JSON.stringify(arg)); }
+        catch { throw new ScreenError('invalid_argument', 'Arguments are plain data that JSON can carry; nothing was sent.', true); }
+        if (__handles.has(arg) || 'elementHandle' in arg || (copy !== null && typeof copy === 'object' && __argProblem(copy, false) === 'handle')) throw __handleRefusal();
+        return copy;
+      });
+      __checkArgs(plain, slots);
+      return method(...plain);
     };
   }
   Object.defineProperties(surface, {

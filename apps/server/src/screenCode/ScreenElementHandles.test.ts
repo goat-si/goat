@@ -198,15 +198,34 @@ it.live("a handle nested in any outgoing call is refused before it reaches the h
           () => app.press('b', { verify: held }),
           () => app.press('c', { verify: { ...held } }),
           () => app.type('x', undefined, { replace: { ...held } }),
+          () => app.press('Enter', Object.create({ verify: held })),
+          () => { const bag = {}; Object.defineProperty(bag, 'verify', { value: held }); return app.press('Enter', bag); },
+          () => { const pt = [4, 5]; pt.bag = held; return app.click(pt); },
+          () => { const fn = () => 1; fn.h = held; return app.pressKey({ key: 'a', fn }); },
+          () => app.pressKey(new Map([['h', held]])),
+          () => { let reads = 0; const bag = { key: 'a', targetRef: app.targetRef }; Object.defineProperty(bag, 'x', { enumerable: true, get: () => (reads++ ? { elementHandle: 'smuggled' } : { ok: 1 }) }); return screen.press_key(bag); },
+          () => app.scroll(1, held),
+          () => app.scroll('Save', held),
+          () => {
+            let reads = 0;
+            const disguised = new Proxy({ key: 'Enter', targetRef: app.targetRef, elementHandle: 'o1:1' }, {
+              has: (t, k) => k === 'elementHandle' ? false : k in t,
+              ownKeys: (t) => reads++ < 1 ? ['key', 'targetRef'] : Reflect.ownKeys(t),
+            });
+            return screen.press_key(disguised);
+          },
+          () => app.press('Enter', new Proxy({ verify: { ...held } }, { getPrototypeOf: () => Object.prototype })),
         ])
           try { await send(); outcome.push('sent'); } catch (e) { outcome.push([e.code, e.nothingSent]); }
-        return outcome;`,
+        return outcome.map((each) => Array.isArray(each) ? [each[0] === 'stale_reference' || each[0] === 'invalid_argument', each[1]] : each);`,
     });
     expect(result).toMatchObject({
       status: "completed",
-      value: Array.from({ length: 10 }, () => ["stale_reference", true]),
+      value: Array.from({ length: 20 }, () => [true, true]),
     });
-    expect(sent.filter((entry) => ["press_key", "type_text"].includes(entry.tool))).toHaveLength(0);
+    expect(
+      sent.filter((entry) => ["press_key", "type_text", "scroll"].includes(entry.tool)),
+    ).toHaveLength(0);
   }).pipe(
     Effect.provide(
       ScreenRunService.layerWithRuntime({
