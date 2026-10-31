@@ -191,6 +191,9 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
 export const make = Effect.gen(function* () {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const attachments = new Map<ThreadId, Attachment>();
+  const waitingEpochs = new Map<string, Map<Control["epoch"], number>>();
+  const waitingKey = (threadId: ThreadId, controlId: string) =>
+    JSON.stringify([threadId, controlId]);
   const threadTokens = new Map<ThreadId, string>();
   // Completed and replaced whenever a binding, a registration or a control changes, so a call
   // waiting for a driver re-checks at once, including when its proxy goes away.
@@ -315,9 +318,11 @@ export const make = Effect.gen(function* () {
   };
   const unsubscribe = leases.onAuthorityChange?.((change) => {
     if (change.terminal === undefined) return;
+    for (const epoch of waitingEpochs.get(waitingKey(change.threadId, change.controlId))?.keys() ??
+      [])
+      epoch.reason = change.terminal;
     const registered = attachments.get(change.threadId)?.registration;
-    if (registered === undefined) return;
-    latch(control(registered, change.controlId), change.terminal);
+    if (registered !== undefined) latch(control(registered, change.controlId), change.terminal);
     wake();
   });
   if (unsubscribe !== undefined) yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
@@ -692,8 +697,18 @@ export const make = Effect.gen(function* () {
       let now = started;
       // The call belongs to the control it began under; a successor never inherits it.
       let began: string | undefined;
-      let beganRecord: Control | undefined;
       let beganEpoch: Control["epoch"] | undefined;
+      let retainedKey: string | undefined;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (retainedKey === undefined || beganEpoch === undefined) return;
+          const waiters = waitingEpochs.get(retainedKey);
+          const count = waiters?.get(beganEpoch) ?? 0;
+          if (count > 1) waiters?.set(beganEpoch, count - 1);
+          else waiters?.delete(beganEpoch);
+          if (waiters?.size === 0) waitingEpochs.delete(retainedKey);
+        }),
+      );
       // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
@@ -722,21 +737,29 @@ export const make = Effect.gen(function* () {
         }
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(
-            terminalFailure(terminalReason(beganRecord?.terminal), input.tool, input.args) ??
+            terminalFailure(terminalReason(beganEpoch?.reason), input.tool, input.args) ??
               desktopNotReady("none"),
           );
         began ??= current.controlId;
         if (current.controlId !== began)
           return yield* Effect.fail(
-            terminalFailure(terminalReason(beganRecord?.terminal), input.tool, input.args) ??
+            terminalFailure(terminalReason(beganEpoch?.reason), input.tool, input.args) ??
               desktopNotReady("unbound"),
           );
         const value = attachments.get(input.threadId);
         const registered = value?.registration;
         const record =
           registered === undefined ? undefined : control(registered, current.controlId);
-        beganRecord ??= record;
-        beganEpoch ??= record?.epoch;
+        if (beganEpoch === undefined && record !== undefined) {
+          beganEpoch = record.epoch;
+          retainedKey = waitingKey(input.threadId, current.controlId);
+          let waiters = waitingEpochs.get(retainedKey);
+          if (waiters === undefined) {
+            waiters = new Map();
+            waitingEpochs.set(retainedKey, waiters);
+          }
+          waiters.set(beganEpoch, (waiters.get(beganEpoch) ?? 0) + 1);
+        }
         const capturedFailure = terminalFailure(
           terminalReason(beganEpoch?.reason),
           input.tool,
@@ -772,7 +795,7 @@ export const make = Effect.gen(function* () {
         )
           return yield* Effect.fail(
             terminalFailure(
-              terminalReason(record?.terminal ?? beganRecord?.terminal),
+              terminalReason(record?.terminal ?? beganEpoch?.reason),
               input.tool,
               input.args,
             ) ?? desktopNotReady("unbound"),
@@ -780,7 +803,7 @@ export const make = Effect.gen(function* () {
         yield* Deferred.await(changed).pipe(Effect.timeoutOption(waitUntil - now));
         now = yield* Clock.currentTimeMillis;
       }
-    }),
+    }, Effect.scoped),
     reply: Effect.fn("ComputerUsePrimitiveChannel.reply")((input) =>
       Clock.currentTimeMillis.pipe(
         Effect.map((now) => {

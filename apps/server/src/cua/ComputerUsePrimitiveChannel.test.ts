@@ -6,6 +6,7 @@ import {
   type ComputerUsePrimitiveRequest,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -84,6 +85,7 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
   readonly before?: (
     channel: PrimitiveChannel.ComputerUsePrimitiveChannel["Service"],
   ) => Effect.Effect<void>;
+  readonly onStateRead?: () => Effect.Effect<void>;
 }) {
   const signals = yield* PubSub.unbounded<void>();
   let state: TurnState = { _tag: "active" };
@@ -101,7 +103,12 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
             : { controlId: liveControlId },
         ),
       ),
-    controlState: () => Effect.sync(() => state),
+    controlState: () =>
+      Effect.gen(function* () {
+        const captured = state;
+        yield* options?.onStateRead?.() ?? Effect.void;
+        return captured;
+      }),
     subscribe: PubSub.subscribe(signals),
     onAuthorityChange: (listener: typeof notify) => {
       notify = listener;
@@ -152,6 +159,31 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("an unbound waiter sees Stop after its registration closes", () =>
+    Effect.gen(function* () {
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hold = false;
+      const f = yield* turnFixture({
+        onStateRead: () =>
+          hold
+            ? Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      });
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+      const pending = yield* f
+        .request()
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+      hold = true;
+      yield* f.channel.closeStream({ threadId, registrationId: f.registration.registrationId });
+      yield* Deferred.await(reading);
+      f.stopAuthority();
+      yield* Deferred.succeed(release, undefined);
+      const answer = yield* Fiber.join(pending);
+      assert.equal(answer._tag, "Failure");
+      if (answer._tag === "Failure") assert.equal(answer.failure.code, "stopped_by_person");
+    }),
+  );
   it.effect("an unbound call retains its control's stop when another control binds", () =>
     Effect.gen(function* () {
       const f = yield* turnFixture();
