@@ -1,6 +1,7 @@
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
 import { settingsLayers } from "./serverSettingsLayers.ts";
+import { cleanAllowedApps, rejectProtectedAllowedApps } from "./serverSettingsAllowedApps.ts";
 import * as HubConnectAccess from "./auth/HubConnectAccess.ts";
 import {
   DEFAULT_SERVER_SETTINGS as CLIENT_DEFAULT_SERVER_SETTINGS,
@@ -39,7 +40,6 @@ import {
   withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
-import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -176,30 +176,6 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
     providerInstances: providerInstances as ServerSettings["providerInstances"],
   };
 };
-
-const cleanAllowedApps = (settings: ServerSettings): ServerSettings => {
-  const seen = new Set<string>();
-  return {
-    ...settings,
-    cuaAllowedApps: settings.cuaAllowedApps.filter((app) => {
-      const key = cuaAppKey(app);
-      if (isExcludedCuaApplication(app) || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }),
-  };
-};
-
-const rejectProtectedAllowedApps = (settings: ServerSettings) =>
-  settings.cuaAllowedApps.some(isExcludedCuaApplication)
-    ? Effect.fail(
-        new ServerSettingsError({
-          settingsPath: "<memory>",
-          operation: "normalize",
-          reason: "A protected app cannot be always allowed.",
-        }),
-      )
-    : Effect.void;
 
 const normalizeServerSettings = (
   settings: ServerSettings,
