@@ -11,6 +11,7 @@ import { finalTerminalLine, terminalSink } from "./ComputerUseLeaseProxyPersonSt
 import { forwardPrimitiveRequests } from "./ComputerUseLeaseProxyOptions.ts";
 import { call } from "./ComputerUseLeaseProxy.testkit.ts";
 import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
+import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import {
   replaceWithTerminal,
   terminalReplyState,
@@ -18,6 +19,50 @@ import {
 } from "./ComputerUseTerminal.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
+
+const finalize = (line: string, input: Input) => {
+  const final = finalTerminalLine(
+    line,
+    "not_started",
+    { id: 1, method: "tools/call", params: { name: "list_apps" } },
+    replaceWithTerminal("none", ...input.reasons),
+  );
+  return replaceWithTerminal(terminalReplyState(parse(final.line)?.result, "not_started"));
+};
+
+const automation = (kind: "finished" | "paused") => (input: Input) =>
+  Effect.gen(function* () {
+    let listed = false;
+    const line = yield* refuseProxyCall({
+      id: 1,
+      message:
+        parse(
+          JSON.stringify({
+            id: 1,
+            method: "tools/call",
+            params: { name: "invoke_menu", arguments: {} },
+          }),
+        ) ?? {},
+      claimPid: 55,
+      finished: () => (listed && kind === "finished" ? "expired" : undefined),
+      paused: () => (listed && kind === "paused" ? "screen_locked" : undefined),
+      idle: () => false,
+      apps: () => undefined,
+      listed: new Map([[55, { id: "app", name: "App" }]]),
+      host: { bundleIds: false },
+      shared: () => false,
+      toFile: () => undefined,
+      tokenFirstRefuses: () => false,
+      foreground: () => [],
+      listApps: Effect.sync(() => {
+        listed = true;
+      }),
+      automationTargets: true,
+    });
+    if (line === undefined) return yield* Effect.die("expected automation target refusal");
+    assert.include(line, kind === "finished" ? '"detail":"expired"' : '"detail":"screen_locked"');
+    return finalize(line, input);
+  });
 
 const unsupported = (kind: "batch" | "point") => (input: Input) =>
   Effect.gen(function* () {
@@ -179,6 +224,16 @@ const retiredPrimitive = (input: Input) =>
   });
 
 export const preDispatchSites = [
+  {
+    name: "ComputerUseLeaseProxyRefusal.automationFinished",
+    undispatched: true,
+    run: automation("finished"),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.automationPaused",
+    undispatched: true,
+    run: automation("paused"),
+  },
   {
     name: "ComputerUseLeaseProxyThread.retiredPrimitive",
     undispatched: true,
