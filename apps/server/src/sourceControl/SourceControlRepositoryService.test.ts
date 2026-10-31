@@ -399,8 +399,8 @@ it.effect.each([
       token === "abc@secret"
         ? "https://github.com"
         : token === "path-token"
-          ? "https://github.com/octocat/t3code's.git"
-          : "https://github.com/octocat/t3code.git";
+          ? "https://github.com/octocat/goat's.git"
+          : "https://github.com/octocat/goat.git";
     const error = yield* Effect.flip(
       cloneInTemporaryDirectory(
         {

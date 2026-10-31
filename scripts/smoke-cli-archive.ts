@@ -201,7 +201,7 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
       (yield* fs.realPath(loaded)) !== (yield* fs.realPath(bundledLibatomic))
     ) {
       return yield* new CliArchiveSmokeError({
-        step: "checking that t3 loads the bundled libatomic",
+        step: "checking that goat loads the bundled libatomic",
         detail: ldd,
       });
     }
