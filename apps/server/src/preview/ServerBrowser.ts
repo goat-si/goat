@@ -1749,7 +1749,10 @@ const make = Effect.gen(function* () {
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
-      await resolveDialog(tab, input as PreviewAutomationDialogInput);
+      const dialog = input as PreviewAutomationDialogInput;
+      await recordAction(tab, "dialog", () => resolveDialog(tab, dialog), {
+        ...(dialog.promptText === undefined ? {} : { typedText: dialog.promptText }),
+      });
       return statusWithTitle(tab, request.agentSessionId);
     }
     const agentSessionId = request.agentSessionId!;
@@ -1967,10 +1970,12 @@ const make = Effect.gen(function* () {
           ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, actionGate()),
         );
       case "evaluate":
-        return ServerBrowserPage.evaluate(
-          tab,
-          input as PreviewAutomationEvaluateInput,
-          request.timeoutMs,
+        return recordAction(tab, "evaluate", () =>
+          ServerBrowserPage.evaluate(
+            tab,
+            input as PreviewAutomationEvaluateInput,
+            request.timeoutMs,
+          ),
         );
       case "waitFor":
         return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(

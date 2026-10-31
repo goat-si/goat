@@ -1,4 +1,5 @@
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -1231,6 +1232,14 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
       expect(page.goto).toHaveBeenCalledTimes(1);
       yield* broker.invoke({ scope, tabId, operation: "dialog", input: { accept: true } });
       expect(yield* Fiber.join(blockedAction)).toBe(true);
+      const history = yield* makeComputerUseHistory;
+      const entries = yield* history.listForThread(scope.thread.threadId);
+      expect(
+        entries.some((entry) => entry.method === "evaluate" && entry.tabHost === "localhost"),
+      ).toBe(true);
+      expect(
+        entries.some((entry) => entry.method === "dialog" && entry.tabHost === "localhost"),
+      ).toBe(true);
       expect(dialog.accept).toHaveBeenCalledTimes(1);
       const resolved = yield* broker.invoke<PreviewAutomationStatus>({
         scope,
