@@ -659,18 +659,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (decoded.kind === "invalid") return yield* rawSink.answer(decoded.response);
     let message = decoded.message;
     let dispatched = false;
-    const sink = terminalSink(
-      rawSink,
-      message,
-      () =>
-        personStop.terminal() ??
-        (paused === "screen_locked"
-          ? "screen_locked"
-          : finished === "stopped" || finished === "stopped_all"
-            ? "stopped_by_person"
-            : undefined),
-      () => dispatched,
-    );
+    const sink = terminalSink(rawSink, message, personStop.terminal, () => dispatched);
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
