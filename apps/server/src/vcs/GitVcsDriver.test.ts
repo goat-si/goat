@@ -1421,7 +1421,7 @@ it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-newline-repo-" });
+      const parent = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-newline-repo-" });
       const cwd = path.join(parent, "multi\nline");
       yield* fileSystem.makeDirectory(cwd);
       yield* runGit(cwd, ["init"]);

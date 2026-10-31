@@ -638,7 +638,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     "publishes local Git changes during a held PR lookup without caching its old branch",
     () =>
       Effect.gen(function* () {
-        const repoDir = yield* makeTempDir("t3code-refresh-status-gh-gate-");
+        const repoDir = yield* makeTempDir("goat-refresh-status-gh-gate-");
         yield* initRepo(repoDir);
         yield* runGit(repoDir, ["checkout", "-b", "release"]);
         const remoteDir = yield* createBareRemote();
@@ -2595,7 +2595,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("uses an explicit project's provider settings for generated commit text", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\nproject\n");
       const projectId = ProjectId.make("project:git-action-settings");

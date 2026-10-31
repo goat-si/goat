@@ -357,7 +357,7 @@ for (const { layout, pathNames, fallbackNames, expected } of [
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-zed-linux-" });
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-zed-linux-" });
       const binDir = path.join(home, "bin");
       const fallbackDir = path.join(home, ".local/bin");
       for (const [dir, names] of [
@@ -401,7 +401,7 @@ it.effect.skipIf(windowsHost)("prefers zeditor in a later Linux fallback directo
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-zed-fallback-" });
+    const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-zed-fallback-" });
     const localBin = path.join(home, ".local/bin");
     const systemBin = path.join(home, "system-bin");
     for (const [dir, name] of [
