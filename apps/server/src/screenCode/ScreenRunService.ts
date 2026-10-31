@@ -57,10 +57,8 @@ import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset, screenRuntimeLayout } from "./ScreenRuntimeAsset.ts";
 import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
-
 const isScreenTargetRef = Schema.is(ScreenTargetRef);
 const OPEN_RUN = new Set(["preparing", "queued", "starting", "running", "waiting"]);
-
 export interface ScreenRunInput {
   readonly runId: string;
   readonly turnId: string;
@@ -72,13 +70,11 @@ export interface ScreenRunInput {
   readonly limits?: Partial<ScreenRunLimits>;
   readonly bindingHints?: ScreenBindingHints;
 }
-
 const fail = (code: ScreenRunError["code"]): ScreenRunError => ({
   code,
   effectStarted: false,
   nextStep: "Refresh the screen run and retry if appropriate.",
 });
-
 export class ScreenRunService extends Context.Service<
   ScreenRunService,
   {
@@ -146,12 +142,10 @@ export class ScreenRunService extends Context.Service<
   static readonly layerWithRuntime = (options: ScreenRuntimeOptions) =>
     Layer.effect(this, make(options));
 }
-
 type PreviewTargetHost =
   ReturnType<typeof makePreviewTargetHost> extends Effect.Effect<infer A, infer _E, infer _R>
     ? A
     : never;
-
 export function layerWithTabHost() {
   return Layer.effect(
     ScreenRunService,
@@ -185,7 +179,6 @@ export function layerWithTabHost() {
     }),
   );
 }
-
 interface ScreenRuntimeOptions {
   readonly primitiveChannel?: ComputerUsePrimitiveChannel["Service"];
   readonly leases?: ComputerUseLeases["Service"];
