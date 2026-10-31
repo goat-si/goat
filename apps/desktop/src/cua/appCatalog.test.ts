@@ -8,7 +8,12 @@ describe("computer use app catalog", () => {
     assert.deepEqual(
       await catalog(
         [
-          { bundle_id: "com.example.App", name: "App", executable: "C:\\Shared\\host.exe" },
+          {
+            bundle_id: "com.example.App",
+            name: "App",
+            executable: "C:\\Shared\\host.exe",
+            bundle_executable: "C:\\Shared\\bundle.exe",
+          },
           { bundle_id: "com.example.App", name: "App", executable: "C:\\Shared\\other.exe" },
         ],
         [],
@@ -17,7 +22,7 @@ describe("computer use app catalog", () => {
         {
           id: "com.example.App",
           name: "App",
-          executables: ["C:\\Shared\\host.exe", "C:\\Shared\\other.exe"],
+          executables: ["C:\\Shared\\host.exe", "C:\\Shared\\bundle.exe", "C:\\Shared\\other.exe"],
         },
       ],
     );

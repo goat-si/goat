@@ -39,16 +39,19 @@ export function makeAppCatalog(readIcons: AppIconReader) {
     for (const app of listed) {
       const id = app.bundle_id?.trim() || app.executable?.trim() || "";
       if (!id || !cuaRequestableApps([app], hostBundleIds).includes(id)) continue;
-      const executable = app.executable?.trim() || app.bundle_executable?.trim() || undefined;
+      const executables = [app.executable?.trim(), app.bundle_executable?.trim()].filter(
+        (value): value is string => Boolean(value),
+      );
+      const executable = executables[0];
       const existing = entries.get(id);
       if (existing !== undefined) {
-        if (executable !== undefined) existing.executables.add(executable);
+        for (const alias of executables) existing.executables.add(alias);
         continue;
       }
       entries.set(id, {
         name: app.name?.trim() || id,
         executable,
-        executables: new Set(executable === undefined ? [] : [executable]),
+        executables: new Set(executables),
       });
     }
     const sorted = [...entries]
