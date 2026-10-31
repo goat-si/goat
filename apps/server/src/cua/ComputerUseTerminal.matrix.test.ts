@@ -66,6 +66,7 @@ import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
+import { preDispatchSites } from "./ComputerUseTerminal.preDispatch.testkit.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -606,6 +607,7 @@ const sites: ReadonlyArray<{
   readonly run: Driver;
   readonly undispatched?: boolean;
 }> = [
+  ...preDispatchSites,
   { name: "ComputerUseLeaseProxyPersonStop.refusal", undispatched: true, run: personFence },
   {
     name: "ComputerUseBatchIdentity.unverifiable",
