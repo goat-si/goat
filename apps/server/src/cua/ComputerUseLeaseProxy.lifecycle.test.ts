@@ -621,3 +621,64 @@ describe("a full access grant follows its control's later expiry", () => {
       }),
   );
 });
+
+it.effect.each(["escape", "lock"] as const)("reservation refusal cannot overwrite %s", (kind) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness({
+      personStop: true,
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }))
+          : Effect.succeed({ status: "released" }),
+    });
+    yield* h.push(active());
+    yield* h.driverStarted;
+    yield* h.send(call(908, "list_apps"));
+    const reservation = yield* h.nextReservation;
+    assert.equal(reservation.action, "reserve");
+    if (kind === "escape") {
+      yield* h.escape;
+      yield* h.escapeReported;
+    } else yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+    yield* h.killed;
+    yield* Deferred.succeed(gate, undefined);
+    const answer = yield* h.nextToProvider;
+    assert.include(
+      JSON.stringify(answer),
+      kind === "escape" ? "stopped_by_person" : "screen_locked",
+    );
+  }),
+);
+
+it.effect.each(["escape", "lock"] as const)("validation refusal cannot overwrite %s", (kind) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness({
+      personStop: true,
+      humanInput: true,
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Effect.succeed({ status: "admitted", reservationId: "ticket:one" })
+          : request.action === "validate"
+            ? Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }))
+            : Effect.succeed({ status: "released" }),
+    });
+    yield* h.push(active());
+    yield* h.driverStarted;
+    yield* h.send(call(909, "click", { pid: 4, window_id: 9, x: 1, y: 1 }));
+    yield* h.nextValidation;
+    if (kind === "escape") {
+      yield* h.escape;
+      yield* h.escapeReported;
+    } else yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+    yield* h.killed;
+    yield* Deferred.succeed(gate, undefined);
+    const answer = yield* h.nextToProvider;
+    assert.include(
+      JSON.stringify(answer),
+      kind === "escape" ? "stopped_by_person" : "screen_locked",
+    );
+    assert.include(JSON.stringify(answer), '"retryClass":"never"');
+  }),
+);

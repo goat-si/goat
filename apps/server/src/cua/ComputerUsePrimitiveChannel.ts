@@ -28,6 +28,7 @@ import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.
 import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import { terminalReason, type ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
 
 const resultOf = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }));
 
@@ -49,6 +50,7 @@ interface Pending {
   readonly request: ComputerUsePrimitiveRequest;
   readonly answer: Deferred.Deferred<ComputerUsePrimitiveReply>;
   sent: boolean;
+  terminal?: ComputerUseTerminalReason;
   /** When its answer reached the server; a loaded server may resume the caller later. */
   answeredAt?: number;
 }
@@ -199,8 +201,10 @@ export const make = Effect.gen(function* () {
     changed = Deferred.makeUnsafe<void>();
     Deferred.doneUnsafe(waiting, Exit.void);
   };
-  const settle = (pending: Pending, terminal?: Control["terminal"]) =>
-    Deferred.doneUnsafe(
+  const settle = (pending: Pending, terminal?: Control["terminal"]) => {
+    pending.terminal ??= terminalReason(terminal);
+    terminal = terminalReason(pending.terminal);
+    return Deferred.doneUnsafe(
       pending.answer,
       Exit.succeed({
         ...pending.request,
@@ -232,6 +236,7 @@ export const make = Effect.gen(function* () {
             }),
       }),
     );
+  };
   const cancelDelivered = (registration: Registration, pending: Pending) => {
     if (pending.sent)
       Queue.offerUnsafe(registration.cancellations, {
@@ -431,7 +436,10 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.filterOrFail(
-        ({ answered, at }) => at <= deadlineMillis || answered.status === "not_started",
+        ({ answered, at }) =>
+          terminalReason(pending.terminal) !== undefined ||
+          at <= deadlineMillis ||
+          answered.status === "not_started",
         deadlineFailure,
       ),
       Effect.map(({ answered }) =>
@@ -659,11 +667,15 @@ export const make = Effect.gen(function* () {
           const record = attachments
             .get(input.threadId)
             ?.registration?.controls.get(current.controlId);
+          const state = yield* leases
+            .controlState(input.threadId, current.controlId)
+            .pipe(Effect.option);
           const terminal =
-            record?.terminal ??
-            (current.ended === "stopped" || current.ended === "stopped_all"
-              ? "stopped_by_person"
-              : undefined);
+            terminalReason(record?.terminal, Option.getOrUndefined(state)) ??
+            terminalReason(
+              undefined,
+              current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+            );
           if (terminal !== undefined)
             return yield* Effect.fail({
               code: terminal,

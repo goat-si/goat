@@ -2,6 +2,7 @@ import type { ComputerUseLeaseUpdate, ComputerUsePauseReason } from "@goat/contr
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 
 import { driverScreenLocked } from "./ComputerUseDriverOutcome.ts";
 import {
@@ -9,7 +10,60 @@ import {
   PAUSE_MESSAGES,
   type Interruption,
 } from "./ComputerUseLeaseMessages.ts";
-import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import type { ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
+import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
+import { terminalReason, type ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
+
+const decodeTerminal = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      result: Schema.Struct({
+        isError: Schema.Literal(true),
+        structuredContent: Schema.Struct({
+          code: Schema.Literals(["stopped_by_person", "screen_locked"]),
+          safety: Schema.Struct({ retryClass: Schema.Literal("never") }),
+        }),
+      }),
+    }),
+  ),
+);
+
+export const terminalSink = (
+  sink: ReplySink,
+  message: Envelope,
+  terminal: () => ComputerUseTerminalReason | undefined,
+  dispatched: () => boolean,
+): ReplySink => ({
+  answer: (line, status, context) =>
+    Effect.suspend(() => {
+      const reason = terminalReason(terminal());
+      if (reason === undefined || message.method !== "tools/call" || message.id == null)
+        return sink.answer(line, status, context);
+      const already = decodeTerminal(line);
+      if (already._tag === "Some" && already.value.result.structuredContent.code === reason)
+        return sink.answer(line, status, context);
+      const cause: Interruption =
+        reason === "screen_locked"
+          ? { _tag: "pause", reason: "screen_locked" }
+          : { _tag: "end", reason: "stopped" };
+      const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
+      return sink.answer(
+        dispatched()
+          ? cutOff(message.id, tool, cause, message.params?.arguments)
+          : refusal(
+              message.id,
+              message.method,
+              reason === "screen_locked" ? "screen_locked" : "stopped",
+              reason === "screen_locked"
+                ? PAUSE_MESSAGES.screen_locked
+                : LEASE_END_MESSAGES.stopped,
+            ),
+        dispatched() ? "unknown_outcome" : "not_started",
+        context,
+      );
+    }),
+});
 
 export function makePersonStopFence() {
   let reason: "stopped_by_person" | "screen_locked" | undefined;
@@ -64,9 +118,6 @@ export function makePersonStopFence() {
           : undefined,
   };
 }
-
-export const isTerminalStop = (finished: string | undefined, paused: string | undefined) =>
-  finished === "stopped" || finished === "stopped_all" || paused === "screen_locked";
 
 export const terminalForInterruption = (
   cause: Interruption,

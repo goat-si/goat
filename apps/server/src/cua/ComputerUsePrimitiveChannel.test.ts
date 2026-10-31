@@ -75,7 +75,8 @@ const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
 /** The control-state fields the channel reads. */
 type TurnState =
   | { readonly _tag: "active"; readonly idle?: true }
-  | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
+  | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd }
+  | { readonly _tag: "paused"; readonly reason: "screen_locked" };
 
 /** One thread whose control state a test moves between turns, Stop and revocation. */
 const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (options?: {
@@ -770,4 +771,48 @@ it.effect("only forwards claimBind authority when supplied as a host request fie
     yield* f.channel.cancel("run:cell", "turn:cell");
     yield* Fiber.join(agentCall);
   }),
+);
+
+it.effect("reconnection preserves a paused screen lock", () =>
+  Effect.gen(function* () {
+    const f = yield* turnFixture();
+    yield* f.channel.reportControlReady(f.report(authority, 1));
+    yield* f.channel.reportControlCutoff({ ...f.report(authority, 1), terminal: "screen_locked" });
+    yield* f.setState({ _tag: "paused", reason: "screen_locked" });
+    yield* f.channel.closeStream({ threadId, registrationId: f.registration.registrationId });
+    const second = yield* f.channel.registerStream({
+      ...authority,
+      proxyInstanceId: "second",
+      kind: "thread",
+    });
+    assert.equal(second.status, "registered");
+    const answer = yield* Effect.flip(f.request());
+    assert.equal(answer.code, "screen_locked");
+    assert.equal(answer.safety?.retryClass, "never");
+  }),
+);
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "late terminal cutoff preserves %s",
+  (terminal) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.channel.reportControlReady(f.report(1));
+      const waiting = yield* f.channel
+        .request({
+          threadId,
+          runId: "run:late",
+          turnId: "turn:late",
+          callId: 1,
+          deadlineMillis: 30000,
+          tool: "list_apps",
+          args: {},
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Stream.runHead(f.registered.requests);
+      yield* TestClock.adjust(2500);
+      yield* f.channel.reportControlCutoff({ ...f.report(1), terminal });
+      const answer = yield* Fiber.join(waiting);
+      assert.equal(answer._tag, "Success");
+      if (answer._tag === "Success") assert.include(JSON.stringify(answer.success), terminal);
+    }),
 );

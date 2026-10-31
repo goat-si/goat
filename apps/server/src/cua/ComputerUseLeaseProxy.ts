@@ -74,9 +74,9 @@ import { refreshDriverManifest } from "./ComputerUseLeaseProxyManifest.ts";
 import { makeUnansweredWatch } from "./ComputerUseLeaseProxyUnanswered.ts";
 import {
   forwardPersonStop,
-  isTerminalStop,
   latchedInterruption,
   makePersonStopFence,
+  terminalSink,
   terminalForInterruption,
 } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { startLeaseUpdates } from "./ComputerUseLeaseProxyUpdates.ts";
@@ -648,7 +648,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   }).pipe(lifecycleLock.withPermits(1));
   const forward = Effect.fn("ComputerUseLeaseProxy.forward")(function* (
     incoming: string,
-    sink: ReplySink,
+    rawSink: ReplySink,
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
@@ -656,8 +656,21 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const keyCall = resolveKeyCall(incoming);
     let line = "line" in keyCall ? keyCall.line : incoming;
     const decoded = decodeProviderIngress(line);
-    if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
+    if (decoded.kind === "invalid") return yield* rawSink.answer(decoded.response);
     let message = decoded.message;
+    let dispatched = false;
+    const sink = terminalSink(
+      rawSink,
+      message,
+      () =>
+        personStop.terminal() ??
+        (paused === "screen_locked"
+          ? "screen_locked"
+          : finished === "stopped" || finished === "stopped_all"
+            ? "stopped_by_person"
+            : undefined),
+      () => dispatched,
+    );
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
@@ -684,12 +697,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         (now) => primitiveCurrent() && now < primitiveDeadline && !held() && !personStop.pending(),
       ),
     );
-    if (
-      message.method === "tools/call" &&
-      message.id != null &&
-      (personStop.pending() || isTerminalStop(finished, paused))
-    )
-      return yield* sink.answer(notSent(message.id), "not_started");
     if (expectedConnection !== undefined && lifecycle.current?.connectionId !== expectedConnection)
       return yield* sink.answer(staleGeneration(message.id ?? "", "tools/call"), "not_started");
     const id = message.id;
@@ -724,15 +731,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       const browser = claims.gate(id, line, message, primitive?.authority);
       if (browser.refused !== undefined) return yield* sink.answer(browser.refused);
       ({ line, message, selected: selectedClaim } = browser);
-      const stale = () =>
-        personStop.pending() || isTerminalStop(finished, paused)
-          ? notSent(id)
-          : staleGeneration(id, message.method);
       if (
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(stale(), "not_started");
+        return yield* sink.answer(staleGeneration(id, message.method), "not_started");
       // A call belongs to its admitted child; only a manifest refresh may replace it.
       let admitted = lifecycle.current;
       const refreshed =
@@ -744,7 +747,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         expectedConnection !== undefined &&
         lifecycle.current?.connectionId !== expectedConnection
       )
-        return yield* sink.answer(stale(), "not_started");
+        return yield* sink.answer(staleGeneration(id, message.method), "not_started");
       const unsupported = yield* claims.unsupported(
         selectedClaim,
         batches.browserSupported,
@@ -960,6 +963,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const register = (sentAt: number) =>
       Effect.sync(() => {
         if (!isRequest) return;
+        dispatched = true;
         if (primitive !== undefined) dispatchedPrimitives.add(primitive);
         const sent = claims.attach(
           outstandingCall(message!, id, sentAt, current, sink, reservationId, primitive),
