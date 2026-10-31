@@ -693,14 +693,17 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       };
     }
     const tree = parseDesktopTreeState({ state: treeState, filtered, query, interactive });
+    // A depth read shows part of the window, but guards, frames and named actions cover all of it,
+    // so an element first shown by observe({within}) is checked like one from a whole read.
+    const whole = depthCut ? parseDesktopTreeState({ state, filtered, query, interactive }) : tree;
     const treeText = depthCut
       ? withChildCounts(tree.shownText, depthCut.counts, raw.cut || state.truncated === true)
       : tree.shownText;
     const numbersChanged =
       isDiff && (bound.structuralDiff === true || structuralDiff(rows, bound.rows, tree.rows));
-    bound.frames = elementFrames(tree.elements);
+    bound.frames = elementFrames(whole.elements);
     // The agent reads frames in window points; internal geometry stays in the driver's screen points.
-    const origin = windowOrigin(tree.elements);
+    const origin = windowOrigin(whole.elements);
     const placed = placeInWindow(tree.shown, tree.elements, bound.frames, origin);
     const omitted = [
       ...(query
@@ -719,7 +722,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     bound.rows =
       isDiff && !numbersChanged && bound.rows
         ? retainPairingTitles(bound.rows, tree.shown, rows)
-        : tree.shown;
+        : whole.shown;
     // Only a whole read compares: a cut, filtered or degraded one drops rows the window still has.
     if (
       !capture &&
@@ -738,9 +741,9 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         connectionGeneration: bound.connectionGeneration,
       };
     bound.elementsByToken = inspectTreeElements(
-      tree.elements,
-      tree.rows,
-      tree.markdown,
+      whole.elements,
+      whole.rows,
+      whole.markdown,
       typeof state.tree_markdown === "string" ? state.tree_markdown : undefined,
     );
     const basis = treeWindowBasis(bound.frames, nextBounds);

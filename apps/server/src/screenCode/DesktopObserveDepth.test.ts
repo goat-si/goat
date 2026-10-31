@@ -329,3 +329,30 @@ it.effect("a driver restart seen through one app ends within for every app it dr
     expect(sent.filter((each) => each.tool === "get_window_state")).toHaveLength(reads);
   }),
 );
+
+it.effect("a send button first shown by within is still guarded as a send button", () =>
+  Effect.gen(function* () {
+    const { host, sent } = fixture({
+      list_apps: { apps: [{ pid: 42, name: "KakaoTalk", bundle_id: "com.kakao.KakaoTalkMac" }] },
+      get_window_state: {
+        ...window(['- [0] AXWindow "Chat"', "  - [1] AXGroup", '    - [3] AXButton "Send"']),
+        elements: [entry(0, "AXWindow", "Chat"), entry(1, "AXGroup"), entry(3, "AXButton", "Send")],
+      },
+    });
+    const target = (yield* host.bindApp(
+      call("bind_app", { bundle_id: "com.kakao.KakaoTalkMac", window_id: 7 }),
+      context,
+    )).value as ScreenTargetRef;
+    const depth = (yield* host.observe(call("get_window_state", { depth: 1 }, target), context))
+      .value as ScreenObservation;
+    const within = (yield* host.observe(
+      call("get_window_state", { within: 1, withinBase: depth.observationId }, target),
+      context,
+    )).value as ScreenObservation;
+    const refused = yield* host
+      .invoke(call("click", { elementRef: refOf(within, 3) }, target), context)
+      .pipe(Effect.flip);
+    expect((refused as ScreenRunError).effectStarted).toBe(false);
+    expect(sent.filter((each) => each.tool === "click")).toHaveLength(0);
+  }),
+);
