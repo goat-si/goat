@@ -2,7 +2,6 @@ import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
 import * as NodeFSP from "node:fs/promises";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { it } from "@effect/vitest";
@@ -27,8 +26,8 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
-
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -144,6 +143,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   const context = {
     page,
     sessions,
+    on: () => context,
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
     cookies: async () => [],
@@ -241,6 +241,7 @@ const asSession = (providerSessionId: string) => ({
   thread: { ...testThread, providerSessionId },
 });
 const dependencies = Layer.mergeAll(
+  ServerSettings.layerTest(),
   Broker.layer,
   Manager.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
@@ -309,7 +310,6 @@ const viewerInput = (tabId: string, canOperate: boolean) => ({
   maxHeight: 800,
   quality: 70,
 });
-
 beforeEach(() => {
   contexts.length = 0;
   encoderStreams.length = 0;
@@ -325,7 +325,6 @@ beforeEach(() => {
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
 });
-
 it.live.each([
   { desktop: false, outcome: "success" },
   { desktop: false, outcome: "failure" },
@@ -1264,7 +1263,6 @@ it.effect("a tab the desktop does not draw is server rendered, so the desktop st
     }),
   ).pipe(Effect.provide(layer)),
 );
-
 it.live("a tab opened to a file the browser cannot show reports the file to download", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1292,6 +1290,7 @@ it.live("a tab opened to a file the browser cannot show reports the file to down
             url: () => "https://example.com/next",
             method: () => "GET",
             isNavigationRequest: () => true,
+            redirectedFrom: () => null,
             frame: () => page,
           });
         },
@@ -1340,6 +1339,7 @@ it.live(
           url: () => url,
           method: () => "GET",
           isNavigationRequest: () => true,
+          redirectedFrom: () => null,
           frame: () => page,
           failure: () => ({ errorText: "net::ERR_CONNECTION_REFUSED" }),
         });

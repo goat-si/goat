@@ -3,6 +3,7 @@ import * as NodeCrypto from "node:crypto";
 import { chromium, type Browser, type BrowserContext } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { testActionGate } from "./actionChannel.testkit.ts";
 import { rememberSecret } from "./pageSecrets.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
@@ -150,7 +151,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
   it("keeps cookie and password values out of evaluation results", async () => {
     const { page, cdp } = await open();
     const evaluate = (expression: string) =>
-      ServerBrowserPage.evaluate({ page, cdp }, { expression }, 5_000);
+      ServerBrowserPage.evaluate({ page, cdp }, { expression }, 5_000, testActionGate(page, cdp));
     const cookie = JSON.stringify(await evaluate("document.cookie"));
     expect(cookie).not.toContain(script);
     const fields = JSON.stringify(
@@ -203,6 +204,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       { page, cdp },
       { expression: "document.body.innerText" },
       5_000,
+      testActionGate(page, cdp),
     );
     const logs = await diagnostics.readMasked({});
     for (const observed of [snapshot, read, logs])
@@ -263,6 +265,7 @@ describe.skipIf(!chromiumInstalled)("server browser credential values", () => {
       { page, cdp },
       { expression: "(() => { throw new Error(document.body.innerText) })()" },
       5_000,
+      testActionGate(page, cdp),
     ).catch((error: unknown) => String(error instanceof Error ? error.message : error));
     expect(failed).toContain("Echo:");
     expect(failed).not.toContain(session);

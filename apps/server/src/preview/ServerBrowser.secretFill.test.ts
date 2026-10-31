@@ -24,6 +24,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, describe, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -112,6 +113,7 @@ const layerFor = (secrets: ReturnType<typeof makeSecrets>) =>
   ServerBrowser.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
+        ServerSettings.layerTest(),
         Manager.layer,
         Broker.layer,
         secrets.layer,
@@ -935,4 +937,25 @@ describe.skipIf(!chromiumInstalled)("the identifier a form was sent with", () =>
       }).pipe(Effect.provide(layerFor(secrets))),
     );
   });
+});
+
+it.effect("does not fill a password in an iframe blocked after it loaded", () => {
+  const secrets = makeSecrets();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const { open, fill } = yield* harness;
+      const { tabId, page } = yield* open("https://login.test/framed");
+      const field = page.frameLocator("#auth").locator("#pw");
+      yield* Effect.promise(() => field.focus());
+      const { ref } = secrets.save("https://auth.test");
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["auth.test"] });
+      const result = yield* fill(tabId, { secretRef: ref }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url", dispatched: false });
+      expect(yield* Effect.promise(() => field.inputValue())).toBe("");
+      expect(secrets.saved.has(ref)).toBe(true);
+    }).pipe(Effect.provide(layerFor(secrets))),
+  );
 });

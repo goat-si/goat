@@ -1,8 +1,9 @@
 import { chromium, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { pointBefore } from "./ServerBrowserPointer.ts";
+import type { PointerReporter } from "./ServerBrowserPage.ts";
 
 const fixture = async (run: (page: Page) => Promise<void>) => {
   expect(chromiumInstalled).toBe(true);
@@ -111,8 +112,7 @@ it("points at a field that appears late, within the input's time, and nowhere fo
     void page.evaluate(`setTimeout(() => document.body.insertAdjacentHTML("beforeend",
       '<input id="f" style="position:fixed;left:100px;top:40px;width:80px;height:20px;border:0;padding:0">'), 800)`);
     const points: Array<[number, number, string]> = [];
-    const pointer: ServerBrowserPage.PointerReporter = async ({ x, y }, phase) =>
-      void points.push([x, y, phase]);
+    const pointer: PointerReporter = async ({ x, y }, phase) => void points.push([x, y, phase]);
     const typed = await pointBefore(page, { locator: "#f", timeoutMs: 5_000 }, pointer, () => {});
     expect(points).toEqual([[140, 50, "move"]]);
     // The input keeps only what is left of its own time.

@@ -18,7 +18,7 @@ import { createScreenDispatchRouter } from "../screenCode/ScreenDispatchRouter.t
 import { ScreenRunService } from "../screenCode/ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "../screenCode/ScreenRuntimeAsset.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 
 const invocation = {
   environmentId: "env" as EnvironmentId,
@@ -78,6 +78,7 @@ it.live(
         controlGeneration: 0,
       };
       // The server browser's own page calls, without its session plumbing.
+      let captures = 0;
       const run = (operation: string, input: unknown): Promise<unknown> => {
         if (operation === "status")
           return Promise.resolve({
@@ -85,17 +86,26 @@ it.live(
             url: page.url(),
             control: { owner: "unclaimed", generation: 0 },
           });
-        if (operation === "snapshot")
-          return ServerBrowserPage.snapshot({
-            ...(input as { captureImage?: boolean }),
-            page,
-            cdp,
-            renderScale: 2,
-            consoleEntries: [],
-            networkEntries: [],
-            actionTimeline: [],
-            timeoutMs: 20_000,
-          });
+        if (operation === "snapshot") {
+          // Distinct captures exercise both image references when identical images are deduplicated.
+          captures++;
+          return (
+            captures === 2
+              ? page.evaluate("document.body.style.backgroundColor = 'rgb(250, 250, 250)'")
+              : Promise.resolve()
+          ).then(() =>
+            ServerBrowserPage.snapshot({
+              ...(input as { captureImage?: boolean }),
+              page,
+              cdp,
+              renderScale: 2,
+              consoleEntries: [],
+              networkEntries: [],
+              actionTimeline: [],
+              timeoutMs: 20_000,
+            }),
+          );
+        }
         if (operation === "click")
           return ServerBrowserPage.click(page, input as PreviewAutomationClickInput).then(
             ({ effect, evidence }) => ({ effect, evidence, url: page.url() }),

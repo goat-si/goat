@@ -6,7 +6,35 @@ import {
   resolveAddressBarInput,
   previewPdfAssetUrl,
   resolveSearchUrlTemplate,
+  normalizeBlockedBrowserHost,
+  isBlockedBrowserUrl,
 } from "./preview.ts";
+
+describe("blocked browser hosts", () => {
+  it("normalizes hosts and rejects URLs, ports and malformed entries", () => {
+    expect(normalizeBlockedBrowserHost(" EXAMPLE.com. ")).toBe("example.com");
+    expect(normalizeBlockedBrowserHost("BÜCHER.example")).toBe("xn--bcher-kva.example");
+    expect(normalizeBlockedBrowserHost("[2001:0db8::1]")).toBe("[2001:db8::1]");
+    for (const invalid of [
+      "",
+      "https://example.com",
+      "example.com:443",
+      "example.com/a",
+      "user@example.com",
+    ]) {
+      expect(normalizeBlockedBrowserHost(invalid)).toBeNull();
+    }
+  });
+
+  it("matches hosts and subdomains on every port, with exact IP matching", () => {
+    expect(isBlockedBrowserUrl("https://a.example.com:8443/", ["example.com"])).toBe(true);
+    expect(isBlockedBrowserUrl("http://example.com./", ["example.com"])).toBe(true);
+    expect(isBlockedBrowserUrl("https://notexample.com/", ["example.com"])).toBe(false);
+    expect(isBlockedBrowserUrl("http://127.0.0.1:8080/", ["127.0.0.1"])).toBe(true);
+    expect(isBlockedBrowserUrl("http://[2001:db8::1]:80/", ["[2001:db8::1]"])).toBe(true);
+    expect(isBlockedBrowserUrl("https://example.com/", [])).toBe(false);
+  });
+});
 
 describe("previewPdfAssetUrl", () => {
   it.each([

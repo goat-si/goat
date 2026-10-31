@@ -49,6 +49,7 @@ const HOST_RESPONSE_GRACE_MS = 1_000;
 
 export interface PreviewAutomationInvokeInput {
   readonly scope: McpInvocationContext.McpThreadInvocationScope;
+  readonly runId?: string;
   readonly operation: PreviewAutomationOperation;
   readonly input: unknown;
   readonly tabId?: PreviewTabId;
@@ -195,7 +196,8 @@ const supportsOperation = (
 ): boolean =>
   connection.supportedOperations.has(operation) &&
   // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
-  ((operation !== "fillSecret" && operation !== "open") || connection.inProcess);
+  ((operation !== "fillSecret" && operation !== "open" && operation !== "claim") ||
+    connection.inProcess);
 
 const supportsRequest = (
   connection: ClientConnection,
@@ -360,11 +362,16 @@ const classifyResponseError = (
       const detail = error.detail;
       const object = typeof detail === "object" && detail !== null ? detail : undefined;
       const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
+      const sent =
+        object && "beforeInput" in object && object.beforeInput === false
+          ? { dispatched: true }
+          : {};
       return new PreviewAutomationControlInterruptedError({
         ...context,
         ...remoteDiagnostics,
         ...(Option.isSome(reason) ? { reason: reason.value } : {}),
         ...notSent,
+        ...sent,
       });
     }
     case "PreviewAutomationInvalidSelectorError": {
@@ -728,6 +735,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
       return { ...next, pending };
     });
     const awaitResponse = Effect.fn("PreviewAutomationBroker.awaitResponse")(function* () {
+      const runId = input.runId ?? input.scope.thread.runId;
       const offered = yield* SynchronizedRef.modifyEffect(state, (current) => {
         // Serialize generation checks and offers with queue closure; routes can outlive eviction.
         if (
@@ -746,6 +754,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
             tabIdExplicit: input.tabId !== undefined || input.exact !== undefined,
             ...BoundPreviewTabs.screenExpectationOf(input.exact),
             agentSessionId: hostAssignmentKey(input.scope),
+            ...(runId === undefined ? {} : { runId }),
             operation: input.operation,
             input: input.input,
             timeoutMs,

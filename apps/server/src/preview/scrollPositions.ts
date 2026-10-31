@@ -1,5 +1,6 @@
 // @effect-diagnostics globalTimers:off - Playwright page reads run outside the Effect runtime.
 import type { ElementHandle, Page } from "playwright-core";
+import { readOnly, type ActionChannel } from "./actionChannel.ts";
 
 /** Where a scroll moved: an element and its scroll ancestors, a wheel point, or the window. */
 export type ScrollScope =
@@ -45,20 +46,22 @@ const fromPoint = ([x, y]: readonly [number, number]) =>
     });
   });
 
-const frameRead = (page: Page, scope: ScrollScope): Promise<string> =>
-  scope && "element" in scope
-    ? scope.element.evaluate(fromElement)
-    : scope && "point" in scope
-      ? page.evaluate(fromPoint, [scope.point.x, scope.point.y] as const)
-      : page.evaluate(fromElement, null);
+export const scrollPositionRead = (page: Page, scope: ScrollScope) =>
+  readOnly((): Promise<string> =>
+    scope && "element" in scope
+      ? scope.element.evaluate(fromElement)
+      : scope && "point" in scope
+        ? page.evaluate(fromPoint, [scope.point.x, scope.point.y] as const)
+        : page.evaluate(fromElement, null),
+  );
 
 /**
  * Waits until the scroll offsets read the same on two consecutive animation frames. A server
  * timer bounds every read, so a page whose frames stopped answers settled: false in time.
  */
 export const settleScroll = async (
-  page: Page,
-  scope: ScrollScope,
+  channel: Pick<ActionChannel, "read">,
+  read: ReturnType<typeof scrollPositionRead>,
   gateDeadline: number | undefined,
 ): Promise<boolean> => {
   // The gate's deadline is on the performance.now() clock.
@@ -69,7 +72,7 @@ export const settleScroll = async (
     if (left <= 0) return false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const next = await Promise.race([
-      frameRead(page, scope).catch(() => undefined),
+      channel.read(read).catch(() => undefined),
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), left);
       }),

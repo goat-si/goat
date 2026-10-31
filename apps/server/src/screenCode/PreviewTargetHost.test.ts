@@ -29,6 +29,21 @@ import {
   scope,
 } from "./PreviewTargetHost.testkit.ts";
 
+it.effect("a blocked tab claim returns blocked_url without acquiring a claim", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    fixture.state.failure = new PreviewAutomationControlInterruptedError({
+      ...actionErrorContext,
+      operation: "claim",
+      reason: "blocked_url",
+      dispatched: false,
+    });
+    const result = yield* fixture.dispatch("claim_tab");
+    expect(result?.error).toMatchObject({ code: "blocked_url", effectStarted: false });
+    expect(fixture.requests.find((request) => request.operation === "claim")?.runId).toBe("run");
+  }),
+);
+
 it.effect("a cell reads page text from an unclaimed tab within the reply budget", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();

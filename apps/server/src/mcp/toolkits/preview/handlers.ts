@@ -37,6 +37,7 @@ import {
 } from "../../../attachmentStore.ts";
 import { resolveAttachmentRelativePath } from "../../../attachmentPaths.ts";
 import * as ServerConfig from "../../../config.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -76,11 +77,25 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   tabId?: PreviewTabId,
 ): Effect.fn.Return<
   { result: A; safety?: ActionOutcomeSafety; toolIcon?: ToolActivityIcon },
-  import("@goat/contracts").PreviewAutomationError,
-  McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
+  import("@goat/contracts").PreviewAutomationError | OrchestratorMcpFailure,
+  | McpInvocationContext.McpInvocationContext
+  | PreviewAutomationBroker.PreviewAutomationBroker
+  | ThreadManagement.ThreadManagementService
 > {
   const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  const threads = yield* ThreadManagement.ThreadManagementService;
+  const unavailable = () =>
+    new OrchestratorMcpFailure({
+      code: "parent_not_active",
+      message:
+        "The calling thread has no active run. Start a live GOAT turn before using the browser.",
+    });
+  const shell = yield* threads
+    .getThreadShell(scope.thread.threadId)
+    .pipe(Effect.mapError(unavailable));
+  if (!shell?.activeRunId) return yield* unavailable();
+  const runId = shell.activeRunId;
   let targetTabId = tabId;
   const result = yield* broker
     .invoke<A>({
@@ -88,6 +103,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
         targetTabId = resolvedTabId;
       },
       scope,
+      runId,
       operation,
       input,
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
@@ -150,6 +166,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   const page = yield* broker
     .invoke<PreviewAutomationStatus>({
       scope,
+      runId,
       operation: "status",
       input: {},
       timeoutMs: 500,

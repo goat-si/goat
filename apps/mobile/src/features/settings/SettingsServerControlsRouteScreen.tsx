@@ -31,6 +31,7 @@ import {
 } from "./components/SettingsEnvironmentFilterHeader";
 import { BranchNamingSettings } from "./components/BranchNamingSettings";
 import { StandingInstructionsSettings } from "./components/StandingInstructionsSettings";
+import { BlockedBrowserHostsSettings } from "./components/BlockedBrowserHostsSettings";
 import { DatabaseStorageNotice } from "./components/DatabaseStorageNotice";
 import { SettingsChoiceRow } from "./components/SettingsChoiceRow";
 import { SettingsSection } from "./components/SettingsSection";
@@ -606,6 +607,15 @@ function ServerSettingsDetail(props: {
                       value={uniform("enableAgentBrowserAccess")}
                       disabled={disabledFor("enableAgentBrowserAccess")}
                       onValueChange={(value) => write({ enableAgentBrowserAccess: value })}
+                    />
+                    <BlockedBrowserHostsSettings
+                      hosts={
+                        displayTargets.length === 1
+                          ? (reference?.settings.blockedBrowserHosts ?? null)
+                          : null
+                      }
+                      disabled={disabledFor("blockedBrowserHosts")}
+                      onChange={(blockedBrowserHosts) => write({ blockedBrowserHosts })}
                     />
                   </SettingsSection>
                   <SettingsSection title="Computer use">

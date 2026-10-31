@@ -30,6 +30,7 @@ import {
 } from "./secretForms.ts";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import { makeActionChannel, type ActionChannel } from "./actionChannel.ts";
 import { readSignInPage, signInState, type SignInRecord } from "./signInState.ts";
 
 /** The part of a server browser tab this module reads. */
@@ -240,30 +241,38 @@ const isWebOrigin = (origin: unknown): origin is string =>
 const GONE =
   /Cannot find context|context was destroyed|Could not find object|No node with given id/iu;
 
-const release = (target: Target) =>
-  target.session.send("Runtime.releaseObject", { objectId: target.objectId }).catch(() => {});
+const release = (target: Target, channel?: ActionChannel) =>
+  (channel ? channel.sendFor(target.session) : target.session.send.bind(target.session))(
+    "Runtime.releaseObject",
+    { objectId: target.objectId },
+  ).catch(() => {});
 
-const isolatedWorld = async (session: CDPSession, frameId: string) =>
-  (await session.send("Page.createIsolatedWorld", { frameId, worldName: WORLD }))
+const isolatedWorld = async (session: CDPSession, frameId: string, channel: ActionChannel) =>
+  (await channel.sendFor(session)("Page.createIsolatedWorld", { frameId, worldName: WORLD }))
     .executionContextId;
 
 /** The session that owns a frame: this one for in-process frames, else an out-of-process frame's own. */
-const sessionForFrame = async (tab: SecretFillTab, session: CDPSession, frameId: string) => {
+const sessionForFrame = async (
+  tab: SecretFillTab,
+  session: CDPSession,
+  frameId: string,
+  channel: ActionChannel,
+) => {
   try {
-    await isolatedWorld(session, frameId);
+    await isolatedWorld(session, frameId, channel);
     return session;
-  } catch {
+  } catch (cause) {
+    if (cause instanceof BrowserControlInterrupted) throw cause;
     const candidates = new Set(tab.frameSessions.values());
     for (const frame of tab.page.frames()) {
       if (frame === tab.page.mainFrame() || tab.frameSessions.has(frame)) continue;
-      const opened = await tab.page
-        .context()
-        .newCDPSession(frame)
-        .catch(() => null);
+      const opened = await channel.newCDPSession(frame).catch(() => null);
       if (opened) candidates.add(opened);
     }
     for (const candidate of candidates) {
-      const tree = await candidate.send("Page.getFrameTree").catch(() => null);
+      const tree = await channel
+        .sendFor(candidate)("Page.getFrameTree")
+        .catch(() => null);
       if (tree?.frameTree.frame.id === frameId) return candidate;
     }
     throw refused("The focused field is in a frame GOAT cannot reach.");
@@ -271,12 +280,16 @@ const sessionForFrame = async (tab: SecretFillTab, session: CDPSession, frameId:
 };
 
 /** Finds the password field to fill: the focused one, through frames, or one CSS match in the page. */
-const locate = async (tab: SecretFillTab, selector: string | undefined): Promise<Target> => {
+const locate = async (
+  tab: SecretFillTab,
+  selector: string | undefined,
+  channel: ActionChannel,
+): Promise<Target> => {
   let session = tab.cdp;
-  let frameId = (await session.send("Page.getFrameTree")).frameTree.frame.id;
+  let frameId = (await channel.sendFor(session)("Page.getFrameTree")).frameTree.frame.id;
   for (let depth = 0; depth < MAX_FRAME_DEPTH; depth++) {
-    const executionContextId = await isolatedWorld(session, frameId);
-    const found = await session.send("Runtime.callFunctionOn", {
+    const executionContextId = await isolatedWorld(session, frameId, channel);
+    const found = await channel.sendFor(session)("Runtime.callFunctionOn", {
       functionDeclaration: selector === undefined ? FOCUSED : SELECTED,
       executionContextId,
       arguments: selector === undefined ? [] : [{ value: selector }],
@@ -292,20 +305,20 @@ const locate = async (tab: SecretFillTab, selector: string | undefined): Promise
       );
     }
     if (selector !== undefined) return { session, objectId };
-    const { node } = await session.send("DOM.describeNode", { objectId });
+    const { node } = await channel.sendFor(session)("DOM.describeNode", { objectId });
     const childFrameId = node.frameId;
     if ((node.nodeName !== "IFRAME" && node.nodeName !== "FRAME") || childFrameId === undefined)
       return { session, objectId };
-    await release({ session, objectId });
-    session = await sessionForFrame(tab, session, childFrameId);
+    await release({ session, objectId }, channel);
+    session = await sessionForFrame(tab, session, childFrameId, channel);
     frameId = childFrameId;
   }
   throw refused("The focused field is nested too deeply in frames.");
 };
 
 /** The identifier field's value beside a password field: null when the page has none. */
-const identifierOf = async (target: Target) => {
-  const read = await target.session.send("Runtime.callFunctionOn", {
+const identifierOf = async (target: Target, channel: ActionChannel) => {
+  const read = await channel.sendFor(target.session)("Runtime.callFunctionOn", {
     objectId: target.objectId,
     functionDeclaration: IDENTIFIER,
     returnByValue: true,
@@ -315,9 +328,9 @@ const identifierOf = async (target: Target) => {
 };
 
 /** The name the identifier field is sent under, read where the page's script cannot change it. */
-const identifierNameOf = async (target: Target) => {
-  const read = await target.session
-    .send("Runtime.callFunctionOn", {
+const identifierNameOf = async (target: Target, channel: ActionChannel) => {
+  const read = await channel
+    .sendFor(target.session)("Runtime.callFunctionOn", {
       objectId: target.objectId,
       functionDeclaration: IDENTIFIER_NAME,
       returnByValue: true,
@@ -387,8 +400,8 @@ const carriesValue = (text: string, values: ReadonlySet<string>) =>
 /** A sign-in request is small; a longer body is checked on its first part only. */
 const SIGN_IN_BODY_CHARS = 256 * 1024;
 
-const passwordOrigin = async (target: Target) => {
-  const checked = await target.session.send("Runtime.callFunctionOn", {
+const passwordOrigin = async (target: Target, channel: ActionChannel) => {
+  const checked = await channel.sendFor(target.session)("Runtime.callFunctionOn", {
     objectId: target.objectId,
     functionDeclaration: PASSWORD_ORIGIN,
     returnByValue: true,
@@ -678,6 +691,10 @@ export const make = Effect.gen(function* () {
     request: PreviewAutomationRequest,
     deadlineMs: number,
     record: RecordAction<T>,
+    checkBlocked: ((destination: string) => Promise<void>) & {
+      readonly isFenced: () => boolean;
+      readonly blockedFrame: () => boolean;
+    },
   ): Promise<PreviewAutomationFillSecretResult> => {
     const input = Option.getOrUndefined(decodeInput(request.input));
     if (input === undefined) throw refused("Pass a secretRef and at most a CSS selector.");
@@ -691,6 +708,16 @@ export const make = Effect.gen(function* () {
         request.agentSessionId,
         (fence) =>
           reserving(tab, async () => {
+            await checkBlocked(tab.page.url());
+            fence.assertMayDispatch();
+            const channel = makeActionChannel({
+              cdp: tab.cdp,
+              page: tab.page,
+              signal: fence.signal,
+              controlGeneration: fence.assertMayDispatch,
+              isFenced: checkBlocked.isFenced,
+              blockedFrame: checkBlocked.blockedFrame,
+            });
             track(tab);
             const recording = [...(contextTabs.get(tab.page.context()) ?? [])].some(
               (each) => each.recording !== null || each.recordingStart !== null,
@@ -699,14 +726,16 @@ export const make = Effect.gen(function* () {
               throw refused(
                 "A tab that shares this tab's sign-ins is recording. Stop the recording before filling a password.",
               );
-            const target = await locate(tab, input.selector);
+            const target = await locate(tab, input.selector, channel);
             let kept = false;
             let used = false;
             try {
-              const destination = await passwordOrigin(target);
-              const identifier = await identifierOf(target);
-              const identifierName = identifier === null ? null : await identifierNameOf(target);
+              const destination = await passwordOrigin(target, channel);
+              const identifier = await identifierOf(target, channel);
+              const identifierName =
+                identifier === null ? null : await identifierNameOf(target, channel);
               fence.hold();
+              await checkBlocked(destination);
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
               const consumed = await consume({
@@ -742,6 +771,7 @@ export const make = Effect.gen(function* () {
                 identifierAbsent: identifier === null,
               });
               watchSignIn(tab, request.threadId);
+              await checkBlocked(destination);
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
               // Fenced before dispatch: a lost reply may still have typed the value.
@@ -751,8 +781,8 @@ export const make = Effect.gen(function* () {
               outstanding.push(entry);
               fences.set(tab.page, outstanding);
               kept = true;
-              const typed = await target.session
-                .send("Runtime.callFunctionOn", {
+              const typed = await channel
+                .sendFor(target.session)("Runtime.callFunctionOn", {
                   objectId: target.objectId,
                   functionDeclaration: FILL,
                   arguments: [
@@ -779,6 +809,8 @@ export const make = Effect.gen(function* () {
               }
               return { destination, verified: input.expectedAccount !== undefined };
             } catch (cause) {
+              if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
+                throw cause;
               if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
                 throw cause;
               throw refused(
@@ -787,7 +819,7 @@ export const make = Effect.gen(function* () {
                   : USED_UP,
               );
             } finally {
-              if (!kept) await release(target);
+              if (!kept && !fence.signal.aborted) await release(target, channel);
             }
           }),
         deadlineMs,

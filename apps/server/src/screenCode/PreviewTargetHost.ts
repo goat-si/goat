@@ -26,42 +26,14 @@ import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabClea
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
 import { dispatchTabExtra } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
+import { fail, firstArg, stringField, type BoundTarget } from "./PreviewTargetHostState.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
-const fail = (code: ScreenRunError["code"], nextStep: string): ScreenRunError => ({
-  code,
-  effectStarted: false,
-  nextStep,
-});
-const firstArg = (call: ScreenHostCall): Record<string, unknown> => {
-  const value = Array.isArray(call.args) ? call.args[0] : undefined;
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-};
-const stringField = (record: Record<string, unknown>, key: string) =>
-  typeof record[key] === "string" ? (record[key] as string) : undefined;
 /** A wait without its own timeout gets the browser's usual one. */
 const DEFAULT_WAIT_MS = 15_000;
 // What a wait leaves of its cell: the browser answers a wait that never started 500 ms after the
 // wait's own deadline (CaptureLock.answerCall), and that answer must still travel back.
 const WAIT_ANSWER_RESERVE_MS = 1_500;
-
-interface BoundTarget {
-  readonly ref: ScreenTargetRef;
-  readonly tab: BoundPreviewTab;
-  readonly origin: string | null;
-  readonly observationId?: string;
-  /** The document the latest observation saw, when the host reports one; points belong to it. */
-  readonly documentGeneration?: number;
-  /** The latest observation, when its tree was incomplete: its refs are held to its document. */
-  readonly incompleteObservationId?: string;
-  readonly screenshotBasis?: {
-    readonly documentGeneration?: number;
-    readonly viewport: { readonly width: number; readonly height: number };
-    readonly viewportReported: boolean;
-  };
-}
 
 /** Constructs a tab dispatcher with its own turn-scoped opaque binding and claim tables. */
 export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(function* (
@@ -161,6 +133,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     const current = yield* broker
       .invoke<PreviewAutomationStatus>({
         scope: context.invocation,
+        runId: context.runId,
         operation: "status",
         input: {},
         exact: exact(bound.tab, false),
@@ -194,6 +167,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
     broker
       .invoke({
         scope: context.invocation,
+        runId: context.runId,
         operation,
         input,
         exact: {
@@ -220,7 +194,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ...failure,
             code: safety.possibleCommit
               ? ("unknown_outcome" as const)
-              : failure.code === "target_ambiguous" || failure.code === "invalid_argument"
+              : failure.code === "target_ambiguous" ||
+                  failure.code === "invalid_argument" ||
+                  failure.code === "blocked_url"
                 ? failure.code
                 : ("downstream_failure" as const),
             effectStarted: safety.possibleCommit,
@@ -290,6 +266,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             const opened = yield* broker
               .invoke<PreviewAutomationStatus>({
                 scope: context.invocation,
+                runId: context.runId,
                 operation: "open",
                 serverHostOnly: true,
                 input: {
@@ -320,10 +297,12 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
                         },
                         release: (tabId) => forgetTab(tabId, context),
                       }).pipe(Effect.flatMap(Effect.fail))
-                    : Effect.fail({
-                        ...fail("unknown_outcome", "Check live tabs before opening again."),
-                        effectStarted: true,
-                      }),
+                    : previewTargetFailure(error, "open").code === "blocked_url"
+                      ? Effect.fail(previewTargetFailure(error, "open"))
+                      : Effect.fail({
+                          ...fail("unknown_outcome", "Check live tabs before opening again."),
+                          effectStarted: true,
+                        }),
                 ),
               );
             const abandon = (nextStep: string) =>
@@ -368,6 +347,18 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
       }
       const bound = lookup(call, context);
       if (!bound) return yield* Effect.fail(fail("stale_reference", "Bind the tab again."));
+      if (call.method === "claim_tab") {
+        yield* broker
+          .invoke({
+            scope: context.invocation,
+            runId: context.runId,
+            operation: "claim",
+            input: {},
+            exact: exact(bound.tab, false),
+            updateCurrentTab: false,
+          })
+          .pipe(Effect.mapError((error) => previewTargetFailure(error, "claim")));
+      }
       if (call.method === "tab_status") {
         const rawArg =
           Array.isArray(call.args) && call.args.length === 1 ? call.args[0] : undefined;

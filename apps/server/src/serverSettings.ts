@@ -825,6 +825,10 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly blockedBrowserHostsSnapshot?: Effect.Effect<
+      ReadonlyArray<string>,
+      ServerSettingsError
+    >;
     /** Hub settings as last committed, without reading secrets; doubles may leave it out. */
     readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
     /** Hub and cloud consent generations, advanced inside each commit; doubles may leave it out. */
@@ -1009,6 +1013,9 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
+      Effect.map((settings) => settings.blockedBrowserHosts),
+    ),
     committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
     hubConsentGenerations: hubConsent.current,
     ...agentWorkspaceTerminalSettingsMethods(
@@ -1345,6 +1352,7 @@ const make = Effect.gen(function* () {
     readonly settings: ServerSettings;
     readonly revision: CodexRoute.SettingsRevision;
   }>();
+  const blockedBrowserHostsRef = yield* Ref.make<ReadonlyArray<string> | null>(null);
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
   const watcherScope = yield* Scope.make("sequential");
@@ -1352,6 +1360,7 @@ const make = Effect.gen(function* () {
 
   const emitChange = (settings: ServerSettings) =>
     Effect.gen(function* () {
+      yield* Ref.set(blockedBrowserHostsRef, settings.blockedBrowserHosts);
       yield* hubConsent.committed(settings.hub);
       yield* PubSub.publish(changesPubSub, settings);
       if (Option.isSome(routeState))
@@ -2104,6 +2113,12 @@ const make = Effect.gen(function* () {
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),
+    ),
+    blockedBrowserHostsSnapshot: Ref.get(blockedBrowserHostsRef).pipe(
+      Effect.filterOrFail(
+        (hosts): hosts is ReadonlyArray<string> => hosts !== null,
+        () => new ServerSettingsError({ settingsPath, operation: "read-file" }),
+      ),
     ),
     committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
     hubConsentGenerations: hubConsent.current,

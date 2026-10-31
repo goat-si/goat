@@ -1,10 +1,30 @@
 import type { BrowserSearchEngine } from "@goat/contracts";
+import { normalizeBlockedBrowserHost } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 import { isLocalLoopbackHost } from "./hostClassification.ts";
 
 const TAB_ID_PREFIX = "tab_";
 let nextPreviewTabSequence = 0;
+
+export { normalizeBlockedBrowserHost };
+
+export function isBlockedBrowserUrl(url: string, hosts: readonly string[]): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+    const host = parsed.hostname.replace(/\.$/, "");
+    return hosts.some((entry) => {
+      const blocked = normalizeBlockedBrowserHost(entry);
+      if (blocked === null) return false;
+      if (host === blocked) return true;
+      if (blocked.startsWith("[") || /^\d+(?:\.\d+){3}$/.test(blocked)) return false;
+      return host.endsWith(`.${blocked}`);
+    });
+  } catch {
+    return false;
+  }
+}
 
 export function previewPdfAssetUrl(rawUrl: string, httpBaseUrl: string | null): string | null {
   if (httpBaseUrl === null) return null;

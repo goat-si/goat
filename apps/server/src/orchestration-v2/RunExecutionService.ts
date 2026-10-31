@@ -1481,7 +1481,10 @@ export const layer: Layer.Layer<
         const reservedHeldTurnItemIds = new Set<TurnItemId>();
         // Ends once the root turn and the children it drives settle. Background commands such
         // as a dev server keep this consumer alive afterwards and must not pin preview focus.
-        const endPreviewActivity = yield* previewAgentActivity.begin(input.run.threadId);
+        const endPreviewActivity = yield* previewAgentActivity.begin(
+          input.run.threadId,
+          input.run.id,
+        );
         const providerEventFiber = yield* eventSubscription.events.pipe(
           Stream.mapEffect((event) =>
             Effect.gen(function* () {

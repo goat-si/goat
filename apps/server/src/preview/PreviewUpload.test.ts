@@ -7,9 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
+import { testActionChannel, testActionGate } from "./actionChannel.testkit.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 const FRAMED =
-  '<input id="g" type="file"><input id="h" type="file"><script>window.changes = 0; g.addEventListener("change", () => changes++); h.addEventListener("change", () => changes++)</script>';
+  '<input id="g" type="file"><input id="h" type="file"><input id="i" type="file"><script>window.changes = 0; g.addEventListener("change", () => changes++); h.addEventListener("change", () => changes++)</script>';
 
 describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () => {
   let browser: Browser;
@@ -26,7 +28,7 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
     await browser?.close();
   });
 
-  it("uploads into a same-site or out-of-process frame's input in one call after the gate, and never after Stop", async () => {
+  it("uploads into framed inputs when allowed and refuses after Stop or a blocked fence", async () => {
     const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
     using _removeDirectory = {
       [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
@@ -77,11 +79,12 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
           () => false,
         ),
       ).toBe(ownSession);
-      let gates = 0;
-      await PreviewUpload.setInputFiles(page, cdp, { locator: `${path}#g`, paths: [file] }, () => {
-        gates++;
-      });
-      expect(gates).toBe(1);
+      await PreviewUpload.setInputFiles(
+        page,
+        cdp,
+        { locator: `${path}#g`, paths: [file] },
+        testActionGate(page, cdp),
+      );
       const state = (id: string) =>
         inside
           .locator(id)
@@ -91,11 +94,30 @@ describe.skipIf(!chromiumInstalled)("agent uploads into framed file inputs", () 
           ]);
       expect(await state("#g")).toEqual(["note.txt", 1]);
       await expect(
-        PreviewUpload.setInputFiles(page, cdp, { locator: `${path}#h`, paths: [file] }, () => {
-          throw new Error("stopped");
-        }),
+        PreviewUpload.setInputFiles(
+          page,
+          cdp,
+          { locator: `${path}#h`, paths: [file] },
+          Object.assign(
+            () => {
+              throw new Error("stopped");
+            },
+            { channel: testActionChannel(page, cdp) },
+          ),
+        ),
       ).rejects.toThrow("stopped");
       expect(await state("#h")).toEqual([null, 1]);
+      await expect(
+        PreviewUpload.setInputFiles(
+          page,
+          cdp,
+          { locator: `${path}#i`, paths: [file] },
+          testActionGate(page, cdp, () => {
+            throw new BrowserControlInterrupted("Blocked host", "blocked_url");
+          }),
+        ),
+      ).rejects.toMatchObject({ reason: "blocked_url" });
+      expect(await state("#i")).toEqual([null, 1]);
     }
   });
 });

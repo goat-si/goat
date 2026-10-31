@@ -19,6 +19,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -134,6 +135,7 @@ function makeContext() {
   const context = {
     page,
     sessions,
+    on: () => context,
     cookies: vi.fn(async () => [{ name: "sid", value: "SecretCookieValue99" }]),
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
@@ -167,6 +169,7 @@ const asSession = (providerSessionId: string) => ({
 });
 
 const dependencies = Layer.mergeAll(
+  ServerSettings.layerTest(),
   Manager.layer,
   Broker.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {

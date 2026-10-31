@@ -1,7 +1,8 @@
 import { chromium } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import { snapshot, click } from "./ServerBrowserPage.ts";
+import { snapshot } from "./ServerBrowserPage.ts";
+import { testActionPage } from "./actionChannel.testkit.ts";
 
 it("narrows snapshots before budgeting, preserves actionable refs and isolates diff modes", async () => {
   expect(chromiumInstalled).toBe(true);
@@ -30,7 +31,7 @@ it("narrows snapshots before budgeting, preserves actionable refs and isolates d
     expect(interactive.accessibilityTree).not.toContain("Article paragraph");
     const ref = /\[ref=([^\]]+)\]/.exec(String(interactive.accessibilityTree))?.[1];
     expect(ref).toBeDefined();
-    await click(page, { locator: `aria-ref=${ref}` });
+    await testActionPage.click(page, { locator: `aria-ref=${ref}` });
     const first = await take({ scope: { selector: "main" }, diff: true });
     expect(first.diff?.base).toBe("none");
     expect(first.visibleText).not.toContain("Outside scope");

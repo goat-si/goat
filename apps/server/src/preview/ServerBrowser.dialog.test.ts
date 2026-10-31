@@ -24,6 +24,7 @@ import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
@@ -90,6 +91,7 @@ function makeContext() {
   };
   const context = {
     page,
+    on: () => context,
     newPage: async () => page,
     grantPermissions: async () => {},
     newCDPSession: async (_target: unknown) => makeSession(),
@@ -132,6 +134,7 @@ const layer = ServerBrowser.layer.pipe(
         pointer: () => Effect.void,
       }),
       PreviewAgentActivity.layer,
+      ServerSettings.layerTest(),
       Layer.mock(SecretRequests.SecretRequests)({}),
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-browser-screen-" })),
