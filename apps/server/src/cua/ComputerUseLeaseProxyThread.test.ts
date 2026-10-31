@@ -312,7 +312,7 @@ describe("thread lease proxy", () => {
         yield* h.send(request(102, "ping"));
         assert.deepEqual((yield* h.next).result, {});
         yield* h.send(work(1));
-        assert.deepInclude((yield* h.next).result?.structuredContent, { detail: "stopped" });
+        assert.deepInclude((yield* h.next).result?.structuredContent, { detail: "reconnecting" });
         assert.deepEqual(h.log, ["start 0", "closed 0", "start 1", "closed 1"]);
         yield* h.push(snapshot("B"));
         const b = yield* h.started;

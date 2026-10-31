@@ -10,6 +10,15 @@ const work = (id: number) => call(id, "type_text", { pid: 42, window_id: 7, text
 const detail = (answer: { result?: { structuredContent?: Record<string, unknown> } }) =>
   answer.result?.structuredContent?.detail;
 
+it.effect("a request before any control does not inherit a person's stop", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.send(work(975));
+    const answer = yield* h.next;
+    assert.notEqual(answer.result?.structuredContent?.code, "stopped_by_person");
+  }),
+);
+
 describe("thread lease proxy across a dropped lease stream", () => {
   it.effect("reconnect cannot replace a person's stopped control with a retry hint", () =>
     Effect.gen(function* () {

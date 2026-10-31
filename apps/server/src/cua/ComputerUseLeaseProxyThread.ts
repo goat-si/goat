@@ -142,23 +142,26 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       latch?.reason === undefined
     )
       return answerReconnecting(id, method);
-    const reason =
+    const candidate =
       given ??
       terminal ??
       (personStopped
         ? "stopped"
         : transport === "lost"
           ? "transport_lost"
-          : (context?.ended ??
-            (current !== undefined && (waiting === "stopped" || waiting === "stopped_all")
-              ? "reconnecting"
-              : waiting)));
+          : (context?.ended ?? waiting));
+    const reason =
+      (candidate === "stopped" || candidate === "stopped_all") && !personStopped
+        ? "reconnecting"
+        : candidate;
     const answer = refusal(
       id,
       method,
       reason,
       reason === "reconnecting"
-        ? RECONNECTING
+        ? transport === "reconnecting"
+          ? RECONNECTING
+          : WAITING
         : terminal !== undefined || personStopped || reason === "transport_lost"
           ? LEASE_END_MESSAGES[reason]
           : reason === "disabled"
