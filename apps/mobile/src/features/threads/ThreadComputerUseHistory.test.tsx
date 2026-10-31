@@ -16,8 +16,10 @@ vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicato
 import { ThreadComputerUseHistoryView } from "./ThreadComputerUseHistoryView";
 import { ThreadComputerUseHistoryForItem } from "./ThreadComputerUseHistory";
 
+const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
+
 it("mounts input history for a browser-only work entry", async () => {
-  const item = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson)({
+  const item = decodeItem({
     id: "browser-action",
     type: "dynamic_tool",
     threadId: "thread:a",
