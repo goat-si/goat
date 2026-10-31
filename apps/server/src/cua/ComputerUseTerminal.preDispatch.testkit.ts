@@ -319,6 +319,7 @@ const channelRefusal =
       | "activeRace"
       | "activeRaceClosed"
       | "activeRaceUnregistered"
+      | "activeRaceContinues"
       | "replacedRace",
   ) =>
   (input: Input) =>
@@ -348,11 +349,13 @@ const channelRefusal =
               const activeRace =
                 kind === "activeRace" ||
                 kind === "activeRaceClosed" ||
-                kind === "activeRaceUnregistered";
+                kind === "activeRaceUnregistered" ||
+                kind === "activeRaceContinues";
               if (activeRace && armed) reads++;
               if (kind === "replacedRace" && controlId === "B") reads++;
               const state: ComputerUseLeases.ComputerUseControlState =
-                kind === "authority" || (activeRace && armed && reads >= 2)
+                kind === "authority" ||
+                (activeRace && kind !== "activeRaceContinues" && armed && reads >= 2)
                   ? reason === "stopped_by_person"
                     ? { _tag: "ended", reason: "stopped" }
                     : { _tag: "paused", reason: "screen_locked" }
@@ -451,7 +454,8 @@ const channelRefusal =
       } else if (
         kind === "activeRace" ||
         kind === "activeRaceClosed" ||
-        kind === "activeRaceUnregistered"
+        kind === "activeRaceUnregistered" ||
+        kind === "activeRaceContinues"
       ) {
         yield* Deferred.await(entered);
         if (kind === "activeRaceClosed" && registered?.status === "registered")
@@ -704,6 +708,11 @@ export const preDispatchSites: ReadonlyArray<{
     name: "ComputerUsePrimitiveChannel.activeRaceUnregistered",
     undispatched: true,
     run: channelRefusal("activeRaceUnregistered"),
+  },
+  {
+    name: "ComputerUsePrimitiveChannel.capturedFailure",
+    undispatched: true,
+    run: channelRefusal("activeRaceContinues"),
   },
   {
     name: "ComputerUsePrimitiveChannel.replacedRace",
