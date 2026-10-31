@@ -82,11 +82,21 @@ const __flush = () => {
     group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
   }
 };
+// A used handle has already become its ref, so one still inside outgoing arguments would reach no element.
+const __carriesHandle = (value, depth = 0) =>
+  depth < 8 && value !== null && typeof value === 'object' &&
+  (Object.hasOwn(value, 'elementHandle') || (Array.isArray(value) ? value : Object.values(value)).some((each) => __carriesHandle(each, depth + 1)));
+const __refuseHandles = (value) => {
+  if (__carriesHandle(value))
+    throw new ScreenError('stale_reference', 'Pass an element handle as the target argument itself; nothing was sent.', true);
+};
 const __reply = (method, args) => {
+  __refuseHandles(args);
   if (__queued.length > 0) __flush();
   return __send(method, args);
 };
 const __enqueue = (method, arg) => new Promise((resolve, reject) => {
+  __refuseHandles(arg);
   if (__queued.length === 0) Promise.resolve().then(() => { if (__queued.length > 0) __flush(); });
   __queued.push({ method, arg, resolve, reject });
 });
