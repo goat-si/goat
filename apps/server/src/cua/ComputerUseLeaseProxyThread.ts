@@ -488,17 +488,30 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       return;
     }
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
+    const response = terminalSink(
+      { answer: (answer, _status, reply) => options.output(answer, reply) },
+      message,
+      () =>
+        terminal === "stopped" ||
+        terminal === "stopped_all" ||
+        (current === undefined &&
+          stoppedControls.size > 0 &&
+          (waiting === "stopped" || waiting === "stopped_all"))
+          ? "stopped_by_person"
+          : undefined,
+      () => false,
+    );
     if (
       isRequest &&
       typeof id === "string" &&
       (id.startsWith(OWN_ID) || id.startsWith("goat-proxy:"))
     )
-      return yield* options.output(
+      return yield* response.answer(
         reservedIdAnswer(id, id.startsWith(OWN_ID) ? OWN_ID : "goat-proxy:"),
       );
     const key = JSON.stringify(id);
     if (isRequest && (owners.has(key) || setup.pending(key)))
-      return yield* options.output(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
+      return yield* response.answer(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     const context = current;

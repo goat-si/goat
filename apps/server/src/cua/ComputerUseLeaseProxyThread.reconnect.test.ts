@@ -24,6 +24,8 @@ describe("thread lease proxy across a dropped lease stream", () => {
       const answer = yield* h.next;
       assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
       assert.notInclude(JSON.stringify(answer), "Try again");
+      yield* h.send(call("goat-proxy:reserved", "list_apps"));
+      assert.include(JSON.stringify(yield* h.next), '"code":"stopped_by_person"');
     }),
   );
   it.effect("a call already being admitted when the stream drops never reaches the driver", () =>
