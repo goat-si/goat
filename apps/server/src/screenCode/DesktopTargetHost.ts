@@ -36,6 +36,7 @@ import {
   type GuardElement,
 } from "./DesktopInputGuards.ts";
 import { aimOf, type Placed, type Rect } from "./DesktopFrames.ts";
+import { waitForGone } from "./DesktopWaitGone.ts";
 import { waitForOutcome } from "./DesktopWindowClosure.ts";
 import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import {
@@ -76,12 +77,10 @@ import { runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
-
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
 const withinPrimitiveCap = (args: Record<string, unknown>) =>
   new TextEncoder().encode(JSON.stringify(args)).byteLength <= COMPUTER_USE_PRIMITIVE_ARGS_BYTES;
-
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -743,6 +742,15 @@ export const createDesktopTargetHost = (deps: {
     }
     if (call.method === "wait_for") {
       const args = callArgs(call.args);
+      if (args.gone !== undefined)
+        return yield* waitForGone({
+          args,
+          pid: bound.pid,
+          windowId: bound.windowId,
+          deadline: call.deadlineMillis,
+          read: (readArgs) =>
+            boundRequest(bound, "nothing", "get_window_state", readArgs, call, context),
+        });
       if (args.window === "hidden")
         return yield* pollHiddenWindow({
           list: () =>
