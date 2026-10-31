@@ -1,10 +1,4 @@
-/**
- * Providers whose agent process runs on this host and can spawn the driver's
- * stdio MCP server. Cloud providers run elsewhere, and the driver would
- * operate this host's desktop on their behalf; Muse only accepts HTTP session
- * servers. See ADR-0022 for the per-adapter table. Clients read it to say why
- * `@computer` cannot run before a turn is sent.
- */
+/** Providers whose local agent process can spawn the desktop driver's stdio server. */
 export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
   "claudeAgent",
   "codex",
