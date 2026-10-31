@@ -31,10 +31,9 @@ import {
   boundedReadDetail,
   buildObservedDraft,
   desktopQuery,
-  desktopRows,
   driverQuery,
   framesOmission,
-  matchesQuery,
+  listedOf,
   observeScope,
   placeInWindow,
   queryOmission,
@@ -42,13 +41,23 @@ import {
   renderFailure,
   renderPageObservation,
   screenPlacement,
-  shownTree,
-  treeOf,
-  type DesktopQuery,
   type DesktopRow,
 } from "./DesktopObserveRead.ts";
+import {
+  numbersIn,
+  stripPartialNote,
+  structureProblem,
+  treeToDepth,
+  treeWithin,
+  withChildCounts,
+} from "./DesktopObserveDepth.ts";
+import {
+  canLiftNamesFromTree,
+  fastShownTree,
+  NAMED_BY_TEXT_ROLES,
+  parseDesktopTreeState,
+} from "./DesktopTreeState.ts";
 import { buildScreenshotCapture, treeWindowBasis } from "./DesktopTargetPoints.ts";
-import { cleanActionText, isInteractive, keepTreeLines } from "./DesktopTreeText.ts";
 import { checkWindowReplyState, otherWindowsOf, type WindowEntry } from "./DesktopWindows.ts";
 import {
   observationReplyBudget,
@@ -162,144 +171,7 @@ const keptScreenshotObservationId = (
     ? bound.observationId
     : undefined;
 
-const NAMED_BY_TEXT_ROLES = ["AXRow", "AXCell", "AXOutlineRow"];
-/**
- * Whether the tree text can name an element: desktopRows names only a listed element without a
- * label, from text under a row or cell line. Otherwise the text adds nothing to the rows.
- */
-export const canLiftNamesFromTree = (
-  elements: ReadonlyArray<Record<string, unknown>>,
-  markdown: string,
-) =>
-  NAMED_BY_TEXT_ROLES.some((role) => markdown.includes(role)) &&
-  elements.some(
-    (entry) =>
-      string(entry.element_token) !== undefined &&
-      natural(entry.element_index) !== undefined &&
-      string(entry.label) === undefined,
-  );
-
-const NUMBERED = /^- \[(\d+)\] /;
-const UNNUMBERED_TEXT = /^\s*- AXStaticText/m;
-/**
- * shownTree in one pass for the common case: no text line to pair, and every numbered line shows
- * its listed element as the driver writes it. Anything else goes through shownTree.
- */
-export const fastShownTree = (
-  markdown: string,
-  elements: ReadonlyArray<Record<string, unknown>> | undefined,
-  filtered: boolean,
-): string => {
-  const slow = () => shownTree(markdown, filtered ? undefined : elements);
-  if (UNNUMBERED_TEXT.test(markdown)) return slow();
-  if (!filtered && elements !== undefined) {
-    // Each listed element's line head, normalized as listedOf and verifiedIndexes read them.
-    const heads = new Map<number, string>();
-    for (const entry of elements) {
-      const index = natural(entry.element_index);
-      if (index === undefined) continue;
-      const label = typeof entry.label === "string" ? entry.label : undefined;
-      const value = typeof entry.value === "string" ? entry.value : undefined;
-      if (heads.has(index) || /[\r\n]/.test((label ?? "") + (value ?? ""))) return slow();
-      const role = string(entry.role) ?? "";
-      heads.set(
-        index,
-        "- [" + index + "] " + role + (label === undefined ? "" : ' "' + label + '"'),
-      );
-    }
-    const seen = new Set<number>();
-    for (const raw of markdown.split("\n")) {
-      const line = raw.trimStart();
-      const number = NUMBERED.exec(line)?.[1];
-      if (number === undefined) continue;
-      const index = Number(number);
-      const head = heads.get(index);
-      if (head === undefined || seen.has(index) || !line.startsWith(head)) return slow();
-      const next = line.charAt(head.length);
-      if (next !== "" && next !== " ") return slow();
-      seen.add(index);
-    }
-  }
-  return markdown.includes("name:") ? cleanActionText(markdown) : markdown;
-};
-
-/** A read's rows, the ones shown and their text, from the driver's state. */
-const parseDesktopTreeState = (input: {
-  readonly state: Record<string, unknown>;
-  readonly filtered: boolean;
-  readonly query: DesktopQuery | undefined;
-  readonly interactive: boolean;
-}) => {
-  const elements = array(input.state.elements)
-    .map(object)
-    .filter((entry) => entry !== undefined);
-  const markdown = treeOf(input.state, elements, input.filtered);
-  const source = string(input.state.tree_diff) ?? string(input.state.tree_markdown) ?? "";
-  const lines = new Map<number, string[]>();
-  for (const line of source.split("\n")) {
-    const match = /^(?:\s*- |[~+] )\[(\d+)\] (.*)$/.exec(line);
-    if (!match?.[1] || match[2] === undefined) continue;
-    const index = Number(match[1]);
-    lines.set(index, [...(lines.get(index) ?? []), match[2]]);
-  }
-  const entries = new Map<number, Record<string, unknown>[]>();
-  for (const entry of elements) {
-    const index = natural(entry.element_index);
-    if (index !== undefined) entries.set(index, [...(entries.get(index) ?? []), entry]);
-  }
-  const safeText = elements.every((entry) =>
-    [
-      entry.label,
-      entry.value,
-      entry.description,
-      ...(Array.isArray(entry.actions) ? entry.actions : []),
-    ].every((value) => typeof value !== "string" || !/[\r\n\u2028\u2029]/.test(value)),
-  );
-  const rows = desktopRows(elements, canLiftNamesFromTree(elements, markdown) ? markdown : "").map(
-    (row) => {
-      if (
-        !safeText ||
-        row.index === undefined ||
-        !row.name ||
-        row.lifted ||
-        row.name === row.text ||
-        /["\r\n]/.test(row.name)
-      )
-        return row;
-      const listed = entries.get(row.index);
-      const entry = listed?.length === 1 ? listed[0] : undefined;
-      if (
-        !entry ||
-        entry?.description === row.name ||
-        (typeof entry?.title === "string" && entry.title !== row.name)
-      )
-        return row;
-      const matches = lines.get(row.index);
-      const head = `${row.role} "${row.name}"`;
-      const content = matches?.[0];
-      return matches?.length === 1 &&
-        content?.startsWith(head) &&
-        /^(?:\s|$)/.test(content.slice(head.length))
-        ? { ...row, pairingTitle: row.name }
-        : row;
-    },
-  );
-  const query = input.query;
-  const shown = query
-    ? rows.filter((row) => matchesQuery(row, query))
-    : input.interactive
-      ? rows.filter(isInteractive)
-      : rows;
-  const treeText = fastShownTree(markdown, input.filtered ? undefined : elements, input.filtered);
-  const shownText =
-    query || input.interactive
-      ? keepTreeLines(
-          treeText,
-          new Set(shown.flatMap((row) => (row.index === undefined ? [] : [row.index]))),
-        )
-      : treeText;
-  return { elements, markdown, rows, shown, shownText };
-};
+export { canLiftNamesFromTree, fastShownTree };
 
 export interface DesktopObserveDeps {
   readonly observations: ScreenObservations;
@@ -362,6 +234,117 @@ const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
   });
   return {
     value: withObserveTiming(res.observation, timing, rawBudget),
+    category: "unverifiable" as const,
+  };
+});
+
+const keptElements = (state: Record<string, unknown>, numbers: ReadonlySet<number>) =>
+  array(state.elements).filter((entry) => {
+    const index = natural(object(entry)?.element_index);
+    return index !== undefined && numbers.has(index);
+  });
+
+/** One element's subtree from the latest whole read, as a page of it: nothing is read again. */
+const observeWithin = Effect.fn("DesktopObserveLatency.within")(function* (
+  deps: DesktopObserveDeps,
+  bound: BoundWindow,
+  call: ScreenHostCall,
+  context: ScreenHostContext,
+  args: Record<string, unknown>,
+) {
+  const startedAt = yield* Clock.currentTimeMillis;
+  const index = args.within;
+  if (typeof index !== "number" || !Number.isInteger(index) || index < 0)
+    return yield* Effect.fail(
+      fail("invalid_argument", "within takes an element number from the latest observe()."),
+    );
+  const kept = bound.lastTree;
+  if (!kept || kept.base !== bound.observationId || string(args.withinBase) !== kept.base)
+    return yield* Effect.fail(
+      fail(
+        "stale_reference",
+        "within reads part of the latest whole read of this window; call observe() or observe({depth}) first.",
+      ),
+    );
+  const problem = structureProblem(
+    string(kept.state.tree_markdown) ?? "",
+    listedOf(
+      array(kept.state.elements)
+        .map(object)
+        .filter((entry) => entry !== undefined),
+    ),
+  );
+  if (problem !== undefined)
+    return yield* Effect.fail(
+      fail(
+        "unsupported",
+        `Part of this read cannot be shown on its own: ${problem}. Use observe({after}) or observe({query}).`,
+      ),
+    );
+  const sub = treeWithin(string(kept.state.tree_markdown) ?? "", index);
+  if (sub === undefined)
+    return yield* Effect.fail(
+      fail("stale_reference", `No [${index}] in the latest read; use a number from observe().`),
+    );
+  const state = {
+    ...kept.state,
+    tree_markdown: sub,
+    elements: keptElements(kept.state, numbersIn(sub)),
+    elements_complete: kept.state.elements_complete === true && !kept.cut,
+  };
+  const tree = parseDesktopTreeState({
+    state,
+    filtered: false,
+    query: undefined,
+    interactive: false,
+  });
+  const origin = windowOrigin(
+    array(kept.state.elements)
+      .map(object)
+      .filter((entry) => entry !== undefined),
+  );
+  // Frames stay only while the window is where the read measured it.
+  const placedOrigin =
+    origin && bound.framesBasis && sameRect(origin, bound.framesBasis) ? origin : undefined;
+  const placed = placeInWindow(tree.shown, tree.elements, bound.frames ?? new Map(), placedOrigin);
+  const rawBudget = observationReplyBudget(call, context.limits);
+  const observation = yield* Effect.try({
+    try: () =>
+      deps.observations.renderObservation({
+        draft: deps.observations.normalizeAppTree(
+          buildObservedDraft({
+            targetRef: bound.ref,
+            generation: bound.epoch,
+            state,
+            filtered: false,
+            limit: READ_BOUNDS[0],
+            shown: placed.rows,
+            shownText: tree.shownText,
+            omitted: framesOmission(placed.dropped),
+            screen: screenPlacement(tree.shown, placedOrigin),
+            fallbackTitle: undefined,
+          }),
+        ),
+        mode: "query",
+        scope: `within [${index}]`,
+        page: kept.base,
+        limits: { treeBytes: rawBudget },
+      }),
+    catch: renderFailure,
+  });
+  if (bound.withinPages?.base !== kept.base)
+    bound.withinPages = { base: kept.base, ids: new Set() };
+  bound.withinPages.ids.add(observation.observationId);
+  const endedAt = yield* Clock.currentTimeMillis;
+  const timing = buildObserveTiming({
+    startedAt,
+    endedAt,
+    driverMs: 0,
+    parseMs: 0,
+    renderMs: elapsed(startedAt, endedAt),
+  });
+  return {
+    value: withObserveTiming(observation, timing, rawBudget),
     category: "unverifiable" as const,
   };
 });
@@ -449,6 +432,14 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
 ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
   const { observations } = deps;
   const capture = call.method === "screenshot";
+  if (!capture && args.within !== undefined)
+    return yield* observeWithin(deps, bound, call, context, args);
+  const depth = capture ? undefined : args.depth;
+  if (
+    depth !== undefined &&
+    (typeof depth !== "number" || !Number.isInteger(depth) || depth < 1 || depth > 10)
+  )
+    return yield* Effect.fail(fail("invalid_argument", "depth is a whole number from 1 to 10."));
   // Any read starts the tree baseline over; only a whole read below sets it again.
   delete bound.fullRows;
   if (!capture && args.after !== undefined)
@@ -529,6 +520,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     delete bound.elementsByToken;
     delete bound.rows;
     delete bound.fullRows;
+    delete bound.lastTree;
   };
   let limit: number = READ_BOUNDS[0];
   yield* settleCaptureIfNeeded(capture, bound, call.deadlineMillis);
@@ -669,12 +661,49 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       currentStatus === "no_change"
         ? (diffText?.match(/; focused element is \[\d+\]/)?.[0] ?? "")
         : "";
-    const tree = parseDesktopTreeState({ state, filtered, query, interactive });
+    const raw = stripPartialNote(string(state.tree_markdown) ?? "");
+    let treeState = state;
+    let depthCut: ReturnType<typeof treeToDepth> | undefined;
+    if (depth !== undefined) {
+      const problem = isDiff
+        ? "it came back as a diff"
+        : structureProblem(
+            raw.tree,
+            listedOf(
+              array(state.elements)
+                .map(object)
+                .filter((entry) => entry !== undefined),
+            ),
+          );
+      if (problem !== undefined) {
+        retire();
+        return yield* Effect.fail(
+          fail(
+            "unsupported",
+            `This window was read, but ${problem}, so it cannot be shown by depth. Use observe(), observe({after}) or observe({query}).`,
+          ),
+        );
+      }
+      depthCut = treeToDepth(raw.tree, depth);
+      treeState = {
+        ...state,
+        tree_markdown: depthCut.text,
+        elements: keptElements(state, numbersIn(depthCut.text)),
+        elements_complete: state.elements_complete === true && !depthCut.dropped && !raw.cut,
+      };
+    }
+    const tree = parseDesktopTreeState({ state: treeState, filtered, query, interactive });
+    // A depth read shows part of the window, but guards, frames and named actions cover all of it,
+    // so an element first shown by observe({within}) is checked like one from a whole read.
+    const whole = depthCut ? parseDesktopTreeState({ state, filtered, query, interactive }) : tree;
+    const treeText = depthCut
+      ? withChildCounts(tree.shownText, depthCut.counts, raw.cut || state.truncated === true)
+      : tree.shownText;
     const numbersChanged =
       isDiff && (bound.structuralDiff === true || structuralDiff(rows, bound.rows, tree.rows));
-    bound.frames = elementFrames(tree.elements);
+    bound.frames = elementFrames(whole.elements);
     // The agent reads frames in window points; internal geometry stays in the driver's screen points.
-    const origin = windowOrigin(tree.elements);
+    const origin = windowOrigin(whole.elements);
     const placed = placeInWindow(tree.shown, tree.elements, bound.frames, origin);
     const omitted = [
       ...(query
@@ -693,11 +722,12 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     bound.rows =
       isDiff && !numbersChanged && bound.rows
         ? retainPairingTitles(bound.rows, tree.shown, rows)
-        : tree.shown;
+        : whole.shown;
     // Only a whole read compares: a cut, filtered or degraded one drops rows the window still has.
     if (
       !capture &&
       query === undefined &&
+      depth === undefined &&
       !interactive &&
       !filtered &&
       state.truncated !== true &&
@@ -711,9 +741,9 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         connectionGeneration: bound.connectionGeneration,
       };
     bound.elementsByToken = inspectTreeElements(
-      tree.elements,
-      tree.rows,
-      tree.markdown,
+      whole.elements,
+      whole.rows,
+      whole.markdown,
       typeof state.tree_markdown === "string" ? state.tree_markdown : undefined,
     );
     const basis = treeWindowBasis(bound.frames, nextBounds);
@@ -723,13 +753,16 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     parseMs = elapsed(parseAt, renderAt);
     const nextEpoch = followedSheet ? deps.epoch() + 1 : bound.epoch;
     const nextRef = followedSheet ? { ...bound.ref, generation: nextEpoch } : bound.ref;
-    const scope = observeScope(
-      followedSheet,
-      fromSheetId,
-      expectedWindowId,
-      query !== undefined,
-      interactive,
-    );
+    const scope =
+      depth !== undefined
+        ? `${observeScope(followedSheet, fromSheetId, expectedWindowId, false, false) ?? "window"} depth ${depth}`
+        : observeScope(
+            followedSheet,
+            fromSheetId,
+            expectedWindowId,
+            query !== undefined,
+            interactive,
+          );
     const snapshotId = string(state.snapshot_id);
     const snapshotBudget =
       snapshotId === undefined ? 0 : Buffer.byteLength(JSON.stringify(snapshotId)) + 12;
@@ -740,7 +773,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
             buildObservedDraft({
               targetRef: nextRef,
               generation: nextEpoch,
-              state,
+              state: treeState,
               filtered,
               limit,
               shown: placed.rows,
@@ -752,7 +785,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
                   : numbersChanged
                     ? `${rows}\nother numbers unchanged since ${baseObservationId}; observe({diff:false}) lists every current number`
                     : `${rows}\nother numbers unchanged; latest full observation is ${bound.fullObservationId}`
-                : tree.shownText,
+                : treeText,
               omitted,
               screen,
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
@@ -777,9 +810,11 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       if (followedSheet) deps.setEpoch(nextEpoch);
       commitObservedSheet(bound, sheet, nextRef, nextBounds);
       if (snapshotId !== undefined) bound.snapshotId = snapshotId;
-      bound.lastReadCut = query === undefined && !interactive && observation.truncated;
+      bound.lastReadCut =
+        query === undefined && depth === undefined && !interactive && observation.truncated;
       bound.diffBaseline =
         query === undefined &&
+        depth === undefined &&
         !interactive &&
         !observation.truncated &&
         !tree.shown.some((row) => row.lifted === true);
@@ -795,7 +830,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         bound.pages = {
           base: observation.observationId,
           rows: placed.rows,
-          text: tree.shownText,
+          text: treeText,
           given: new Set(observation.elements.map((element) => element.index)),
           ids: new Set(),
           ...(origin === undefined ? {} : { origin }),
@@ -803,6 +838,14 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
           screen,
         };
       else delete bound.pages;
+      // A whole read keeps its raw tree so observe({within}) can show part of it without reading.
+      if (!isDiff && !filtered && query === undefined && !interactive && raw.tree.trim() !== "")
+        bound.lastTree = {
+          base: observationId,
+          state: { ...state, tree_markdown: raw.tree },
+          cut: raw.cut || state.truncated === true,
+        };
+      else delete bound.lastTree;
       const timing = buildObserveTiming({
         startedAt,
         endedAt: yield* Clock.currentTimeMillis,

@@ -85,7 +85,7 @@ export const repeatedIndexes = (lines: ReadonlyArray<TreeLine>): ReadonlySet<num
   return repeated;
 };
 
-interface Listed {
+export interface Listed {
   readonly index: number;
   readonly role: string;
   readonly label?: string;

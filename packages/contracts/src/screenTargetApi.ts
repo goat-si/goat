@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/27";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/28";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
@@ -92,6 +92,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
+// app.observe({ depth: 1..10 }) reads the window and shows it to that depth; "(+K)" counts children left out. app.observe({ within: n }) then shows [n]'s subtree from that same read, sending nothing, and keeps its numbers; a newer read or any input ends it.
 interface App extends TargetBase { menu(path: string[], o?: { send?: boolean; verify?: boolean }): Promise<Done>; launch(): Promise<Done>;
   selectText(t: Target, text: string, o?: { occurrence?: number; prefix?: string; suffix?: string; selection?: "text" | "cursor_before" | "cursor_after" }): Promise<Done>;
   // selectText (macOS): selects text inside a field named by number, id or role and name, never a point, leaving its value as is; the text must match once
