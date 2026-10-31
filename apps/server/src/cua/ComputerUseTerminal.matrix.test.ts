@@ -493,11 +493,12 @@ const refusalBase: Parameters<typeof refuseProxyCall>[0] = {
   listApps: Effect.void,
 };
 const proxyRefusal =
-  (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>): Driver =>
+  (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>, detail: string): Driver =>
   (input) =>
     Effect.gen(function* () {
       const line = yield* refuseProxyCall({ ...refusalBase, ...overrides });
       if (line === undefined) return yield* Effect.die("expected a proxy refusal");
+      assert.include(line, `"detail":"${detail}"`);
       return outputState(
         finalTerminalLine(
           line,
@@ -516,74 +517,91 @@ const sites: ReadonlyArray<{
   {
     name: "ComputerUseLeaseProxyRefusal.finished",
     undispatched: true,
-    run: proxyRefusal({ finished: () => "expired" }),
+    run: proxyRefusal({ finished: () => "expired" }, "expired"),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.paused",
     undispatched: true,
-    run: proxyRefusal({ paused: () => "screen_locked" }),
+    run: proxyRefusal({ paused: () => "screen_locked" }, "screen_locked"),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.idle",
     undispatched: true,
-    run: proxyRefusal({ idle: () => true }),
+    run: proxyRefusal({ idle: () => true }, "control_idle"),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.desktopCapture",
     undispatched: true,
-    run: proxyRefusal({
-      message: { id: 1, method: "tools/call", params: { name: "get_desktop_state" } },
-    }),
+    run: proxyRefusal(
+      {
+        message: { id: 1, method: "tools/call", params: { name: "get_desktop_state" } },
+      },
+      "desktop_capture_off",
+    ),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.toFile",
     undispatched: true,
-    run: proxyRefusal({ toFile: () => "capture unavailable" }),
+    run: proxyRefusal({ toFile: () => "capture unavailable" }, "desktop_capture_off"),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.tokenFirst",
     undispatched: true,
-    run: proxyRefusal({ tokenFirstRefuses: () => true }),
+    run: proxyRefusal({ tokenFirstRefuses: () => true }, "token_first"),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.scopeResolve",
     undispatched: true,
-    run: proxyRefusal({
-      message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
-      apps: () => new Set(["approved"]),
-    }),
+    run: proxyRefusal(
+      {
+        message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
+        apps: () => new Set(["approved"]),
+      },
+      "app_not_allowed",
+    ),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.scopeRefuse",
     undispatched: true,
-    run: proxyRefusal({
-      message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
-      apps: () => new Set(["approved"]),
-      listed: new Map([[55, { id: "other", name: "Other" }]]),
-    }),
+    run: proxyRefusal(
+      {
+        message: { id: 1, method: "tools/call", params: { name: "click", arguments: { pid: 55 } } },
+        apps: () => new Set(["approved"]),
+        listed: new Map([[55, { id: "other", name: "Other" }]]),
+      },
+      "app_not_approved",
+    ),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.screenShared",
     undispatched: true,
-    run: proxyRefusal({
-      message: {
-        id: 1,
-        method: "tools/call",
-        params: { name: "move_mouse", arguments: { x: 1, y: 1 } },
+    run: proxyRefusal(
+      {
+        message: {
+          id: 1,
+          method: "tools/call",
+          params: { name: "bring_to_front", arguments: { pid: 55, window_id: 7 } },
+        },
+        listed: new Map([[55, { id: "other", name: "Other" }]]),
+        shared: () => true,
       },
-      shared: () => true,
-    }),
+      "screen_shared",
+    ),
   },
   {
     name: "ComputerUseLeaseProxyRefusal.foreground",
     undispatched: true,
-    run: proxyRefusal({
-      message: {
-        id: 1,
-        method: "tools/call",
-        params: { name: "type_text", arguments: { text: "a" } },
+    run: proxyRefusal(
+      {
+        message: {
+          id: 1,
+          method: "tools/call",
+          params: { name: "bring_to_front", arguments: { pid: 55, window_id: 7 } },
+        },
+        listed: new Map([[55, { id: "other", name: "Other" }]]),
       },
-    }),
+      "foreground_not_approved",
+    ),
   },
   {
     name: "ComputerUseLeaseResponses.unsentCallRefusal.ending",
