@@ -17,7 +17,12 @@ export const batchNeedsListing = (message: Envelope, listed: ReadonlyMap<number,
       return (
         entries.length === 0 ||
         entries.some(
-          (app) => app.bundleId === undefined || cuaAppKey(app.bundleId) !== cuaAppKey(wanted),
+          (app) =>
+            app.bundleId === undefined ||
+            cuaAppKey(app.bundleId) !== cuaAppKey(wanted) ||
+            [app.name, app.executable].some(
+              (alias) => alias !== undefined && cuaAppKey(alias) === cuaAppKey(wanted),
+            ),
         )
       );
     }) === true
