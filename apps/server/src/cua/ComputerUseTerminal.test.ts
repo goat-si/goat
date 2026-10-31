@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
   mergeTerminal,
+  replaceWithTerminal,
   terminalFailure,
   terminalReplyState,
   terminalState,
@@ -316,5 +317,15 @@ it("preserves terminal evidence when a failed reply has a malformed error marker
   };
   const state = terminalReplyState(reply, "unknown_outcome");
   assert.equal(state.reason, "screen_locked");
+  assert.isTrue(state.possibleCommit);
+});
+
+it("merges conflicting terminal reasons inside a replaced answer", () => {
+  const state = replaceWithTerminal({
+    reason: "screen_locked",
+    code: "stopped_by_person",
+    possibleCommit: true,
+  });
+  assert.equal(state.reason, "stopped_by_person");
   assert.isTrue(state.possibleCommit);
 });

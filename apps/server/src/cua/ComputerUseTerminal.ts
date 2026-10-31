@@ -44,7 +44,7 @@ export type ComputerUseTerminalSource =
   | boolean
   | undefined
   | {
-      readonly reason?: ComputerUseTerminalReason | undefined;
+      readonly reason?: unknown;
       readonly possibleCommit?: boolean | undefined;
       readonly code?: unknown;
       readonly effectStarted?: boolean | undefined;
@@ -63,15 +63,17 @@ export const replaceWithTerminal = (
       };
     if (source === undefined) return {};
     const code = source.code;
-    return {
-      reason:
-        source.reason ??
-        (code === "stopped_by_person" || code === "screen_locked" ? code : undefined),
-      possibleCommit:
-        source.possibleCommit === true ||
-        source.effectStarted === true ||
-        source.safety?.possibleCommit === true,
-    };
+    const reason = source.reason;
+    return mergeTerminal(
+      { reason: reason === "stopped_by_person" || reason === "screen_locked" ? reason : undefined },
+      {
+        reason: code === "stopped_by_person" || code === "screen_locked" ? code : undefined,
+        possibleCommit:
+          source.possibleCommit === true ||
+          source.effectStarted === true ||
+          source.safety?.possibleCommit === true,
+      },
+    );
   };
   return sources.reduce<ComputerUseTerminalState>(
     (state, source) => mergeTerminal(state, stateOf(source)),
