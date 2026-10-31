@@ -120,7 +120,11 @@ it.effect(
       const restarted = yield* Deferred.make<void>();
       const answered = yield* Deferred.make<void>();
       const sendGate = yield* Deferred.make<void>();
-      const proxy = yield* harness({ onTarget: () => true, targetGate: sendGate });
+      const proxy = yield* harness({
+        autoAppListing: true,
+        onTarget: () => true,
+        targetGate: sendGate,
+      });
       yield* Effect.gen(function* () {
         const service = yield* Grants.BrowserOriginGrants;
         yield* service.setDriverCapability(true);
