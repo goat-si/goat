@@ -2,6 +2,8 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
@@ -24,6 +26,86 @@ const invocation = {
   },
 };
 
+it.live("a late Stop for an old control does not fence a newer control's unfinished cell", () =>
+  Effect.gen(function* () {
+    const firstEntered = yield* Deferred.make<void>();
+    const secondEntered = yield* Deferred.make<void, string>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    let controlId = "A";
+    let notify: Parameters<
+      NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+    >[0] = () => {};
+    const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: (threadId) =>
+            Effect.sync(() =>
+              Option.some({ threadId, controlId, expiresAt: DateTime.makeUnsafe(60000) }),
+            ),
+          onAuthorityChange: (listener) => {
+            notify = listener;
+            return () => {};
+          },
+          releaseForeground: () => Effect.succeed(false),
+        }),
+      ),
+    );
+    const { host } = desktopFixture({});
+    const service = yield* ScreenRunService.pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          leases,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          desktopHost: {
+            ...host,
+            finishCell: (context) =>
+              Deferred.succeed(
+                context.turnId === "A" ? firstEntered : secondEntered,
+                undefined,
+              ).pipe(Effect.andThen(Deferred.await(release)), Effect.as({})),
+          },
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+    const request = {
+      runId: "run",
+      threadId: "thread",
+      environmentId: "env",
+      invocation,
+      source: "return 1;",
+    };
+    const first = yield* service
+      .runCell({ ...request, turnId: "A" })
+      .pipe(Effect.result, Effect.forkChild);
+    yield* Deferred.await(firstEntered);
+    controlId = "B";
+    const second = yield* service.runCell({ ...request, turnId: "B" }).pipe(
+      Effect.tapError(() => Deferred.fail(secondEntered, "second cell did not start")),
+      Effect.result,
+      Effect.forkChild,
+    );
+    yield* Deferred.await(secondEntered);
+    notify({
+      kind: "stop",
+      threadId: ThreadId.make("thread"),
+      controlId: "A",
+      terminal: "stopped_by_person",
+    });
+    yield* Deferred.succeed(release, undefined);
+    const a = yield* Fiber.join(first);
+    const b = yield* Fiber.join(second);
+    expect(a._tag).toBe("Failure");
+    if (a._tag === "Failure") expect(a.failure.code).toBe("stopped_by_person");
+    expect(b._tag).toBe("Success");
+  }),
+);
+
 it.live.each(["lock first", "stop first"])(
   "end-cell collection merges terminal causes and preserves possible input: %s",
   (order) =>
@@ -37,6 +119,7 @@ it.live.each(["lock first", "stop first"])(
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             proxy: undefined,
+            currentControl: () => Effect.succeedNone,
             onAuthorityChange: (listener) => {
               notify = listener;
               return () => {};
@@ -111,6 +194,7 @@ it.live.each(["stopped_by_person", "screen_locked"] as const)(
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             proxy: undefined,
+            currentControl: () => Effect.succeedNone,
             onAuthorityChange: (listener) => {
               trigger = () =>
                 listener({
@@ -176,6 +260,7 @@ it.live.each(["lock", "stop", "lock then stop", "stop then lock", "lock then res
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             proxy: undefined,
+            currentControl: () => Effect.succeedNone,
             onAuthorityChange: (listener) => {
               notify = listener;
               return () => {};

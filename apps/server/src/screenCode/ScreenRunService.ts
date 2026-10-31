@@ -38,6 +38,7 @@ import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import * as SiteNotes from "../preview/SiteNotes.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollection.ts";
+import { makeCellAuthority } from "./ScreenCellAuthority.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
@@ -392,7 +393,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   };
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
-  const activeCells = new Map<string, string>();
+  const activeCells = makeCellAuthority(options.leases);
   const cellTerminals = new Map<string, ComputerUseTerminalReason>();
   const cleanupJournal = new Map<string, ScreenJournalEntry[]>();
   const turnKey = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
@@ -498,6 +499,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const [runId, turnId] = id.split("\u0000");
       if (!runId || !turnId) continue;
       const cellId = activeCells.get(id);
+      if (!activeCells.matches(id, change.controlId)) continue;
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
         latchCellTerminal(cellTerminals, id, change.terminal);
@@ -569,8 +571,9 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         });
       if (input.bindingHints) options.tabHost?.setBindingHints(input, input.bindingHints);
       // Stop fences the tracked cell, so a second cell must never replace the one still running.
-      if (activeCells.has(id)) return yield* Effect.fail(fail("pending_limit"));
-      activeCells.set(id, cellId);
+      const controlId = yield* activeCells.current(input.threadId);
+      if (!activeCells.begin(id, cellId, controlId))
+        return yield* Effect.fail(fail("pending_limit"));
       // A child's WASM memory cannot shrink, so a lower cap needs a fresh child.
       const liveWasmBytes = running.threadWasmBytes(input.threadId);
       if (liveWasmBytes !== undefined && cellLimits.turnWasmBytes < liveWasmBytes)
@@ -851,6 +854,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         const [runId, turnId] = id.split("\u0000");
         if (!runId || !turnId) continue;
         const cellId = activeCells.get(id);
+        if (!activeCells.matches(id, input.controlId)) continue;
         const cut = cutsCell(input, runId, turnId, cellId);
         // With no cell running, a cutoff ends the turn's hold on the screen; values stay.
         const releases = cut || cellId === undefined;
