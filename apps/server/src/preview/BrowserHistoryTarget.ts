@@ -14,7 +14,7 @@ export async function browserHistoryTarget(
         if (
           tag === "input" ||
           tag === "textarea" ||
-          (element instanceof HTMLElement && element.isContentEditable)
+          element.closest("[contenteditable]:not([contenteditable='false'])") !== null
         )
           return "textbox";
         const role =
