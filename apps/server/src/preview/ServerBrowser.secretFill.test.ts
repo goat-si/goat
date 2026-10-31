@@ -1,3 +1,6 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 // @effect-diagnostics nodeBuiltinImport:off - one-time dummy passwords come from node:crypto.
 import * as NodeCrypto from "node:crypto";
 
@@ -108,10 +111,12 @@ const makeSecrets = (beforeConsume: () => Promise<unknown> = async () => {}) => 
   return { save, saved, consumed, layer: Layer.succeed(SecretRequests.SecretRequests, service) };
 };
 
-const layerFor = (secrets: ReturnType<typeof makeSecrets>) =>
+const layerFor = (secrets: ReturnType<typeof makeSecrets>, keepTypedText = false) =>
   ServerBrowser.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
+        SqlitePersistence.layerMemory,
+        ServerSettings.layerTest({ computerUseKeepTypedText: keepTypedText }),
         Manager.layer,
         Broker.layer,
         secrets.layer,
@@ -935,4 +940,31 @@ describe.skipIf(!chromiumInstalled)("the identifier a form was sent with", () =>
       }).pipe(Effect.provide(layerFor(secrets))),
     );
   });
+});
+
+it.live("retains only observed normal browser typing when enabled", () => {
+  const secrets = makeSecrets();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const { open, call, fill, privacy } = yield* harness;
+      const { tabId, page } = yield* open("https://history.test/");
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const history = yield* makeComputerUseHistory;
+      yield* call(tabId, "type", { selector: "#normal", text: "normal" });
+      yield* call(tabId, "type", { selector: "#edit", text: "editable" });
+      yield* settings.updateSettings({ computerUseKeepTypedText: false });
+      yield* call(tabId, "type", { selector: "#normal", text: "off" });
+      yield* settings.updateSettings({ computerUseKeepTypedText: true });
+      const secret = secrets.save("https://history.test");
+      yield* fill(tabId, { secretRef: secret.ref, selector: "#pw" });
+      yield* Effect.promise(() => page.locator("#normal").focus());
+      yield* privacy(tabId, false);
+      yield* call(tabId, "type", { selector: "#normal", text: "guarded" });
+      const entries = (yield* history.listForThread(threadId)).filter(
+        (entry) => entry.method === "type",
+      );
+      expect(entries.map((entry) => entry.typedText)).toEqual([null, null, "editable", "normal"]);
+      expect(entries.map((entry) => entry.typedLength)).toEqual([7, 3, 8, 6]);
+    }),
+  ).pipe(Effect.provide(layerFor(secrets, true)));
 });

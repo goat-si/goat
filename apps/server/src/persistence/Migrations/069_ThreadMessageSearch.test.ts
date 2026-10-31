@@ -35,7 +35,7 @@ layer("069_ThreadMessageSearch", (it) => {
       // Older rows carry no author; they were the user's.
       yield* insert("legacy", "user", 0, "needle from before authors", undefined);
 
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: 69 });
 
       const indexed = () =>
         sql<{ readonly messageId: string }>`

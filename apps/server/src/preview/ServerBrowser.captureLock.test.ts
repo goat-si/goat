@@ -1,3 +1,4 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as NodeEvents from "node:events";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -119,6 +120,7 @@ const scope = {
 const layer = ServerBrowser.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
+      SqlitePersistence.layerMemory,
       Broker.layer,
       PreviewAgentActivity.layer,
       Layer.mock(SecretRequests.SecretRequests)({}),

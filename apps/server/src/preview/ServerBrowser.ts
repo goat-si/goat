@@ -95,12 +95,16 @@ import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrows
 import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
+import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
+import { makeBrowserInputRetention } from "./BrowserInputRetention.ts";
+import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
-import { pushBounded } from "./boundedBuffer.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { READ_OPERATIONS } from "./readOperations.ts";
@@ -143,7 +147,6 @@ const sleepUntil = (deadline: number) =>
 const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
-const ACTION_TIMELINE_LIMIT = 50;
 
 export class ServerBrowserTabNotFoundError extends Schema.TaggedError<ServerBrowserTabNotFoundError>()(
   "ServerBrowserTabNotFoundError",
@@ -347,9 +350,20 @@ const make = Effect.gen(function* () {
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
   const secretFill = yield* ServerBrowserSecretFill.make;
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const history = yield* makeComputerUseHistory;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const keepTypedText = () =>
+    Option.isSome(settings)
+      ? runPromise(
+          settings.value.getSettings.pipe(
+            Effect.map((value) => value.computerUseKeepTypedText),
+            Effect.orElseSucceed(() => false),
+          ),
+        )
+      : Promise.resolve(false);
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
@@ -1539,30 +1553,7 @@ const make = Effect.gen(function* () {
       }
     };
 
-  const recordAction = <A>(tab: ServerTab, action: string, run: () => Promise<A>): Promise<A> => {
-    const event: {
-      -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
-    } = {
-      id: NodeCrypto.randomUUID(),
-      action,
-      status: "running",
-      startedAt: new Date().toISOString(),
-    };
-    pushBounded(tab.actionTimeline, event, ACTION_TIMELINE_LIMIT);
-    return run().then(
-      (result) => {
-        event.status = "succeeded";
-        event.completedAt = new Date().toISOString();
-        return result;
-      },
-      (cause: unknown) => {
-        event.status = "failed";
-        event.completedAt = new Date().toISOString();
-        event.error = tab.diagnostics.firstLine(cause);
-        throw cause;
-      },
-    );
-  };
+  const recordAction = makeBrowserHistoryRecordAction(history, runPromise);
 
   const requireTab = async (request: PreviewAutomationRequest) => {
     SessionControl.requireAgentSession(request);
@@ -1654,7 +1645,6 @@ const make = Effect.gen(function* () {
               : "The requested server preview tab does not exist.",
           );
         }
-        // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
         const existing =
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
@@ -1675,13 +1665,14 @@ const make = Effect.gen(function* () {
                 'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
                 "dialogPending",
               );
-            if (existing) {
-              if (url) await navigate(tab, url, "load", navigationTimeout);
-            } else {
-              await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
-                throw unloadedOpen(tab.tabId, cause);
-              });
-            }
+            const loading = () =>
+              existing && url
+                ? navigate(tab, url, "load", navigationTimeout)
+                : (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
+                    throw unloadedOpen(tab.tabId, cause);
+                  });
+            if (url) await recordAction(tab, "navigate", loading, { url });
+            else if (!existing) await loading();
             const reveal = open.open ?? open.show;
             if (reveal !== false) {
               await runPromise(
@@ -1829,13 +1820,18 @@ const make = Effect.gen(function* () {
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
-        await recordAction(tab, "navigate", () =>
-          navigate(
-            tab,
-            resolveNavigationUrl(navigateInput),
-            navigateInput.readiness ?? "load",
-            navigateInput.timeoutMs ?? request.timeoutMs,
-          ),
+        const destination = resolveNavigationUrl(navigateInput);
+        await recordAction(
+          tab,
+          "navigate",
+          () =>
+            navigate(
+              tab,
+              destination,
+              navigateInput.readiness ?? "load",
+              navigateInput.timeoutMs ?? request.timeoutMs,
+            ),
+          { url: destination },
         );
         return statusWithTitle(tab, request.agentSessionId);
       }
@@ -1942,13 +1938,26 @@ const make = Effect.gen(function* () {
         return recordAction(tab, "upload", () =>
           uploadFiles(tab, input as PreviewAutomationUploadInput),
         );
-      case "type":
-        return recordAction(tab, "type", async () => {
-          const gate = actionGate();
-          const aimed = input as PreviewAutomationTypeInput;
-          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
-          return ServerBrowserPage.type(tab.page, timed, gate);
-        });
+      case "type": {
+        const aimed = input as PreviewAutomationTypeInput;
+        const retention = makeBrowserInputRetention(
+          () => startBrowserInputEvidence(tab.page),
+          keepTypedText,
+          () => secretFill.historySafe(tab, request.threadId),
+        );
+        return recordAction(
+          tab,
+          "type",
+          async () => {
+            const gate = actionGate();
+            const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+            return ServerBrowserPage.type(tab.page, timed, gate, {
+              onHistoryFocus: retention.onFocus,
+            });
+          },
+          { typedText: aimed.text, finishRetention: retention.finish },
+        );
+      }
       case "press":
         return recordAction(tab, "press", () =>
           ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),

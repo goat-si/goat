@@ -162,6 +162,12 @@ automatically.
 
 ## Watching agents
 
+Expand a computer-use entry in the thread and choose **Show input history** to
+see the apps or browser hosts the agent used, its actions and their outcomes.
+History is kept for 30 days. Typing is recorded as a length unless you enable
+**Keep typed text** in computer-use settings and GOAT confirms it reached a
+normal browser field. Desktop typing is never kept as text.
+
 While agents use the built-in browser or this computer, GOAT shows them in a
 stack at the right of the window, one tile each, with what the agent works on,
 its thread and whether the agent or you are in control. Browser tiles show a

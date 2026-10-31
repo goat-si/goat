@@ -33,6 +33,7 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import {
   HttpIncomingMessage,
   HttpRouter,
@@ -48,6 +49,8 @@ import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
+import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
+import { recordCallOutcome } from "./ComputerUseHistoryReport.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -209,6 +212,18 @@ export const reportLayer = HttpRouter.add(
       return HttpServerResponse.empty({ status: 204 });
     }
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    if ("type" in value) {
+      if (!(yield* leases.ownsControl(threadId, value.controlId)))
+        return HttpServerResponse.empty({ status: 409 });
+      const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+      if (Option.isNone(sql)) return HttpServerResponse.empty({ status: 503 });
+      const history = yield* makeComputerUseHistory.pipe(
+        Effect.provideService(SqlClient.SqlClient, sql.value),
+      );
+      // The shared thread credential cannot attest that the target field is non-secret.
+      const saved = yield* recordCallOutcome(history, threadId, value, false).pipe(Effect.option);
+      return HttpServerResponse.empty({ status: Option.isSome(saved) ? 204 : 503 });
+    }
     if ("humanInput" in value) {
       const outcome = yield* leases.humanInput(
         threadId,

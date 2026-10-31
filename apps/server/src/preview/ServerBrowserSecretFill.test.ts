@@ -677,6 +677,15 @@ it.live("drops an image a tab sharing sign-ins took while a password was filled"
   });
 });
 
+it.live("never permits history text retention on a secret-fill target", () => {
+  const { tab } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record);
+    expect(await fill.historyField(tab, threadId)).toBeUndefined();
+    expect(fill.historySafe(tab, threadId)).toBe(false);
+  });
+});
+
 it.live("a focused non-password field refuses before consuming or typing the secret", () => {
   const { tab, field } = makeTab({ notPassword: true });
   return withFill(async (fill, state) => {

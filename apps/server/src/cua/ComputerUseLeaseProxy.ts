@@ -47,6 +47,7 @@ import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type ComputerUseCallTarget, targetOf } from "./computerUseTarget.ts";
 import { inputKinds } from "./agentInputLog.ts";
+import { historySink } from "./ComputerUseHistoryProxy.ts";
 import { forwardHelperInput, makeAgentInputReports } from "./agentInputReports.ts";
 import { makeOverlayDrawer } from "./agentCursorReports.ts";
 import * as Cursor from "./ComputerUseCursorTools.ts";
@@ -219,6 +220,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (latest?.connectionId !== request.connectionId) continue;
       outstanding.delete(key);
       if (latest.cancelled) {
+        yield* latest.sink.recordOutcome?.("{}", "unknown_outcome") ?? Effect.void;
         options.onCancelledRequestSettled?.(key);
         continue;
       }
@@ -248,14 +250,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
-
-  // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
-  // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
-    // Runs for every driver line, so it opens no span of its own.
     const handle = Effect.fnUntraced(function* (line: string) {
       if (finished !== undefined || lifecycle.current !== current) return;
       const message = parse(line);
@@ -296,6 +293,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         }
         yield* agentInput.ended(key);
         if (request.cancelled) {
+          yield* request.sink.recordOutcome?.(line) ?? Effect.void;
           yield* drawOverlay({ type: "reply", id: key, failed: true });
           yield* release(request, true, driverRefused(request.tool, message, request.args));
           if (gone() || paused !== undefined || idle) return;
@@ -653,7 +651,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   }).pipe(lifecycleLock.withPermits(1));
   const forward = Effect.fn("ComputerUseLeaseProxy.forward")(function* (
     incoming: string,
-    sink: ReplySink,
+    originalSink: ReplySink,
     expectedConnection?: string,
     primitive?: ComputerUsePrimitiveRequest,
   ) {
@@ -661,8 +659,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const keyCall = resolveKeyCall(incoming);
     let line = "line" in keyCall ? keyCall.line : incoming;
     const decoded = decodeProviderIngress(line);
-    if (decoded.kind === "invalid") return yield* sink.answer(decoded.response);
+    if (decoded.kind === "invalid") return yield* originalSink.answer(decoded.response);
     let message = decoded.message;
+    const sink = historySink(options, message, listed, originalSink, scope);
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
@@ -869,6 +868,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         foreground,
         scope: { listed, apps, labels },
       });
+      sink.captureTarget?.();
       selectedForeground = admission.selectedForeground;
       reservationId = admission.reservationId;
       permissionDeadline = admission.deadline;

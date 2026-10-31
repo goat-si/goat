@@ -1,4 +1,9 @@
 import {
+  ComputerUseHistoryInput,
+  ComputerUseHistoryResult,
+  ComputerUseHistoryError,
+} from "./computerUseHistory.ts";
+import {
   HandoffReadInput,
   HandoffRespondInput,
   HandoffOpenResult,
@@ -623,6 +628,7 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverCheckComputerUse: "server.checkComputerUse",
   computerUseStatusChanges: "computerUse.statusChanges",
+  computerUseHistory: "computerUse.history",
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
   computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
@@ -811,6 +817,12 @@ const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, 
   payload: Schema.Struct({}),
   success: CuaHostStatus,
   error: EnvironmentAuthorizationError,
+});
+
+const WsComputerUseHistoryRpc = Rpc.make(WS_METHODS.computerUseHistory, {
+  payload: ComputerUseHistoryInput,
+  success: ComputerUseHistoryResult,
+  error: Schema.Union([ComputerUseHistoryError, EnvironmentAuthorizationError]),
 });
 
 const WsComputerUseStatusChangesRpc = Rpc.make(WS_METHODS.computerUseStatusChanges, {
@@ -2487,6 +2499,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerCheckComputerUseRpc,
   WsComputerUseStatusChangesRpc,
+  WsComputerUseHistoryRpc,
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
   WsComputerUseRemoveAllowedAppRpc,

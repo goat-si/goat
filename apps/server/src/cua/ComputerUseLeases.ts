@@ -103,6 +103,7 @@ export type {
 
 /** How long a control without a grant lasts after the turn that last used it. */
 const INTERACTIVE_CONTROL_MINUTES = 60;
+const RECENT_CONTROL_LIMIT = 128;
 /**
  * Rounded down to the minute: never past an hour from the last use, and the many calls of a turn
  * move it once a minute, every move announced, so a following proxy holds the server's expiry.
@@ -195,6 +196,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly currentControl: (
       threadId: ThreadId,
     ) => Effect.Effect<Option.Option<ComputerUseControlSnapshot>>;
+    readonly ownsControl: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /** Where one control stands, for the proxy started with it. */
     readonly controlState: (
       threadId: ThreadId,
@@ -342,6 +344,7 @@ const make = Effect.gen(function* () {
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
+  const controlOwners = new Map<string, ThreadId>();
   const authorityListeners = new Set<
     (change: {
       kind: "stop" | "credentialRevoked" | "pause" | "private";
@@ -444,6 +447,11 @@ const make = Effect.gen(function* () {
           uses: 0,
         };
         if (existing !== undefined) {
+          controlOwners.set(existing.controlId, threadId);
+          if (controlOwners.size > RECENT_CONTROL_LIMIT) {
+            const oldest = controlOwners.keys().next();
+            if (!oldest.done) controlOwners.delete(oldest.value);
+          }
           reservations.forgetClosed(threadId, existing.controlId);
           reservations.markStopped(threadId, existing.controlId, DateTime.toEpochMillis(now));
           foreground.revokeControl(threadId, existing.controlId);
@@ -714,6 +722,12 @@ const make = Effect.gen(function* () {
       "ComputerUseLeases.currentControl",
       PER_SIGNAL_READ,
     )((threadId) => Effect.sync(() => Option.fromNullishOr(controls.get(threadId)))),
+    ownsControl: (threadId, controlId) =>
+      Effect.sync(
+        () =>
+          controls.get(threadId)?.controlId === controlId ||
+          controlOwners.get(controlId) === threadId,
+      ),
     controlState,
     ...makeForegroundAuthority({
       foreground,

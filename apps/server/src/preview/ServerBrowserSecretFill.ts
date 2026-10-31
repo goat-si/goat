@@ -21,6 +21,7 @@ import type { BrowserContext, CDPSession, Frame, Page, Request } from "playwrigh
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
+import { HISTORY_FIELD_SCRIPT } from "./historyFieldScript.ts";
 import {
   compileSecretForms,
   compileSkeletonForms,
@@ -816,6 +817,31 @@ export const make = Effect.gen(function* () {
       : null;
   };
 
+  const historyField = async (tab: SecretFillTab, threadId: ThreadId) => {
+    if (pixelsOff(tab, threadId) !== null) return undefined;
+    const target = await locate(tab, undefined).catch(() => undefined);
+    if (target === undefined) return undefined;
+    try {
+      const checked = await target.session.send("Runtime.callFunctionOn", {
+        objectId: target.objectId,
+        functionDeclaration: HISTORY_FIELD_SCRIPT,
+        returnByValue: true,
+      });
+      if (
+        checked.exceptionDetails !== undefined ||
+        checked.result.value !== true ||
+        pixelsOff(tab, threadId) !== null
+      )
+        return undefined;
+      const { node } = await target.session.send("DOM.describeNode", { objectId: target.objectId });
+      return { session: target.session, nodeId: node.backendNodeId };
+    } catch {
+      return undefined;
+    } finally {
+      await release(target);
+    }
+  };
+
   /**
    * Refuses where a recording starts, after the tab is marked as starting one: a fill checks that
    * mark after reserving its context, so whichever comes second refuses.
@@ -942,5 +968,14 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  return { fill, guard, assertPixels, mask, maskText, signInState: signInStateOf };
+  return {
+    fill,
+    guard,
+    assertPixels,
+    historyField,
+    historySafe: (tab: SecretFillTab, threadId: ThreadId) => pixelsOff(tab, threadId) === null,
+    mask,
+    maskText,
+    signInState: signInStateOf,
+  };
 });

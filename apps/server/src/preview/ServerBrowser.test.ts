@@ -1,3 +1,4 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -162,7 +163,6 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   return context;
 }
 
-// Runs the real encoder script against fake canvas and MediaRecorder globals.
 function makeEncoderPage() {
   const canvas = {
     width: 0,
@@ -241,6 +241,7 @@ const asSession = (providerSessionId: string) => ({
   thread: { ...testThread, providerSessionId },
 });
 const dependencies = Layer.mergeAll(
+  SqlitePersistence.layerMemory,
   Broker.layer,
   Manager.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
@@ -1630,7 +1631,6 @@ it.live("agents read a human's tab with no arguments and act on it only while no
         input: {},
       });
       expect(diagnostics.console.entries[0]?.text).toBe("human tab evidence");
-      // Acting is refused while the user controls the tab.
       const refused = yield* broker
         .invoke<void>({
           scope,
