@@ -26,7 +26,10 @@ import * as Stream from "effect/Stream";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
 import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
+import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+
+const resultOf = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }));
 
 /**
  * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
@@ -196,7 +199,6 @@ export const make = Effect.gen(function* () {
     changed = Deferred.makeUnsafe<void>();
     Deferred.doneUnsafe(waiting, Exit.void);
   };
-  const resultOf = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }));
   const settle = (pending: Pending, terminal?: Control["terminal"]) =>
     Deferred.doneUnsafe(
       pending.answer,
@@ -338,6 +340,7 @@ export const make = Effect.gen(function* () {
         if (
           record !== undefined &&
           state._tag === "ended" &&
+          "reason" in state &&
           (state.reason === "stopped" || state.reason === "stopped_all")
         )
           record.terminal ??= "stopped_by_person";
@@ -651,6 +654,30 @@ export const make = Effect.gen(function* () {
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
+        if (current !== undefined && !(yield* active(input.threadId, current.controlId))) {
+          const record = attachments
+            .get(input.threadId)
+            ?.registration?.controls.get(current.controlId);
+          const terminal =
+            record?.terminal ??
+            (current.ended === "stopped" || current.ended === "stopped_all"
+              ? "stopped_by_person"
+              : undefined);
+          if (terminal !== undefined)
+            return yield* Effect.fail({
+              code: terminal,
+              effectStarted: false,
+              nextStep:
+                terminal === "screen_locked"
+                  ? PAUSE_MESSAGES.screen_locked
+                  : LEASE_END_MESSAGES.stopped,
+              safety: refusalSafety(
+                terminal === "screen_locked" ? "screen_locked" : "stopped",
+                input.tool,
+                input.args,
+              ),
+            });
+        }
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(desktopNotReady("none"));
         began ??= current.controlId;
@@ -710,6 +737,10 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
+          if (record.terminal !== undefined) {
+            settle(pending, record.terminal);
+            return true;
+          }
           pending.answeredAt = now;
           Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
           return true;

@@ -317,7 +317,10 @@ describe("ComputerUsePrimitiveChannel", () => {
           state: "primitive-cancel",
           requestId: (delivered as ComputerUsePrimitiveRequest).requestId,
         });
-        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+        const stopped = yield* Effect.flip(t.request());
+        assert.equal(stopped.code, "stopped_by_person");
+        assert.equal(stopped.safety?.possibleCommit, false);
+        assert.equal(stopped.safety?.retryClass, "never");
 
         const next = { ...authority, attachmentGeneration: "attachment:two" };
         yield* t.setState({ _tag: "active" });
