@@ -247,11 +247,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (sessions.size > 0)
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
-  // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = Admission.makeProxyRelease(options);
   const releaseLater = Admission.makeProxyReleaseLater(options, scope);
-  // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
-  // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
     const handle = Effect.fnUntraced(function* (line: string) {
       if (finished !== undefined || lifecycle.current !== current) return;
@@ -836,7 +833,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       return yield* sink.answer(line, "settled", { tool: String(name) });
     }
     if (isRequest && message?.method === "tools/call") {
-      // Before the call reaches the driver: a capture must not see the overlay (#1321).
       yield* drawOverlay({
         type: "call",
         id: JSON.stringify(id),

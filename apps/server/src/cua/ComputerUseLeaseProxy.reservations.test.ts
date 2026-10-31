@@ -1,17 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
-import {
-  ThreadId,
-  type ComputerUseCallAdmission,
-  type ComputerUsePrimitiveRequest,
-} from "@goat/contracts";
+import { ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
-import { runMigrations } from "../persistence/Migrations.ts";
-import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
-import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
+import { cancellationHistoryFixture } from "./ComputerUseHistoryCancellation.testkit.ts";
 import {
   active,
   reobserveRefusalSafety,
@@ -623,24 +617,11 @@ describe("proxy execution ownership", () => {
     "suppresses a reply cancelled during asynchronous reply processing while releasing its ticket",
     () =>
       Effect.gen(function* () {
-        yield* runMigrations();
-        const history = yield* makeComputerUseHistory;
-        const threadId = ThreadId.make("thread:history-cancellation");
+        const { history, threadId, reservation } = yield* cancellationHistoryFixture;
         const entered = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         const h = yield* harness({
-          reservation: (request) =>
-            request.action === "reserve"
-              ? recordAdmittedCall(history, threadId, request, {
-                  reservationId: "ticket:cancelled",
-                }).pipe(
-                  Effect.orDie,
-                  Effect.as<ComputerUseCallAdmission>({
-                    status: "admitted",
-                    reservationId: "ticket:cancelled",
-                  }),
-                )
-              : Effect.succeed<ComputerUseCallAdmission>({ status: "released" }),
+          reservation,
           overlay: (command) =>
             command.op === "show" && command.phase === "resting"
               ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
