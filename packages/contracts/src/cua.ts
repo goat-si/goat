@@ -18,7 +18,12 @@ import {
 import { needsHumanFields } from "./humanStepResult.ts";
 import { ComputerUseAgentCursor, AgentCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
-import { BrowserOrigin, PendingBrowserBind } from "./browserClaims.ts";
+import {
+  ComputerUseLeaseBrowserCapability,
+  ComputerUseLeaseBrowserClaimEnded,
+  LeaseBrowserClaim,
+  PendingBrowserBind,
+} from "./browserClaims.ts";
 import {
   AgentCursorLeaseUpdate,
   ComputerUsePrimitiveCancel,
@@ -266,17 +271,6 @@ export const ComputerUseLeaseDriverEnded = Schema.Struct({
   ]),
 });
 export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
-
-export const ComputerUseLeaseBrowserCapability = Schema.Struct({
-  browserClaimsSupported: Schema.Boolean,
-});
-export const ComputerUseLeaseBrowserClaimEnded = Schema.Struct({
-  browserClaimEnded: Schema.Struct({
-    claimId: TrimmedNonEmptyString,
-    claimGeneration: Schema.Int,
-    reason: Schema.Literal("origin_changed"),
-  }),
-});
 
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseTarget,
@@ -583,18 +577,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
     browserClaimVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     browserClaimBindings: Schema.optionalKey(Schema.Array(PendingBrowserBind)),
     claimedBrowserPids: Schema.optionalKey(Schema.Array(Schema.Int.check(Schema.isGreaterThan(0)))),
-    browserClaims: Schema.optionalKey(
-      Schema.Array(
-        Schema.Struct({
-          claimId: TrimmedNonEmptyString,
-          claimGeneration: Schema.Int.check(Schema.isGreaterThan(0)),
-          pid: Schema.Int.check(Schema.isGreaterThan(0)),
-          windowId: Schema.Int.check(Schema.isGreaterThan(0)),
-          tabId: TrimmedNonEmptyString,
-          origins: Schema.Array(BrowserOrigin).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
-        }),
-      ),
-    ),
+    browserClaims: Schema.optionalKey(Schema.Array(LeaseBrowserClaim)),
     foreground: Schema.optionalKey(Schema.Array(ComputerUseForegroundGrant)),
     /** Calls echo this value so a missed idle/reuse update cannot admit old-turn input. */
     idleEpoch: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),

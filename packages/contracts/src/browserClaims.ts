@@ -37,6 +37,27 @@ export const PendingBrowserBind = Schema.Struct({
 });
 export type PendingBrowserBind = typeof PendingBrowserBind.Type;
 
+/** One claimed tab as the lease proxy enforces it. */
+export const LeaseBrowserClaim = Schema.Struct({
+  claimId: TrimmedNonEmptyString,
+  claimGeneration: Schema.Int.check(Schema.isGreaterThan(0)),
+  pid: Schema.Int.check(Schema.isGreaterThan(0)),
+  windowId: Schema.Int.check(Schema.isGreaterThan(0)),
+  tabId: TrimmedNonEmptyString,
+  origins: Schema.Array(BrowserOrigin).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+});
+
+export const ComputerUseLeaseBrowserCapability = Schema.Struct({
+  browserClaimsSupported: Schema.Boolean,
+});
+export const ComputerUseLeaseBrowserClaimEnded = Schema.Struct({
+  browserClaimEnded: Schema.Struct({
+    claimId: TrimmedNonEmptyString,
+    claimGeneration: Schema.Int,
+    reason: Schema.Literal("origin_changed"),
+  }),
+});
+
 export const BrowserClaimEndReason = Schema.Literals([
   "revoked",
   "stopped",
