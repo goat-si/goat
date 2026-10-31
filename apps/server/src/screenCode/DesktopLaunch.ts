@@ -215,8 +215,22 @@ export const makeBindWindow =
           previous.connectionGeneration === input.connectionGeneration &&
           previous.controlId === input.controlId &&
           previous.ref.environmentId === context.environmentId
-        )
+        ) {
+          // The kept target takes this listing's frame: a moved or resized window places reads there.
+          const moved = boundsOf(input.bounds);
+          if (moved !== undefined) previous.windowBounds = moved;
+          deps.labelTarget?.(
+            previous.ref.id,
+            {
+              kind: "app",
+              bundleId: input.bundleId,
+              name: input.name,
+              iconBundleId: input.iconBundleId,
+            },
+            context,
+          );
           return previous.ref;
+        }
         lastClickedTableCell ??= previous.lastClickedTableCell;
         deps.evict(id);
         deps.targets.delete(id);

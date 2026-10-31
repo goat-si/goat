@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import { call, context, fixture, goat2WindowState } from "./DesktopTargetHost.testkit.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
+import { makeBindWindow } from "./DesktopLaunch.ts";
+import type { BoundWindow } from "./DesktopTargetHost.ts";
 
 /** A window bound and seen under driver:1, after which a new driver replaced it. */
 const replaced = Effect.fn(function* () {
@@ -147,4 +149,35 @@ it.effect(
       });
       expect(sent).toHaveLength(before);
     }),
+);
+it.effect("binding the same window again keeps its target and takes the window's new frame", () =>
+  Effect.sync(() => {
+    const targets = new Map<string, BoundWindow>();
+    const labels: string[] = [];
+    const bind = makeBindWindow({
+      targets,
+      evict: (id) => void targets.delete(id),
+      nextEpoch: (() => {
+        let epoch = 0;
+        return () => ++epoch;
+      })(),
+      labelTarget: (id) => void labels.push(id),
+    });
+    const listing = (x: number) => ({
+      pid: 42,
+      windowId: 7,
+      bundleId: "org.example.Editor",
+      name: "Editor",
+      appId: "org.example.Editor",
+      iconBundleId: undefined,
+      bounds: { x, y: 10, width: 400, height: 300 },
+      connectionGeneration: "driver:1",
+      controlId: "control:1",
+    });
+    const first = bind(listing(0), context);
+    const again = bind(listing(250), context);
+    expect(again).toEqual(first);
+    expect(targets.get(first.id)?.windowBounds).toMatchObject({ x: 250, y: 10 });
+    expect(labels).toEqual([first.id, first.id]);
+  }),
 );
