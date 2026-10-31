@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { seedUserInputDraftAnswers } from "./threadRequests.ts";
 import {
   buildPendingUserInputAnswers,
+  isPendingUserInputOptionSelected,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -149,4 +150,34 @@ describe("shared user input drafts", () => {
       ).toBeNull();
     },
   );
+});
+
+describe("shared option validation", () => {
+  const labelOnly = {
+    id: "scope",
+    options: [{ label: "Orchestration-first" }, { label: "Node.js" }],
+  };
+
+  it("matches a trimmed label only for an option without a value", () => {
+    expect(resolvePendingUserInputAnswer(labelOnly, { selectedOptionValues: [" Node.js "] })).toBe(
+      "Node.js",
+    );
+    expect(
+      resolvePendingUserInputAnswer(question, { selectedOptionValues: ["One", "unknown"] }),
+    ).toBeNull();
+  });
+
+  it("leaves the draft alone for an unknown option and reports the selected one", () => {
+    const first = togglePendingUserInputOptionSelection(question, undefined, "  exact	");
+    expect(isPendingUserInputOptionSelected(question, first, "  exact	")).toBe(true);
+    expect(isPendingUserInputOptionSelected(question, first, "two")).toBe(false);
+    expect(togglePendingUserInputOptionSelection(question, first, "One")).toBe(first);
+  });
+
+  it("keeps the draft when typing into a question that accepts only offered options", () => {
+    const optionsOnly = { ...question, allowCustomAnswer: false };
+    const draft = { selectedOptionValues: ["two"] };
+    expect(setPendingUserInputCustomAnswer(draft, "Other", optionsOnly)).toBe(draft);
+    expect(setPendingUserInputCustomAnswer(undefined, "Other", optionsOnly)).toEqual({});
+  });
 });
