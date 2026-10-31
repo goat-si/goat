@@ -611,7 +611,9 @@ describe("proxy execution ownership", () => {
         const h = yield* harness({
           reservation: (request) =>
             request.action === "reserve"
-              ? recordAdmittedCall(history, threadId, request, "ticket:cancelled").pipe(
+              ? recordAdmittedCall(history, threadId, request, {
+                  reservationId: "ticket:cancelled",
+                }).pipe(
                   Effect.orDie,
                   Effect.as<ComputerUseCallAdmission>({
                     status: "admitted",

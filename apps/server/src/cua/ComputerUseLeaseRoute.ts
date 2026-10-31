@@ -53,7 +53,6 @@ import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseSt
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
-import { recordCallOutcome } from "./ComputerUseHistoryReport.ts";
 import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -252,27 +251,6 @@ export const reportLayer = HttpRouter.add(
       const history = yield* makeComputerUseHistory.pipe(
         Effect.provideService(SqlClient.SqlClient, sql.value),
       );
-      if (value.type === "proxyRefusal") {
-        if (
-          value.verdict !== "refused" ||
-          value.reservationId !== undefined ||
-          !(yield* leases.ownsControl(threadId, value.controlId))
-        )
-          return HttpServerResponse.empty({ status: 409 });
-        const saved = yield* recordCallOutcome(
-          history,
-          threadId,
-          {
-            ...value,
-            targetLabel:
-              value.targetLabel === undefined
-                ? "Reported by proxy"
-                : `Reported by proxy: ${value.targetLabel}`,
-          },
-          false,
-        ).pipe(Effect.option);
-        return HttpServerResponse.empty({ status: Option.isSome(saved) ? 204 : 503 });
-      }
       if (value.reservationId === undefined) return HttpServerResponse.empty({ status: 409 });
       const saved = yield* history
         .settle({
@@ -447,28 +425,32 @@ export const callLayer = HttpRouter.add(
       Effect.map((settings) => settings.cuaMovePointer),
       Effect.orElseSucceed(() => "never" as const),
     );
-    if (
+    const pointerLocked =
       call.value.action === "reserve" &&
       movePointer !== "allowed" &&
-      movesPersonPointer(call.value)
-    )
-      return HttpServerResponse.text(
-        encodeAdmission({ status: "refused", detail: "pointer_locked" }),
-        { contentType: "application/json", headers: { "cache-control": "no-store" } },
-      );
+      movesPersonPointer(call.value);
+    let outsideManifest = false;
     if (call.value.action === "reserve") {
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const snapshot = Option.isSome(grants)
         ? yield* grants.value.snapshotFor(threadId)
         : { claims: [], bindings: [] };
-      if (!serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot))
-        return HttpServerResponse.text(
-          encodeAdmission({ status: "refused", detail: "outside_manifest" }),
-          { contentType: "application/json", headers: { "cache-control": "no-store" } },
-        );
+      outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
     }
     const result = yield* Effect.gen(function* () {
-      const result = yield* leases.callReservation(threadId, call.value);
+      const result: ComputerUseCallAdmission = pointerLocked
+        ? { status: "refused", detail: "pointer_locked" }
+        : outsideManifest
+          ? { status: "refused", detail: "outside_manifest" }
+          : yield* leases.callReservation(threadId, call.value);
+      if (call.value.action === "reserve" && result.status === "refused") {
+        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isNone(sql)) return yield* Effect.fail("history_unavailable");
+        const history = yield* makeComputerUseHistory.pipe(
+          Effect.provideService(SqlClient.SqlClient, sql.value),
+        );
+        yield* recordAdmittedCall(history, threadId, call.value, { refusalCode: result.detail });
+      }
       if (
         call.value.action === "reserve" &&
         result.status === "admitted" &&
@@ -489,7 +471,9 @@ export const callLayer = HttpRouter.add(
         const history = yield* makeComputerUseHistory.pipe(
           Effect.provideService(SqlClient.SqlClient, sql.value),
         );
-        yield* recordAdmittedCall(history, threadId, call.value, result.reservationId).pipe(
+        yield* recordAdmittedCall(history, threadId, call.value, {
+          reservationId: result.reservationId,
+        }).pipe(
           Effect.catchCause((cause) =>
             leases
               .callReservation(threadId, {

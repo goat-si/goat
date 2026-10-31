@@ -10,7 +10,7 @@ export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCa
   history: Effect.Success<typeof makeComputerUseHistory>,
   threadId: ThreadId,
   call: Extract<ComputerUseCallReservation, { action: "reserve" }>,
-  reservationId: string,
+  outcome: { readonly reservationId: string } | { readonly refusalCode: string },
 ) {
   if (isHistoryRead(call.name, call.args)) return;
   const args = isRecord(call.args) ? call.args : {};
@@ -24,7 +24,9 @@ export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCa
   const appId = call.app ?? call.appLabel?.bundleId;
   yield* history.record({
     threadId,
-    reservation: { id: reservationId, controlId: call.controlId },
+    ...("reservationId" in outcome
+      ? { reservation: { id: outcome.reservationId, controlId: call.controlId } }
+      : {}),
     target: {
       kind: "app",
       ...(appId === undefined ? {} : { id: appId }),
@@ -32,7 +34,8 @@ export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCa
     },
     method: call.name,
     ...(label ? { targetLabel: label } : {}),
-    verdict: "unknown_outcome",
+    verdict: "reservationId" in outcome ? "unknown_outcome" : "refused",
+    ...("refusalCode" in outcome ? { refusalCode: outcome.refusalCode } : {}),
     ...(typeof typed === "string"
       ? { typed: { length: typed.length, field: "unknown", keep: false } }
       : {}),

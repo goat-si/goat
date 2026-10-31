@@ -120,10 +120,35 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       assert.equal((yield* send(f.first.controlId)).status, 409);
       assert.equal((yield* history.listForThread(f.a)).length, 1);
       assert.equal((yield* send(f.second.controlId)).status, 409);
-      assert.equal((yield* send(replacement.controlId, undefined, true)).status, 204);
+      assert.equal((yield* send(replacement.controlId, undefined, true)).status, 400);
       const proxyReported = yield* history.listForThread(f.a);
-      assert.equal(proxyReported[0]?.refusalCode, "not_allowed");
-      assert.equal(proxyReported[0]?.targetLabel, "Reported by proxy");
+      assert.equal(proxyReported.length, 1);
+      const denied = yield* Effect.promise(() =>
+        handler(
+          new Request("http://goat.test" + COMPUTER_USE_LEASE_ROUTE + "/calls", {
+            method: "POST",
+            headers: { authorization: "Bearer token" },
+            body: JSON.stringify({
+              action: "reserve",
+              controlId: replacement.controlId,
+              connectionId: "driver:2",
+              callId: "denied",
+              interruptions: 0,
+              idleEpoch: 0,
+              name: "click",
+              args: { delivery_mode: "foreground" },
+              app: "real.app",
+              appLabel: { name: "Real app" },
+            }),
+          }),
+          services,
+        ),
+      );
+      assert.equal(denied.status, 200);
+      const rejected = yield* history.listForThread(f.a);
+      assert.equal(rejected[0]?.verdict, "refused");
+      assert.equal(rejected[0]?.refusalCode, "pointer_locked");
+      assert.equal(rejected[0]?.appId, "real.app");
       yield* Effect.promise(() => dispose());
     }),
   ).pipe(

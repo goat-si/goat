@@ -104,11 +104,7 @@ it.effect("reports a server admission refusal without dispatch", () =>
     yield* h.push(active());
     yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
     yield* h.nextToProvider;
-    assert.deepInclude(yield* Queue.take(reports), {
-      type: "proxyRefusal",
-      verdict: "refused",
-      refusalCode: "target_busy",
-    });
+    assert.equal(yield* Queue.size(reports), 0);
     assert.equal(yield* h.driverQueued, 0);
   }),
 );

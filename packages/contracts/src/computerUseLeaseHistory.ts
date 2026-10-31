@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const ComputerUseLeaseCallOutcome = Schema.Struct({
-  type: Schema.Literals(["callOutcome", "proxyRefusal"]),
+  type: Schema.Literal("callOutcome"),
   controlId: TrimmedNonEmptyString,
   reservationId: Schema.optionalKey(TrimmedNonEmptyString),
   tool: TrimmedNonEmptyString,

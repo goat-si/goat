@@ -109,13 +109,9 @@ export const historySink = (
       status,
     );
     const report =
-      outcome === undefined
+      outcome === undefined || reservationId === undefined
         ? undefined
-        : reservationId !== undefined
-          ? { ...outcome, reservationId }
-          : outcome.verdict === "refused"
-            ? ({ ...outcome, type: "proxyRefusal" } satisfies ComputerUseLeaseCallOutcome)
-            : undefined;
+        : { ...outcome, reservationId };
     return report === undefined || options.onCallOutcome === undefined
       ? Effect.void
       : Effect.forkIn(Effect.ignoreCause(options.onCallOutcome(report)), scope).pipe(Effect.asVoid);
