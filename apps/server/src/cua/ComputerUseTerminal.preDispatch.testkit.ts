@@ -107,7 +107,43 @@ const supervisor = (kind: "reserved" | "notReady") => (input: Input) =>
     return replaceWithTerminal(terminalReplyState(answer.result));
   });
 
+const duplicate = (input: Input) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    const h = yield* threadHarness({
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as({ status: "refused", detail: "reconnecting" }),
+            )
+          : Effect.succeed({ status: "released" }),
+    });
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    const line = call(973, "type_text", { pid: 42, window_id: 7, text: "fixture" });
+    yield* h.send(line);
+    yield* Deferred.await(entered);
+    let stopped = false;
+    for (const reason of input.reasons) {
+      if (reason === "stopped_by_person") {
+        yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+        stopped = true;
+      } else {
+        yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+        if (!stopped) yield* h.applied;
+      }
+    }
+    yield* h.send(line);
+    const answer = yield* h.next;
+    return replaceWithTerminal(terminalReplyState(answer.result));
+  });
+
 export const preDispatchSites = [
+  { name: "ComputerUseLeaseProxyThread.duplicateId", undispatched: true, run: duplicate },
   {
     name: "ComputerUseLeaseProxyThread.reservedId",
     undispatched: true,
