@@ -457,7 +457,7 @@ export const callLayer = HttpRouter.add(
       settings.value.cuaMovePointer !== "allowed" &&
       movesPersonPointer(call.value);
     let outsideManifest = false;
-    if (call.value.action === "reserve") {
+    if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const snapshot = Option.isSome(grants)
         ? yield* grants.value.snapshotFor(threadId)
