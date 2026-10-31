@@ -104,7 +104,13 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const ended = yield* Deferred.make<LeaseEnd>();
   const owners = new Map<
     string,
-    { context: Context; id: JsonRpcId; method: string; cancelled: boolean }
+    {
+      context: Context;
+      latch: Context["terminal"];
+      id: JsonRpcId;
+      method: string;
+      cancelled: boolean;
+    }
   >();
   const clientRequests = new Map<string, { context: Context; id: JsonRpcId }>();
   const ownAnswers = new Map<string, Deferred.Deferred<Envelope | undefined>>();
@@ -125,9 +131,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     method: string | undefined,
     given?: LeaseEnd,
     context: Context | undefined = current ?? predecessor,
+    latch: Context["terminal"] | undefined = context?.terminal,
+    dispatched = false,
   ) => {
-    const latched = context?.terminal;
-    const personStopped = latched?.reason === "stopped_by_person";
+    const personStopped = latch?.reason === "stopped_by_person";
     if (
       given === undefined &&
       terminal === undefined &&
@@ -142,7 +149,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         ? "stopped"
         : transport === "lost"
           ? "transport_lost"
-          : (context?.ended ?? "reconnecting"));
+          : (context?.ended ??
+            (current !== undefined && (waiting === "stopped" || waiting === "stopped_all")
+              ? "reconnecting"
+              : waiting)));
     const answer = refusal(
       id,
       method,
@@ -156,8 +166,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     return terminalSink(
       { answer: (line) => options.output(line) },
       { id, ...(method === undefined ? {} : { method }) },
-      () => latched?.reason,
-      () => false,
+      () => latch?.reason,
+      () => dispatched,
     ).answer(answer);
   });
 
@@ -376,6 +386,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
                 owner.method,
                 context.ended ?? terminal ?? "lost",
                 context,
+                owner.latch,
+                true,
               );
           }
           yield* Deferred.succeed(context.closed, undefined);
@@ -543,7 +555,14 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         ? setup.answer(id, message.method, line, refuse).pipe(Effect.forkIn(scope))
         : refuse;
     }
-    if (isRequest) owners.set(key, { context, id, method: message.method, cancelled: false });
+    if (isRequest)
+      owners.set(key, {
+        context,
+        latch: context.terminal,
+        id,
+        method: message.method,
+        cancelled: false,
+      });
     yield* Queue.offer(context.input, line);
   });
   yield* options.input.pipe(Stream.runForEach(handle));
