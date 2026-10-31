@@ -257,6 +257,8 @@ export const queryOmission = (
       },
     ];
   }
+  // A whole walk the driver finished proves the absence, so it carries no omission.
+  if (state.elements_complete === true && !filtered && state.truncated !== true) return [];
   const read = filtered
     ? "driver filtered; lifted names are absent"
     : "not driver filtered; names include child text";
@@ -267,7 +269,7 @@ export const queryOmission = (
   return [
     {
       kind: "budget",
-      detail: `No match among ${covered} elements (${read}); compared role, name, row text, accessibility id. ${next}`,
+      detail: `No match in ${covered} elements read (${read}); compared role, name, row text, accessibility id. ${next}`,
     },
     ...(state.truncated === true
       ? [

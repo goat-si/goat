@@ -234,7 +234,7 @@ it.effect("no match on an ordinary read is an empty result that says absence is 
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
-    expect(budgetDetail(observation)).toContain("No match among 5 elements");
+    expect(budgetDetail(observation)).toContain("No match in 5 elements read");
   }),
 );
 
@@ -247,7 +247,7 @@ it.effect("only a complete, untruncated walk proves absence", () =>
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(false);
-    expect(budgetDetail(observation)).toContain("No match among 5 elements");
+    expect(observation.omitted).toBeUndefined();
   }),
 );
 
