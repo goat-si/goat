@@ -32,8 +32,9 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
     readonly path?: string;
     readonly env?: Record<string, string>;
     readonly executable?: boolean;
+    readonly args?: ReadonlyArray<string>;
   }) =>
-    resolveRootCliCommand("browser setup").pipe(
+    resolveRootCliCommand("browser setup", input.args).pipe(
       Effect.provideService(HostProcess.ExecutablePath, input.node),
       Effect.provideService(HostProcess.Arguments, [input.node, input.entry]),
       Effect.provideService(HostProcess.IsExecutable, input.executable ?? false),
@@ -68,6 +69,28 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           path: yield* pathWithGoat,
         }),
       ).toBe('sudo env "PATH=$PATH" goat browser setup');
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps the arguments, so root runs setup on the same GOAT home", () =>
+    Effect.gen(function* () {
+      const args = ["--base-dir", "/srv/goat home"];
+      expect(
+        yield* rootCommand({
+          node: "/home/theo/.local/node/bin/node",
+          entry: "/home/theo/.local/lib/node_modules/goat/dist/bin.mjs",
+          path: yield* pathWithGoat,
+          args,
+        }),
+      ).toBe(`sudo env "PATH=$PATH" goat browser setup --base-dir '/srv/goat home'`);
+      expect(
+        yield* rootCommand({
+          node: "/opt/goat/goat",
+          entry: "/opt/goat/goat",
+          executable: true,
+          args,
+        }),
+      ).toBe("sudo /opt/goat/goat browser setup --base-dir '/srv/goat home'");
     }).pipe(Effect.scoped),
   );
 
