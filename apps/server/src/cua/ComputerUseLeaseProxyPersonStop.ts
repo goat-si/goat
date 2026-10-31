@@ -70,13 +70,13 @@ export const forwardPersonStop = Effect.fn("ComputerUseLeaseProxy.forwardPersonS
       Stream.runForEach(() =>
         Effect.gen(function* () {
           if (!input.active() || !input.current() || !input.fence.beginStop()) return;
+          yield* input.stop.pipe(Effect.forkIn(input.scope));
           yield* Effect.gen(function* () {
             const accepted = yield* report();
             if (!accepted)
               yield* Effect.logWarning(
                 "Could not report Escape stop to GOAT; stopping the local driver.",
               );
-            yield* input.stop;
           }).pipe(Effect.forkIn(input.scope));
         }),
       ),

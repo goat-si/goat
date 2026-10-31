@@ -132,18 +132,9 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
       yield* h.nextToDriver;
       yield* h.escape;
       yield* h.escapeReported;
-      yield* h.reply(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: 91,
-          result: { content: [{ type: "text", text: "late success" }] },
-        }),
-      );
-      yield* h.reply(JSON.stringify({ jsonrpc: "2.0", method: "notifications/message" }));
-      assert.equal((yield* h.nextToProvider).method, "notifications/message");
-      yield* Deferred.succeed(gate, undefined);
       yield* h.killed;
       assert.include(JSON.stringify(yield* h.nextToProvider), '"code":"stopped_by_person"');
+      yield* Deferred.succeed(gate, undefined);
     }),
   );
 

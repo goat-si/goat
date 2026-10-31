@@ -626,12 +626,12 @@ const make = Effect.gen(function* () {
     return record;
   });
 
-  const pause = (reason: ComputerUsePauseReason) =>
+  const pause = (reason: ComputerUsePauseReason, includeIdle = false) =>
     Effect.sync(() => {
       foreground.clear();
       // A person's input with no agent on the screen is just a person using their computer,
       // also between a thread's turns.
-      if (![...controls.values()].some(acting)) return false;
+      if (!includeIdle && ![...controls.values()].some(acting)) return false;
       paused = reason;
       interrupted(reason);
       for (const record of controls.values())
@@ -757,9 +757,9 @@ const make = Effect.gen(function* () {
       ),
     screenLocked: Effect.fn("ComputerUseLeases.screenLocked")(function* (threadId, controlId) {
       const record = yield* liveControl(threadId, controlId);
-      if (record === undefined || !acting(record)) return false;
+      if (record === undefined) return false;
       if (paused === "screen_locked") return true;
-      yield* pause("screen_locked");
+      yield* pause("screen_locked", true);
       return true;
     }),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
