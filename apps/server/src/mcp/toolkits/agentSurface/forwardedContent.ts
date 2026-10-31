@@ -45,8 +45,18 @@ export const forwardedContentRegistration = <
           );
           const blocks = yield* Ref.get(collected);
           if (blocks.length === 0 || !isCallToolResult(result)) return result;
+          const { structuredContent, ...withoutStructured } = result;
           return new McpSchema.CallToolResult({
-            ...result,
+            ...withoutStructured,
+            ...(blocks.some(
+              (block) =>
+                typeof block === "object" &&
+                block !== null &&
+                "type" in block &&
+                block.type === "image",
+            )
+              ? {}
+              : { structuredContent }),
             content: [...result.content, ...(blocks as ReadonlyArray<ContentBlock>)],
           });
         }),

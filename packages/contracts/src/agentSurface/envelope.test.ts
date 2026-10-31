@@ -45,6 +45,19 @@ const handoff = {
 };
 
 describe("fromToolResult", () => {
+  it("keeps warning text beside JSON from a non-screen tool", () => {
+    const result = fromToolResult(
+      {
+        content: [
+          { type: "text", text: "Warning: partial results" },
+          { type: "text", text: '{"count":1}' },
+        ],
+      },
+      { effect: "read" },
+    );
+    expect(result).toMatchObject({ status: "ok", value: 'Warning: partial results\n{"count":1}' });
+  });
+
   it("classifies an OrchestratorMcpFailure by its code and keeps the code as reason", () => {
     const cases = [
       ["capability_denied", "permission_denied"],
