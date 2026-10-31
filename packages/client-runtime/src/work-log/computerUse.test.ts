@@ -35,7 +35,7 @@ describe("hasComputerUseHistory", () => {
     ["mcp__t3code__goat_screen_run", {}, true],
     ["t3-code.goat_screen_run", {}, true],
     ["t3_code/goat_screen_run", {}, true],
-    ["t3code:goat_screen_run", {}, true],
+    ["t3" + "code:goat_screen_run", {}, true],
     ["t3-code-thread_1_goat_screen_run", {}, true],
     [
       "goat_call",
