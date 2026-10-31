@@ -571,8 +571,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         });
       if (input.bindingHints) options.tabHost?.setBindingHints(input, input.bindingHints);
       // Stop fences the tracked cell, so a second cell must never replace the one still running.
-      const controlId = yield* activeCells.current(input.threadId);
-      if (!activeCells.begin(id, cellId, controlId))
+      if (!(yield* activeCells.begin(id, cellId, input.threadId)))
         return yield* Effect.fail(fail("pending_limit"));
       // A child's WASM memory cannot shrink, so a lower cap needs a fresh child.
       const liveWasmBytes = running.threadWasmBytes(input.threadId);
