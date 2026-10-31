@@ -3357,8 +3357,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     it.effect("drops false bypass switches from --settings before they reach the SDK", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
-        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-launch-" });
-        const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-launch-cwd-" });
+        const home = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-claude-launch-" });
+        const cwd = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-claude-launch-cwd-",
+        });
         const sdk = yield* Effect.promise(() =>
           vi.importActual<typeof ClaudeSdk>("@anthropic-ai/claude-agent-sdk"),
         );
@@ -7729,7 +7731,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
           const root = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: "t3-claude-task-output-cwd-",
+            prefix: "goat-claude-task-output-cwd-",
           });
           const physicalCwd = path.join(root, "real", "project");
           const launchCwd = path.join(root, "link");
@@ -14727,10 +14729,10 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   it.effect.each([
     { autoCompactWindow: "", model: "claude-sonnet-4-6", threshold: undefined },
-    { autoCompactWindow: "150000", model: "claude-sonnet-4-6", threshold: 150_000 },
+    { autoCompactWindow: "150000", model: "claude-sonnet-4-6", threshold: 117_000 },
     { autoCompactWindow: "200000", model: "claude-sonnet-4-6", threshold: undefined },
     { autoCompactWindow: "650000", model: "claude-sonnet-4-6", threshold: undefined },
-    { autoCompactWindow: "650000", model: "uncatalogued-model", threshold: 650_000 },
+    { autoCompactWindow: "650000", model: "uncatalogued-model", threshold: 617_000 },
   ])(
     "ignores stale snapshots after compaction and reports threshold $autoCompactWindow for $model",
     ({ autoCompactWindow, model, threshold }) =>
