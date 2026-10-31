@@ -143,6 +143,8 @@ it("writes nothing when an outer observation is withheld after the fetch finishe
         };
       },
       context: () => ({ cookies: async () => [] }),
+      on: () => undefined,
+      off: () => undefined,
     };
     // A human-driven tab: the server observes around the whole operation, as ServerBrowser does.
     const outer = control.observe(async () => {

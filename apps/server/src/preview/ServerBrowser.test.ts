@@ -482,7 +482,13 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
       const no = async () => null;
       const element = { boundingBox: box, waitForElementState: box, dispose: box, ownerFrame: no };
-      const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
+      const locator = {
+        scrollIntoViewIfNeeded: box,
+        boundingBox: box,
+        click: box,
+        page: () => ({ waitForLoadState: box }),
+        first: () => ({ waitFor: box }),
+      };
       page.locator.mockImplementationOnce(
         () => ({ ...locator, elementHandle: async () => element }) as never,
       );
