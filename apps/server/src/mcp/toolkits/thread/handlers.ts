@@ -98,9 +98,13 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         const { task, threadId } = yield* scheduler
           .runNow({ id: input.taskId })
           .pipe(Effect.mapError(unavailable));
+        const scope = yield* McpInvocationContext.McpInvocationContext;
         return {
           taskId: task.id,
           threadId,
+          ...(threadId === null
+            ? {}
+            : { link: McpInvocationContext.threadLinkFor(scope, threadId, task.title) }),
           lastRunStatus: task.lastRunStatus,
           ...(task.lastRun === undefined ? {} : { lastRun: task.lastRun }),
           runCount: task.runCount,
@@ -116,7 +120,19 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       Effect.gen(function* () {
         const scope = yield* McpInvocationContext.McpInvocationContext;
         const search = yield* ThreadSearchMcpService.ThreadSearchMcpService;
-        return yield* search.search(scope, input);
+        const result = yield* search.search(scope, input);
+        // Only this host's threads open on the origin the caller reached.
+        return {
+          ...result,
+          matches: result.matches.map((match) =>
+            match.host === undefined
+              ? {
+                  ...match,
+                  link: McpInvocationContext.threadLinkFor(scope, match.threadId, match.title),
+                }
+              : match,
+          ),
+        };
       }),
   ),
   goat_thread_fork: McpToolAccess.destructive(

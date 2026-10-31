@@ -733,6 +733,11 @@ const make = Effect.gen(function* () {
                     : false;
                 return {
                   threadId: thread.id,
+                  link: McpInvocationContext.threadLinkFor(
+                    context.scope,
+                    thread.id,
+                    input.title ?? thread.title,
+                  ),
                   projectId: thread.projectId,
                   modelSelection: thread.modelSelection,
                   runId: run?.id ?? null,
