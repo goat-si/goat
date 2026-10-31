@@ -320,7 +320,8 @@ const channelRefusal =
       | "activeRaceClosed"
       | "activeRaceUnregistered"
       | "activeRaceContinues"
-      | "replacedRace",
+      | "replacedRace"
+      | "staleGeneration",
   ) =>
   (input: Input) =>
     Effect.gen(function* () {
@@ -401,37 +402,64 @@ const channelRefusal =
             });
       if (registered !== undefined && registered.status !== "registered")
         return yield* Effect.die("registration failed");
+      if (kind === "staleGeneration" && registered?.status === "registered")
+        yield* channel.reportControlReady({
+          ...authority,
+          registrationId: registered.registrationId,
+          controlId: "A",
+          connectionId: "current",
+          driverGeneration: 1,
+        });
       const reading = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const clock = yield* Clock.Clock;
       let hold = false;
+      let injected = false;
       yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
       armed = true;
-      const pending = yield* channel
-        .request({
-          threadId,
-          runId: "run",
-          turnId: "turn",
-          callId: 1,
-          deadlineMillis: 30000,
-          tool: "list_apps",
-          args: {},
-        })
-        .pipe(
-          Effect.provideService(Clock.Clock, {
-            ...clock,
-            currentTimeMillis: Effect.suspend(() =>
-              hold
-                ? Deferred.succeed(reading, undefined).pipe(
-                    Effect.andThen(Deferred.await(release)),
-                    Effect.andThen(clock.currentTimeMillis),
-                  )
-                : clock.currentTimeMillis,
-            ),
-          }),
-          Effect.result,
-          Effect.forkChild({ startImmediately: true }),
-        );
+      const request = {
+        threadId,
+        runId: "run",
+        turnId: "turn",
+        callId: 1,
+        deadlineMillis: 30000,
+        tool: "list_apps",
+        args: {},
+      };
+      const admission =
+        kind === "staleGeneration"
+          ? {
+              ...request,
+              get expectedConnectionGeneration() {
+                if (!injected) {
+                  injected = true;
+                  for (const terminal of input.reasons)
+                    notify({
+                      kind: terminal === "screen_locked" ? "pause" : "stop",
+                      threadId,
+                      controlId: "A",
+                      terminal,
+                    });
+                }
+                return "stale";
+              },
+            }
+          : request;
+      const pending = yield* channel.request(admission).pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          currentTimeMillis: Effect.suspend(() =>
+            hold
+              ? Deferred.succeed(reading, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(clock.currentTimeMillis),
+                )
+              : clock.currentTimeMillis,
+          ),
+        }),
+        Effect.result,
+        Effect.forkChild({ startImmediately: true }),
+      );
       if (kind === "replacedRace") {
         if (registered?.status !== "registered") return yield* Effect.die("missing registration");
         currentControlId = "B";
@@ -489,6 +517,7 @@ const channelRefusal =
         yield* Deferred.succeed(release, undefined);
       }
       const answer = yield* Fiber.join(pending);
+      if (kind === "staleGeneration") assert.isTrue(injected);
       if (answer._tag !== "Failure") return yield* Effect.die("expected channel refusal");
       assert.equal(answer.failure.safety?.retryClass, "never");
       return replaceWithTerminal(answer.failure);
@@ -718,6 +747,11 @@ export const preDispatchSites: ReadonlyArray<{
     name: "ComputerUsePrimitiveChannel.replacedRace",
     undispatched: true,
     run: channelRefusal("replacedRace"),
+  },
+  {
+    name: "ComputerUsePrimitiveChannel.staleGeneration",
+    undispatched: true,
+    run: channelRefusal("staleGeneration"),
   },
   {
     name: "ComputerUseLeaseProxyPersonStop.lockRefusal",
