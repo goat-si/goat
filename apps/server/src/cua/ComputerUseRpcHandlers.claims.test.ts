@@ -18,6 +18,7 @@ it.effect("Stop and Stop all end claims even without an active desktop lease", (
       publish: (union) => Effect.sync(() => void published.push(union)),
       bind: (input) =>
         Effect.succeed({
+          targetId: "target-1",
           tabId: `tab-${input.windowId}`,
           title: "Site",
           url: input.origin,

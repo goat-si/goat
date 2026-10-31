@@ -2,10 +2,8 @@ import * as NodeModule from "node:module";
 
 import {
   CuaAgentBlock,
-  cuaAgentBlockUnder,
   CuaDriverMcpConfiguration,
   type ComputerUseApp,
-  type ComputerUseReadiness,
   type CuaDisplayCapability,
   type CuaHostStatus,
   type HostComputerUse,
@@ -57,6 +55,7 @@ import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetry
 import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import { makeDesktopBrowserManifest } from "./DesktopBrowserManifest.ts";
+import { currentBlock } from "./cuaDriverBlock.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
 import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
@@ -114,26 +113,7 @@ export const CUA_DRIVER_REFUSED_MESSAGE =
   "Cua Driver refused GOAT's capability manifest or launch options. The server log has the driver's reason.";
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
 
-/** The typed reason behind a failed start, when agents cannot get past it alone (#1399). */
-export const agentBlock = (failure: Option.Option<CuaDriverError>) =>
-  Option.isSome(failure) && failure.value._tag === "CuaDriverHostError"
-    ? failure.value.block
-    : undefined;
-
-/**
- * The block that still explains anything: the grants the helper's newer readiness does not
- * report granted; once every one is back, the last failure is history and the next start tries
- * again (#1399).
- */
-const currentBlock = (
-  failure: Option.Option<CuaDriverError>,
-  readiness: ComputerUseReadiness | undefined,
-) => {
-  const block = agentBlock(failure);
-  return block === undefined || readiness === undefined
-    ? block
-    : cuaAgentBlockUnder(block, readiness);
-};
+export { agentBlock } from "./cuaDriverBlock.ts";
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
 const isHostError = Schema.is(CuaDriverHostError);
@@ -148,6 +128,8 @@ export class CuaDriver extends Context.Service<
   {
     readonly readBrowserConfig?: Effect.Effect<unknown, Error>;
     readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
+    /** Restarts the running driver, so a manifest it would not reload stops counting. */
+    readonly fenceBrowserManifest?: Effect.Effect<void>;
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
     ) => Effect.Effect<void, CuaDriverHostError>;
@@ -518,6 +500,9 @@ export const make = Effect.fn("CuaDriver.make")(function* (
             new BrowserClaimManifestUnavailable({ cause: "Driver manifest is unavailable." }),
           ),
       ),
+    ),
+    fenceBrowserManifest: lifecycle.withPermit(
+      Effect.suspend(() => (active === undefined ? Effect.void : revoke(active))),
     ),
     ...(refresh ? { refreshManifest } : {}),
     acquire,
@@ -992,6 +977,7 @@ export const layer = Layer.effect(
           Effect.fail(
             new BrowserClaimManifestUnavailable({ cause: "Driver configuration is unavailable." }),
           ),
+        driver.fenceBrowserManifest,
       );
     return driver;
   }),

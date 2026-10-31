@@ -114,6 +114,7 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
           publish: () => Effect.void,
           bind: (input) =>
             Effect.succeed({
+              targetId: "target-1",
               tabId: "tab-1",
               title: "Site",
               url: input.origin,

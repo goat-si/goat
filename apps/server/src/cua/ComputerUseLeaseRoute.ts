@@ -50,6 +50,7 @@ import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThr
 import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
+import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -410,6 +411,17 @@ const callLayer = HttpRouter.add(
         encodeAdmission({ status: "refused", detail: "pointer_locked" }),
         { contentType: "application/json", headers: { "cache-control": "no-store" } },
       );
+    if (call.value.action === "reserve") {
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      const snapshot = Option.isSome(grants)
+        ? yield* grants.value.snapshotFor(threadId)
+        : { claims: [], bindings: [] };
+      if (!serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot))
+        return HttpServerResponse.text(
+          encodeAdmission({ status: "refused", detail: "outside_manifest" }),
+          { contentType: "application/json", headers: { "cache-control": "no-store" } },
+        );
+    }
     const result = yield* leases.callReservation(threadId, call.value).pipe(Effect.option);
     // The session is still accepted; GOAT could not read the authority that judges the call.
     if (Option.isNone(result)) return HttpServerResponse.empty({ status: 503 });

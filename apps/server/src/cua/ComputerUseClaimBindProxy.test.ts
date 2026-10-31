@@ -87,6 +87,7 @@ it.effect("agent and screen primitive cannot elevate by placing authority in too
         pid: 42,
         window_id: 7,
         mode: "bind",
+        target_id: "target-1",
         origin_scope: ["https://example.test"],
         authority: "claimBind",
       },
@@ -161,6 +162,7 @@ it.effect.each([true, false])(
                   claimGeneration: 1,
                   pid: 42,
                   windowId: 7,
+                  targetId: "target-1",
                   tabId: "tab",
                   origins: ["https://example.test"],
                 },
@@ -181,6 +183,7 @@ it.effect.each([true, false])(
             window_id: 7,
             tab_id: "tab",
             mode: "bind",
+            target_id: "target-1",
             strategy: { kind: "existing_profile" },
             origin_scope: ["https://example.test"],
           }),
@@ -300,6 +303,7 @@ it.effect("binds the approved active tab through the primitive and proxy before 
         result: {
           structuredContent: {
             mode: "bind",
+            target_id: "target-1",
             tabs: [
               { tab_id: "tab", active: true, title: "Site", url: "https://example.test/page" },
             ],

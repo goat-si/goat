@@ -18,7 +18,13 @@ it.effect("agent request only creates pending approval and never binds or grants
       bind: (input) =>
         Effect.sync(() => {
           binds++;
-          return { tabId: "tab", title: "Site", url: input.origin, driverGeneration: 1 };
+          return {
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          };
         }),
     });
     const threadId = ThreadId.make("thread:one");

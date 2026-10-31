@@ -39,6 +39,7 @@ describe("ComputerUseLeaseRoute reports", () => {
         publish: () => Effect.void,
         bind: () =>
           Effect.succeed({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test",

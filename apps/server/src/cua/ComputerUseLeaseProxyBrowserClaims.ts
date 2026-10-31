@@ -32,12 +32,16 @@ export const supportsBrowserClaims = (result: unknown): boolean => {
   return Object.hasOwn(tool.inputSchema.properties, "origin_scope");
 };
 
+/** The driver session a claim's bind mints its target in; its page calls must use the same one. */
+export const browserClaimSession = (claimId: string) => `goat-claim:${claimId}`;
+
 export interface ProxyBrowserClaim {
   readonly claimId: string;
   readonly claimGeneration: number;
   readonly pid: number;
   readonly windowId: number;
   readonly tabId: string;
+  readonly targetId: string;
   readonly origins: ReadonlyArray<string>;
 }
 
@@ -55,11 +59,17 @@ export const browserReplyOutsideClaim = (result: unknown, claim: ProxyBrowserCla
   const inspect = (value: unknown, depth: number): boolean => {
     if (depth > 12 || !isRecord(value)) return false;
     if (value.code === "browser_origin_outside_scope") return true;
-    if (value.tab_id === claim.tabId && typeof value.url === "string") {
-      try {
-        if (!claim.origins.includes(new URL(value.url).origin)) return true;
-      } catch {
-        return true;
+    if (value.tab_id === claim.tabId) {
+      // A semantic snapshot reports its page as page.url beside the tab id.
+      const urls = [value.url, isRecord(value.page) ? value.page.url : undefined];
+      for (const url of urls) {
+        if (url === undefined) continue;
+        if (typeof url !== "string") return true;
+        try {
+          if (!claim.origins.includes(new URL(url).origin)) return true;
+        } catch {
+          return true;
+        }
       }
     }
     return Object.values(value).some((entry) =>
@@ -115,12 +125,38 @@ export const scopeBrowserCall = (
   return {
     args: {
       ...args,
+      target_id: claim.targetId,
+      session: browserClaimSession(claim.claimId),
       origin_scope: claim.origins,
-      ...(args.session === undefined ? {} : { session: args.session }),
     },
     claimId: claim.claimId,
     claimGeneration: claim.claimGeneration,
   };
+};
+
+/**
+ * The server's own judgement of a browser call at reservation, from its live claims: the proxy's
+ * copy can trail a revoke, so a call scoped to a claim that has ended is refused here.
+ */
+export const serverAdmitsBrowserCall = (
+  name: unknown,
+  args: unknown,
+  snapshot: {
+    readonly claims: ReadonlyArray<ProxyBrowserClaim>;
+    readonly bindings: ReadonlyArray<PendingBrowserBind>;
+  },
+): boolean => {
+  const scoped = scopeBrowserCall(name, args, snapshot.claims);
+  if ("unchanged" in scoped) return true;
+  if ("refused" in scoped)
+    return authorizeClaimBind("claimBind", name, args, snapshot.bindings) !== undefined;
+  if (!isRecord(args)) return false;
+  return (
+    args.target_id === scoped.args.target_id &&
+    args.session === scoped.args.session &&
+    Array.isArray(args.origin_scope) &&
+    JSON.stringify(args.origin_scope) === JSON.stringify(scoped.args.origin_scope)
+  );
 };
 
 const desktopTools = new Set([

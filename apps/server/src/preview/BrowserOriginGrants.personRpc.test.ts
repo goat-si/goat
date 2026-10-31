@@ -18,7 +18,13 @@ it.effect(
         bind: (input) =>
           Effect.sync(() => {
             binds++;
-            return { tabId: "tab", title: "Site", url: input.origin, driverGeneration: 1 };
+            return {
+              targetId: "target-1",
+              tabId: "tab",
+              title: "Site",
+              url: input.origin,
+              driverGeneration: 1,
+            };
           }),
       });
       const threadId = ThreadId.make("thread:one");
@@ -56,7 +62,13 @@ it.effect("person claim and end attach once and keep the approved grant", () =>
       bind: (input) =>
         Effect.sync(() => {
           binds++;
-          return { tabId: "tab", title: "Site", url: input.origin, driverGeneration: 1 };
+          return {
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          };
         }),
     });
     const threadId = ThreadId.make("thread:one");

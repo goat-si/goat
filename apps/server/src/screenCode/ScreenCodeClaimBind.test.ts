@@ -142,12 +142,14 @@ it.effect("the installed binder uses the same live primitive channel exposed to 
           result: {
             structuredContent: {
               mode: "bind",
+              target_id: "target-1",
               tabs: [{ tab_id: "tab", active: true, title: "Site", url: "https://example.test/" }],
             },
           },
         },
       });
       assert.deepEqual(yield* Fiber.join(bind), {
+        targetId: "target-1",
         tabId: "tab",
         title: "Site",
         url: "https://example.test/",

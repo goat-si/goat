@@ -173,6 +173,8 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
     streamOpened: () => Effect.void,
     proxy: undefined,
+    callReservation: () =>
+      Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const),
     currentControl: () =>
       Ref.get(current).pipe(
         Effect.map((value) =>
@@ -283,6 +285,37 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
     request,
     postPrimitive,
+    reserve: (name: string, args: object) =>
+      handler.pipe(
+        Effect.provideService(
+          HttpServerRequest.HttpServerRequest,
+          HttpServerRequest.fromWeb(
+            new Request("http://goat.test/api/computer-use/lease/calls", {
+              method: "POST",
+              headers: {
+                authorization: credential.config.authorizationHeader,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                action: "reserve",
+                controlId: "control:test",
+                connectionId: "driver:1",
+                callId: "one",
+                name,
+                args,
+                interruptions: 0,
+                idleEpoch: 0,
+              }),
+            }),
+          ),
+        ),
+        Effect.provideContext(context),
+        Effect.map((response): unknown =>
+          response.body._tag === "Uint8Array"
+            ? JSON.parse(new TextDecoder().decode(response.body.body))
+            : response.status,
+        ),
+      ),
     open,
     released,
     holdNextRead: Effect.gen(function* () {
@@ -375,6 +408,7 @@ describe("computer use lease route", () => {
         publish: () => Effect.void,
         bind: () =>
           Effect.succeed({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test",
@@ -408,6 +442,62 @@ describe("computer use lease route", () => {
       assert.isUndefined(snapshot.claimedBrowserPids);
     }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest())),
   );
+  it.effect(
+    "the server refuses a reservation for a claim revoked before the proxy heard of it",
+    () =>
+      Effect.gen(function* () {
+        const grants = yield* makeBrowserOriginGrants({
+          environmentId: EnvironmentId.make("environment:test"),
+          supported: () => true,
+          publish: () => Effect.void,
+          bind: () =>
+            Effect.succeed({
+              targetId: "target-1",
+              tabId: "tab",
+              title: "Site",
+              url: "https://example.test",
+              driverGeneration: 1,
+            }),
+        });
+        const pending = yield* grants.request({
+          threadId,
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        });
+        if (pending.status !== "pending") return assert.fail("expected pending");
+        yield* grants.answer(pending.claimId, true);
+        const route = yield* threadFixture({
+          grants: { ...grants, setDriverCapability: () => Effect.void },
+        });
+        // The arguments exactly as the proxy scoped them while it still held the claim.
+        const scoped = {
+          tab_id: "tab",
+          target_id: "target-1",
+          session: "goat-claim:" + pending.claimId,
+          origin_scope: ["https://example.test"],
+        };
+        assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+          status: "admitted",
+          reservationId: "reservation:test",
+        });
+        assert.deepEqual(
+          yield* route.reserve("browser_click", { ...scoped, target_id: "target-other" }),
+          { status: "refused", detail: "outside_manifest" },
+        );
+        yield* grants.revoke(threadId, "https://example.test");
+        assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+          status: "refused",
+          detail: "outside_manifest",
+        });
+        assert.deepEqual(yield* route.reserve("list_apps", {}), {
+          status: "admitted",
+          reservationId: "reservation:test",
+        });
+      }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
+
   it.effect("revoking a service claim makes the next proxied call refuse", () =>
     Effect.gen(function* () {
       const grants = yield* makeBrowserOriginGrants({
@@ -416,6 +506,7 @@ describe("computer use lease route", () => {
         publish: () => Effect.void,
         bind: () =>
           Effect.succeed({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test",
@@ -458,6 +549,7 @@ describe("computer use lease route", () => {
           publish: () => Effect.void,
           bind: () =>
             Effect.succeed({
+              targetId: "target-1",
               tabId: "tab",
               title: "Site",
               url: "https://example.test",
@@ -517,6 +609,8 @@ describe("computer use lease route", () => {
           return assert.fail("expected call arguments");
         assert.deepEqual(params.arguments, {
           tab_id: "tab",
+          target_id: "target-1",
+          session: "goat-claim:browser-claim:1",
           origin_scope: ["https://example.test"],
         });
         yield* h.reply(
@@ -595,6 +689,7 @@ describe("computer use lease route", () => {
         publish: () => Effect.void,
         bind: () =>
           Effect.succeed({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test",
@@ -626,6 +721,7 @@ describe("computer use lease route", () => {
             claimGeneration: answer.agentResult.claim.claimGeneration,
             pid: 42,
             windowId: 7,
+            targetId: "target-1",
             tabId: "tab",
             origins: ["https://example.test"],
           },
@@ -646,6 +742,7 @@ describe("computer use lease route", () => {
         publish: () => Effect.void,
         bind: () =>
           Effect.succeed({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test",
@@ -671,6 +768,7 @@ describe("computer use lease route", () => {
           claimGeneration: answer.agentResult.claim.claimGeneration,
           pid: 42,
           windowId: 7,
+          targetId: "target-1",
           tabId: "tab",
           origins: ["https://example.test"],
         },

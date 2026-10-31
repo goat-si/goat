@@ -8,7 +8,15 @@ import * as Schema from "effect/Schema";
 import type { ScreenRunError } from "@goat/contracts";
 import type { PrimitiveChannelRequest } from "../cua/ComputerUsePrimitiveChannel.ts";
 import type { Request } from "./BrowserOriginGrants.ts";
+import { browserClaimSession } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
 
+interface BoundTab {
+  readonly targetId: string;
+  readonly tabId: string;
+  readonly title: string;
+  readonly url: string;
+  readonly driverGeneration: number;
+}
 type BindRequest = Request & { readonly claimId: string; readonly bindingVersion: number };
 interface BindReply {
   readonly status: string;
@@ -44,7 +52,7 @@ export const makeBrowserClaimBind = Effect.fn("BrowserClaimBind.make")((channel:
             pid: input.pid,
             window_id: input.windowId,
             origin_scope: [input.origin],
-            session: `goat-claim:${input.claimId}`,
+            session: browserClaimSession(input.claimId),
           },
         })
         .pipe(Effect.mapError((cause) => new BrowserClaimBindFailure({ cause })));
@@ -58,6 +66,8 @@ export const makeBrowserClaimBind = Effect.fn("BrowserClaimBind.make")((channel:
         reply.result.isError === true ||
         !result ||
         result.mode !== "bind" ||
+        typeof result.target_id !== "string" ||
+        result.target_id.length === 0 ||
         !Array.isArray(result.tabs)
       )
         return yield* new BrowserClaimBindFailure({
@@ -77,6 +87,7 @@ export const makeBrowserClaimBind = Effect.fn("BrowserClaimBind.make")((channel:
           cause: "The active tab is not available in the granted origin.",
         });
       return {
+        targetId: result.target_id,
         tabId: active[0].tab_id,
         title: active[0].title,
         url: active[0].url,
@@ -134,26 +145,10 @@ export const makeBrowserClaimWindow = Effect.fn("BrowserClaimBind.makeWindowRead
 export class BrowserClaimBind extends Context.Service<
   BrowserClaimBind,
   {
-    readonly bind: (request: BindRequest) => Effect.Effect<
-      {
-        readonly tabId: string;
-        readonly title: string;
-        readonly url: string;
-        readonly driverGeneration: number;
-      },
-      Error
-    >;
+    readonly bind: (request: BindRequest) => Effect.Effect<BoundTab, Error>;
     readonly windowTitle?: (request: WindowRequest) => Effect.Effect<string, Error>;
     readonly install?: (
-      bind: (request: BindRequest) => Effect.Effect<
-        {
-          readonly tabId: string;
-          readonly title: string;
-          readonly url: string;
-          readonly driverGeneration: number;
-        },
-        Error
-      >,
+      bind: (request: BindRequest) => Effect.Effect<BoundTab, Error>,
       windowTitle: (request: WindowRequest) => Effect.Effect<string, Error>,
     ) => Effect.Effect<void>;
   }

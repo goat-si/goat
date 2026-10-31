@@ -29,6 +29,10 @@ const make = Effect.gen(function* () {
         : Effect.fail(
             new BrowserClaimBindUnavailable({ cause: "Browser manifest is unavailable." }),
           ),
+    fence: () =>
+      Option.isSome(manifest) && manifest.value.fence
+        ? manifest.value.fence
+        : Effect.succeed(false),
     confirm: () =>
       Option.isSome(manifest)
         ? manifest.value.readConfig

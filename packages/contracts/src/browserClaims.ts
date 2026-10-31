@@ -44,6 +44,8 @@ export const LeaseBrowserClaim = Schema.Struct({
   pid: Schema.Int.check(Schema.isGreaterThan(0)),
   windowId: Schema.Int.check(Schema.isGreaterThan(0)),
   tabId: TrimmedNonEmptyString,
+  /** The driver target the claim's bind minted; the proxy sends it with every page call. */
+  targetId: TrimmedNonEmptyString,
   origins: Schema.Array(BrowserOrigin).check(Schema.isMinLength(1), Schema.isMaxLength(64)),
 });
 

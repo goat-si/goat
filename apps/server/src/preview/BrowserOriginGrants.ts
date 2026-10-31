@@ -41,6 +41,8 @@ interface Dependencies {
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
+  /** Restarts the driver; true when it could. */
+  readonly fence?: () => Effect.Effect<boolean>;
   readonly windowTitle?: (
     input: Pick<Request, "threadId" | "pid" | "windowId">,
   ) => Effect.Effect<string, Error>;
@@ -48,6 +50,7 @@ interface Dependencies {
     input: Request & { readonly claimId: string; readonly bindingVersion: number },
   ) => Effect.Effect<
     {
+      readonly targetId: string;
       readonly tabId: string;
       readonly title: string;
       readonly url: string;
@@ -108,15 +111,28 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   });
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
     const sha = yield* write(value);
+    // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
+    // restarted: its old browser windows and origins must not outlive the claims that named them.
     yield* confirm(sha).pipe(
       Effect.catch((cause) =>
-        Effect.logWarning("Browser manifest shrink confirmation failed", { cause }),
+        Effect.logWarning("Browser manifest shrink was not confirmed; restarting the driver", {
+          cause,
+        }).pipe(
+          Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
+          Effect.flatMap((fenced) =>
+            fenced
+              ? Effect.void
+              : Effect.logError("Browser manifest shrink was not confirmed and no fence exists"),
+          ),
+        ),
       ),
       Effect.forkDetach({ startImmediately: true }),
     );
   });
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
+  // The bind's driver target, kept off LiveTabClaim so people and agents never see it.
+  const targets = new WeakMap<LiveTabClaim, string>();
   const grants = new Map<string, BrowserOriginGrant>();
   const uncommittedGrants = new Set<string>();
   const ended = new Map<
@@ -256,6 +272,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             status: "attached",
           };
           uncommittedGrants.delete(grantKey);
+          targets.set(claim, tab.targetId);
           claims.set(claimId, claim);
           pending.delete(claimId);
           yield* advance;
@@ -419,16 +436,21 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           grant.threadId === threadId && !uncommittedGrants.has(key(grant.threadId, grant.origin)),
       )
       .map((grant) => grant.origin);
-    return [...claims.values()]
-      .filter((claim) => claim.threadId === threadId)
-      .map((claim) => ({
-        claimId: claim.claimId,
-        claimGeneration: claim.claimGeneration,
-        pid: claim.tab.pid,
-        windowId: claim.tab.windowId,
-        tabId: claim.tab.tabId,
-        origins,
-      }));
+    return [...claims.values()].flatMap((claim) => {
+      const targetId = targets.get(claim);
+      if (claim.threadId !== threadId || targetId === undefined) return [];
+      return [
+        {
+          claimId: claim.claimId,
+          claimGeneration: claim.claimGeneration,
+          pid: claim.tab.pid,
+          windowId: claim.tab.windowId,
+          tabId: claim.tab.tabId,
+          targetId,
+          origins,
+        },
+      ];
+    });
   };
   const pidValues = () => [...new Set([...claims.values()].map((claim) => claim.tab.pid))];
   const bindingsFor = Effect.fn("BrowserOriginGrants.bindingsFor")((threadId: ThreadId) =>

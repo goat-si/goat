@@ -61,6 +61,7 @@ it.effect("reports unsupported capability as unavailable and removes claims from
             Layer.succeed(BrowserClaimBind, {
               bind: () =>
                 Effect.succeed({
+                  targetId: "target-1",
                   tabId: "tab",
                   title: "Site",
                   url: "https://example.test",

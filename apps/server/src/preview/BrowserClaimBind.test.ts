@@ -17,6 +17,7 @@ it.effect("binds the active tab through a host-authorized scoped primitive", () 
             result: {
               structuredContent: {
                 mode: "bind",
+                target_id: "target-1",
                 tabs: [
                   { tab_id: "tab", active: true, title: "Site", url: "https://example.test/page" },
                 ],
@@ -35,6 +36,7 @@ it.effect("binds the active tab through a host-authorized scoped primitive", () 
       windowTitle: "Browser",
     });
     assert.deepEqual(result, {
+      targetId: "target-1",
       tabId: "tab",
       title: "Site",
       url: "https://example.test/page",

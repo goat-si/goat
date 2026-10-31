@@ -18,6 +18,7 @@ it.effect("exposes binding authority only after approval and only to the owning 
         Deferred.succeed(entered, undefined).pipe(
           Effect.andThen(Deferred.await(release)),
           Effect.as({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test/",
@@ -61,6 +62,7 @@ it.effect("returns the bind and revision in one snapshot", () =>
         Deferred.succeed(entered, undefined).pipe(
           Effect.andThen(Deferred.await(release)),
           Effect.as({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test/",

@@ -14,9 +14,12 @@ export class BrowserClaimManifest extends Context.Service<
   {
     readonly publish: (union: Union) => Effect.Effect<string, Error>;
     readonly readConfig: Effect.Effect<unknown, Error>;
+    /** Restarts the driver when it would not confirm a narrower manifest; false without one. */
+    readonly fence?: Effect.Effect<boolean>;
     readonly install: (
       publish: (union: Union) => Effect.Effect<string, Error>,
       readConfig: Effect.Effect<unknown, Error>,
+      fence?: Effect.Effect<void>,
     ) => Effect.Effect<void>;
   }
 >()("goat/preview/BrowserClaimManifest") {}
@@ -26,6 +29,7 @@ export const layer = Layer.effect(
   Effect.sync(() => {
     let writer: ((union: Union) => Effect.Effect<string, Error>) | undefined;
     let reader: Effect.Effect<unknown, Error> | undefined;
+    let fencer: Effect.Effect<void> | undefined;
     return {
       publish: Effect.fn("BrowserClaimManifest.publish")((union: Union) =>
         Effect.suspend(() =>
@@ -43,10 +47,12 @@ export const layer = Layer.effect(
             new BrowserClaimManifestUnavailable({ cause: "Driver configuration is unavailable." }),
           ),
       ),
-      install: (publish, readConfig) =>
+      fence: Effect.suspend(() => (fencer ? fencer.pipe(Effect.as(true)) : Effect.succeed(false))),
+      install: (publish, readConfig, fence) =>
         Effect.sync(() => {
           writer = publish;
           reader = readConfig;
+          fencer = fence;
         }),
     };
   }),

@@ -13,6 +13,7 @@ it.effect("stopping one thread ends its claims and preserves other claims and gr
       publish: () => Effect.void,
       bind: (input) =>
         Effect.succeed({
+          targetId: "target-1",
           tabId: `tab-${input.windowId}`,
           title: "Site",
           url: input.origin,
@@ -56,7 +57,13 @@ it.effect("stop fences a pending bind without waiting for it", () =>
       bind: (input) =>
         Deferred.succeed(started, undefined).pipe(
           Effect.andThen(Deferred.await(release)),
-          Effect.as({ tabId: "tab", title: "Site", url: input.origin, driverGeneration: 1 }),
+          Effect.as({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          }),
         ),
     });
     const threadId = ThreadId.make("thread:first");

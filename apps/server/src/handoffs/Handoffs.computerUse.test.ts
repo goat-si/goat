@@ -119,6 +119,7 @@ it.effect(
           publish: () => Effect.void,
           bind: (input) =>
             Effect.succeed({
+              targetId: "target-1",
               tabId: "tab-1",
               title: "Site",
               url: input.origin,

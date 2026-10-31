@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
+import { makeBrowserOriginGrants as makeUnconfirmedGrants } from "./BrowserOriginGrants.ts";
 
 it.effect("does not bind before approval and hides a mismatch as a decline", () =>
   Effect.gen(function* () {
@@ -18,6 +19,7 @@ it.effect("does not bind before approval and hides a mismatch as a decline", () 
         Effect.sync(() => {
           binds++;
           return {
+            targetId: "target-1",
             tabId: "tab-1",
             title: "Private",
             url: "https://other.test/",
@@ -64,6 +66,7 @@ it.effect("keeps grants per thread and shrinks the exact window union on revoke 
       publish: (value) => Effect.sync(() => void manifests.push(value)),
       bind: (input) =>
         Effect.succeed({
+          targetId: "target-1",
           tabId: `tab-${input.windowId}`,
           title: "Site",
           url: input.origin,
@@ -150,6 +153,7 @@ it.effect("serializes a revoke behind an in-flight bind", () =>
         Deferred.succeed(started, undefined).pipe(
           Effect.andThen(Deferred.await(release)),
           Effect.as({
+            targetId: "target-1",
             tabId: "tab",
             title: "Site",
             url: "https://example.test",
@@ -185,6 +189,7 @@ it.effect("ends only the matching claim generation when its origin changes", () 
       publish: (value) => Effect.sync(() => void manifests.push(value)),
       bind: () =>
         Effect.succeed({
+          targetId: "target-1",
           tabId: "tab-1",
           title: "Site",
           url: "https://example.test/",
@@ -222,6 +227,7 @@ it.effect("exposes each thread's claims and fences claimed browser pids until re
       publish: () => Effect.void,
       bind: () =>
         Effect.succeed({
+          targetId: "target-1",
           tabId: "tab-1",
           title: "Site",
           url: "https://example.test",
@@ -245,6 +251,7 @@ it.effect("exposes each thread's claims and fences claimed browser pids until re
         claimGeneration: answer.agentResult.claim.claimGeneration,
         pid: 42,
         windowId: 7,
+        targetId: "target-1",
         tabId: "tab-1",
         origins: ["https://example.test"],
       },
@@ -284,6 +291,7 @@ it.effect("refuses a claim when manifest confirmation fails and restores the pre
         }),
       bind: (input) =>
         Effect.succeed({
+          targetId: "target-1",
           tabId: `tab-${input.windowId}`,
           title: "Site",
           url: input.origin,
@@ -308,5 +316,51 @@ it.effect("refuses a claim when manifest confirmation fails and restores the pre
     assert.equal(answer.agentResult.status, "refused");
     assert.deepEqual(published.at(-1), [{ pid: 42, windowId: 7 }]);
     assert.lengthOf(yield* service.claimsFor(threadId), 1);
+  }),
+);
+
+it.effect("restarts the driver when it will not confirm a narrower manifest", () =>
+  Effect.gen(function* () {
+    const hash = "b".repeat(64);
+    let rejectReload = false;
+    const fenced = yield* Deferred.make<void>();
+    const service = yield* makeUnconfirmedGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.succeed(hash),
+      confirm: () =>
+        Effect.sync(() => ({
+          capability_manifest: {
+            sha256: hash,
+            file_sha256: hash,
+            reload_error: rejectReload ? "reload refused" : null,
+          },
+        })),
+      fence: () => Deferred.succeed(fenced, undefined).pipe(Effect.as(true)),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target-1",
+          tabId: "tab-1",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending request");
+    const answer = yield* service.answer(request.claimId, true);
+    assert.equal(answer.agentResult.status, "attached");
+    assert.isFalse(yield* Deferred.isDone(fenced));
+    rejectReload = true;
+    yield* service.revoke(threadId, "https://example.test");
+    yield* Deferred.await(fenced);
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
   }),
 );

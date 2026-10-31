@@ -21,6 +21,7 @@ const config = (file: string, error: string | null = null) => ({
 });
 const bind = (request: typeof input) =>
   Effect.succeed({
+    targetId: "target-1",
     tabId: `tab-${request.windowId}`,
     title: "Site",
     url: request.origin,
@@ -41,7 +42,13 @@ it.effect("does not bind or attach until the written hash is confirmed", () =>
       bind: (request) =>
         Effect.sync(() => {
           bindings++;
-          return { tabId: "tab", title: "Site", url: request.origin, driverGeneration: 1 };
+          return {
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: request.origin,
+            driverGeneration: 1,
+          };
         }),
     });
     const request = yield* service.request(input);

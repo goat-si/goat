@@ -88,6 +88,7 @@ it("detects an out-of-scope claimed tab reply without treating redacted other ta
     claimGeneration: 1,
     pid: 42,
     windowId: 7,
+    targetId: "target-1",
     tabId: "tab-1",
     origins: ["https://example.test"],
   };
@@ -118,6 +119,57 @@ it("detects an out-of-scope claimed tab reply without treating redacted other ta
   ).toBe(false);
 });
 
+it("withholds a semantic snapshot whose page left the grant", () => {
+  const claim = {
+    claimId: "claim-1",
+    claimGeneration: 1,
+    pid: 42,
+    windowId: 7,
+    targetId: "target-1",
+    tabId: "tab-1",
+    origins: ["https://example.test"],
+  };
+  // The driver's semantic_v2 snapshot: the tab id at the top, its address under page.
+  const snapshot = (url: string) => ({
+    structuredContent: {
+      status: "ok",
+      mode: "snapshot",
+      target_id: "target-1",
+      tab_id: "tab-1",
+      snapshot: { id: "p1", format: "semantic_v2" },
+      page: { url, title: "Page" },
+    },
+  });
+  expect(browserReplyOutsideClaim(snapshot("https://other.test/secret"), claim)).toBe(true);
+  expect(browserReplyOutsideClaim(snapshot("https://example.test/inbox"), claim)).toBe(false);
+});
+
+it("sends the claim's own driver target and session whatever the caller names", () => {
+  const claims = [
+    {
+      claimId: "claim-1",
+      claimGeneration: 1,
+      pid: 42,
+      windowId: 7,
+      targetId: "target-1",
+      tabId: "tab-1",
+      origins: ["https://example.test"],
+    },
+  ];
+  const scoped = scopeBrowserCall(
+    "browser_click",
+    { tab_id: "tab-1", target_id: "target-other", session: "someone-else", ref: "r1" },
+    claims,
+  );
+  expect("args" in scoped && scoped.args).toEqual({
+    tab_id: "tab-1",
+    ref: "r1",
+    target_id: "target-1",
+    session: "goat-claim:claim-1",
+    origin_scope: ["https://example.test"],
+  });
+});
+
 it("limits browser calls to the claimed tab and replaces caller supplied origin scopes", () => {
   const claims = [
     {
@@ -125,6 +177,7 @@ it("limits browser calls to the claimed tab and replaces caller supplied origin 
       claimGeneration: 1,
       pid: 42,
       windowId: 7,
+      targetId: "target-1",
       tabId: "tab-1",
       origins: ["https://example.test"],
     },
@@ -141,7 +194,12 @@ it("limits browser calls to the claimed tab and replaces caller supplied origin 
       claims,
     ),
   ).toEqual({
-    args: { tab_id: "tab-1", origin_scope: ["https://example.test"] },
+    args: {
+      tab_id: "tab-1",
+      target_id: "target-1",
+      session: "goat-claim:claim-1",
+      origin_scope: ["https://example.test"],
+    },
     claimId: "claim-1",
     claimGeneration: 1,
   });
@@ -161,6 +219,7 @@ it("refuses browser calls that name a different pid or window for the claimed ta
       claimGeneration: 1,
       pid: 42,
       windowId: 7,
+      targetId: "target-1",
       tabId: "tab-1",
       origins: ["https://example.test"],
     },
@@ -233,6 +292,7 @@ effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", 
           claimGeneration: 1,
           pid: 42,
           windowId: 7,
+          targetId: "target-1",
           tabId: "tab-1",
           origins: ["https://example.test"],
         },
@@ -251,7 +311,12 @@ effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", 
     if (result.kind === "sent")
       assert.deepEqual(result.message.params, {
         name: "browser_click",
-        arguments: { tab_id: "tab-1", origin_scope: ["https://example.test"] },
+        arguments: {
+          tab_id: "tab-1",
+          target_id: "target-1",
+          session: "goat-claim:claim-1",
+          origin_scope: ["https://example.test"],
+        },
       });
   }),
 );
@@ -269,6 +334,7 @@ effectIt.effect(
             claimGeneration: 1,
             pid: 42,
             windowId: 7,
+            targetId: "target-1",
             tabId: "tab-1",
             origins: ["https://example.test"],
           },
@@ -319,6 +385,7 @@ effectIt.effect("a revoked claim fences a browser call held before dispatch", ()
       claimGeneration: 1,
       pid: 42,
       windowId: 7,
+      targetId: "target-1",
       tabId: "tab-1",
       origins: ["https://example.test"],
     };
@@ -346,6 +413,7 @@ effectIt.effect("the proxy refuses a claimed browser call when the driver lacks 
           claimGeneration: 1,
           pid: 42,
           windowId: 7,
+          targetId: "target-1",
           tabId: "tab-1",
           origins: ["https://example.test"],
         },
@@ -385,6 +453,7 @@ effectIt.effect(
             claimGeneration: 2,
             pid: 42,
             windowId: 7,
+            targetId: "target-1",
             tabId: "tab-1",
             origins: ["https://example.test"],
           },
@@ -418,6 +487,7 @@ effectIt.effect("a claim admits only its own tab under app-restricted control", 
       claimGeneration: 1,
       pid: 42,
       windowId: 7,
+      targetId: "target-1",
       tabId: "tab-1",
       origins: ["https://example.test"],
     };
@@ -454,6 +524,7 @@ effectIt.effect("an app-restricted claim generation change fences a held page ca
       claimGeneration: 1,
       pid: 42,
       windowId: 7,
+      targetId: "target-1",
       tabId: "tab-1",
       origins: ["https://example.test"],
     };

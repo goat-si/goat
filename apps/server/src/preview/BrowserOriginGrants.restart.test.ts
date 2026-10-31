@@ -56,6 +56,7 @@ const fixture = (published: Union[], bind: BrowserClaimBind["Service"]["bind"]) 
     ),
   );
 const bound = (windowId: number) => ({
+  targetId: "target-1",
   tabId: `tab-${windowId}`,
   title: "Site",
   url: input.origin,
