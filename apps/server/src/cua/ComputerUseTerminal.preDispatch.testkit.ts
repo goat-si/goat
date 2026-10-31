@@ -400,11 +400,20 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
   });
 
 const proxyAdmission =
-  (kind: "duplicate" | "incompleteWindow" | "wrongDisplay" | "paused" | "noTicket") =>
+  (kind: "duplicate" | "incompleteWindow" | "wrongDisplay" | "paused" | "noTicket" | "capture") =>
   (input: Input) =>
     Effect.gen(function* () {
+      let visible = false;
+      const overlay = Object.assign(
+        (command: { readonly op: "show" | "hide" | "status" }) =>
+          Effect.sync(() => {
+            if (command.op === "show") visible = true;
+          }),
+        { captureHideConfirmed: () => !visible },
+      );
       const h = yield* harness({
         autoAppListing: true,
+        ...(kind === "capture" ? { overlay } : {}),
         ...(kind === "incompleteWindow" || kind === "wrongDisplay"
           ? { elsewhere: new Set([900]) }
           : {}),
@@ -429,6 +438,12 @@ const proxyAdmission =
       } else if (kind === "paused") {
         yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
         yield* h.send(call(1, "list_apps"));
+      } else if (kind === "capture") {
+        yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
+        yield* h.nextToDriver;
+        yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+        yield* h.nextToProvider;
+        yield* h.send(call(2, "get_window_state", { pid: 4, window_id: 9 }));
       } else {
         const args =
           kind === "incompleteWindow"
@@ -446,7 +461,9 @@ const proxyAdmission =
             ? "waiting_for_human"
             : kind === "noTicket"
               ? "unauthorized"
-              : "wrong_display";
+              : kind === "capture"
+                ? "capture_hide_unconfirmed"
+                : "wrong_display";
       assert.include(answer, `"detail":"${detail}"`);
       return finalize(answer, input);
     });
@@ -474,6 +491,7 @@ export const preDispatchSites: ReadonlyArray<{
   },
   { name: "ComputerUseLeaseProxy.paused", undispatched: true, run: proxyAdmission("paused") },
   { name: "ComputerUseLeaseProxy.noTicket", undispatched: true, run: proxyAdmission("noTicket") },
+  { name: "ComputerUseLeaseProxy.captureHide", undispatched: true, run: proxyAdmission("capture") },
   {
     name: "ComputerUsePrimitiveChannel.retainedWaiter",
     undispatched: true,
