@@ -261,11 +261,13 @@ export const reportLayer = HttpRouter.add(
       }
       const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
       if (Option.isNone(handoffs)) return HttpServerResponse.empty({ status: 503 });
+      const claims = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const result = yield* stopComputerUseFromHelper(
         Option.some(leases),
         handoffs.value,
         threadId,
         value.controlId,
+        claims,
       );
       return HttpServerResponse.empty({ status: result.stopped ? 204 : 409 });
     }

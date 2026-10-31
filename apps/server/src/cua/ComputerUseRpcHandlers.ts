@@ -106,11 +106,13 @@ export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")
   handoffs: Handoffs.Handoffs["Service"],
   threadId: ThreadId,
   controlId: string,
+  claims: Option.Option<BrowserOriginGrants["Service"]> = Option.none(),
 ) {
   if (Option.isNone(leases) || leases.value.stopAllIfCurrent === undefined)
     return { stopped: false, failed: 0 };
   const stopped = yield* leases.value.stopAllIfCurrent(threadId, controlId);
   if (!stopped) return { stopped: false, failed: 0 };
+  if (Option.isSome(claims)) yield* claims.value.stop();
   yield* handoffs.stopComputerUseSessions();
   const { failed } = yield* endGrants(leases.value, handoffs, undefined, () => true);
   return { stopped: true, failed };
