@@ -43,28 +43,6 @@ export function makeBrowserHistoryRecordAction(
     };
     pushBounded(tab.actionTimeline, event, 50);
     const url = details?.url ?? tab.page.url();
-    const record = Effect.fn("ComputerUseHistory.recordBrowserOutcome")(function* (
-      outcome: {
-        verdict: "sent" | "refused" | "unknown_outcome";
-        refusalCode?: string;
-      },
-      stamp: HistoryStamp,
-    ) {
-      const finishRetention = details?.finishRetention;
-      const evidence =
-        finishRetention === undefined ? false : yield* Effect.tryPromise(finishRetention);
-      const keep = outcome.verdict === "sent" && evidence;
-      yield* recordBrowserAction(history, {
-        threadId: tab.threadId,
-        stamp,
-        url: action === "back" || action === "forward" ? tab.page.url() : url,
-        action,
-        ...(details?.targetLabel === undefined ? {} : { targetLabel: details.targetLabel }),
-        ...outcome,
-        ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
-        ...(keep ? { keepTypedText: true, normalField: true, secretProtected: false } : {}),
-      });
-    });
     const schedule = (
       outcome: {
         verdict: "sent" | "refused" | "unknown_outcome";
@@ -72,12 +50,36 @@ export function makeBrowserHistoryRecordAction(
       },
       stamp: HistoryStamp,
     ) => {
+      const snapshot = (() => {
+        try {
+          return {
+            threadId: tab.threadId,
+            stamp,
+            url: action === "back" || action === "forward" ? tab.page.url() : url,
+            action,
+            ...(details?.targetLabel === undefined ? {} : { targetLabel: details.targetLabel }),
+            ...outcome,
+            ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
+            finishRetention: details?.finishRetention,
+          };
+        } catch (cause) {
+          fork(Effect.logWarning("Computer use history snapshot failed", { cause }));
+          return undefined;
+        }
+      })();
+      if (snapshot === undefined) return;
+      const { finishRetention, ...entry } = snapshot;
+      const record = Effect.fn("ComputerUseHistory.recordBrowserOutcome")(function* () {
+        const evidence =
+          finishRetention === undefined ? false : yield* Effect.tryPromise(finishRetention);
+        const keep = entry.verdict === "sent" && evidence;
+        yield* recordBrowserAction(history, {
+          ...entry,
+          ...(keep ? { keepTypedText: true, normalField: true, secretProtected: false } : {}),
+        });
+      });
       fork(
-        scheduleHistory(
-          browserHistoryPrefix(tab.threadId) + event.id,
-          record(outcome, stamp),
-          serverScope,
-        ),
+        scheduleHistory(browserHistoryPrefix(snapshot.threadId) + event.id, record(), serverScope),
       );
     };
     return execute().then(

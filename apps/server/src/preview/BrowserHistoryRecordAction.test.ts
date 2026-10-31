@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import type { PreviewAutomationActionEvent } from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,6 +9,10 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import * as TestClock from "effect/testing/TestClock";
+import * as Clock from "effect/Clock";
+import { awaitHistory } from "../cua/ComputerUseHistoryBackground.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
+import { browserHistoryPrefix } from "./BrowserHistoryRecordAction.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
 
@@ -55,4 +60,98 @@ it.effect("returns a successful click when history fails or never completes", ()
     yield* Deferred.succeed(gate, undefined);
     yield* Scope.close(owner, Exit.void);
   }).pipe(Effect.scoped, Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect.each(["back", "forward"])(
+  "records the %s destination at completion before later navigation",
+  (method) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const history = yield* makeComputerUseHistory;
+        const owner = yield* Effect.scope;
+        const now = yield* Clock.currentTimeMillis;
+        const fork = Effect.runForkWith(yield* Effect.context<never>());
+        const launches: Array<ReturnType<typeof fork>> = [];
+        const record = makeBrowserHistoryRecordAction(
+          history,
+          (effect) => {
+            launches.push(fork(effect));
+          },
+          owner,
+          () => now,
+        );
+        let url = "https://start.example/";
+        const actionTimeline: Array<PreviewAutomationActionEvent> = [];
+        const tab = {
+          threadId: "thread:navigation",
+          page: { url: () => url },
+          actionTimeline,
+          diagnostics: { firstLine: (cause: unknown) => String(cause) },
+        };
+        const retention = Promise.withResolvers<boolean>();
+        const details = {
+          targetLabel: "button",
+          typedText: "hello",
+          finishRetention: () => retention.promise,
+        };
+        yield* Effect.promise(() =>
+          record(
+            tab,
+            method,
+            async () => {
+              url = "https://back-result.example/path";
+              return "done";
+            },
+            details,
+          ).then((result) => {
+            url = "https://later-navigation.example/private";
+            tab.threadId = "thread:other";
+            details.targetLabel = "different";
+            details.typedText = "changed";
+            return result;
+          }),
+        );
+        retention.resolve(false);
+        yield* Effect.forEach(launches, Fiber.join, { discard: true });
+        const event = tab.actionTimeline[0];
+        if (event === undefined) return assert.fail("missing event");
+        yield* awaitHistory(browserHistoryPrefix("thread:navigation") + event.id);
+        const rows = yield* history.listForThread("thread:navigation");
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0]?.method, method);
+        assert.equal(rows[0]?.tabHost, "back-result.example");
+        assert.equal(rows[0]?.targetLabel, "button");
+        assert.equal(rows[0]?.typedLength, 5);
+        assert.equal((yield* history.listForThread("thread:other")).length, 0);
+      }),
+    ).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+);
+
+it.effect("returns a completed navigation when its destination snapshot is unavailable", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const history = yield* makeComputerUseHistory;
+      const owner = yield* Effect.scope;
+      const fork = Effect.runForkWith(yield* Effect.context<never>());
+      let reads = 0;
+      const tab = {
+        threadId: "thread:closed",
+        page: {
+          url: () => {
+            if (++reads > 1) throw new Error("page unavailable");
+            return "https://start.example/";
+          },
+        },
+        actionTimeline: [],
+        diagnostics: { firstLine: (cause: unknown) => String(cause) },
+      };
+      const record = makeBrowserHistoryRecordAction(history, fork, owner);
+      const result = yield* Effect.tryPromise(() =>
+        record(tab, "back", async () => "completed"),
+      ).pipe(Effect.result);
+      assert.equal(result._tag, "Success");
+      if (result._tag === "Success") assert.equal(result.success, "completed");
+    }),
+  ).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
