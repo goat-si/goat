@@ -8,6 +8,7 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { context, DriverError, UnknownOutcome, fixture } from "./DesktopTargetHost.testkit.ts";
 
+// Stop and lock end the cell even when its script catches the individual tool error.
 it.live.each([
   { code: "stopped_by_person", method: "click", tool: "click" },
   { code: "stopped_by_person", method: "observe", tool: "get_window_state" },
@@ -22,20 +23,22 @@ it.live.each([
   });
   return Effect.gen(function* () {
     const service = yield* ScreenRunService;
-    const result = yield* service.runCell({
-      runId: "r",
-      turnId: "t",
-      threadId: "thread",
-      environmentId: "env",
-      invocation: context.invocation,
-      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); try { await app.${method}(${method === "click" ? "{x: 1, y: 2}" : ""}); } catch (e) { return { code: e.code, nextStep: e.nextStep, retryClass: e.safety?.retryClass, possibleCommit: e.safety?.possibleCommit }; }`,
-    });
-    expect(result.value).toMatchObject({
+    const result = yield* service
+      .runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); try { await app.${method}(${method === "click" ? "{x: 1, y: 2}" : ""}); } catch (e) { return { code: e.code, nextStep: e.nextStep, retryClass: e.safety?.retryClass, possibleCommit: e.safety?.possibleCommit }; }`,
+      })
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({
       code,
-      retryClass: "never",
-      possibleCommit: method === "click",
-      nextStep: "The person stopped this action.",
+      safety: { retryClass: "never", possibleCommit: method === "click" },
     });
+    expect(result.nextStep).toMatch(code === "screen_locked" ? /unlock/i : /stop/i);
+    expect(result.nextStep).not.toMatch(/try again/i);
     yield* service.finishTurn({
       runId: "r",
       turnId: "t",
@@ -68,25 +71,39 @@ it.live.each([
   });
   return Effect.gen(function* () {
     const service = yield* ScreenRunService;
-    const result = yield* service.runCell({
-      runId: "r",
-      turnId: "t",
-      threadId: "thread",
-      environmentId: "env",
-      invocation: context.invocation,
-      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+    const outcome = yield* service
+      .runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
         try { await app.${method}(${method === "click" ? "{x: 1, y: 2}" : ""}); return 'success'; }
         catch (e) { return { name: e.name, code: e.code, nothingSent: e.nothingSent, effectStarted: e.effectStarted, refused: e.refused, nextStep: e.nextStep, retryClass: e.safety?.retryClass }; }`,
-    });
-    expect(result.value).toMatchObject({
-      name: "ScreenError",
-      code,
-      nothingSent: true,
-      effectStarted: false,
-      ...(code === "user_interacting"
-        ? { refused: "targetRefused", nextStep: expect.stringMatching(/750.*observe/i) }
-        : { nextStep: expect.stringMatching(/unlock/i), retryClass: "never" }),
-    });
+      })
+      .pipe(Effect.result);
+    if (code === "screen_locked") {
+      expect(outcome._tag).toBe("Failure");
+      if (outcome._tag === "Failure")
+        expect(outcome.failure).toMatchObject({
+          code,
+          effectStarted: false,
+          nextStep: expect.stringMatching(/unlock/i),
+          safety: { retryClass: "never", possibleCommit: false },
+        });
+    } else {
+      expect(outcome._tag).toBe("Success");
+      if (outcome._tag === "Success")
+        expect(outcome.success.value).toMatchObject({
+          name: "ScreenError",
+          code,
+          nothingSent: true,
+          effectStarted: false,
+          refused: "targetRefused",
+          nextStep: expect.stringMatching(/750.*observe/i),
+        });
+    }
     expect(sent.filter((entry) => entry.tool === tool)).toHaveLength(1);
     yield* service.finishTurn({
       runId: "r",
@@ -121,21 +138,35 @@ it.live.each(["user_interacting", "screen_locked"])(
     });
     return Effect.gen(function* () {
       const service = yield* ScreenRunService;
-      const result = yield* service.runCell({
-        runId: "r",
-        turnId: "t",
-        threadId: "thread",
-        environmentId: "env",
-        invocation: context.invocation,
-        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+      const outcome = yield* service
+        .runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
           try { await app.click({x: 1, y: 2, verify: true}); return 'success'; }
           catch (e) { return { code: e.code, nothingSent: e.nothingSent, retryClass: e.safety?.retryClass }; }`,
-      });
-      expect(result.value).toEqual({
-        code,
-        nothingSent: true,
-        retryClass: code === "user_interacting" ? "new_key" : "never",
-      });
+        })
+        .pipe(Effect.result);
+      if (code === "screen_locked") {
+        expect(outcome._tag).toBe("Failure");
+        if (outcome._tag === "Failure")
+          expect(outcome.failure).toMatchObject({
+            code,
+            effectStarted: false,
+            safety: { retryClass: "never", possibleCommit: false },
+          });
+      } else {
+        expect(outcome._tag).toBe("Success");
+        if (outcome._tag === "Success")
+          expect(outcome.success.value).toEqual({
+            code,
+            nothingSent: true,
+            retryClass: "new_key",
+          });
+      }
       expect(sent.some((entry) => entry.tool === "click")).toBe(false);
       yield* service.finishTurn({
         runId: "r",
@@ -171,17 +202,31 @@ it.live.each(["user_interacting", "screen_locked"])(
     });
     return Effect.gen(function* () {
       const service = yield* ScreenRunService;
-      const result = yield* service.runCell({
-        runId: "r",
-        turnId: "t",
-        threadId: "thread",
-        environmentId: "env",
-        invocation: context.invocation,
-        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+      const outcome = yield* service
+        .runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation: context.invocation,
+          source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
           try { await app.click({x: 1, y: 2, verify: true}); return 'success'; }
           catch (e) { return { code: e.code, nothingSent: e.nothingSent, possibleCommit: e.safety?.possibleCommit }; }`,
-      });
-      expect(result.value).toEqual({ code, nothingSent: false, possibleCommit: true });
+        })
+        .pipe(Effect.result);
+      if (code === "screen_locked") {
+        expect(outcome._tag).toBe("Failure");
+        if (outcome._tag === "Failure")
+          expect(outcome.failure).toMatchObject({
+            code,
+            effectStarted: true,
+            safety: { retryClass: "never", possibleCommit: true },
+          });
+      } else {
+        expect(outcome._tag).toBe("Success");
+        if (outcome._tag === "Success")
+          expect(outcome.success.value).toEqual({ code, nothingSent: false, possibleCommit: true });
+      }
       expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
       yield* service.finishTurn({
         runId: "r",
@@ -223,22 +268,22 @@ it.live.each([
   });
   return Effect.gen(function* () {
     const service = yield* ScreenRunService;
-    const result = yield* service.runCell({
-      runId: "r",
-      turnId: "t",
-      threadId: "thread",
-      environmentId: "env",
-      invocation: context.invocation,
-      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
+    const result = yield* service
+      .runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7});
         try { await ${expression}; return 'success'; }
         catch (e) { return {name: e.name, code: e.code, nothingSent: e.nothingSent, effectStarted: e.effectStarted, retryClass: e.safety?.retryClass}; }`,
-    });
-    expect(result.value).toEqual({
-      name: "ScreenError",
+      })
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({
       code: "screen_locked",
-      nothingSent: true,
       effectStarted: false,
-      retryClass: "never",
+      safety: { retryClass: "never", possibleCommit: false },
     });
     expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(1);
     yield* service.finishTurn({
