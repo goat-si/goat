@@ -5,7 +5,7 @@ import { CheckIcon, MessageSquareIcon, CircleXIcon as XCircleIcon } from "~/comp
 import { useState, type ReactNode, type RefObject } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
-import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
