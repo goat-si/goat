@@ -39,6 +39,36 @@ export type ComputerUseTerminalState = {
   readonly possibleCommit: boolean;
 };
 
+export const replaceWithTerminal = (
+  replaced:
+    | "none"
+    | string
+    | {
+        readonly reason?: ComputerUseTerminalReason | undefined;
+        readonly possibleCommit?: boolean | undefined;
+      }
+    | undefined,
+  ...sources: readonly (
+    | string
+    | {
+        readonly reason?: ComputerUseTerminalReason | undefined;
+        readonly possibleCommit?: boolean | undefined;
+      }
+    | undefined
+  )[]
+): ComputerUseTerminalState => {
+  const stateOf = (source: typeof replaced) =>
+    typeof source === "string"
+      ? {
+          reason: source === "stopped_by_person" || source === "screen_locked" ? source : undefined,
+        }
+      : (source ?? {});
+  return sources.reduce<ComputerUseTerminalState>(
+    (state, source) => mergeTerminal(state, stateOf(source)),
+    mergeTerminal(stateOf(replaced), {}),
+  );
+};
+
 export const terminalState = (reason: unknown, possibleCommit: boolean): ComputerUseTerminalState =>
   mergeTerminal(
     {

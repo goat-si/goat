@@ -90,6 +90,8 @@ import {
   forwardPrimitiveRequests,
   beginHops,
   outstandingCall,
+  rememberDriverReply,
+  retainedTerminal,
   reservedProviderRequest,
   type OutstandingCall,
   type ReplySink,
@@ -224,7 +226,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
       const refuse = request.sink.answer(
         request.method === "tools/call"
-          ? cutOff(request.id, request.tool, cause, request.args, fresh)
+          ? cutOff(request.id, request.tool, cause, request.args, retainedTerminal(request))
           : deny(request.id, request.method, interruptionDetail(cause), message),
         request.sink === providerSink ? undefined : "unknown_outcome",
       );
@@ -289,6 +291,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
+        rememberDriverReply(request, message);
         if (personStop.beginLock(message)) {
           yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
         }

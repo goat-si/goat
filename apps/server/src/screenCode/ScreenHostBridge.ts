@@ -27,6 +27,7 @@ import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import {
   mergeTerminal,
+  replaceWithTerminal,
   terminalFailure,
   terminalState,
   type ComputerUseTerminalReason,
@@ -627,7 +628,10 @@ export class ScreenHostBridge {
       const terminal =
         state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
           ? terminalFailure(
-              terminalState(state.cutoffReason, false),
+              replaceWithTerminal(
+                result._tag === "Success" ? (result.success.safety ?? "none") : "none",
+                state.cutoffReason,
+              ),
               isScreenRead(call.method) ? "list_apps" : call.method,
               call.args,
               dispatched,
@@ -640,7 +644,7 @@ export class ScreenHostBridge {
         dispatched ? "unknown_outcome" : "refused",
         dispatched ? "unknown" : "settled",
         dispatched,
-        [],
+        result._tag === "Success" ? (result.success.evidence ?? []) : [],
         safety,
       );
       return refused(call, {

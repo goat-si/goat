@@ -157,3 +157,59 @@ it.effect("the outbound fence catches a cutoff after the host reply was prepared
     expect(final?.error?.safety?.retryClass).toBe("never");
   }),
 );
+
+it.effect.each(["stopped_by_person", "screen_locked"])(
+  "a synchronous %s cutoff keeps successful read input evidence",
+  (reason) =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.sync(() => {
+            bridge.cutCellNow("r", "t", "c", reason);
+            return {
+              category: "confirmed",
+              evidence: ["observed"],
+              value: [],
+              safety: {
+                possibleCommit: true,
+                retryClass: "never",
+                writeStatus: "committed",
+                code: "write_committed",
+              },
+            };
+          }),
+      });
+      const answer = yield* bridge.handle({ ...call(1), method: "list_apps" }, context());
+      expect(answer?.error?.code).toBe(reason);
+      expect(answer?.error?.safety?.possibleCommit).toBe(true);
+    }),
+);
+
+it.effect("a completed read retains input evidence through the final fence", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () =>
+        Effect.succeed({
+          category: "confirmed",
+          evidence: ["observed"],
+          value: [],
+          safety: {
+            possibleCommit: true,
+            retryClass: "never",
+            writeStatus: "committed",
+            code: "write_committed",
+          },
+        }),
+    });
+    const input = { ...call(1), method: "list_apps" } satisfies ScreenHostCall;
+    const prepared = yield* bridge.handle(input, context());
+    bridge.cutCellNow("r", "t", "c", "stopped_by_person");
+    expect(bridge.finalizeReply(prepared, input, context())?.error?.safety?.possibleCommit).toBe(
+      true,
+    );
+  }),
+);

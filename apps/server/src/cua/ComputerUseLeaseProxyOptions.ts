@@ -38,6 +38,7 @@ import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxSc
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 import {
   mergeTerminal,
+  replaceWithTerminal,
   terminalErrorState,
   terminalFailure,
   terminalReplyState,
@@ -143,8 +144,20 @@ export interface OutstandingCall {
   /** The screen call's step times, finished when the driver's line arrives. */
   readonly hops?: PrimitiveHops;
   cancelled?: boolean;
+  received?: ComputerUseTerminalState;
   readonly sink: ReplySink;
 }
+
+export const rememberDriverReply = (request: OutstandingCall, message: Envelope) => {
+  request.received = replaceWithTerminal(
+    request.received ?? "none",
+    terminalReplyState(message.result),
+    terminalErrorState(message.error),
+  );
+};
+
+export const retainedTerminal = (request: OutstandingCall) =>
+  replaceWithTerminal(request.received ?? "none");
 
 export const primitiveReplySink = (
   request: ComputerUsePrimitiveRequest,
