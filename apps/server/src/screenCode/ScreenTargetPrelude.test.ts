@@ -156,6 +156,55 @@ const formTab = {
   controlGeneration: 0,
 };
 
+it.live("tab handles are refused unsent after a new read or on another target", () => {
+  const otherTab = { ...formTab, tabId: PreviewTabId.make("other") };
+  const operations: string[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([formTab, otherTab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      operations.push(request.operation);
+      if (request.operation === "snapshot")
+        return Effect.succeed({
+          url: formTab.url,
+          title: formTab.title,
+          loading: false,
+          accessibilityTree: "- button Go [ref=e1]",
+          treeComplete: true,
+          refGeneration: "1",
+        } as A);
+      return Effect.succeed({
+        tabId: request.exact?.tabId,
+        url: formTab.url,
+        title: formTab.title,
+        loading: false,
+        refGeneration: "1",
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    `const first = await screen.tab('form'); const other = await screen.tab('other');
+    await first.claim(); await other.claim(); const obs = await first.observe(); const held = obs.ref(0);
+    const errors = []; try { await other.click(held); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    await first.observe({diff:false});
+    try { await first.click(held); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    return errors;`,
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        success: {
+          status: "completed",
+          value: [
+            ["stale_reference", true],
+            ["stale_reference", true],
+          ],
+        },
+      });
+      expect(operations.filter((operation) => operation === "click")).toHaveLength(0);
+    }),
+  );
+});
+
 it.live("a tab click returns a compact Done", () => {
   const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
     listBoundTabs: () => Effect.succeed([formTab]),

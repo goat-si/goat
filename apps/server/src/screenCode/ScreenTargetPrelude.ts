@@ -139,6 +139,7 @@ const __only = (what, given, allowed) => {
 const __winPt = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) &&
   Array.isArray(arg.window) && arg.window.length === 2;
+const __handles = new WeakMap();
 const __legacy = (arg) =>
   arg !== null && typeof arg === 'object' && !Array.isArray(arg) && !__winPt(arg) &&
   ('ref' in arg || 'elementRef' in arg || 'point' in arg || 'x' in arg || 'selector' in arg || 'targetRef' in arg ||
@@ -197,6 +198,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
 
   };
   const checkEmptyTarget = (target) => {
+    if (target !== null && typeof target === 'object' && __handles.has(target)) return;
     if (target === undefined || target === null ||
         (typeof target === 'number' && !Number.isFinite(target)) ||
         (typeof target === 'object' && !Array.isArray(target) &&
@@ -206,6 +208,11 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const element = (target) => {
     checkEmptyTarget(target);
+    const held = typeof target === 'object' && target !== null ? __handles.get(target) : undefined;
+    if (held) {
+      if (held.targetId !== ref.id) throw new ScreenError('stale_reference', 'This element belongs to another target.', true);
+      return { ref: held };
+    }
     const observation = seen.observation;
     if (!observation)
       throw new ScreenError(
@@ -268,6 +275,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
   // unseen, so it is refused before any read or input.
   const checkTarget = (target) => {
     checkEmptyTarget(target);
+    if (target !== null && typeof target === 'object' && __handles.has(target)) return;
     if (target === null || typeof target !== 'object' || Array.isArray(target) || __legacy(target)) return;
     __only('A target', target, __winPt(target) ? ['window'] : ['role', 'name', 'id']);
   };
@@ -349,6 +357,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const shown = { text: indexedText, ...rest, ...(seen.image && arg.screenshot ? { image: seen.image } : {}) };
     // Cells written before text read indexedText; it is not enumerable, so results do not carry it twice.
     Object.defineProperty(shown, 'indexedText', { value: indexedText, enumerable: false });
+    Object.defineProperty(shown, 'ref', { value: (index) => {
+      const found = observation.elements.find((item) => item.index === index);
+      if (!found) throw new ScreenError('stale_reference', 'No [' + index + '] in this observation.', true);
+      const handle = Object.freeze({});
+      __handles.set(handle, Object.freeze({ ...found.ref }));
+      return handle;
+    }});
     __remember({ call: 'observe', mode: shown.mode, text: String(indexedText).slice(0, 4000) });
     return shown;
   };
@@ -446,7 +461,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       // An object naming no element is the options, so a misspelt key is refused rather than aimed at.
       const targetIsSendOpts =
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
-        !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target);
+        !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target) && !__handles.has(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
       const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs']);
       if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))
