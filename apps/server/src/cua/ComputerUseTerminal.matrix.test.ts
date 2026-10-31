@@ -28,6 +28,8 @@ import {
   offScreenAnswer,
   refusal,
   terminalReplacement,
+  unsentCallRefusal,
+  unsentOutcome,
 } from "./ComputerUseLeaseResponses.ts";
 import { finalTerminalLine, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import {
@@ -440,7 +442,90 @@ const completion: Driver = (input) =>
     if (outcome._tag !== "Failure") return yield* Effect.die("expected terminal failure");
     return replaceWithTerminal(outcome.failure);
   });
-const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
+const unsentBase: Parameters<typeof unsentCallRefusal>[2] = {
+  pending: undefined,
+  finished: undefined,
+  paused: undefined,
+  idle: false,
+  foregroundRevoked: false,
+  lastInterruption: { _tag: "other", detail: "reconnecting", message: "reconnecting" },
+};
+const unsent = (state: Parameters<typeof unsentCallRefusal>[2]): Driver =>
+  sync((input) =>
+    outputState(
+      finalTerminalLine(
+        unsentCallRefusal(1, "tools/call", state),
+        "not_started",
+        { id: 1, method: "tools/call", params: { name: "list_apps" } },
+        sourceState(input),
+      ).line,
+      "not_started",
+    ),
+  );
+const unsentResult = (kind: "shared" | "expired"): Driver =>
+  sync((input) =>
+    outputState(
+      finalTerminalLine(
+        unsentOutcome(kind, 1, "tools/call", () => {
+          throw new Error("unexpected stale outcome");
+        }),
+        "not_started",
+        { id: 1, method: "tools/call", params: { name: "list_apps" } },
+        sourceState(input),
+      ).line,
+      "not_started",
+    ),
+  );
+const sites: ReadonlyArray<{
+  readonly name: string;
+  readonly run: Driver;
+  readonly undispatched?: boolean;
+}> = [
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.ending",
+    undispatched: true,
+    run: unsent({ ...unsentBase, finished: "expired" }),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.pause",
+    undispatched: true,
+    run: unsent({ ...unsentBase, paused: "screen_locked" }),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.idle",
+    undispatched: true,
+    run: unsent({ ...unsentBase, idle: true }),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.held",
+    undispatched: true,
+    run: unsent({ ...unsentBase, held: true }),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.narrowed",
+    undispatched: true,
+    run: unsent({ ...unsentBase, pending: { narrowed: true } }),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.foregroundRevoked",
+    undispatched: true,
+    run: unsent({ ...unsentBase, foregroundRevoked: true }),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentCallRefusal.interrupted",
+    undispatched: true,
+    run: unsent(unsentBase),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentOutcome.shared",
+    undispatched: true,
+    run: unsentResult("shared"),
+  },
+  {
+    name: "ComputerUseLeaseResponses.unsentOutcome.expired",
+    undispatched: true,
+    run: unsentResult("expired"),
+  },
   { name: "ComputerUseTerminal.replaceWithTerminal", run: sync((input) => merged(input)) },
   {
     name: "ComputerUseTerminal.terminalFailure",
@@ -597,7 +682,9 @@ const orders: ReadonlyArray<{
   { name: "stop then lock", reasons: ["stopped_by_person", "screen_locked"] },
 ];
 const matrix = sites.flatMap((site) =>
-  [false, true].flatMap((possible) => orders.map((order) => ({ site, possible, order }))),
+  (site.undispatched === true ? [false] : [false, true]).flatMap((possible) =>
+    orders.map((order) => ({ site, possible, order })),
+  ),
 );
 it.effect.each(matrix)(
   "$site.name preserves input=$possible under $order.name",
