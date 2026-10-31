@@ -72,7 +72,7 @@ it.effect.each(["back", "forward"])(
         const owner = yield* Effect.scope;
         const now = yield* Clock.currentTimeMillis;
         const fork = Effect.runForkWith(yield* Effect.context<never>());
-        const launches: Array<ReturnType<typeof fork>> = [];
+        const launches: Array<Fiber.Fiber<void, never>> = [];
         const record = makeBrowserHistoryRecordAction(
           history,
           (effect) => {
