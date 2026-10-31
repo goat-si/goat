@@ -17,6 +17,7 @@ const command = createComputerUseHistoryCommand(connectionAtomRuntime);
 export function ComputerUseHistorySection(props: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
+  readonly hideWithoutPermission?: boolean;
 }) {
   const canRead = useAtomValue(command.permissionAtom(props.environmentId));
   const request = useAtomCommand(command, { reportFailure: false });
@@ -54,6 +55,7 @@ export function ComputerUseHistorySection(props: {
         setLoading(false);
       });
   };
+  if (props.hideWithoutPermission && !canRead) return null;
   return (
     <section aria-label="Computer use history">
       {entries.length > 0 ? (

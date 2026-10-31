@@ -3,10 +3,10 @@ import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 
-const mocks = vi.hoisted(() => ({ request: vi.fn() }));
+const mocks = vi.hoisted(() => ({ request: vi.fn(), canRead: true }));
 vi.mock(import("@effect/atom-react"), async (original) => ({
   ...(await original()),
-  useAtomValue: () => true,
+  useAtomValue: () => mocks.canRead,
 }));
 vi.mock("@goat/client-runtime/state/computer-use-history", () => ({
   createComputerUseHistoryCommand: () => ({ permissionAtom: () => null }),
@@ -65,4 +65,32 @@ it("loads history on demand, pages older results, and clears it when the thread 
   );
   await expect.element(screen.getByRole("button", { name: "Show input history" })).toBeVisible();
   expect(screen.getByText(/target_busy/).elements()).toHaveLength(0);
+});
+
+it("offers thread history without work entries only with read permission", async () => {
+  const environmentId = EnvironmentId.make("environment:a");
+  const threadId = ThreadId.make("thread:empty");
+  mocks.canRead = true;
+  mocks.request
+    .mockReset()
+    .mockResolvedValue({ _tag: "Success", value: { entries: [], nextCursor: null } });
+  await using screen = await render(
+    <ComputerUseHistorySection
+      environmentId={environmentId}
+      threadId={threadId}
+      hideWithoutPermission
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Show input history" }));
+  await expect.element(screen.getByText("No input history.")).toBeVisible();
+  mocks.canRead = false;
+  await screen.rerender(
+    <ComputerUseHistorySection
+      key="forbidden"
+      environmentId={environmentId}
+      threadId={threadId}
+      hideWithoutPermission
+    />,
+  );
+  expect(screen.getByRole("button", { name: "Show input history" }).elements()).toHaveLength(0);
 });
