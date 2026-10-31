@@ -36,7 +36,7 @@ import * as RepositoryReferenceMcpService from "../../RepositoryReferenceMcpServ
 import * as ThreadLaunchMcpService from "../../ThreadLaunchMcpService.ts";
 import * as ThreadReplicaService from "../../ThreadReplicaService.ts";
 
-export const localAdapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
+const localAdapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
   instanceId: ProviderInstanceId.make("codex"),
   driver: ProviderDriverKind.make("codex"),
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),

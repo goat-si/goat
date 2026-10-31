@@ -1,5 +1,5 @@
 import { planPinnedReorder } from "@goat/client-runtime/state/thread-sort";
-export function crossesFrozenKeylessBoundary(
+function crossesFrozenKeylessBoundary(
   order: readonly string[],
   keysById: ReadonlyMap<string, string | null | undefined>,
   writable: ReadonlySet<string>,
