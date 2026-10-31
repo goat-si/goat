@@ -1230,7 +1230,12 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         reason: "dialogPending",
       });
       expect(page.goto).toHaveBeenCalledTimes(1);
-      yield* broker.invoke({ scope, tabId, operation: "dialog", input: { accept: true } });
+      yield* broker.invoke({
+        scope,
+        tabId,
+        operation: "dialog",
+        input: { accept: true, promptText: "private" },
+      });
       expect(yield* Fiber.join(blockedAction)).toBe(true);
       const history = yield* makeComputerUseHistory;
       const entries = yield* history.listForThread(scope.thread.threadId);
@@ -1240,6 +1245,9 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
       expect(
         entries.some((entry) => entry.method === "dialog" && entry.tabHost === "localhost"),
       ).toBe(true);
+      const dialogEntry = entries.find((entry) => entry.method === "dialog");
+      expect(dialogEntry?.typedLength).toBe(7);
+      expect(dialogEntry?.typedText).toBeNull();
       expect(dialog.accept).toHaveBeenCalledTimes(1);
       const resolved = yield* broker.invoke<PreviewAutomationStatus>({
         scope,
