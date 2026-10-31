@@ -26,7 +26,10 @@ const decodeTerminal = Schema.decodeUnknownOption(
         isError: Schema.Literal(true),
         structuredContent: Schema.Struct({
           code: Schema.Literals(["stopped_by_person", "screen_locked"]),
-          safety: Schema.Struct({ retryClass: Schema.Literal("never") }),
+          safety: Schema.Struct({
+            retryClass: Schema.Literal("never"),
+            possibleCommit: Schema.optionalKey(Schema.Boolean),
+          }),
         }),
       }),
     }),
@@ -41,11 +44,26 @@ export const terminalSink = (
 ): ReplySink => ({
   answer: (line, status, context) =>
     Effect.suspend(() => {
-      const reason = terminalReason(terminal());
-      if (reason === undefined || message.method !== "tools/call" || message.id == null)
+      if (message.method !== "tools/call" || message.id == null)
         return sink.answer(line, status, context);
       const already = decodeTerminal(line);
-      if (already._tag === "Some" && already.value.result.structuredContent.code === reason)
+      const merged = mergeTerminal(
+        { reason: terminalReason(terminal()), possibleCommit: dispatched() },
+        already._tag === "Some"
+          ? {
+              reason: already.value.result.structuredContent.code,
+              possibleCommit: already.value.result.structuredContent.safety.possibleCommit,
+            }
+          : {},
+      );
+      const reason = merged.reason;
+      if (reason === undefined) return sink.answer(line, status, context);
+      if (
+        already._tag === "Some" &&
+        already.value.result.structuredContent.code === reason &&
+        (!merged.possibleCommit ||
+          already.value.result.structuredContent.safety.possibleCommit === true)
+      )
         return sink.answer(line, status, context);
       const cause: Interruption =
         reason === "screen_locked"
@@ -53,7 +71,7 @@ export const terminalSink = (
           : { _tag: "end", reason: "stopped" };
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       return sink.answer(
-        dispatched()
+        merged.possibleCommit
           ? cutOff(message.id, tool, cause, message.params?.arguments)
           : refusal(
               message.id,
@@ -63,7 +81,7 @@ export const terminalSink = (
                 ? PAUSE_MESSAGES.screen_locked
                 : LEASE_END_MESSAGES.stopped,
             ),
-        dispatched() ? "unknown_outcome" : "not_started",
+        merged.possibleCommit ? "unknown_outcome" : "not_started",
         context,
       );
     }),

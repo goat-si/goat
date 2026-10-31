@@ -570,12 +570,15 @@ export const make = Effect.gen(function* () {
         const state = yield* leases
           .controlState(input.threadId, current.controlId)
           .pipe(Effect.option);
-        const terminal =
-          terminalReason(undefined, Option.getOrUndefined(state)) ??
-          terminalReason(
-            undefined,
-            current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
-          );
+        const terminal = mergeTerminal(
+          { reason: terminalReason(undefined, Option.getOrUndefined(state)) },
+          {
+            reason: terminalReason(
+              undefined,
+              current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+            ),
+          },
+        ).reason;
         if (terminal !== undefined) latch(control(registered, current.controlId), terminal);
       }
       const requests = Stream.merge(

@@ -57,7 +57,7 @@ type ThreadProxyOptions<EU, ED> = Omit<
     current: {
       readonly connectionId: string;
       readonly generation: number;
-      readonly terminal?: "stopped_by_person" | "screen_locked" | undefined;
+      readonly terminal?: "stopped_by_person" | "screen_locked";
     },
   ) => Effect.Effect<void>;
   /** Runs after the supervisor has routed an update, without waiting for native teardown. */
