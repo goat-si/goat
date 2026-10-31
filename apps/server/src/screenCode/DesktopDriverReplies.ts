@@ -4,7 +4,12 @@ import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
-import { replaceWithTerminal, terminalErrorState } from "../cua/ComputerUseTerminal.ts";
+import {
+  replaceWithTerminal,
+  terminalErrorState,
+  terminalReplyState,
+  terminalFailure,
+} from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -75,7 +80,13 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   const terminal = (code: string | undefined) =>
     code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
   const rpc = terminalErrorState(reply.error);
-  const merged = replaceWithTerminal(rpc, terminal(nested), terminal(outer)).reason;
+  const state = replaceWithTerminal(
+    terminalReplyState(reply.result, reply.status),
+    rpc,
+    terminal(nested),
+    terminal(outer),
+  );
+  const merged = state.reason;
   const driverCode = merged ?? nested ?? outer;
   const said =
     merged !== undefined && merged !== (nested ?? outer)
@@ -96,7 +107,10 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
             ? "The screen is locked; stop until the person unlocks it."
             : "The person stopped computer use; do not retry this turn."),
       ),
-      effectStarted: reply.status === "unknown_outcome" || rpc.possibleCommit,
+      effectStarted: reply.status === "unknown_outcome" || state.possibleCommit,
+      ...(state.possibleCommit
+        ? { safety: terminalFailure(state, "list_apps", {}, true)?.safety }
+        : {}),
       ...refusalOf(structured),
     };
   if (reply.status === "unknown_outcome")

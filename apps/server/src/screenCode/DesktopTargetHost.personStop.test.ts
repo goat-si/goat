@@ -1,3 +1,4 @@
+import { driverError } from "./DesktopDriverReplies.ts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -153,3 +154,27 @@ it.effect("a terminal unknown outcome preserves reported possible input", () =>
     }
   }),
 );
+
+it("terminal driver errors retain possible input from the replaced reply", () => {
+  const reply: import("@goat/contracts").ComputerUsePrimitiveReply = {
+    requestId: "request",
+    registrationId: "registration",
+    controlId: "control",
+    connectionGeneration: "g",
+    runId: "r",
+    turnId: "t",
+    callId: 1,
+    status: "settled",
+    result: {
+      isError: true,
+      structuredContent: {
+        code: "stopped_by_person",
+        safety: { possibleCommit: true, retryClass: "never" },
+      },
+    },
+  };
+  const error = driverError(reply);
+  expect(error?.code).toBe("stopped_by_person");
+  expect(error?.safety?.possibleCommit).toBe(true);
+  expect(error?.safety?.retryClass).toBe("never");
+});
