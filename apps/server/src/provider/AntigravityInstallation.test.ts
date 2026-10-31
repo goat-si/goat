@@ -121,6 +121,7 @@ interface HarnessOptions {
   readonly fileSystem?: FileSystem.FileSystem;
   readonly validate?: AntigravityInstallation.AntigravityInstallationOptions["validate"];
   readonly useDefaultValidation?: boolean;
+  readonly useBundledRelease?: boolean;
 }
 
 const makeHarness = Effect.fn("test.makeAntigravityInstallation")(function* (
@@ -163,7 +164,7 @@ const makeHarness = Effect.fn("test.makeAntigravityInstallation")(function* (
   });
   const installation = yield* AntigravityInstallation.makeAntigravityInstallation({
     baseDir,
-    releaseAsset: asset,
+    ...(options.useBundledRelease ? {} : { releaseAsset: asset }),
     ...(options.useDefaultValidation
       ? {}
       : {
@@ -234,6 +235,20 @@ const expectPreviousRelease = Effect.fn("test.expectPreviousAntigravityRelease")
 });
 
 it.layer(NodeServices.layer)("Antigravity installation", (it) => {
+  it.effect("requests runtime 1.4.1 for the default managed install", () =>
+    Effect.gen(function* () {
+      const { installation, requests } = yield* makeHarness({ useBundledRelease: true });
+      const started = yield* installation.start;
+      expect(started.version).toBe("1.4.1");
+      yield* terminalState(installation);
+      expect(requests).toEqual([
+        hostPlatform === "win32"
+          ? "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.1-windows-x86_64.zip"
+          : "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.1-linux-x86_64.zip",
+      ]);
+    }),
+  );
+
   it.effect("reports missing Node before downloading the standalone provider runtime", () =>
     Effect.gen(function* () {
       const { installation, requests, validations } = yield* makeHarness();

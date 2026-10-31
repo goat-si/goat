@@ -970,6 +970,9 @@ importers:
       dbus-next:
         specifier: 0.10.2
         version: 0.10.2(patch_hash=cf7266337af5726f6cbdf2cfda94bc74cd959e2cc629df04ebea079f23e39bb9)
+      diff:
+        specifier: 8.0.3
+        version: 8.0.3
       effect:
         specifier: 4.0.5
         version: 4.0.5
