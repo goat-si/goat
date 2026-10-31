@@ -217,13 +217,13 @@ export const pairTreeText = (markdown: string): string => {
 
 /** A custom action the driver reports as `name:<label>\\ntarget:…\\nselector:…` shows as its label. */
 export const actionName = (action: string): string => {
-  const named = /^name:([^\n]*)\n/.exec(action);
+  const named = /^name:([^\n]*)\n/i.exec(action);
   return (named?.[1] ?? action).trim();
 };
 
 /** The same, inside the tree text's `actions=[…]` lists, where the driver escapes the newlines. */
 export const cleanActionText = (markdown: string): string =>
-  markdown.replace(/name:([^,\]\\]*?)\\ntarget:[^,\]]*?\\nselector:[^,\]]*/g, "$1");
+  markdown.replace(/name:([^,\]\\]*?)\\ntarget:[^,\]]*?\\nselector:[^,\]]*/gi, "$1");
 
 /** Actions every container offers; an element with only these is not a control. */
 const PASSIVE_ACTIONS: ReadonlySet<string> = new Set([

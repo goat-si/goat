@@ -1350,12 +1350,17 @@ export interface DesktopPreviewBridge {
     environmentId: EnvironmentId,
     profileId?: string,
   ) => Promise<DesktopPreviewWebviewConfig>;
+  listBrowserProfileOrigins: (
+    environmentId: EnvironmentId,
+    profileId: string,
+  ) => Promise<ReadonlyArray<string>>;
   listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
   importBrowserCookies: (input: {
     readonly environmentId: EnvironmentId;
     readonly sourceId: BrowserImportSourceId;
     readonly sourceProfileDirectory: string;
     readonly targetProfileId: string;
+    readonly origins?: ReadonlyArray<string>;
   }) => Promise<BrowserImportResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   setAnnotationSendEnabled: (tabId: string, enabled: boolean) => Promise<void>;

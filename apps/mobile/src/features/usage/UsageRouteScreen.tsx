@@ -28,7 +28,7 @@ import {
   formatUsd,
   makeWindow,
 } from "@goat/shared/usageFormat";
-import { useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useRef, useState, type ReactNode } from "react";
 import { Platform, Pressable, RefreshControl, View } from "react-native";
 import Animated, { FadeIn, ReduceMotion } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -53,12 +53,11 @@ import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import type { UsageChartMetric } from "./usageChartData";
 import { PROVIDER_LABEL, useProviderColors, useUsageMixColors } from "./usageProviders";
+import { resolveUsageTab, usageTabOptions, type UsageTab } from "./usageTabs";
+import { useFleetTabVisible } from "./useFleetTabVisible";
 
-type UsageTab = "usage" | "limits";
-const TAB_OPTIONS = [
-  { value: "usage", label: "Usage" },
-  { value: "limits", label: "Limits" },
-] as const satisfies readonly { value: UsageTab; label: string }[];
+// Loaded on first open of the Fleet tab, so the screen and app start never evaluate it.
+const UsageFleetSection = lazy(() => import("./fleet/UsageFleetSection"));
 
 const WINDOW_OPTIONS = [
   { value: 1, label: "24h", accessibilityLabel: "Past 24 hours" },
@@ -86,18 +85,16 @@ function UsageScreen(props: {
   readonly tabParam: string | undefined;
 }) {
   const insets = useSafeAreaInsets();
-  const [selection, setSelection] = useState(() => ({
-    params: props.tabParam,
-    tab: (props.tabParam === "usage" ? "usage" : "limits") as UsageTab,
-  }));
+  const fleetVisible = useFleetTabVisible();
+  const [selection, setSelection] = useState<{
+    readonly params: string | undefined;
+    readonly choice: UsageTab | null;
+  }>(() => ({ params: props.tabParam, choice: null }));
   if (selection.params !== props.tabParam) {
-    setSelection({
-      params: props.tabParam,
-      tab: props.tabParam === "usage" ? "usage" : "limits",
-    });
+    setSelection({ params: props.tabParam, choice: null });
   }
-  const { tab } = selection;
-  const setTab = (tab: UsageTab) => setSelection({ params: props.tabParam, tab });
+  const tab = resolveUsageTab({ choice: selection.choice, param: props.tabParam, fleetVisible });
+  const setTab = (choice: UsageTab) => setSelection({ params: props.tabParam, choice });
   const [windowSelection, setWindowSelection] = useState(() => ({
     days: 30,
     window: makeWindow(30),
@@ -155,6 +152,7 @@ function UsageScreen(props: {
   const [refreshingUsage, setRefreshingUsage] = useState(false);
   const refreshingRef = useRef(false);
   const showingLimits = tab === "limits";
+  const showingFleet = tab === "fleet";
   const progress = usageProgress(selectedEnvironments, {
     refreshing: refreshingUsage,
     providerLabel,
@@ -184,7 +182,8 @@ function UsageScreen(props: {
     });
   };
 
-  const showEnvironmentFilter = environments.length > 0 || selectedEnvironmentIds !== null;
+  const showEnvironmentFilter =
+    !showingFleet && (environments.length > 0 || selectedEnvironmentIds !== null);
   const filterIcon =
     selectedEnvironmentIds === null
       ? "line.3.horizontal.decrease"
@@ -274,7 +273,7 @@ function UsageScreen(props: {
         contentContainerClassName="gap-6 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
         refreshControl={
-          showingLimits || canReadDiagnostics ? (
+          !showingFleet && (showingLimits || canReadDiagnostics) ? (
             <RefreshControl
               refreshing={showingLimits ? limits.refreshing : refreshingUsage}
               onRefresh={showingLimits ? () => void limits.refresh() : refreshWindow}
@@ -282,13 +281,22 @@ function UsageScreen(props: {
           ) : undefined
         }
       >
-        <SegmentedControl options={TAB_OPTIONS} selected={tab} onSelect={setTab} role="tab" />
+        <SegmentedControl
+          options={usageTabOptions(fleetVisible)}
+          selected={tab}
+          onSelect={setTab}
+          role="tab"
+        />
         <Animated.View
           key={tab}
           entering={FadeIn.duration(160).reduceMotion(ReduceMotion.System)}
           className="gap-6"
         >
-          {showingLimits ? (
+          {showingFleet ? (
+            <Suspense fallback={null}>
+              <UsageFleetSection />
+            </Suspense>
+          ) : showingLimits ? (
             <UsageLimitsSection
               now={limits.now}
               failedLabels={limits.failedLabels}

@@ -167,6 +167,19 @@ const FAR_DEADLINE = 10 ** 15;
 const BIND =
   "const app = await screen.app({ bundle_id: 'org.example.Editor', window_id: 72907 }); await app.observe();";
 
+it.live("a window-opening input names the window in a compact note", () => {
+  const { host } = finder();
+  return Effect.gen(function* () {
+    const result = yield* cell(BIND + "return await app.press('cmd+shift+g');");
+    expect(result.value).toEqual({
+      ok: true,
+      verdict: "unverifiable",
+      note: "windows opened [82779]",
+    });
+    expect(Buffer.byteLength(JSON.stringify(result.value))).toBeLessThanOrEqual(200);
+  }).pipe(Effect.provide(service(host)));
+});
+
 it.live(
   "after cmd+shift+g opens Go to Folder as its own window, the input reports it, observe() moves onto it with its PathTextField named, and comes back once a fresh window list shows it closed",
   () => {
@@ -174,20 +187,21 @@ it.live(
     return Effect.gen(function* () {
       const result = yield* cell(
         BIND +
-          "const done = await app.press('cmd+shift+g');" +
+          "screen.debug = true; const done = await app.press('cmd+shift+g');" +
           "const sheet = await app.observe();" +
-          "const field = sheet.elements.find((e) => e.name === 'PathTextField');" +
+          'const field = Number(/\\[(\\d+)\\] AXTextField "PathTextField"/.exec(sheet.text)[1]);' +
           "const onSheet = app.windowId;" +
-          "await app.setValue(field.index, '~/Developer/codex/computeruse');" +
+          "await app.setValue(field, '~/Developer/codex/computeruse');" +
           "await app.press('Enter');" +
           "const back = await app.observe();" +
-          "return { observed: done.observed, opened: done.result.windows.opened.map((w) => w.window_id), onSheet, text: sheet.text, backWindow: app.windowId, backTitle: back.title, scope: back.scope };",
+          "return { note: done.note, observed: done.result.debug.value._observed, opened: done.result.debug.value.windows.opened.map((w) => w.window_id), onSheet, text: sheet.text, backWindow: app.windowId, backTitle: back.title, scope: back.scope };",
       );
       expect(result.value).toMatchObject({
         observed: expect.arrayContaining([
           "observed:window_opened:82779",
           expect.stringContaining("observed:sheet_candidate:82779"),
         ]),
+        note: "windows opened [82779]",
         opened: [82779],
         onSheet: 82779,
         text: expect.stringContaining('[2] AXTextField "PathTextField" = "/Users/jun/Downloads"'),
@@ -247,11 +261,11 @@ it.live(
         const { host } = late();
         const result = yield* cell(
           BIND +
-            "const done = await " +
+            "screen.debug = true; const done = await " +
             press +
             ";" +
             "await app.observe();" +
-            "return { opened: (done.result ?? done).windows?.opened.map((w) => w.window_id), onSheet: app.windowId };",
+            "return { opened: done.result.debug.value.windows?.opened.map((w) => w.window_id), onSheet: app.windowId };",
         ).pipe(Effect.provide(service(host)));
         expect(result.value).toEqual({ opened: [82779], onSheet: 82779 });
       }
@@ -355,7 +369,7 @@ it.live(
         const run = yield* cell(
           BIND +
             "await app.press('cmd+shift+g'); const o = await app.observe();" +
-            "return [app.windowId, (o.omitted ?? []).map((n) => n.detail).join(' '), o.elements.some((e) => e.index === 41)];",
+            "return [app.windowId, (o.omitted ?? []).map((n) => n.detail).join(' '), o.text.includes('[41]')];",
         ).pipe(Effect.provide(service(host)));
         expect(run.value).toEqual([72907, expect.stringContaining(words), true]);
         expect((run.value as [number, string])[1]).toContain("82779");
@@ -438,16 +452,18 @@ it.live(
       const found = yield* cell(
         BIND +
           "const o = await app.observe(); const q = await app.observe({ query: { name: 'PathTextField' } });" +
-          "const f = o.elements.find((e) => /path|Go to|^\\//i.test((e.name || '') + (e.text || '')));" +
-          "return [f && f.index, f && f.name, q.elements.map((e) => e.index)];",
+          'const f = /\\[(\\d+)\\] AXTextField "PathTextField"/.exec(o.text);' +
+          "const matches = [...q.text.matchAll(/\\[(\\d+)\\] AXTextField/g)].map((m) => Number(m[1]));" +
+          "return [f && Number(f[1]), f && 'PathTextField', matches];",
       );
       expect(found.value).toEqual([3, "PathTextField", [3]]);
       // A file name written to look like the id stays a file name.
       forged = true;
       const forgedRead = yield* cell(
-        BIND + "const o = await app.observe(); return o.elements.map((e) => e.name);",
+        BIND +
+          "await app.observe(); try { await app.click({id:'PathTextField'}); } catch (e) { return e.code; }",
       );
-      expect(forgedRead.value).not.toContain("PathTextField");
+      expect(forgedRead.value).toBe("target_missing");
     }).pipe(Effect.provide(service(host)));
   },
 );

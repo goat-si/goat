@@ -308,6 +308,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
+  goat_browser_site_note_read: tool(
+    ["Read", "Reading", "Read", "a site note"],
+    "browser",
+    "browser",
+  ),
+  goat_browser_site_note_write: tool(
+    ["Save", "Saving", "Saved", "a site note"],
+    "browser",
+    "browser",
+  ),
   goat_preview_read: tool(
     ["Read", "Reading", "Read", "rendered browser text"],
     "browser",

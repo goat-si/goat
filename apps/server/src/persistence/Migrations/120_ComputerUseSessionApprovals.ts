@@ -6,6 +6,8 @@ export default Effect.gen(function* () {
   yield* sql`CREATE TABLE computer_use_session_approvals (
     thread_id TEXT NOT NULL,
     app_key TEXT NOT NULL,
+    created_sequence INTEGER NOT NULL DEFAULT 0,
+    consent_sequence INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (thread_id, app_key)
   )`;
 });

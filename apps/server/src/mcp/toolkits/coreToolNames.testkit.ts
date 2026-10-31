@@ -28,6 +28,8 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_attachment_pending_list",
   "goat_attachment_prepare_upload",
   "goat_background_wait",
+  "goat_browser_site_note_read",
+  "goat_browser_site_note_write",
   "goat_cloud_holders",
   "goat_cloud_launch",
   "goat_cloud_machine_create",

@@ -933,3 +933,26 @@ it.effect("summary titles are capped without splitting a surrogate pair", () =>
     assert.isTrue(isSummary((yield* notes.list({})).notes[0]));
   }).pipe(Effect.provide(layer())),
 );
+
+it.effect("keeps a UTF-8 byte order mark through a body edit and leaves it out of the body", () =>
+  Effect.gen(function* () {
+    const notes = yield* Notes.NotesService;
+    const fs = yield* FileSystem.FileSystem;
+    const { notesDir } = yield* Config.ServerConfig;
+    for (const [name, contents] of [
+      ["bom-header.md", "\uFEFF---\nstatus: idea\n---\n# Header\n"],
+      ["bom-plain.md", "\uFEFF# Plain\n"],
+    ] as const) {
+      yield* fs.writeFileString(`${notesDir}/${name}`, contents);
+      const initial = yield* notes.read({ path: name });
+      assert.isFalse(initial.body.startsWith("\uFEFF"));
+      yield* notes.write(
+        { path: name, baseRevision: initial.revision, body: initial.body + "more\n" },
+        "user",
+      );
+      const bytes = yield* fs.readFile(`${notesDir}/${name}`);
+      assert.deepStrictEqual(Array.from(bytes.subarray(0, 3)), [0xef, 0xbb, 0xbf]);
+      assert.isTrue((yield* fs.readFileString(`${notesDir}/${name}`)).endsWith("more\n"));
+    }
+  }).pipe(Effect.provide(layer())),
+);

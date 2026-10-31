@@ -99,6 +99,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       retainedLocalSpace: Schema.optionalKey(Schema.Boolean),
       /** memory.syncStatus may report a paused memory model when the request opts in. */
       generationHold: Schema.optionalKey(Schema.Boolean),
+      /** Site notes RPCs are absent on older servers. */
+      siteNotes: Schema.optionalKey(Schema.Boolean),
       /** Separate diagnostics/read and Settings reconcile RPCs; absent on older servers. */
       hubDiagnostics: Schema.optionalKey(Schema.Boolean),
       /** Server accepts the opt-in `aside` import source format; absent on older servers. */
@@ -273,6 +275,8 @@ export const ExecutionEnvironmentDescriptor = Schema.Struct({
    * reconnects once this server is idle. Absent otherwise and on older servers.
    */
   appServerLive: Schema.optionalKey(Schema.Boolean),
+  /** "on" only on a development server started with GOAT_DEV_SSH=on, which may SSH elsewhere. */
+  devSsh: Schema.optionalKey(Schema.Literal("on")),
   capabilities: ExecutionEnvironmentCapabilities,
 });
 export type ExecutionEnvironmentDescriptor = typeof ExecutionEnvironmentDescriptor.Type;

@@ -8,16 +8,21 @@ export const makeComputerUseStop = Effect.gen(function* () {
   const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
   return (effect: OrchestrationEffectV2) =>
     Option.isSome(handoffs)
-      ? handoffs.value.stopComputerUseSessions(effect.threadId).pipe(
-          Effect.asVoid,
-          Effect.mapError(
-            (cause) =>
-              new OrchestrationEffectExecutionError({
-                effectId: effect.id,
-                effectType: effect.request.type,
-                cause,
-              }),
-          ),
-        )
+      ? handoffs.value
+          .stopComputerUseSessions(
+            effect.threadId,
+            effect.request.type === "computer-use.stop" ? effect.request.cutoff : undefined,
+          )
+          .pipe(
+            Effect.asVoid,
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationEffectExecutionError({
+                  effectId: effect.id,
+                  effectType: effect.request.type,
+                  cause,
+                }),
+            ),
+          )
       : Effect.void;
 });

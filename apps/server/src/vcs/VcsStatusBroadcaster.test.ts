@@ -25,6 +25,7 @@ import { GitManagerError } from "@goat/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
 import * as AutomationHold from "../automationHold.ts";
+import { refuseSshHostsScoped } from "@goat/ssh/hostAccess";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { symlinksSupported } from "@goat/shared/testing/symlinks";
@@ -344,6 +345,41 @@ describe("VcsStatusBroadcaster", () => {
       }).pipe(Effect.provide(layerTest));
     },
   );
+
+  it.effect("regression: a server refused SSH reads status but never auto-pulls", () => {
+    let pullCalls = 0;
+    const layerTest = VcsStatusBroadcaster.layer.pipe(
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provide(layerBackgroundPolicy(() => true)),
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.VcsAutoPullPolicy, {
+          isEnabled: () => Effect.succeed(true),
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          localStatus: () =>
+            Effect.succeed({ ...baseLocalStatus, isDefaultRef: true, refName: "main" }),
+          remoteStatus: () => Effect.succeed({ ...baseRemoteStatus, behindCount: 2 }),
+          invalidateLocalStatus: () => Effect.void,
+          invalidateRemoteStatus: () => Effect.void,
+          invalidateStatus: () => Effect.void,
+          pullCurrentBranch: () =>
+            Effect.sync(() => {
+              pullCalls += 1;
+              return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+            }),
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      yield* refuseSshHostsScoped();
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const status = yield* broadcaster.refreshStatus("/copied");
+      assert.equal(status.behindCount, 2);
+      assert.equal(pullCalls, 0);
+    }).pipe(Effect.provide(layerTest), Effect.scoped);
+  });
 
   it.effect("refreshes a loaded cwd without reusing a previous branch's PR", () => {
     const state = {

@@ -128,6 +128,7 @@ export function makeDevelopmentEnvironmentScript(environment) {
     ["VITE_DEV_SERVER_URL", environment.VITE_DEV_SERVER_URL],
     ["GOAT_PORT", environment.GOAT_PORT],
     ["GOAT_HOME", environment.GOAT_HOME],
+    ["GOAT_DEV_SSH", environment.GOAT_DEV_SSH],
     ["GOAT_DEV_INSECURE_SECRET_STORAGE", environment.GOAT_DEV_INSECURE_SECRET_STORAGE],
     ["GOAT_COMMIT_HASH", environment.GOAT_COMMIT_HASH],
     ["GOAT_OTLP_TRACES_URL", environment.GOAT_OTLP_TRACES_URL],

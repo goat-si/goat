@@ -50,6 +50,7 @@ export const Handoff = Schema.Struct({
   /** A computer use grant's approved apps; a grant without them admits every app. */
   apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always", "standing"])),
+  computerUseConsentSequence: Schema.optionalKey(Schema.Number),
   computerUseForeground: Schema.optionalKey(
     Schema.Struct({ purpose: TrimmedNonEmptyString, target: Schema.Literal("desktop") }),
   ),

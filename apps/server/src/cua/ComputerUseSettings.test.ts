@@ -17,7 +17,7 @@ const base = Layer.mergeAll(
     Layer.provide(NodeServices.layer),
   ),
   ServerSettings.layerTest(),
-  Layer.mock(Handoffs.Handoffs)({ withComputerUseToggle: (_enabled, update) => update }),
+  Layer.mock(Handoffs.Handoffs)({ withComputerUseSettings: (_patch, update) => update }),
 );
 
 it.effect("enables computer use only after driver admission and disables it again", () =>

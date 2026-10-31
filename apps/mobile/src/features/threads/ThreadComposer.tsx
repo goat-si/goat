@@ -32,7 +32,14 @@ import {
 } from "@goat/shared/usageLimits";
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { ReactNode } from "react";
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { Keyboard, Platform, View, type ViewStyle } from "react-native";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
@@ -47,6 +54,7 @@ import Animated, {
   FadeOut,
   type LayoutAnimationFunction,
   ReduceMotion,
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -156,10 +164,23 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   );
   // A line that fits the expanded editor may still overflow its compact slot.
   // Compare its measured width too so widening cannot trigger a collapse loop.
+  // iOS reports a ceiled width, so this can expand up to a point early; it never loops.
   const isExpanded =
     value.length > 0 &&
     (contentHeight > text.lineHeight * 1.5 ||
       (compactWidth > 0 && contentSize.width > compactWidth));
+  // The editor rises out of the toolbar row inside its compact slot; only once it has left the
+  // row does it widen and the model label expand, so text never draws over the row's controls.
+  // Collapsing narrows it first, then lowers it back into the slot.
+  const [hasRisen, setHasRisen] = useState(false);
+  if (!isExpanded && hasRisen) setHasRisen(false);
+  const isWide = isExpanded && (Platform.OS === "android" || hasRisen);
+  // Only the latest animation may finish the rise: a collapse and re-expand can leave an older
+  // completion queued.
+  const riseGeneration = useRef(0);
+  const finishRise = useEffectEvent((generation: number) => {
+    if (generation === riseGeneration.current) setHasRisen(true);
+  });
   const compactRowHeight = Math.max(44, minimum);
   const animatedHeight = useSharedValue(height);
   const surfaceHeight = useSharedValue(compactRowHeight);
@@ -175,12 +196,18 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
     }
     // Resolve wrapping at the destination width before animating vertically.
     // Intermediate widths otherwise produce taller measurements mid-transition.
+    riseGeneration.current += 1;
+    const generation = riseGeneration.current;
     let nextFrame: number | undefined;
     const frame = requestAnimationFrame(() => {
       nextFrame = requestAnimationFrame(() => {
         animatedHeight.set(withTiming(height, config));
         surfaceHeight.set(withTiming(targetSurfaceHeight, config));
-        expansion.set(withTiming(Number(isExpanded), config));
+        expansion.set(
+          withTiming(Number(isExpanded), config, (finished) => {
+            if (finished && isExpanded) runOnJS(finishRise)(generation);
+          }),
+        );
       });
     });
     return () => {
@@ -195,13 +222,15 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
     position: "absolute",
     overflow: "hidden",
     height: animatedHeight.value,
-    left: isExpanded ? 14 : editorX.value + 4,
-    right: isExpanded ? 14 : rowWidth.value - editorX.value - editorWidth.value + 4,
+    left: isWide ? 14 : editorX.value + 4,
+    right: isWide ? 14 : rowWidth.value - editorX.value - editorWidth.value + 4,
     bottom:
       (compactRowHeight - minimum) / 2 + expansion.value * (52 - (compactRowHeight - minimum) / 2),
   }));
   return {
     isExpanded,
+    /** The expanded toolbar layout: the editor spans the surface and the model label shows. */
+    isWide,
     containerStyle,
     editorStyle,
     onRowLayout: (event: { nativeEvent: { layout: { width: number } } }) => {
@@ -210,7 +239,7 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
     onEditorLayout: (event: { nativeEvent: { layout: { x: number; width: number } } }) => {
       // The expanded toolbar gives this slot to the model control. Keep the
       // compact geometry for the return transition, rather than recording zero.
-      if (!isExpanded) {
+      if (!isWide) {
         editorX.set(event.nativeEvent.layout.x);
         editorWidth.set(event.nativeEvent.layout.width);
         setCompactWidth(Math.max(0, event.nativeEvent.layout.width - 8));
@@ -826,7 +855,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
         reportedSelection={props.reportedModelSelection}
         prompt={draftMessage}
         surfaceColor={composerPanel}
-        iconOnly={!compactEditor.isExpanded}
+        iconOnly={!compactEditor.isWide}
         onPress={openSettings}
       />
     </View>
@@ -935,12 +964,12 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                 style={[
                   {
                     minWidth:
-                      compactEditor.isExpanded || stripAttachments.length > 0
+                      compactEditor.isWide || stripAttachments.length > 0
                         ? 0
                         : INLINE_EDITOR_MIN_WIDTH,
                   },
                   compactEditor.containerStyle,
-                  compactEditor.isExpanded ? { flex: 0, width: 0 } : undefined,
+                  compactEditor.isWide ? { flex: 0, width: 0 } : undefined,
                 ]}
               ></Animated.View>
               {!isExpanded && stripAttachments.length > 0 ? (
@@ -968,9 +997,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               ) : null}
               <View
                 className="min-w-0 shrink flex-row items-center"
-                style={
-                  compactEditor.isExpanded ? { flex: 1, justifyContent: "flex-end" } : undefined
-                }
+                style={compactEditor.isWide ? { flex: 1, justifyContent: "flex-end" } : undefined}
               >
                 {modelControl}
                 <ComposerDictationStartAction

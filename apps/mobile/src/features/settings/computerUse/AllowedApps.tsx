@@ -1,4 +1,4 @@
-import type { EnvironmentId, ServerSettingsPatch } from "@goat/contracts";
+import type { EnvironmentId } from "@goat/contracts";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { SettingsRow } from "../components/SettingsRow";
 import type { ScopedMobileSettingsTarget } from "../settings-scoped-server";
@@ -10,9 +10,7 @@ export function AllowedApps({
 }: {
   targets: readonly ScopedMobileSettingsTarget[];
   disabled: boolean;
-  onRemove: (
-    writes: readonly { environmentId: EnvironmentId; patch: ServerSettingsPatch }[],
-  ) => void;
+  onRemove: (environmentId: EnvironmentId, app: string) => void;
 }) {
   return (
     <>
@@ -28,16 +26,7 @@ export function AllowedApps({
             label={`Remove ${app}`}
             value={target.environment.label}
             disabled={disabled}
-            onPress={() =>
-              onRemove([
-                {
-                  environmentId: target.environment.environmentId,
-                  patch: {
-                    cuaAllowedApps: target.settings.cuaAllowedApps.filter((item) => item !== app),
-                  },
-                },
-              ])
-            }
+            onPress={() => onRemove(target.environment.environmentId, app)}
           />
         )),
       )}

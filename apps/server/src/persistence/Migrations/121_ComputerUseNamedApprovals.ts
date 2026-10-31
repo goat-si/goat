@@ -25,7 +25,14 @@ export default Effect.gen(function* () {
   yield* sql`CREATE TABLE computer_use_revocation_watermarks (
     scope TEXT PRIMARY KEY, sequence INTEGER NOT NULL
   )`;
+  yield* sql`CREATE TABLE computer_use_app_revocation_watermarks (
+    thread_id TEXT NOT NULL, app_key TEXT NOT NULL, sequence INTEGER NOT NULL,
+    PRIMARY KEY (thread_id, app_key)
+  )`;
+  yield* sql`CREATE TABLE computer_use_allowed_apps_snapshot (app_key TEXT PRIMARY KEY)`;
+  yield* sql`CREATE TABLE computer_use_always_approval_consents (app_key TEXT PRIMARY KEY, consent_sequence INTEGER NOT NULL)`;
   yield* sql`CREATE INDEX computer_use_first_message_event
     ON orchestration_events(stream_id, json_extract(payload_json, '$.id'), sequence)
-    WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND event_type = 'message.updated'`;
+    WHERE application_event_version = 2 AND aggregate_kind = 'thread' AND event_type = 'message.updated'
+      AND json_extract(payload_json, '$.role') = 'user'`;
 });

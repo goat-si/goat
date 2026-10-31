@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import { expect, it } from "@effect/vitest";
+import { SETTINGS_ACCESS } from "@goat/contracts/agentSurface";
 
 const SERVER_SOURCE = NodeURL.fileURLToPath(new URL("../../../", import.meta.url));
 
@@ -44,4 +45,15 @@ it("adds no direct settings writer without a reviewed reason", () => {
     .map((file) => NodePath.relative(SERVER_SOURCE, file).replaceAll("\\", "/"))
     .sort();
   expect(writers).toEqual(Object.keys(SETTINGS_WRITERS).sort());
+});
+
+it("keeps allowed-app grants person-only and confines named writers to computer-use paths", () => {
+  expect(SETTINGS_ACCESS.cuaAllowedApps.access).toBe("person");
+  const namedWriters = Object.keys(SETTINGS_WRITERS).filter((file) =>
+    /cuaAllowedApps/.test(NodeFS.readFileSync(NodePath.join(SERVER_SOURCE, file), "utf8")),
+  );
+  expect(namedWriters.sort()).toEqual([
+    "cua/ComputerUseSettings.ts",
+    "handoffs/computerUseStanding.ts",
+  ]);
 });

@@ -59,6 +59,7 @@ import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
+import * as SiteNotes from "./preview/SiteNotes.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 import * as NodeHttp from "node:http";
 
@@ -882,7 +883,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.provideMerge(layerSourceControlProviderRegistry),
   Layer.provideMerge(layerGit),
   Layer.provideMerge(layerVcs),
-  Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice)),
+  Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice, SiteNotes.layer)),
   Layer.provideMerge(layerPersistence),
   Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
   Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),

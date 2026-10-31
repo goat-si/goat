@@ -20,7 +20,11 @@ import { BoatIcon } from "../Icons";
 import { FleetCloudAgents } from "./FleetCloudAgents";
 import { FleetConsoleSlot } from "./FleetConsoleSlot";
 import { FleetGraph } from "./FleetGraph";
-import { fleetMachineSubtitle } from "./describeMachine";
+import {
+  fleetMachineSubtitle,
+  fleetMachineWork,
+  isFleetMachineBusy as isBusy,
+} from "@goat/client-runtime/state/fleet-machine-description";
 import {
   fleetConnectionLegend,
   isFleetConnectionWait,
@@ -47,18 +51,6 @@ const readHeatDemo = () =>
   import.meta.env.DEV && new URLSearchParams(window.location.search).get("fleetDemo") === "heat"
     ? fleetHeatDemo()
     : null;
-
-function machineWork(machine: FleetMachine): string {
-  const parts = [
-    machine.running > 0 ? machine.running + " running" : null,
-    machine.attention > 0 ? machine.attention + " need you" : null,
-    machine.reported > 0 ? machine.reported + " reported" : null,
-  ].filter((part) => part !== null);
-  return parts.length === 0 ? "Idle" : parts.join(" · ");
-}
-
-const isBusy = (machine: FleetMachine) =>
-  machine.running + machine.attention + machine.reported > 0;
 
 function groupThreadsByMachine(threads: ReadonlyArray<FleetThread>) {
   const grouped = new Map<string, FleetThread[]>();
@@ -209,7 +201,7 @@ export function FleetPage() {
                       <span className="text-xs text-muted-foreground">{subtitle}</span>
                     ) : null}
                     <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-                      {machineWork(machine)}
+                      {fleetMachineWork(machine)}
                     </span>
                   </button>
                   <FleetThreadList threads={threadsByMachine.get(machine.id) ?? []} />

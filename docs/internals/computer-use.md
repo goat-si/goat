@@ -59,13 +59,18 @@ provider (Codex, Claude, ...)
   per app input. Only a call that passes `verify: true`, whether alone, a bare key or a batch
   member, or one that opens a Go to Folder sheet, reads the process's window list around the
   input, and the acted element only when a unique label with text or selection names it (a 60 ms
-  settle follows that read); those reads run in parallel. Element changes are `observed:`
-  evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
+  settle follows that read); those reads run in parallel. Diagnostics are exposed under
+  `result.debug` only with `verify: true` or `screen.debug = true`; the verdict and driver
+  warnings remain at the top level, including `suspected_noop`; element changes are evidence; only a proven window open or close upgrades a verdict to `confirmed`. Without them an input that opens or closes a window keeps
   `unverifiable` even when the driver says done, and the cell's end read lists the new windows
   (flagged unverified when no baseline window is still listed). A cell's window
   baseline comes from its bind, or from one read for the first input on a process, and its end
   read compares against it. The next screenshot or tree read after an input waits only for what
   is left of the 60 ms settle time.
+- The first app diff of the same window after inputs in a cell is attached to those inputs as
+  `change_seen` or `no_change_seen` evidence (`ScreenObservedEffect.ts`). It never changes the
+  driver's verdict and never stops later inputs the way a driver `suspected_noop` does: one
+  window's diff cannot rule out an effect on another window, a sheet or the clipboard.
 - Desktop servers ask Electron for the driver over the existing private control pipe
   (`cuaDriverRequest` / `cuaDriverReport` in `packages/contracts/src/cua.ts`), and the Electron host
   requires the helper on packaged macOS (`apps/desktop/src/cua/DesktopCuaDriver.ts`); a build
@@ -158,14 +163,15 @@ designated requirement, never a pid or path alone. The driver would remain the h
 
 - A target is a pid, a window id and an opaque epoch that names the window, its Space or virtual
   desktop, and its display. Any change of epoch invalidates every element ref issued under it.
-- The first observation of a window is full. Later ones are diffs against the latest observation
-  of the same lineage, with added, changed and removed refs; "removed" means not seen, because
-  accessibility reads can miss nodes. GOAT's observation tracker
-  (`packages/shared/src/computerUseObservation.ts`) assigns refs by tree position, so a ref keeps
-  naming the same control while the driver's own tokens rotate, and gives a position a ref only
-  when it is unambiguous all the way up. A full observation starts a new lineage and says why.
-- A ref from an older lineage or epoch is refused with `staleElement` or `epochChanged`. The
-  helper never guesses among several matches.
+- App observations start with a full tree. Later reads request a driver diff against the latest
+  snapshot and retain the new snapshot's element tokens and frames internally. Numbers from the latest full observation remain valid until a diff adds, removes or renumbers
+  rows. After that, apply each diff and use the latest observation's numbers, or read the full list
+  with `observe({diff:false})`. A driver fallback
+  returns a full tree and explains why; refs from earlier observations are stale. Tab diffs are
+  computed by GOAT's observation tracker using role, accessible name and native main-frame ref
+  within a known document lineage. A frame ref or ambiguous row resets the diff to a full read.
+  Added, changed and removed rows use `+`, `~` and `-`; unchanged numbers stay valid in the new
+  observation. Model-facing observations omit the element array.
 - `observe` with `screenshot: false` returns the tree without capturing pixels. Omitting the image
   from a response is not the same as not capturing it; the browser preview had that gap
   (`apps/server/src/mcp/toolkits/preview/tools.ts` `includeImage`).
@@ -215,6 +221,10 @@ turn can run later cells with computation values intact while its child remains 
 reset clears those values, not a tab, app, grant or approval. Process and WASM limits bound
 accidental guest work, but are not an OS sandbox against same-user code.
 
+App click modifiers use `cmd`, `shift`, `alt`, and `ctrl`; tabs refuse them.
+App click named actions must be advertised by the latest observation.
+App `press` accepts `holdMs` from 0 to 30000 only with a supporting driver; tabs refuse it before input.
+
 Each Target call crosses `ScreenHostBridge`. The host resolves an exact tab or app window and
 checks the current run, turn, reference generation and caller's browser or computer-use authority
 before dispatch. A preview tile gives no authority to a cell. A tab mention is a binding hint,
@@ -247,20 +257,7 @@ journal slot for its receipt, so once a cell's journal is full its next call is 
 `call_limit` before dispatch. At most four screen-code children can run on one host; a fifth
 request receives `live_children_limit` until a slot is released.
 
-Element clicks, typing and `set_value` that a cell starts on one app window without awaiting
-each leave the guest as one batch group and reach the driver as one `run_steps`, kept by
-`app_scope` to that window's app in the background (`ScreenBatchGroups.ts`,
-`DesktopTargetHost.dispatchBatch`). The runtime admits a group whole or refuses all of it before
-any goes out, and the group takes one pending place; a refused group sent nothing, so like any
-refusal it leaves the cell free. Each call keeps its own admission, receipt and
-reply. The group's first call holds the window's gate until every member has passed its own checks,
-so a member refused on admission sends none of the group. Each step's receipt reads the driver's
-effect and code for that step, which stay on a failed call's error and receipt as evidence. Steps
-after a failed one get `not_run` only when the reply accounts for every step it ran and ends at the
-failure; any other reply leaves them all possibly committed. The driver does go on past a step that
-answered no-op, so those later steps may have run where single calls would have stopped; their
-receipts say what they did. A driver that refuses the batch before running it, such as one without
-`app_scope`, gets the calls one at a time.
+Concurrent decided app inputs on one window form a GOAT-side group: all members pass preflight before any are sent, then the driver receives individual calls in order; after a failure, later members are `not_run`.
 
 A person's Stop must not wait on a page. `PreviewSessions` fences the affected cells first, then
 stops the browser agents or computer-use control, and only then closes the turn's temporary tabs
@@ -652,7 +649,7 @@ GOAT builds Cua Driver from its own fork, `goat-si/cua-driver`: a subtree split 
 `cua-driver-rs-v0.37.0-goat.N` and signed only inside GOAT's helper build (ADR-0023, D15).
 GOAT pins the fork's release archives by name, size and SHA-256
 (`packages/shared/src/cuaDriverRelease.ts`); the archives are unsigned and carry build-provenance
-attestations. GOAT pins `0.38.0-goat.15`. `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
+attestations. GOAT pins `0.38.0-goat.16`. `0.37.0-goat.1` was never pinned, because its tar members carried a `./` prefix that
 the server installer rejects (goat-si/cua-driver#16), and `0.38.0-goat.4` and `0.38.0-goat.12` are tags with no release.
 The native macOS helper forces `CUA_DRIVER_DISABLE_SCREENCAPTURE=1` (#1588). npm SDK 0.37.0's
 embedded allowlist rejects that name, so the in-process dev path omits it; the driver keeps

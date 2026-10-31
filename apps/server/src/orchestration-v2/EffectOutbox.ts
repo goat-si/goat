@@ -128,7 +128,10 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     childThreadIds: Schema.optional(Schema.Array(ThreadId)),
     reason: Schema.optional(Schema.String),
   }),
-  Schema.Struct({ type: Schema.Literal("computer-use.stop") }),
+  Schema.Struct({
+    type: Schema.Literal("computer-use.stop"),
+    cutoff: Schema.optional(Schema.Number),
+  }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
