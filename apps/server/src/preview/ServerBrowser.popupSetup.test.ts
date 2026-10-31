@@ -768,3 +768,192 @@ it.effect("a popup opened during secret fill is adopted and closes when the tab 
 it.effect("a popup opened just after secret fill is adopted and closes when the tab is cut", () =>
   secretPopup("after").pipe(Effect.provide(layer)),
 );
+
+it.effect("a takeover before a secret popup response prevents agent adoption", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      interceptSecretReply = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          interceptSecretReply = false;
+          afterSecretReply = undefined;
+        }),
+      );
+      const f = yield* fixture;
+      const filled = yield* Deferred.make<void>();
+      const created = yield* Deferred.make<void>();
+      const reply = Promise.withResolvers<void>();
+      const response = Promise.withResolvers<void>();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          reply.resolve();
+          response.resolve();
+        }),
+      );
+      afterSecretReply = async () => {
+        Deferred.doneUnsafe(filled, Effect.void);
+        await reply.promise;
+      };
+      yield* Effect.promise(() =>
+        f.page.context().route("https://safe.test/delayed", async (route) => {
+          await response.promise;
+          await route.fulfill({ body: "popup", contentType: "text/html" });
+        }),
+      );
+      const monitor = yield* Effect.promise(() => f.page.context().newCDPSession(f.page));
+      const root = yield* Effect.promise(() => monitor.send("Target.getTargetInfo"));
+      monitor.on("Target.targetCreated", ({ targetInfo }) => {
+        if (targetInfo.openerId === root.targetInfo.targetId)
+          Deferred.doneUnsafe(created, Effect.void);
+      });
+      yield* Effect.promise(() => monitor.send("Target.setDiscoverTargets", { discover: true }));
+      yield* Effect.promise(() =>
+        f.page.evaluate(
+          `document.body.innerHTML='<input type="password" id="pw">';document.querySelector('#pw').addEventListener('input',()=>window.open('https://safe.test/delayed'));`,
+        ),
+      );
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      const popupReady = f.page.waitForEvent("popup");
+      const filling = yield* f
+        .call(f.tabId, "fillSecret", {
+          secretRef: "secret-ref:12345678901234567890123456789012",
+          selector: "#pw",
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(created);
+      yield* Deferred.await(filled);
+      const taken = yield* Deferred.make<void>();
+      const handed = yield* Deferred.make<void>();
+      const take = SessionControl.prototype.take,
+        hand = SessionControl.prototype.release;
+      const takeSpy = vi.spyOn(SessionControl.prototype, "take").mockImplementation(function (
+        this: SessionControl,
+        ...args
+      ) {
+        const result = Reflect.apply(take, this, args);
+        Deferred.doneUnsafe(taken, Effect.void);
+        return result;
+      });
+      const handSpy = vi.spyOn(SessionControl.prototype, "release").mockImplementation(function (
+        this: SessionControl,
+        ...args
+      ) {
+        const result = Reflect.apply(hand, this, args);
+        Deferred.doneUnsafe(handed, Effect.void);
+        return result;
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          takeSpy.mockRestore();
+          handSpy.mockRestore();
+        }),
+      );
+      const taking = yield* viewer
+        .input({ type: "takeControl" })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(taken);
+      const handing = yield* viewer
+        .input({ type: "releaseControl" })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(handed);
+      reply.resolve();
+      yield* Fiber.join(filling);
+      yield* Fiber.join(taking);
+      yield* Fiber.join(handing);
+      response.resolve();
+      const popup = yield* Effect.promise(() => popupReady);
+      const close = yield* Deferred.make<void>();
+      if (popup.isClosed()) yield* Deferred.succeed(close, undefined);
+      else popup.once("close", () => Deferred.doneUnsafe(close, Effect.void));
+      const adopted = Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+        Stream.mapEffect(() => f.service.sessions),
+        Stream.filter((tabs) => tabs.some((tab) => tab.tabId !== f.tabId)),
+        Stream.runHead,
+        Effect.as("adopted"),
+      );
+      const result = yield* Effect.raceFirst(
+        Deferred.await(close).pipe(Effect.as("closed")),
+        adopted,
+      );
+      expect(result).toBe("closed");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a takeover while popup setup waits closes it before instrumentation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* popupSetup;
+      const entered = yield* Deferred.make<void>();
+      const taken = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Deferred.await(release).pipe(
+        Effect.tap(() => Effect.sync(latch.resolve)),
+        Effect.forkScoped,
+      );
+      let popupSessions = 0;
+      f.hook.beforeReturn = async (target) => {
+        if (target !== f.page && ++popupSessions === 2) {
+          Deferred.doneUnsafe(entered, Effect.void);
+          await latch.promise;
+        }
+      };
+      const take = SessionControl.prototype.take;
+      const spy = vi.spyOn(SessionControl.prototype, "take").mockImplementation(function (
+        this: SessionControl,
+        ...args
+      ) {
+        const work = Reflect.apply(take, this, args);
+        Deferred.doneUnsafe(taken, Effect.void);
+        return work;
+      });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          spy.mockRestore();
+          latch.resolve();
+          delete f.hook.beforeReturn;
+        }),
+      );
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      yield* Effect.promise(() =>
+        f.page
+          .locator("#next")
+          .evaluate(
+            (button, url) => button.setAttribute("onclick", `window.open('${url}')`),
+            `${f.allowed}/safe`,
+          ),
+      );
+      const popupReady = f.page.waitForEvent("popup");
+      const clicking = yield* f
+        .call(f.tabId, "click", { locator: "#next" })
+        .pipe(Effect.result, Effect.forkChild);
+      const popup = yield* Effect.promise(() => popupReady);
+      yield* Deferred.await(entered);
+      const taking = yield* viewer
+        .input({ type: "takeControl" })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(taken);
+      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(clicking);
+      yield* Fiber.join(taking);
+      expect(f.sent).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+      expect(f.sent).not.toContain("Fetch.enable");
+    }),
+  ).pipe(Effect.provide(layer)),
+);

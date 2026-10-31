@@ -47,8 +47,8 @@ export const popupOwner = (
     : null;
 };
 
-const matchesControl = (
-  input: AgentInput,
+export const matchesControl = (
+  input: Pick<AgentInput, "generation" | "authority">,
   control: { readonly generation: number; readonly authority?: number },
 ) =>
   input.authority === undefined
@@ -75,6 +75,7 @@ export class PopupAttribution {
       agentControlled: boolean;
       signal?: AbortSignal;
       runSignal?: AbortSignal;
+      identity?: Pick<AgentInput, "generation" | "authority">;
       /** The input that opened it came from a request without a run, which keeps run-less adoption. */
       runless?: boolean;
     }
@@ -90,6 +91,14 @@ export class PopupAttribution {
     this.openings.set(targetId, {
       owner,
       agentControlled: !("controller" in opener.control) || opener.control.controller === null,
+      ...(input
+        ? {
+            identity: {
+              generation: input.generation,
+              ...(input.authority === undefined ? {} : { authority: input.authority }),
+            },
+          }
+        : {}),
       ...(input?.signal ? { signal: input.signal } : {}),
       ...(input?.runSignal ? { runSignal: input.runSignal } : { runless: input !== undefined }),
     });
@@ -106,7 +115,9 @@ export class PopupAttribution {
     if (opening === undefined)
       return popupOwner({ ...opener, lastAgentInput: this.lastInput }, now);
     this.openings.delete(targetId ?? "");
-    return opening.owner;
+    return opening.identity && !matchesControl(opening.identity, opener.control)
+      ? null
+      : opening.owner;
   }
 }
 

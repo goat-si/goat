@@ -69,20 +69,37 @@ export const inspectPopup = async (
 
   const opening = opener.popups.opening(targetId);
   const agentId = opener.popups.owner(targetId, opener, now());
+  const stale =
+    opening?.identity !== undefined &&
+    !AgentTabState.matchesControl(opening.identity, opener.control);
+  const authorityCut = new AbortController();
+  const checkAuthority = () => {
+    if (opening?.identity && !AgentTabState.matchesControl(opening.identity, opener.control))
+      authorityCut.abort(
+        new BrowserControlInterrupted("Browser control changed during popup setup.", "interrupted"),
+      );
+  };
+  const removeAuthorityListener =
+    opening?.agentControlled && opening.identity
+      ? opener.control.onChange(checkAuthority)
+      : () => {};
+  checkAuthority();
   const visits = navigation.take(popup).flatMap((visit) => {
     const run = visit.runs.get(opener.threadId);
     return run ? [{ url: visit.url, run }] : [];
   });
   for (const visit of visits) fence.observe(opener, visit.url, visit.run);
   fence.observe(opener, popup.url());
-  if (opening?.signal) signals.push(opening.signal);
+  if (!stale && opening?.signal) signals.push(opening.signal);
   const agentControlled = opening?.agentControlled === true && agentId !== null;
   const origin = agentControlled ? fence.popupRun(opener.threadId, opening?.runSignal) : undefined;
   if (origin) signals.push(origin.signal);
+  if (opening?.agentControlled && opening.identity) signals.push(authorityCut.signal);
   const signal = AbortSignal.any(signals);
   try {
     const refused =
       opener.closing ||
+      stale ||
       (agentId !== null && atLimit(agentId)) ||
       (agentControlled && !origin && opening?.runless !== true) ||
       (await closeCutAgentPopup({
@@ -95,6 +112,7 @@ export const inspectPopup = async (
       }));
 
     if (refused) {
+      removeAuthorityListener();
       origin?.release();
       await close();
     }
@@ -103,10 +121,14 @@ export const inspectPopup = async (
       visits,
       refused,
       signal: agentControlled ? signal : undefined,
-      releaseOrigin: origin?.release,
+      releaseOrigin: () => {
+        removeAuthorityListener();
+        origin?.release();
+      },
       close,
     };
   } catch (cause) {
+    removeAuthorityListener();
     origin?.release();
     throw cause;
   }
