@@ -117,6 +117,22 @@ export const terminalReplyState = (
   };
 };
 
+const decodeRpcError = Schema.decodeUnknownOption(
+  Schema.Struct({
+    code: Schema.optionalKey(Schema.Unknown),
+    data: Schema.optionalKey(Schema.Unknown),
+  }),
+);
+
+export const terminalErrorState = (value: unknown) => {
+  const error = decodeRpcError(value);
+  if (error._tag === "None") return mergeTerminal({}, {});
+  return mergeTerminal(
+    terminalReplyState({ isError: true, structuredContent: error.value }),
+    terminalReplyState({ isError: true, structuredContent: error.value.data }),
+  );
+};
+
 export const terminalReplyReason = (
   value: unknown,
   status?: "settled" | "not_started" | "unknown_outcome",

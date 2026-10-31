@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
-import { mergeTerminal } from "../cua/ComputerUseTerminal.ts";
+import { mergeTerminal, terminalErrorState } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -74,7 +74,11 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   const outer = string(structured?.code);
   const terminal = (code: string | undefined) =>
     code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
-  const merged = mergeTerminal({ reason: terminal(nested) }, { reason: terminal(outer) }).reason;
+  const rpc = terminalErrorState(reply.error);
+  const merged = mergeTerminal(
+    mergeTerminal({ reason: terminal(nested) }, { reason: terminal(outer) }),
+    rpc,
+  ).reason;
   const driverCode = merged ?? nested ?? outer;
   const said =
     merged !== undefined && merged !== (nested ?? outer)
@@ -83,7 +87,8 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   if (
     (reply.status === "unknown_outcome" ||
       reply.status === "not_started" ||
-      result?.isError === true) &&
+      result?.isError === true ||
+      reply.error !== undefined) &&
     (driverCode === "stopped_by_person" || driverCode === "screen_locked")
   )
     return {
@@ -94,7 +99,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
             ? "The screen is locked; stop until the person unlocks it."
             : "The person stopped computer use; do not retry this turn."),
       ),
-      effectStarted: reply.status === "unknown_outcome",
+      effectStarted: reply.status === "unknown_outcome" || rpc.possibleCommit,
       ...refusalOf(structured),
     };
   if (reply.status === "unknown_outcome")

@@ -31,6 +31,7 @@ import {
   terminalFailure,
   mergeTerminal,
   terminalReason,
+  terminalErrorState,
   terminalReplyReason,
   terminalReplyState,
   type ComputerUseTerminalReason,
@@ -478,7 +479,10 @@ export const make = Effect.gen(function* () {
         ({ answered, at }) =>
           mergeTerminal(
             mergeTerminal({ reason: pending.terminal }, epoch),
-            terminalReplyState(answered.result, answered.status),
+            mergeTerminal(
+              terminalReplyState(answered.result, answered.status),
+              terminalErrorState(answered.error),
+            ),
           ).reason !== undefined ||
           at <= deadlineMillis ||
           answered.status === "not_started",
@@ -486,10 +490,16 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map(({ answered }) => {
         const reply = terminalReplyState(answered.result, answered.status);
-        const merged = mergeTerminal(mergeTerminal({ reason: pending.terminal }, epoch), reply);
+        const merged = mergeTerminal(
+          mergeTerminal(mergeTerminal({ reason: pending.terminal }, epoch), reply),
+          terminalErrorState(answered.error),
+        );
         const reason = merged.reason;
         const result =
-          reason !== undefined && (reply.wireReason !== reason || !reply.terminalSafety)
+          reason !== undefined &&
+          (reply.wireReason !== reason ||
+            !reply.terminalSafety ||
+            (merged.possibleCommit && !reply.possibleCommit))
             ? terminalReply(pending, reason, merged.possibleCommit)
             : answered;
         return input.authority === "claimBind"
@@ -866,7 +876,10 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
-          const replyTerminal = terminalReplyReason(input.reply.result, input.reply.status);
+          const replyTerminal = mergeTerminal(
+            { reason: terminalReplyReason(input.reply.result, input.reply.status) },
+            terminalErrorState(input.reply.error),
+          ).reason;
           if (replyTerminal !== undefined) {
             latchWaiting(input.threadId, input.reply.controlId, replyTerminal);
             latch(record, replyTerminal);

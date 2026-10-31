@@ -15,6 +15,7 @@ import type { OutstandingCall, ReplySink } from "./ComputerUseLeaseProxyOptions.
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import {
   mergeTerminal,
+  terminalErrorState,
   terminalReason,
   terminalReplyState,
   type ComputerUseTerminalReason,
@@ -23,7 +24,8 @@ import {
 const decodeTerminal = Schema.decodeUnknownOption(
   Schema.fromJsonString(
     Schema.Struct({
-      result: Schema.Json,
+      result: Schema.optionalKey(Schema.Json),
+      error: Schema.optionalKey(Schema.Json),
     }),
   ),
 );
@@ -46,8 +48,8 @@ export const terminalSink = (
         status,
       );
       const merged = mergeTerminal(
-        { reason: terminalReason(terminal()), possibleCommit: dispatched() },
-        reply,
+        mergeTerminal({ reason: terminalReason(terminal()), possibleCommit: dispatched() }, reply),
+        terminalErrorState(already._tag === "Some" ? already.value.error : undefined),
       );
       const reason = merged.reason;
       if (reason === undefined) return sink.answer(line, status, context);

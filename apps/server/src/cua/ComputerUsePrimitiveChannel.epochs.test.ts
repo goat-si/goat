@@ -26,6 +26,7 @@ it.effect.each([
   "lock then resume then stop",
   "stop then lock",
   "nested stop",
+  "rpc error stop",
   "status without isError",
   "lock then reconnect stopped",
 ])("a pending primitive merges %s", (order) =>
@@ -113,19 +114,31 @@ it.effect.each([
       );
     const first = Option.getOrThrow(yield* Stream.runHead(registered.requests));
     if (first.state !== "primitive-request") return assert.fail("expected primitive");
-    if (order === "nested stop" || order === "status without isError") {
+    if (
+      order === "nested stop" ||
+      order === "status without isError" ||
+      order === "rpc error stop"
+    ) {
       yield* channel.reply({
         ...authority,
         registrationId: registered.registrationId,
         reply: {
           ...first,
           status: "unknown_outcome",
+          ...(order === "rpc error stop"
+            ? {
+                error: {
+                  code: -32000,
+                  data: { code: "stopped_by_person", safety: { possibleCommit: true } },
+                },
+              }
+            : {}),
           result: {
-            ...(order === "nested stop" ? { isError: true } : {}),
+            ...(order !== "status without isError" ? { isError: true } : {}),
             structuredContent: {
               code: "screen_locked",
-              refusal: { code: "stopped_by_person" },
-              safety: { retryClass: "never", possibleCommit: true },
+              refusal: { code: order === "rpc error stop" ? "screen_locked" : "stopped_by_person" },
+              safety: { retryClass: "never", possibleCommit: order !== "rpc error stop" },
             },
           },
         },

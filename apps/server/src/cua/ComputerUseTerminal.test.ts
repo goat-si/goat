@@ -138,3 +138,37 @@ it.effect("an answered call releases its epoch and another control remains indep
     assert.isUndefined(second.terminal());
   }),
 );
+
+it.effect("the proxy sink merges a terminal RPC error with the result", () =>
+  Effect.gen(function* () {
+    let output = "";
+    const sink = terminalSink(
+      {
+        answer: (line) =>
+          Effect.sync(() => {
+            output = line;
+          }),
+      },
+      { id: 1, method: "tools/call", params: { name: "click" } },
+      () => "screen_locked",
+      () => false,
+    );
+    yield* sink.answer(
+      JSON.stringify({
+        error: {
+          code: -32000,
+          data: { code: "stopped_by_person", safety: { possibleCommit: true } },
+        },
+        result: {
+          isError: true,
+          structuredContent: {
+            code: "screen_locked",
+            safety: { retryClass: "never", possibleCommit: false },
+          },
+        },
+      }),
+    );
+    assert.include(output, '"code":"stopped_by_person"');
+    assert.include(output, '"possibleCommit":true');
+  }),
+);
