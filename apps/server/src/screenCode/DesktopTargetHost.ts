@@ -1,6 +1,6 @@
+// @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import { staleTargets } from "./DesktopStaleTargets.ts";
 import { goneHint } from "./DesktopGoneHint.ts";
-// @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Clock from "effect/Clock";

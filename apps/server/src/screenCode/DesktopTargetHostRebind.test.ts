@@ -42,7 +42,8 @@ it.effect(
     Effect.gen(function* () {
       for (const [reason, expected] of [
         ["turn_ended", "The target was bound in an earlier turn."],
-        ["takeover", "The control changed (takeover)."],
+        ["takeover", "The person took control (takeover). Wait until they hand it back, then:"],
+        ["stopped", "The control changed (stopped)."],
         ["permission_denied", "Permission was lost."],
         ["credentialRevoked", "Permission was lost."],
       ] as const) {
@@ -142,7 +143,7 @@ it.effect(
         code: "stale_reference",
         effectStarted: false,
         nextStep:
-          'The control changed (takeover). Rebind with screen.app({ bundle_id: "org.example.Editor", window_id: 7 }).',
+          'The person took control (takeover). Wait until they hand it back, then: Rebind with screen.app({ bundle_id: "org.example.Editor", window_id: 7 }).',
       });
       expect(sent).toHaveLength(before);
     }),

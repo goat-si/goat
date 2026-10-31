@@ -1,5 +1,5 @@
-import { replyTargetId } from "./ScreenHostReplyTarget.ts";
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import { replyTargetId } from "./ScreenHostReplyTarget.ts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";

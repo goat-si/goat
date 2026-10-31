@@ -2,6 +2,8 @@ import type { BoundWindow } from "./DesktopTargetHost.ts";
 import type { ScreenObservations } from "./ScreenObservations.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 
+const PERSON_HOLDS = new Set(["pause", "takeover", "private", "waiting_for_human"]);
+
 export const staleTargets = (
   targets: Map<string, BoundWindow>,
   observations: ScreenObservations,
@@ -47,6 +49,9 @@ export const staleTargets = (
       entry.bundleId === undefined
         ? "Use screen.discover() to find the window and bind it again."
         : `Rebind with screen.app({ bundle_id: ${JSON.stringify(entry.bundleId)}, window_id: ${entry.windowId} }).`;
+    // The person holds the app now; binding again before they hand it back would be refused.
+    if (PERSON_HOLDS.has(why))
+      return `The person took control (${why}). Wait until they hand it back, then: ${rebind}`;
     return `${reason} ${rebind}`;
   };
   const staleTarget = (targetId: string | undefined) =>
