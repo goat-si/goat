@@ -502,6 +502,21 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
   { name: "ComputerUseLeaseProxyOptions.primitiveReplySink", run: compact },
   { name: "ComputerUsePrimitiveChannel.replyAndSettle", run: channel },
   {
+    name: "ComputerUseDriverOutcome.driverOutcomeSafety",
+    run: sync((input) => {
+      const reason = sourceState(input).reason;
+      if (reason === undefined) throw new Error("Expected a terminal reason.");
+      const reply = {
+        status: "settled",
+        result: {
+          isError: true,
+          structuredContent: { code: reason, safety: { possibleCommit: input.possible } },
+        },
+      };
+      return replaceWithTerminal(driverOutcomeSafety("list_apps", reply), reason);
+    }),
+  },
+  {
     name: "DesktopDriverReplies.driverError",
     run: sync((input) => {
       const reason = sourceState(input).reason;
