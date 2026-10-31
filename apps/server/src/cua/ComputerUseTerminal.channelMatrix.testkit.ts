@@ -6,11 +6,16 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Leases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
-import { replaceWithTerminal, type ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
+import {
+  replaceWithTerminal,
+  type ComputerUseTerminalReason,
+  type ComputerUseTerminalState,
+} from "./ComputerUseTerminal.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
 
@@ -105,7 +110,11 @@ const channelEdge = (kind: "queueClosed" | "deadline") => (input: Input) =>
     return replaceWithTerminal(answer.failure);
   });
 
-export const channelEdgeSites = [
+export const channelEdgeSites: ReadonlyArray<{
+  readonly name: string;
+  readonly undispatched: true;
+  readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
+}> = [
   {
     name: "ComputerUsePrimitiveChannel.queueClosed",
     undispatched: true,
