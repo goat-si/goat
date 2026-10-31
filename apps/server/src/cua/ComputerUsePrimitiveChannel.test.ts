@@ -85,11 +85,16 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 }) {
   const signals = yield* PubSub.unbounded<void>();
   let state: TurnState = { _tag: "active" };
+  let liveControlId = controlId;
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     // An ended control keeps its record with the reason, as ComputerUseLeases.end writes it.
     currentControl: () =>
       Effect.sync(() =>
-        Option.some(state._tag === "ended" ? { controlId, ended: state.reason } : { controlId }),
+        Option.some(
+          state._tag === "ended"
+            ? { controlId: liveControlId, ended: state.reason }
+            : { controlId: liveControlId },
+        ),
       ),
     controlState: () => Effect.sync(() => state),
     subscribe: PubSub.subscribe(signals),
@@ -108,6 +113,9 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
   return {
     channel,
     registration,
+    replaceControl: Effect.sync(() => {
+      liveControlId = "control:next";
+    }),
     setState: (next: TurnState) =>
       Effect.sync(() => {
         state = next;
@@ -115,7 +123,7 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
     report: (current: typeof authority, driverGeneration: number) => ({
       ...current,
       registrationId: registration.registrationId,
-      controlId,
+      controlId: liveControlId,
       connectionId: `driver:${driverGeneration}`,
       driverGeneration,
     }),
@@ -167,6 +175,9 @@ describe("ComputerUsePrimitiveChannel", () => {
       const answer = yield* Fiber.join(waiter);
       assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
       assert.include(JSON.stringify(answer), '"retryClass":"never"');
+      const next = yield* Effect.flip(f.request());
+      assert.equal(next.code, "stopped_by_person");
+      assert.equal(next.safety?.retryClass, "never");
     }),
   );
   it.effect("a stop settles an in-flight call with its terminal person reason", () =>
@@ -345,8 +356,9 @@ describe("ComputerUsePrimitiveChannel", () => {
         assert.equal(stopped.safety?.retryClass, "never");
 
         const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.replaceControl;
         yield* t.setState({ _tag: "active" });
-        yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+        yield* t.channel.issue({ ...next, controlId: "control:next", expiresAt: 60_000 });
         assert.isTrue(yield* t.channel.reportControlReady(t.report(next, 1)));
         const waiter = yield* t.request().pipe(Effect.forkChild);
         const resumed = Option.getOrThrow(yield* Stream.runHead(t.registration.requests));

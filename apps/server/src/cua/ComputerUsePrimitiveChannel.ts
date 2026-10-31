@@ -655,7 +655,7 @@ export const make = Effect.gen(function* () {
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
-        if (current !== undefined && !(yield* active(input.threadId, current.controlId))) {
+        if (current !== undefined) {
           const record = attachments
             .get(input.threadId)
             ?.registration?.controls.get(current.controlId);
