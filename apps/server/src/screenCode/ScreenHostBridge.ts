@@ -30,7 +30,7 @@ import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenA
 import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
-import { failure, notRun, refused } from "./ScreenHostFailures.ts";
+import { failure, imageSize, key, notRun, refused, replyTargetId } from "./ScreenHostFailures.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
 const decodeOptionScreenHostCall = Schema.decodeUnknownOption(ScreenHostCall);
@@ -106,26 +106,8 @@ const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set(
   "suspected_noop",
   "refused",
 ]);
-const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
 // A tab wait's deadline answer must still reach the cell process before the cell ends.
 const WAIT_REPLY_RESERVE_MS = 100;
-const key = (runId: string, turnId: string, cellId: string) =>
-  `${runId}\u0000${turnId}\u0000${cellId}`;
-
-/** The target a bind_app reply (a ref) or a tab reply ({targetRef}) hands back. */
-const replyTargetId = (value: unknown): string | undefined => {
-  const reply = typeof value === "object" && value !== null ? value : undefined;
-  const ref = reply && "targetRef" in reply ? reply.targetRef : reply;
-  return typeof ref === "object" &&
-    ref !== null &&
-    "id" in ref &&
-    typeof ref.id === "string" &&
-    "kind" in ref &&
-    (ref.kind === "app" || ref.kind === "tab")
-    ? ref.id
-    : undefined;
-};
-
 /** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
 export const observationReplyBudget = (
   call: ScreenHostCall,

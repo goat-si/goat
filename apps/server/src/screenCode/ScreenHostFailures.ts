@@ -1,4 +1,20 @@
-import type { ScreenHostCall, ScreenHostReply, ScreenRunError } from "@goat/contracts";
+import type { ScreenHostCall, ScreenHostReply, ScreenRunError, ScreenImage } from "@goat/contracts";
+
+export const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
+export const key = (runId: string, turnId: string, cellId: string) =>
+  `${runId}\u0000${turnId}\u0000${cellId}`;
+export const replyTargetId = (value: unknown): string | undefined => {
+  const reply = typeof value === "object" && value !== null ? value : undefined;
+  const ref = reply && "targetRef" in reply ? reply.targetRef : reply;
+  return typeof ref === "object" &&
+    ref !== null &&
+    "id" in ref &&
+    typeof ref.id === "string" &&
+    "kind" in ref &&
+    (ref.kind === "app" || ref.kind === "tab")
+    ? ref.id
+    : undefined;
+};
 
 export const failure = (code: ScreenRunError["code"], callId?: number): ScreenRunError => ({
   code,
