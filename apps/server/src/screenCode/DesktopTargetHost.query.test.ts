@@ -165,9 +165,9 @@ it.effect("a query whose walk stopped short says so and why", () =>
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
     expect(observation.omitted?.every((item) => (item.detail?.length ?? 0) <= 200)).toBe(true);
-    expect(
-      observation.omitted?.some((item) => item.detail?.includes("stopped early (timeout)")),
-    ).toBe(true);
+    expect(observation.omitted?.map((item) => item.detail)).toContain(
+      "Search stopped early (timeout); absence is unproven.",
+    );
   }),
 );
 
@@ -296,7 +296,9 @@ it.effect("a filtered read that misses says names from nearby text were not sear
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
-    expect(budgetDetail(observation)).toContain("driver filtered; lifted names are absent");
+    expect(budgetDetail(observation)).toContain(
+      "driver filtered: text under elements was not searched",
+    );
   }),
 );
 
@@ -412,6 +414,20 @@ it.effect("a role miss lists the sorted bare roles searched, capped at 32", () =
   }),
 );
 
+it.effect("a role miss keeps each listed role within the contract's 200 characters", () =>
+  Effect.gen(function* () {
+    const role = `AX${"x".repeat(300)}`;
+    const { outcomes } = yield* observeAll(() => read([`- [0] ${role}`], [{ index: 0, role }]), {
+      mode: "query",
+      query: { role: "button" },
+    });
+    const roles =
+      (observed(outcomes[0]) as ScreenObservation & { rolesPresent?: readonly string[] })
+        .rolesPresent ?? [];
+    expect(roles.map((each) => each.length)).toEqual([200]);
+  }),
+);
+
 it.effect("a text miss explains whole and driver filtered reads", () =>
   Effect.gen(function* () {
     for (const filtered of [false, true]) {
@@ -422,14 +438,15 @@ it.effect("a text miss explains whole and driver filtered reads", () =>
       const observation = observed(outcomes[0]);
       const detail = budgetDetail(observation) ?? "";
       expect(detail.length).toBeLessThanOrEqual(200);
-      expect(detail).toContain("role");
-      expect(detail).toContain("name");
-      expect(detail).toContain("row text");
-      expect(detail).toContain("accessibility id");
+      // Only the field the query named was compared.
+      expect(detail).toContain("compared name and row text.");
+      expect(detail).not.toContain("role");
+      expect(detail).not.toContain("accessibility id");
       expect(detail).toContain("5 elements");
-      expect(detail).toContain(filtered ? "driver filtered" : "not driver filtered");
+      expect(detail).toContain(
+        filtered ? "driver filtered: text under elements was not searched" : "(whole read)",
+      );
       expect(detail).toContain(filtered ? "observe({depth: 2})" : "different field");
-      if (filtered) expect(detail).toContain("lifted names are absent");
     }
   }),
 );
@@ -472,7 +489,7 @@ it.effect("a driver-filtered sidebar miss does not invent a row match", () =>
     expect(reads.map((r) => r.query)).toEqual([undefined, "Applications"]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
-    expect(budgetDetail(observation)).toContain("lifted names are absent");
+    expect(budgetDetail(observation)).toContain("text under elements was not searched");
     expect(budgetDetail(observation)).toContain("observe({depth: 2}) then observe({within: n})");
   }),
 );
