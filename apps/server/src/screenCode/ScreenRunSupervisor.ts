@@ -16,6 +16,7 @@ import {
   ScreenEffectReceipt,
 } from "@goat/contracts";
 import { ScreenHostBridge, type ScreenHostContext } from "./ScreenHostBridge.ts";
+import { cellErrorSafety } from "./ScreenActionOutcome.ts";
 
 const isScreenGuestError = Schema.is(ScreenGuestError);
 const isScreenRunError = Schema.is(ScreenRunError);
@@ -409,12 +410,34 @@ export function createScreenRunSupervisor(deps: {
                 if (settled) return;
                 settled = true;
                 cleanup();
+                const first = taken.firstFailure;
+                const finalError =
+                  error && isScreenRunError(error) && first
+                    ? (() => {
+                        const safe = cellErrorSafety(
+                          error,
+                          taken.journal.map((entry) => entry.receipt),
+                        );
+                        return {
+                          ...safe,
+                          nextStep:
+                            `First failure: call ${first.callId} ${first.code} (${first.mayHaveSent ? "may have landed" : "nothing sent"}). ${safe.nextStep}`.slice(
+                              0,
+                              1024,
+                            ),
+                          evidence: [
+                            `first_failure:${first.callId}:${first.code}`,
+                            ...(safe.evidence ?? []),
+                          ].slice(0, 16),
+                        };
+                      })()
+                    : error;
                 resolve({
                   runId: identity.runId,
                   turnId: identity.turnId,
                   cellId,
                   status: result.status,
-                  ...(error === undefined ? {} : { error }),
+                  ...(finalError === undefined ? {} : { error: finalError }),
                   ...(result.value === undefined ? {} : { value: result.value }),
                   console: Array.isArray(result.console) ? result.console : [],
                   truncated: [

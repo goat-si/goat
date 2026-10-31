@@ -74,3 +74,35 @@ it.effect.each([
       expect(journal.map((entry) => entry.receipt.dispatched)).toEqual(dispatched);
     }),
 );
+
+it.effect("unawaited settled refusals remain refused while dispatched calls stay unknown", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    const started = yield* Deferred.make<void>();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    yield* bridge.handle(
+      { ...member(1), method: "type_text", args: [{ text: "too long" }] },
+      { ...context, limits: screenRunLimits({ argBytes: 4 }) },
+    );
+    yield* bridge
+      .handle({ ...member(2), args: {} }, context)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(started);
+    bridge.markUnawaitedNow("r", "t", "c", [1, 2]);
+    const journal = bridge.takeCellImagesNow("r", "t", "c").journal;
+    expect(journal[0]?.receipt).toMatchObject({
+      category: "refused",
+      journalState: "settled",
+      dispatched: false,
+    });
+    expect(journal[1]?.receipt).toMatchObject({
+      category: "unknown_outcome",
+      journalState: "unknown",
+      dispatched: true,
+    });
+    bridge.cutCellNow("r", "t", "c");
+  }),
+);

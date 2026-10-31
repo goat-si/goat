@@ -25,7 +25,13 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
-import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
+import {
+  isScreenRead,
+  screenActionSafety,
+  screenFailureSafety,
+  markUnawaited,
+  firstScreenFailure,
+} from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
@@ -95,6 +101,7 @@ interface CellState {
   effectsStarted: number;
   /** The first call that failed after its write may have landed; the cell's later input does not run. */
   haltedBy?: number;
+  firstFailure?: { callId: number; code: ScreenRunError["code"]; mayHaveSent: boolean };
   readonly batches: BatchGroups;
 }
 
@@ -289,6 +296,7 @@ export class ScreenHostBridge {
     const deny = (error: ScreenRunError) => {
       const receipts = state.journal.slice(-15).map((entry) => entry.receipt);
       const safety = screenFailureSafety(call, error);
+      state.firstFailure ??= firstScreenFailure(call.callId, error, safety);
       record("refused", "settled", false, notRunEvidence(error), safety, axes("refused"));
       leave();
       return refused(call, { ...error, safety, receipts });
@@ -434,6 +442,7 @@ export class ScreenHostBridge {
     });
     const failCell = (error: ScreenRunError) => {
       const safety = screenFailureSafety(call, error);
+      state.firstFailure ??= firstScreenFailure(call.callId, error, safety);
       ownFailure = { ...error, safety, effectStarted: safety.possibleCommit };
       settle(
         safety.possibleCommit ? "unknown_outcome" : "refused",
@@ -672,6 +681,7 @@ export class ScreenHostBridge {
     if (result._tag === "Failure") {
       if (callDispatched && !result.failure.effectStarted) state.effectsStarted--;
       const safety = screenFailureSafety(call, result.failure);
+      state.firstFailure ??= firstScreenFailure(call.callId, result.failure, safety);
       settle(
         result.failure.effectStarted ? "unknown_outcome" : "refused",
         result.failure.effectStarted ? "unknown" : "settled",
@@ -812,6 +822,7 @@ export class ScreenHostBridge {
       journal: state?.journal ?? [],
       truncated: state?.truncated ?? [],
       effectsStarted: state?.effectsStarted ?? 0,
+      firstFailure: state?.firstFailure,
     };
   }
 
@@ -910,22 +921,7 @@ export class ScreenHostBridge {
   ): void {
     const state = this.cells.get(key(runId, turnId, cellId));
     if (!state) return;
-    const unawaited = new Set(callIds);
-    for (let index = 0; index < state.journal.length; index++) {
-      const entry = state.journal[index];
-      if (!entry || !unawaited.has(entry.receipt.callId)) continue;
-      state.journal[index] = {
-        ...entry,
-        receipt: {
-          ...entry.receipt,
-          category: "unknown_outcome",
-          journalState: "unknown",
-          ...(entry.receipt.dispatched
-            ? { safety: screenActionSafety(entry.receipt, "indeterminate", true) }
-            : {}),
-        },
-      };
-    }
+    markUnawaited(state.journal, callIds);
   }
 
   invalidateTarget = Effect.fn("ScreenHostBridge.invalidateTarget")(function* (

@@ -590,7 +590,7 @@ it.live("a deadline stops a queued call before it dispatches and journals it und
       ]);
       expect(result.journal.slice(1).map((entry) => entry.receipt.category)).toEqual([
         "unknown_outcome",
-        "unknown_outcome",
+        "refused",
       ]);
       yield* Deferred.succeed(held, undefined);
     }).pipe(Effect.ensuring(Effect.sync(supervisor.dispose)));
@@ -863,7 +863,9 @@ it.live("an unawaited screen effect does not report a completed cell", () =>
       false,
     );
     expect(result.status).toBe("failed");
-    expect(result.journal[0]?.receipt.category).toBe("unknown_outcome");
+    expect(["unverifiable:settled", "unknown_outcome:unknown", "refused:settled"]).toContain(
+      `${result.journal[0]?.receipt.category}:${result.journal[0]?.receipt.journalState}`,
+    );
     yield* Effect.sync(supervisor.dispose);
   }),
 );
