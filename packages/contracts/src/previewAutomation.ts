@@ -1,4 +1,6 @@
 import { ActionOutcomeSafety } from "./actionOutcomeSafety.ts";
+import { PreviewAutomationOperation } from "./previewAutomationOperations.ts";
+export * from "./previewAutomationOperations.ts";
 import { Schema } from "effect";
 import { DiagnosticFilter, DiagnosticSince } from "./previewLogsFilters.ts";
 import {
@@ -42,49 +44,6 @@ const URL_GUIDANCE = "Absolute http(s) URL, or a bare host (https; http for loop
 const OptionalTimeoutMs = Schema.optional(
   Schema.Int.check(Schema.isGreaterThan(0)).check(Schema.isLessThanOrEqualTo(60_000)),
 ).annotate({ description: "Default 15000." });
-export const PREVIEW_AUTOMATION_V1_OPERATIONS = [
-  "status",
-  "open",
-  "navigate",
-  "snapshot",
-  "click",
-  "type",
-  "press",
-  "scroll",
-  "evaluate",
-  "waitFor",
-  "recordingStart",
-  "recordingStop",
-] as const;
-
-const PREVIEW_AUTOMATION_OPERATIONS = [
-  ...PREVIEW_AUTOMATION_V1_OPERATIONS,
-  "resize",
-  "setColorScheme",
-] as const;
-
-export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
-  ...PREVIEW_AUTOMATION_OPERATIONS,
-  "claim",
-  "dialog",
-  "close",
-  "upload",
-  "hover",
-  "select",
-  "drag",
-  "back",
-  "forward",
-  "reload",
-  "logs",
-  "fetch",
-  "scrollCollect",
-  "fillSecret",
-  "read",
-  "signInState",
-] as const;
-export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
-export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
-
 const PreviewAutomationTabTargetFields = {
   tabId: Schema.optional(PreviewTabId),
 };
