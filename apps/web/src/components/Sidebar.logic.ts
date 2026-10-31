@@ -1,3 +1,4 @@
+import { arrangeSidebarReorder } from "./sidebar/frozenReorder";
 import {
   hasUnseenCompletion,
   holdThreadPriorityRank as holdSidebarPriorityRank,
@@ -48,7 +49,7 @@ import {
   type SidebarThreadSortOrder,
 } from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
-import { planPinnedReorder, sortByRankThenPrompt } from "@goat/client-runtime/state/thread-sort";
+import { sortByRankThenPrompt } from "@goat/client-runtime/state/thread-sort";
 import { isInSidebarProjectScope, type SidebarProjectScopeInput } from "./sidebar/projectScope";
 import {
   effectiveSnoozed,
@@ -478,20 +479,6 @@ export function planSidebarThreadDrop(input: {
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
-  const arrange = (
-    order: readonly string[],
-    keysById: ReadonlyMap<string, string | null | undefined>,
-    writable: ReadonlySet<string> | undefined,
-  ) => {
-    if (!writable) return planPinnedReorder({ orderedIds: order, keysById, movedId: activeKey });
-    if (!writable.has(activeKey)) return null;
-    const assignments = planPinnedReorder({
-      orderedIds: order.filter((key) => writable.has(key) || keysById.get(key) != null),
-      keysById,
-      movedId: activeKey,
-    });
-    return assignments.every(({ id }) => writable.has(id)) ? assignments : null;
-  };
   switch (target.section) {
     case "active": {
       if (input.activeTimeOrdered) {
@@ -514,7 +501,13 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
-      const assignments = arrange(order, activeKeysById, activeReorderableKeys);
+      const assignments = arrangeSidebarReorder(
+        activeKey,
+        target.section,
+        order,
+        activeKeysById,
+        activeReorderableKeys,
+      );
       if (assignments === null) return { kind: "none" };
       return {
         kind: "move-active",
@@ -536,7 +529,13 @@ export function planSidebarThreadDrop(input: {
       ) {
         return { kind: "none" };
       }
-      const assignments = arrange(order, pinnedKeysById, reorderableKeys);
+      const assignments = arrangeSidebarReorder(
+        activeKey,
+        target.section,
+        order,
+        pinnedKeysById,
+        reorderableKeys,
+      );
       if (assignments === null) return { kind: "none" };
       if (activeSection === "pinned") {
         return assignments.length === 0

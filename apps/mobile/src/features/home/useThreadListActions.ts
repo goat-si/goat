@@ -15,6 +15,7 @@ import { refreshArchivedThreadsForEnvironment } from "../archive/useArchivedThre
 import { pinOrderKeyBetween } from "@goat/client-runtime/state/thread-sort";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentServerConfigsAtom } from "../../state/server";
+import { connectedEnvironmentIdsAtom } from "../../state/presentation";
 import { readEnvironmentScope } from "../../state/session";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { queuedThreadKeysAtom } from "../../state/use-thread-outbox";
@@ -657,6 +658,8 @@ export function useThreadListActions(): {
     const hiddenBotThreadKeys = appAtomRegistry.get(hiddenGoatBotThreadKeysAtom);
     if (hiddenBotThreadKeys.has(scopedThreadKey(thread.environmentId, thread.id))) return false;
     const configs = appAtomRegistry.get(environmentServerConfigsAtom);
+    const connectedEnvironmentIds = new Set(appAtomRegistry.get(connectedEnvironmentIdsAtom));
+    if (!connectedEnvironmentIds.has(thread.environmentId)) return false;
     const supportsReorder = (environmentId: EnvironmentThreadShell["environmentId"]) => {
       const capabilities = configs.get(environmentId)?.environment.capabilities;
       return section === "pinned"
@@ -695,7 +698,9 @@ export function useThreadListActions(): {
       allThreads: shells,
       ordered,
       section,
-      reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
+      reorderableEnvironmentIds: new Set(
+        [...configs.keys()].filter((id) => connectedEnvironmentIds.has(id) && supportsReorder(id)),
+      ),
     })(scopedThreadKey(thread.environmentId, thread.id), direction);
     if (assignments === null) return false;
     const lifecycle = threadDropLifecycle(thread, section, new Date().toISOString());

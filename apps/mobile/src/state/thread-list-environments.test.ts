@@ -22,7 +22,7 @@ describe("createThreadListEnvironmentsAtom", () => {
     const configs = Atom.make<ReadonlyMap<EnvironmentId, ServerConfig>>(
       new Map([[environmentId, makeConfig(hour)]]),
     );
-    const environments = createThreadListEnvironmentsAtom(configs);
+    const environments = createThreadListEnvironmentsAtom(configs, Atom.make([environmentId]));
     const registry = AtomRegistry.make();
     registry.mount(environments);
     try {
