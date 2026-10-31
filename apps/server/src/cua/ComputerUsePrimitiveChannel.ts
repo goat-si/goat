@@ -758,6 +758,18 @@ export const make = Effect.gen(function* () {
         if (previousFailure !== undefined) return yield* Effect.fail(previousFailure);
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
         if (current !== undefined) {
+          began ??= current.controlId;
+          if (current.controlId === began && beganEpoch === undefined) {
+            const registered = attachments.get(input.threadId)?.registration;
+            beganEpoch = registered === undefined ? {} : control(registered, began).epoch;
+            retainedKey = waitingKey(input.threadId, began);
+            let waiters = waitingEpochs.get(retainedKey);
+            if (waiters === undefined) {
+              waiters = new Map();
+              waitingEpochs.set(retainedKey, waiters);
+            }
+            waiters.set(beganEpoch, (waiters.get(beganEpoch) ?? 0) + 1);
+          }
           const record = attachments
             .get(input.threadId)
             ?.registration?.controls.get(current.controlId);
@@ -787,7 +799,6 @@ export const make = Effect.gen(function* () {
               input.args,
             ) ?? desktopNotReady("none"),
           );
-        began ??= current.controlId;
         if (current.controlId !== began)
           return yield* Effect.fail(
             terminalFailure(
@@ -800,16 +811,6 @@ export const make = Effect.gen(function* () {
         const registered = value?.registration;
         const record =
           registered === undefined ? undefined : control(registered, current.controlId);
-        if (beganEpoch === undefined && record !== undefined) {
-          beganEpoch = record.epoch;
-          retainedKey = waitingKey(input.threadId, current.controlId);
-          let waiters = waitingEpochs.get(retainedKey);
-          if (waiters === undefined) {
-            waiters = new Map();
-            waitingEpochs.set(retainedKey, waiters);
-          }
-          waiters.set(beganEpoch, (waiters.get(beganEpoch) ?? 0) + 1);
-        }
         const capturedFailure = terminalFailure(
           replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
           input.tool,

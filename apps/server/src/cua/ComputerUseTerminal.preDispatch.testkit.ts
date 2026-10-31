@@ -309,7 +309,7 @@ const fencedCell = (input: Input) =>
     return replaceWithTerminal(answer.error);
   });
 
-const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) =>
+const channelRefusal = (kind: "retainedWaiter" | "authority" | "activeRace") => (input: Input) =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("matrix:channel");
     const signals = yield* PubSub.unbounded<void>();
@@ -317,6 +317,11 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
     const reason = input.reasons.includes("stopped_by_person")
       ? "stopped_by_person"
       : "screen_locked";
+    const entered = yield* Deferred.make<void>();
+    const admissionGate = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(admissionGate, undefined));
+    let armed = false;
+    let reads = 0;
     let notify: Parameters<
       NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
     >[0] = () => {};
@@ -325,9 +330,10 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
         Layer.mock(ComputerUseLeases.ComputerUseLeases)({
           proxy: undefined,
           currentControl: () => Effect.succeedSome({ threadId, controlId: "A", expiresAt }),
-          controlState: () =>
-            Effect.succeed<ComputerUseLeases.ComputerUseControlState>(
-              kind === "authority"
+          controlState: () => {
+            if (kind === "activeRace" && armed) reads++;
+            const state: ComputerUseLeases.ComputerUseControlState =
+              kind === "authority" || (kind === "activeRace" && armed && reads >= 2)
                 ? reason === "stopped_by_person"
                   ? { _tag: "ended", reason: "stopped" }
                   : { _tag: "paused", reason: "screen_locked" }
@@ -337,8 +343,14 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
                     interruptions: { count: 0, last: "screen_locked" },
                     apps: undefined,
                     wakeAt: 60000,
-                  },
-            ),
+                  };
+            if (kind === "activeRace" && armed && reads === 2)
+              return Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(admissionGate)),
+                Effect.as(state),
+              );
+            return Effect.succeed(state);
+          },
           subscribe: PubSub.subscribe(signals),
           onAuthorityChange: (listener) => {
             notify = listener;
@@ -363,6 +375,7 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
     const clock = yield* Clock.Clock;
     let hold = false;
     yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    armed = true;
     const pending = yield* channel
       .request({
         threadId,
@@ -388,7 +401,17 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
         Effect.result,
         Effect.forkChild({ startImmediately: true }),
       );
-    if (kind === "retainedWaiter") {
+    if (kind === "activeRace") {
+      yield* Deferred.await(entered);
+      for (const terminal of input.reasons)
+        notify({
+          kind: terminal === "screen_locked" ? "pause" : "stop",
+          threadId,
+          controlId: "A",
+          terminal,
+        });
+      yield* Deferred.succeed(admissionGate, undefined);
+    } else if (kind === "retainedWaiter") {
       hold = true;
       const first = input.reasons[0];
       if (first === undefined) return yield* Effect.die("expected a terminal source");
@@ -601,6 +624,11 @@ export const preDispatchSites: ReadonlyArray<{
     name: "ComputerUsePrimitiveChannel.authority",
     undispatched: true,
     run: channelRefusal("authority"),
+  },
+  {
+    name: "ComputerUsePrimitiveChannel.activeRace",
+    undispatched: true,
+    run: channelRefusal("activeRace"),
   },
   {
     name: "ComputerUseLeaseProxyPersonStop.lockRefusal",
