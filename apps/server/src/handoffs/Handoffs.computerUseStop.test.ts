@@ -13,6 +13,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as SqlClient from "effect/sql/SqlClient";
+import * as ServerSettings from "../serverSettings.ts";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { makeTestBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
@@ -85,7 +87,7 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         const elsewhere = yield* ask(otherThread, ["at.studio.AsideBrowser"]);
         yield* worker.drain();
         yield* service.respond(
-          { threadId, handoffId: held.handoffId, action: "completed" },
+          { threadId, handoffId: held.handoffId, action: "completed", computerUseScope: "session" },
           owner.sessionId,
         );
         yield* service.respond(
@@ -94,6 +96,15 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         );
         yield* PubSub.take(wake);
         const live = yield* leases.control(threadId, yield* leases.active(threadId));
+        const sql = yield* SqlClient.SqlClient;
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const allowedBefore = [...(yield* settings.getSettings).cuaAllowedApps];
+        const sessionsBefore =
+          yield* sql`SELECT * FROM computer_use_session_approvals ORDER BY thread_id, app_key`;
+        const markerBefore = yield* sql`SELECT id FROM computer_use_person_approval ORDER BY id`;
+        assert.isNotEmpty(allowedBefore);
+        assert.isNotEmpty(sessionsBefore);
+        assert.lengthOf(markerBefore, 1);
         const handoffBefore = yield* service.read({ threadId, handoffId: held.handoffId });
         const approvalBefore = yield* leases.active(threadId);
         const controlBefore = yield* leases.controlState(threadId, live.controlId);
@@ -141,6 +152,24 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         yield* proxy.nextToProvider;
         yield* proxy.send(call(100, "browser_click", { tab_id: "tab-1" }));
         assert.equal((yield* proxy.nextToDriver).id, 100);
+        yield* proxy.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 100,
+            result: { structuredContent: { tab_id: "tab-1", url: "https://example.test/" } },
+          }),
+        );
+        assert.equal((yield* proxy.nextToProvider).id, 100);
+        yield* claims.revoke(threadId, "https://example.test");
+        assert.deepEqual((yield* settings.getSettings).cuaAllowedApps, allowedBefore);
+        assert.deepEqual(
+          yield* sql`SELECT * FROM computer_use_session_approvals ORDER BY thread_id, app_key`,
+          sessionsBefore,
+        );
+        assert.deepEqual(
+          yield* sql`SELECT id FROM computer_use_person_approval ORDER BY id`,
+          markerBefore,
+        );
         assert.deepEqual(
           yield* service.read({ threadId, handoffId: held.handoffId }),
           handoffBefore,
@@ -203,6 +232,9 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         Effect.provide(
           Handoffs.layer.pipe(
             Layer.provideMerge(ComputerUseLeases.layer),
+            Layer.provideMerge(
+              ServerSettings.layerTest({ enableCua: true, cuaAllowedApps: ["com.example.Other"] }),
+            ),
             Layer.provide(dependencies),
           ),
         ),
