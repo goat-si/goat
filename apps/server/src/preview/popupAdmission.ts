@@ -7,7 +7,7 @@ import type { makeBlockedTabFence } from "./blockedTabFence.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 import type { BlockedTabRun } from "./blockedTabFence.ts";
 
-export const closeCutAgentPopup = async (input: {
+const closeCutAgentPopup = async (input: {
   readonly agentControlled: boolean;
   readonly signal?: AbortSignal;
   readonly visits: ReadonlyArray<{ readonly url: string; readonly run: BlockedTabRun }>;
