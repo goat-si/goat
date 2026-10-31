@@ -109,6 +109,7 @@ it.effect(
         apps: [
           { pid: 42, name: "Editor", bundle_id: "org.example.Editor" },
           { pid: 43, name: "Other", bundle_id: "org.example.Other" },
+          { pid: 44, name: "Third", bundle_id: "org.example.Third" },
         ],
       },
       list_windows: {
@@ -116,6 +117,7 @@ it.effect(
           { pid: 42, window_id: 7, title: "First" },
           { pid: 42, window_id: 8, title: "Second" },
           { pid: 43, window_id: 9, title: "Other" },
+          { pid: 44, window_id: 10, title: "Third" },
         ],
       },
     });
@@ -130,7 +132,7 @@ it.effect(
       const second = yield* service.runCell({
         ...request,
         source:
-          "const again = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); const other = await screen.app({bundle_id: 'org.example.Editor', window_id: 8}); await screen.app({bundle_id: 'org.example.Other', window_id: 9}); return [again.targetRef.id === screen.state.app.targetRef.id, other.targetRef.id !== again.targetRef.id];",
+          "const again = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); const other = await screen.app({bundle_id: 'org.example.Editor', window_id: 8}); await screen.app({bundle_id: 'org.example.Other', window_id: 9}); await screen.app({bundle_id: 'org.example.Third', window_id: 10}); return [again.targetRef.id === screen.state.app.targetRef.id, other.targetRef.id !== again.targetRef.id];",
       });
       expect(second.value).toEqual([true, true]);
       const third = yield* service.runCell({
