@@ -88,6 +88,8 @@ interface ThreadLifecycleInput {
   readonly activeThread: EnvironmentThreadShell | undefined;
   readonly activeThreadId: ThreadId | null;
   readonly activeThreadRef: ScopedThreadRef | null;
+  /** Null until the thread's detail may load; see resolveThreadDetailRef. */
+  readonly threadDetailRef: ScopedThreadRef | null;
   readonly activeThreadKey: string | null;
   readonly activeThreadShell: EnvironmentThreadShell | null;
   readonly activeLatestRun: EnvironmentThreadShell["latestRun"];
@@ -137,6 +139,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     activeThread,
     activeThreadId,
     activeThreadRef,
+    threadDetailRef,
     activeThreadKey,
     activeThreadShell,
     activeLatestRun,
@@ -563,7 +566,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
 
   const forceStop = useForceStopThread(environmentId);
   const anyRunStop = useAtomValue(
-    activeThreadRef ? environmentThreadDetails.runStopAtom(activeThreadRef) : NO_RUN_STOP_ATOM,
+    threadDetailRef ? environmentThreadDetails.runStopAtom(threadDetailRef) : NO_RUN_STOP_ATOM,
   );
   // A background Stop matters only while that work is still pending.
   const runStop = anyRunStop?.background && activeBackgroundTasks.length === 0 ? null : anyRunStop;
