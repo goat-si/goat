@@ -85,7 +85,7 @@ export const confirmByTree = Effect.fn("DesktopTreeEffect.confirmByTree")(functi
   const after = yield* read.pipe(
     Effect.catchIf(
       (error) => error.code !== "stopped_by_person" && error.code !== "screen_locked",
-      () => Effect.succeed(undefined),
+      () => Effect.void,
     ),
     Effect.mapError((error) => ({ ...error, effectStarted: true, safety: INDETERMINATE_WRITE })),
   );
