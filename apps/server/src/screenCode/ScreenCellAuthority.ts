@@ -6,7 +6,7 @@ import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 export const makeCellAuthority = (leases: ComputerUseLeases["Service"] | undefined) => {
   const cells = new Map<string, { cellId: string; controlId?: string }>();
   const current = (threadId: string) =>
-    typeof leases?.currentControl === "function"
+    leases !== undefined
       ? leases
           .currentControl(ThreadId.make(threadId))
           .pipe(Effect.map((control) => Option.getOrUndefined(control)?.controlId))

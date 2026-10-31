@@ -538,6 +538,7 @@ it.live("desktop private authority notification cuts an active screen cell", () 
     >[0];
     let notify: AuthorityListener | undefined;
     const leases = {
+      currentControl: () => Effect.succeedNone,
       onAuthorityChange: (listener: AuthorityListener) => {
         notify = listener;
         return () => {
@@ -637,6 +638,7 @@ it.live("Stop during slow tab cleanup fails a cell that caught its dispatched in
     >[0];
     let notify: AuthorityListener | undefined;
     const leases = {
+      currentControl: () => Effect.succeedNone,
       onAuthorityChange: (listener: AuthorityListener) => {
         notify = listener;
         return () => {
