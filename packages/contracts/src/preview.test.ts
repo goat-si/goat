@@ -14,6 +14,7 @@ describe("PreviewAutomationLogsInput", () => {
   const decode = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
   it("accepts combined filters and rejects unbounded inputs", () => {
     const input = {
+      since: "2026-01-01T00:00:00Z",
       limit: 100,
       consoleLevels: ["warning", "error"],
       text: "failure",
@@ -24,7 +25,15 @@ describe("PreviewAutomationLogsInput", () => {
       includeConsole: false,
     };
     expect(decode(input)).toEqual(input);
+    expect(decode({ since: "2024-02-29T23:00:00-02:00" })).toEqual({
+      since: "2024-02-29T23:00:00-02:00",
+    });
     for (const invalid of [
+      { since: "not a date" },
+      { since: "2026-01-01" },
+      { since: "2026-02-31T00:00:00Z" },
+      { since: "2025-02-29T00:00:00+02:00" },
+      { since: "2026-01-01T24:00:00Z" },
       { limit: 0 },
       { limit: 101 },
       { limit: 1.5 },

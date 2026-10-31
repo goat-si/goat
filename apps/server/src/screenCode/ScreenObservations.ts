@@ -7,6 +7,7 @@ import type {
   ScreenTargetRef,
 } from "@goat/contracts";
 import type { PreviewAutomationSnapshot } from "@goat/contracts";
+import { diffTabObservation, hasFrameRefs } from "./TabObservationDiff.ts";
 import {
   cutDetail,
   cutTreeText,
@@ -159,6 +160,7 @@ export interface ScreenObservationDraft {
   readonly title?: string;
   readonly url?: string;
   readonly lineage?: string;
+  readonly tabDocumentKnown?: boolean;
   /** Regions the source left out, such as frames it could not read. */
   readonly omitted?: NonNullable<ScreenObservation["omitted"]>;
   /** The window's screen bounds, for app reads: elements outside them go before visible ones. */
@@ -388,6 +390,7 @@ export class ScreenObservations {
       targetRef: input.targetRef,
       targetGeneration: input.targetGeneration,
       surfaceGeneration: generation.generation,
+      tabDocumentKnown: typeof input.documentGeneration === "number",
       lineage: `${input.connectionId}\u0000${input.controlGeneration}\u0000${input.documentGeneration ?? ""}\u0000${snapshot.url}`,
       indexedText: tree,
       complete: snapshot.treeComplete === true && validGeneration,
@@ -487,32 +490,17 @@ export class ScreenObservations {
         draft.complete &&
         !draft.truncated &&
         old.draft.lineage === draft.lineage &&
-        old.draft.targetGeneration === draft.targetGeneration;
-      if (valid) {
-        const previousLines = old.draft.indexedText.split("\n");
-        const key = (line: string) => line.replace(/\[ref=[^\]]+\]/g, "[ref]");
-        const oldKeys = previousLines.map(key);
-        const newKeys = currentLines.map(key);
-        const unique =
-          new Set(oldKeys).size === oldKeys.length && new Set(newKeys).size === newKeys.length;
-        const removed = previousLines.filter((line) => !newKeys.includes(key(line)));
-        const added = currentLines.filter((line) => !oldKeys.includes(key(line)));
-        const stableOld = oldKeys.filter((line) => newKeys.includes(line));
-        const stableNow = newKeys.filter((line) => oldKeys.includes(line));
-        const compact = [
-          ...removed.map((line) => `- ${line}`),
-          ...added.map((line) => `+ ${line}`),
-        ].join("\n");
-        if (
-          unique &&
-          stableOld.join("\n") === stableNow.join("\n") &&
-          compact.length < renderedText.length
-        ) {
-          renderedText = compact;
-          // The text shows what changed; the elements are every current one, numbered as a full
-          // read numbers them, so a name or number found before is found again.
-          selected = draft.elements;
-        } else resetReason = "reordered_or_longer_diff";
+        old.draft.targetGeneration === draft.targetGeneration &&
+        (old.draft.surfaceGeneration === draft.surfaceGeneration ||
+          (old.draft.tabDocumentKnown === true && draft.tabDocumentKnown === true));
+      if (valid && (hasFrameRefs(old.draft) || hasFrameRefs(draft))) {
+        resetReason = "frame_refs";
+      } else if (valid) {
+        const diff = diffTabObservation(old.draft, draft, old.observation.observationId);
+        if (diff) {
+          renderedText = diff.text;
+          selected = diff.elements;
+        } else resetReason = "ambiguous_rows";
       } else resetReason = "lineage_or_completeness_changed";
       if (resetReason) mode = "full";
     }
@@ -564,7 +552,9 @@ export class ScreenObservations {
     // A tab's tree names elements by Playwright ref; show the same numbers an app's tree shows,
     // only for elements the observation still carries, so every number shown has a ref.
     const numbers = new Map(
-      selected.slice(0, 4096).map((element, position) => [element.driverToken, position]),
+      selected
+        .slice(0, 4096)
+        .map((element, position) => [element.driverToken, element.index ?? position]),
     );
     const numbered = (carried: ReadonlySet<string>) =>
       draft.targetRef.kind !== "tab"
@@ -737,6 +727,9 @@ export class ScreenObservations {
     }
     if (Buffer.byteLength(JSON.stringify(build())) > budget)
       throw new Error("Screen observation metadata exceeds tree budget");
+    if (mode === "diff" && !input.prediffed && truncated) {
+      return this.renderObservation({ ...input, mode: "full", resetReason: "diff_exceeds_budget" });
+    }
     const observation = build();
     if (input.page !== undefined) {
       if (!this.index.addPage(draft.targetRef.id, input.page, observationId, tokens, editable))
@@ -744,7 +737,7 @@ export class ScreenObservations {
       return observation;
     }
     this.index.put(draft.targetRef.id, observationId, draft.surfaceGeneration, tokens, editable);
-    this.previous.set(draft.targetRef.id, { observation, draft });
+    this.previous.set(draft.targetRef.id, { observation, draft: { ...draft, elements: selected } });
     return observation;
   }
 }

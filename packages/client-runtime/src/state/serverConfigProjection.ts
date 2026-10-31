@@ -1,4 +1,5 @@
 import type { ServerConfig, ServerConfigStreamEvent } from "@goat/contracts";
+import { applyProviderStatusChanges } from "@goat/shared/providerStatusChanges";
 import * as Option from "effect/Option";
 
 export interface ServerConfigProjection {
@@ -103,6 +104,15 @@ export function applyServerConfigProjection(
         config: {
           ...projection.config,
           providers: reuseUnchanged(projection.config.providers, event.payload.providers),
+        },
+        latestEvent: event,
+        source: "live",
+      }));
+    case "providerStatusChanges":
+      return Option.map(current, (projection) => ({
+        config: {
+          ...projection.config,
+          providers: applyProviderStatusChanges(projection.config.providers, event.payload),
         },
         latestEvent: event,
         source: "live",

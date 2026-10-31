@@ -68,7 +68,7 @@ export const stopAllComputerUse = Effect.fn("ComputerUse.stopAll")(function* (
   sessionId: AuthSessionId,
 ) {
   if (Option.isNone(leases)) return { stopped: 0, failed: 0 };
-  const stopped = new Set(yield* leases.value.stopAll);
+  const stopped = new Set(yield* handoffs.stopComputerUseSessions());
   const { ended, failed } = yield* endGrants(leases.value, handoffs, sessionId, () => true);
   for (const thread of ended) stopped.add(thread);
   return { stopped: stopped.size, failed };
@@ -86,7 +86,7 @@ export const stopComputerUse = Effect.fn("ComputerUse.stop")(function* (
   threadId: ThreadId,
 ) {
   if (Option.isNone(leases)) return { stopped: false, failed: 0 };
-  const stopped = yield* leases.value.stop(threadId);
+  const stopped = (yield* handoffs.stopComputerUseSessions(threadId)).length > 0;
   const { ended, failed } = yield* endGrants(
     leases.value,
     handoffs,
@@ -136,10 +136,12 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
             ),
     [WS_METHODS.computerUseStop]: (input: { readonly threadId: ThreadId }) =>
       stopComputerUse(leases, handoffs, sessionId, input.threadId).pipe(
+        Effect.orDie,
         Effect.map(({ stopped }) => ({ stopped })),
       ),
     [WS_METHODS.computerUseStopAll]: (_input: {}) =>
       stopAllComputerUse(leases, handoffs, sessionId).pipe(
+        Effect.orDie,
         Effect.map(({ stopped }) => ({ stopped })),
       ),
     [WS_METHODS.computerUseApps]: (_input: {}) =>

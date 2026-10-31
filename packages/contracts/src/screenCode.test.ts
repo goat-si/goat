@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 
 import {
   ScreenEffectReceipt,
+  ScreenObservation,
   ScreenHostCall,
   DEFAULT_SCREEN_RUN_LIMITS,
   ScreenHostReply,
@@ -53,6 +54,28 @@ describe("screen code wire contracts", () => {
     expect(() => decode({ ...call, threadId: "thread:forged" })).toThrow();
     expect(() => decode({ ...call, method: "run_script" })).toThrow();
     expect(() => targetDecode({ ...target, generation: -1 })).toThrow();
+  });
+
+  it("roundtrips a bounded observation effect and accepts older observations", () => {
+    const decode = Schema.decodeUnknownSync(ScreenObservation);
+    const encode = Schema.encodeSync(ScreenObservation);
+    const observation = {
+      observationId: "o1",
+      targetRef: target,
+      targetGeneration: 0,
+      surfaceGeneration: 0,
+      mode: "diff",
+      complete: true,
+      truncated: false,
+      loading: false,
+      indexedText: "~ row",
+      elements: [],
+      scope: "window",
+    };
+    expect(decode(observation).effect).toBeUndefined();
+    const withEffect = { ...observation, effect: "x".repeat(256) };
+    expect(encode(decode(withEffect))).toEqual(withEffect);
+    expect(() => decode({ ...observation, effect: "x".repeat(257) })).toThrow();
   });
 
   it("roundtrips additive safety receipts and keeps older receipts unclassified", () => {

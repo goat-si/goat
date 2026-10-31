@@ -483,6 +483,10 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
+    "./providerStatusChanges": {
+      "types": "./src/providerStatusChanges.ts",
+      "import": "./src/providerStatusChanges.ts"
+    },
     "./quotaVerdict": {
       "types": "./src/quotaVerdict.ts",
       "import": "./src/quotaVerdict.ts"

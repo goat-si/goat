@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
 const OPEN = new Set(["preparing", "queued", "starting", "running", "waiting", "pending"]);
@@ -36,6 +37,23 @@ export const layer = Layer.effectDiscard(
     if (Option.isNone(leases)) return;
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const handoffs = yield* Handoffs.Handoffs;
+    const disable = handoffs.stopComputerUseSessions().pipe(
+      Effect.catch((cause) => Effect.logError("Could not clear computer use sessions", { cause })),
+      Effect.andThen(leases.value.disable),
+    );
+    const revalidate = handoffs
+      .revalidateComputerUse()
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logError("Could not revalidate computer use grants", { cause }).pipe(
+            Effect.andThen(leases.value.stopAll),
+            Effect.asVoid,
+          ),
+        ),
+      );
+    if (!(yield* settings.getSettings).enableCua) yield* disable;
+    else yield* revalidate;
     yield* forkParked(
       Stream.runForEach(orchestrator.streamDomainEvents, (event) =>
         // A subagent's events carry its child thread, so every acting control is checked.
@@ -48,7 +66,7 @@ export const layer = Layer.effectDiscard(
       ),
     );
     yield* (yield* settings.subscribeChanges).pipe(
-      Stream.runForEach((value) => (value.enableCua ? Effect.void : leases.value.disable)),
+      Stream.runForEach((value) => (value.enableCua ? revalidate : disable)),
       Effect.forkScoped,
     );
   }),

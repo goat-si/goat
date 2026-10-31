@@ -141,7 +141,7 @@ it.effect("an observe lists where the proxy and the host spent the driver call",
   }),
 );
 
-it.effect("a macOS screenshot asks the driver for a JPEG, and a tree read does not", () =>
+it.effect("a macOS screenshot requests model fit, and a tree read has no image", () =>
   Effect.gen(function* () {
     const { host, sent } = timedHost({ get_window_state: goat2WindowState });
     const ref = yield* bind(host);
@@ -150,9 +150,10 @@ it.effect("a macOS screenshot asks the driver for a JPEG, and a tree read does n
     const reads = sent.filter((entry) => entry.tool === "get_window_state");
     expect(reads.map((entry) => entry.args)).toMatchObject([
       { include_accessibility_tree: true, include_screenshot: false },
-      { include_accessibility_tree: false, include_screenshot: true, screenshot_format: "jpeg" },
+      { include_accessibility_tree: false, include_screenshot: true, screenshot_fit: "model" },
     ]);
-    expect(reads[0]?.args).not.toHaveProperty("screenshot_format");
+    expect(reads[0]?.args).not.toHaveProperty("screenshot_fit");
+    expect(reads[1]?.args).not.toHaveProperty("screenshot_format");
   }),
 );
 

@@ -74,6 +74,15 @@ The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.
 
+## Site notes
+
+GOAT can remember short notes about a site's procedures and quirks for future browser work.
+Open **Settings → Memory → Sites** on the environment to view, edit, delete, or restore its
+default notes. Notes belong to an HTTP or HTTPS origin and are limited to 1024 UTF-8 bytes.
+Agents can save notes for sites they have visited; GOAT presents a site's note once per thread.
+Do not put passwords or other secrets in notes. GOAT rejects some recognizable credentials and
+password or token assignments, but that check cannot identify every secret.
+
 ## Sites you are signed in to
 
 A tab an agent opens starts with no saved sign-ins, so it cannot reach your accounts unless
@@ -102,6 +111,14 @@ channel. They also get foreground input without asking. In other modes, the agen
 request names the apps and says when approval expires. Approve it in a GOAT app
 and the agent continues in the same turn, using those apps until then. Until
 approved, it can list apps and windows but cannot look inside or type into them.
+Choose **Allow for this conversation** to let the thread request those apps again without another
+card until you stop its computer use. That choice survives a server restart, and ends when you
+use **Stop**, **End computer use**, **Stop all**, or turn computer use off. Choose **Always allow**
+to let threads request the apps on this environment without another card; remove an app under
+**Settings → Integrations → Computer use → Allowed apps**. Removing it also ends admissions
+that depend on that standing choice. Each request still receives a
+time-limited admission shown in the thread, which you can end early.
+After you have approved computer use on this environment once, naming an app in your own message can also allow it for the conversation without another card.
 A request for foreground control says so; approving it lets the agent bring
 apps forward and use keyboard or pointer focus for the stated purpose. Agents
 cannot screenshot the whole display; they look at one window at a time. On

@@ -625,6 +625,7 @@ export const WS_METHODS = {
   computerUseStatusChanges: "computerUse.statusChanges",
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
+  computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
   computerUseResume: "computerUse.resume",
   computerUseApps: "computerUse.apps",
   previewSessionsSubscribe: "previewSessions.subscribe",
@@ -842,6 +843,12 @@ const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
   payload: Schema.Struct({}),
   success: ComputerUseStopAllResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsComputerUseRemoveAllowedAppRpc = Rpc.make(WS_METHODS.computerUseRemoveAllowedApp, {
+  payload: Schema.Struct({ app: Schema.String }),
+  success: Schema.Struct({}),
+  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
 /** Hands the screen back to agents after a person's input or takeover paused them. */
@@ -2242,6 +2249,8 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
     usageLimitsCommand: Schema.optional(Schema.Boolean),
     /** Omit per-cwd provider snapshots; the client fetches its cwd through `server.refreshProviders`. */
     workspaceSnapshotsOnDemand: Schema.optional(Schema.Boolean),
+    /** Send `providerStatusChanges` instead of resending every provider on each change. */
+    providerStatusChanges: Schema.optional(Schema.Boolean),
   }),
   success: ServerConfigStreamEvent,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
@@ -2480,6 +2489,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsComputerUseStatusChangesRpc,
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
+  WsComputerUseRemoveAllowedAppRpc,
   WsComputerUseResumeRpc,
   WsComputerUseAppsRpc,
   WsPreviewSessionsSubscribeRpc,
