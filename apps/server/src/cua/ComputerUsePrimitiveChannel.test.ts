@@ -142,6 +142,31 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("a terminal proxy refusal preserves its not-started outcome", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.channel.reportControlReady(f.report(1));
+      const waiting = yield* f.request().pipe(Effect.forkChild);
+      const request = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      const result = {
+        isError: true,
+        structuredContent: {
+          code: "stopped_by_person",
+          safety: { retryClass: "never", possibleCommit: false },
+        },
+      };
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: f.registered.registrationId,
+          reply: { ...request, status: "not_started", result },
+        }),
+      );
+      const answer = yield* Fiber.join(waiting);
+      assert.equal(answer.status, "not_started");
+      assert.deepEqual(answer.result, result);
+    }),
+  );
   it.effect("a late typed terminal reply survives before the cutoff report", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

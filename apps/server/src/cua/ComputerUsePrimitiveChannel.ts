@@ -756,6 +756,12 @@ export const make = Effect.gen(function* () {
           record.pending.delete(original.requestId);
           const replyTerminal = terminalReplyReason(input.reply.result);
           if (replyTerminal !== undefined) record.terminal ??= replyTerminal;
+          if (replyTerminal !== undefined && replyTerminal === record.terminal) {
+            pending.terminal = replyTerminal;
+            pending.answeredAt = now;
+            Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
+            return true;
+          }
           if (record.terminal !== undefined) {
             settle(pending, record.terminal);
             return true;
