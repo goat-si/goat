@@ -121,9 +121,12 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     }
     return operation.controller.signal;
   };
-  const cut = (tab: Tab, runId: string | undefined) => {
-    const actualRun = runId ?? capture(tab.threadId)?.runId;
-    if (actualRun) operations.get(entryKey(keyOf(tab), actualRun))?.controller.abort(blocked());
+  const cut = (tab: Tab, _runId: string | undefined) => {
+    const key = keyOf(tab);
+    for (const runId of runSync(activity.activeRuns(ThreadId.make(tab.threadId))))
+      entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
+    for (const [operationKey, operation] of operations)
+      if (operationKey.startsWith(`${key}\u0000`)) operation.controller.abort(blocked());
     tab.control?.cutBlockedUrl();
   };
   const capture = (threadId: string): BlockedTabRun | undefined => {

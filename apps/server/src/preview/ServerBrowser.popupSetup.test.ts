@@ -28,6 +28,7 @@ import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -586,10 +587,22 @@ it.effect("a person's unattributed blocked popup fences all active tabs in its c
         input: { reuseExistingTab: false, show: false },
       });
       const other = PreviewTabId.make(opened.tabId!);
+      const observed = yield* Deferred.make<void>();
+      const cut = SessionControl.prototype.cutBlockedUrl;
+      const cutTabs = new Set<SessionControl>();
+      const spy = vi
+        .spyOn(SessionControl.prototype, "cutBlockedUrl")
+        .mockImplementation(function () {
+          cut.call(this);
+          cutTabs.add(this);
+          if (cutTabs.size === 2) Deferred.doneUnsafe(observed, Effect.void);
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
       const opening = yield* Effect.promise(() =>
         f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
       ).pipe(Effect.forkChild);
       yield* Deferred.await(f.slowStarted);
+      yield* Deferred.await(observed);
       const first = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
       const second = yield* f.call(other, "press", { key: "Enter" }).pipe(Effect.result);
       yield* Deferred.succeed(f.slowGate, undefined);

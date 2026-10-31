@@ -114,6 +114,88 @@ it.effect(
     ).pipe(Effect.provide(layer)),
 );
 
+it.effect("a blocked visit cuts a waiting observer from an earlier concurrent run", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const browser = yield* Effect.acquireRelease(
+        Effect.promise(() => chromium.launch({ headless: true })),
+        (b) => Effect.promise(() => b.close()),
+      );
+      const page = yield* Effect.promise(() => browser.newPage());
+      yield* Effect.promise(() =>
+        page.route("https://*.test/**", (route) =>
+          route.fulfill({ body: "<button>safe</button>", contentType: "text/html" }),
+        ),
+      );
+      yield* Effect.promise(() => page.goto("https://safe.test/"));
+      const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
+      const fence = yield* makeBlockedTabFence();
+      const threadId = ThreadId.make("concurrent-observer-runs");
+      const endFirst = yield* activity.begin(threadId, "run");
+      const control = new SessionControl("agent");
+      yield* Effect.promise(() => control.take("person"));
+      const tab = {
+        threadId,
+        tabId: "tab",
+        page,
+        cdp,
+        control,
+        closing: false,
+        desktop: null,
+        viewers: new Set<never>(),
+      };
+      const gate = tabActionGate(
+        tab,
+        request(threadId),
+        fence,
+        Infinity,
+        new AbortController().signal,
+        undefined,
+        true,
+      );
+      const release = yield* Deferred.make<void>();
+      const lock = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(release).pipe(Effect.tap(() => Effect.sync(lock.resolve))),
+      );
+      const evaluate = vi.spyOn(page, "evaluate");
+      const work = control.observe(() =>
+        withCaptureLock({ captureLock: lock.promise, closing: false }, () =>
+          withRefAnnotations(
+            page,
+            "- button [ref=e1] [box=1,1,10,10]",
+            async () => "captured",
+            gate.channel,
+          ),
+        ),
+      );
+      void work.catch(() => undefined);
+      const endSecond = yield* activity.begin(threadId, "run-b");
+      yield* Effect.promise(() => page.goto("https://blocked.test/"));
+      yield* Effect.promise(() => fence.observe(tab, "https://blocked.test/")!);
+      yield* Effect.promise(() => page.goto("https://safe.test/"));
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Effect.promise(() =>
+        work.then(
+          () => null,
+          (cause: unknown) => cause,
+        ),
+      );
+      expect(result).toMatchObject({ reason: "blocked_url" });
+      expect(
+        evaluate.mock.calls.filter(([script]) => String(script).includes("goat-ref-overlay")),
+      ).toEqual([]);
+      expect(fence.isFenced(tab, "run")).toBe(true);
+      expect(fence.isFenced(tab, "run-b")).toBe(true);
+      yield* endFirst;
+      yield* endSecond;
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.effect("an agent action cannot dispatch after its run ends while it waits", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -21,6 +21,7 @@ export class PreviewAgentActivity extends Context.Service<
     readonly begin: (threadId: ThreadId, runId?: string) => Effect.Effect<Effect.Effect<void>>;
     readonly active: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly currentRun: (threadId: ThreadId) => Effect.Effect<string | undefined>;
+    readonly activeRuns: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<string>>;
     readonly isRunActive: (threadId: ThreadId, runId: string) => Effect.Effect<boolean>;
     readonly onRunEnd: (
       handler: (threadId: ThreadId, runId: string) => void,
@@ -73,6 +74,11 @@ const make = Effect.gen(function* () {
     currentRun: Effect.fn("PreviewAgentActivity.currentRun")(function (threadId) {
       return Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].at(-1));
     }),
+    activeRuns: Effect.fn("PreviewAgentActivity.activeRuns")((threadId) =>
+      Effect.sync(() =>
+        [...new Set(turns.get(threadId)?.values() ?? [])].filter((runId) => runId !== undefined),
+      ),
+    ),
     isRunActive: Effect.fn("PreviewAgentActivity.isRunActive")((threadId, runId) =>
       Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].includes(runId)),
     ),

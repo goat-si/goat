@@ -29,6 +29,7 @@ import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { SessionControl } from "./SessionControl.ts";
 
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
@@ -469,10 +470,20 @@ it.effect("a slow blocked popup fences active context tabs before the response a
         quality: 70,
       });
       yield* viewer.input({ type: "takeControl" });
+      const observed = yield* Deferred.make<void>();
+      const cut = SessionControl.prototype.cutBlockedUrl;
+      const spy = vi
+        .spyOn(SessionControl.prototype, "cutBlockedUrl")
+        .mockImplementation(function () {
+          cut.call(this);
+          Deferred.doneUnsafe(observed, Effect.void);
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
       const opening = yield* Effect.promise(() =>
         f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
       ).pipe(Effect.forkChild);
       yield* Deferred.await(f.slowStarted);
+      yield* Deferred.await(observed);
       const result = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
       yield* Deferred.succeed(f.slowGate, undefined);
       yield* Fiber.join(opening);
