@@ -23,6 +23,7 @@ describe("screen run MCP result", () => {
     expect(api).toContain("state values survive later turns");
     expect(api).toContain("targets must be bound again each turn");
     expect(api).toContain("rebinding the same window returns the same target");
+    expect(api).toContain("A refused stale target names why and how to bind it again.");
   });
   it.each([
     { hasApi: false, hasImage: false },
