@@ -416,3 +416,47 @@ it.effect.each(["idle", "stop", "narrow"])(
       assert.include(JSON.stringify(answer), '"retryClass":"never"');
     }),
 );
+
+it.effect.each(["current context then stop", "transport lost then stop", "replacement then stop"])(
+  "Stop reaches an unfinished call after %s",
+  (after) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const h = yield* threadHarness({
+        reservation: (r) =>
+          r.action === "reserve"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as({ status: "admitted", reservationId: "probe-r9" }),
+              )
+            : Effect.succeed(
+                r.action === "validate"
+                  ? {
+                      status: "admitted",
+                      reservationId: r.reservationId,
+                      permissions: { validUntilMillis: 3600000 },
+                    }
+                  : { status: "released" },
+              ),
+      });
+      yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+      yield* h.push(snapshot("A"));
+      yield* h.started;
+      yield* h.applied;
+      yield* h.send(work(990));
+      yield* Deferred.await(entered);
+      yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+      yield* h.started;
+      yield* h.applied;
+      if (after !== "current context then stop") yield* h.push({ state: "transport_lost" });
+      if (after === "replacement then stop") {
+        yield* h.push(snapshot("A"));
+      }
+      yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.next;
+      assert.equal(answer.result?.structuredContent?.code, "stopped_by_person");
+      assert.include(JSON.stringify(answer), '"retryClass":"never"');
+    }),
+);

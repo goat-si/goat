@@ -477,6 +477,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           else if (update.state === "control-ended") {
             seen.add(update.controlId);
             if (update.reason === "stopped" || update.reason === "stopped_all") {
+              for (const owner of owners.values())
+                if (owner.context.controlId === update.controlId)
+                  owner.latch.reason = mergeTerminal(owner.latch, {
+                    reason: "stopped_by_person",
+                  }).reason;
               const latch = controlTerminals.get(update.controlId) ?? {};
               if (current?.controlId !== update.controlId)
                 latch.reason = mergeTerminal(latch, { reason: "stopped_by_person" }).reason;

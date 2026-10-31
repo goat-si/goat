@@ -679,11 +679,20 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   })),
                 ].slice(-64);
                 const classified = cellResultSafety(result);
-                if (classified.error && isScreenRunErrorSchema(classified.error)) {
+                const reason = cellTerminals.get(id);
+                if (
+                  reason !== undefined ||
+                  (classified.error && isScreenRunErrorSchema(classified.error))
+                ) {
                   const receipts = journal.map((entry) => entry.receipt);
-                  failed = { code: classified.error.code, receipts };
+                  const error =
+                    classified.error && isScreenRunErrorSchema(classified.error)
+                      ? classified.error
+                      : fail("stopped");
+                  const merged = cellTerminalError(error, receipts, reason);
+                  failed = { code: merged.code, receipts };
                   return Effect.fail({
-                    ...cellTerminalError(classified.error, receipts, cellTerminals.get(id)),
+                    ...merged,
                     cellId,
                     receipts: receipts.slice(-16),
                     ...cellWindows,

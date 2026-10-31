@@ -162,3 +162,86 @@ it.live.each(["stopped_by_person", "screen_locked"] as const)(
       }
     }),
 );
+
+it.live.each(["lock", "stop", "lock then stop", "stop then lock"])(
+  "successful end-cell collection must preserve a terminal cutoff: %s",
+  (order) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let notify: Parameters<
+        NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+      >[0] = () => {};
+      const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+        Effect.provide(
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            proxy: undefined,
+            onAuthorityChange: (listener) => {
+              notify = listener;
+              return () => {};
+            },
+            releaseForeground: () => Effect.succeed(false),
+          }),
+        ),
+      );
+      const { host } = desktopFixture({});
+      const service = yield* ScreenRunService.pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            leases,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+            dispatcher: {
+              availability: () => Effect.succeed([{ kind: "app", available: true }]),
+              dispatch: () =>
+                Effect.succeed({
+                  category: "confirmed",
+                  value: [],
+                  evidence: ["fixture:apps_read"],
+                }),
+            },
+            desktopHost: {
+              ...host,
+              finishCell: () =>
+                Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(Effect.succeed({})),
+                ),
+            },
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+      const pending = yield* service
+        .runCell({
+          runId: "run-terminal",
+          turnId: "turn-terminal",
+          threadId: "thread",
+          environmentId: "env",
+          invocation,
+          source: "return await screen.list_apps();",
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      const terminal = order === "lock" ? "screen_locked" : "stopped_by_person";
+      const emit = (reason: "screen_locked" | "stopped_by_person") =>
+        notify({
+          kind: reason === "screen_locked" ? "pause" : "stop",
+          threadId: ThreadId.make("thread"),
+          controlId: "control",
+          terminal: reason,
+        });
+      if (order === "lock" || order === "lock then stop") emit("screen_locked");
+      if (order !== "lock") emit("stopped_by_person");
+      if (order === "stop then lock") emit("screen_locked");
+      yield* Deferred.succeed(release, undefined);
+      const answer = yield* Fiber.join(pending);
+      expect(answer._tag).toBe("Failure");
+      if (answer._tag === "Failure") {
+        expect(answer.failure.code).toBe(terminal);
+        expect(answer.failure.safety?.retryClass).toBe("never");
+      }
+    }),
+);
