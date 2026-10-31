@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Fakes the detached Windows cleanup process.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, expect, it } from "@effect/vitest";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -12,7 +14,12 @@ import * as TestConsole from "effect/testing/TestConsole";
 import { afterEach, vi } from "vite-plus/test";
 
 import * as BootService from "../cloud/bootService.ts";
-import { findOwnedLauncher, uninstallCommand } from "./uninstall.ts";
+import { findOwnedLauncher, spawnWindowsRemoval, uninstallCommand } from "./uninstall.ts";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(() => new actual.ChildProcess()) };
+});
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -120,3 +127,24 @@ it.layer(Layer.mergeAll(NodeServices.layer, NetService.layer, TestConsole.layer)
     );
   },
 );
+
+it("passes the Windows removal directory literally with delayed expansion disabled", () => {
+  const spawn = vi.mocked(NodeChildProcess.spawn);
+  spawn.mockClear();
+  const runtimeDir = "C:\\GOAT home %COMSPEC% !COMSPEC! & data\\runtime\\goat";
+  spawnWindowsRemoval("fake-cmd.exe", runtimeDir);
+  expect(spawn).toHaveBeenCalledWith(
+    "fake-cmd.exe",
+    [
+      "/d",
+      "/v:off",
+      "/s",
+      "/c",
+      '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
+    ],
+    expect.objectContaining({
+      env: expect.objectContaining({ GOAT_UNINSTALL_RUNTIME: runtimeDir }),
+      windowsVerbatimArguments: true,
+    }),
+  );
+});
