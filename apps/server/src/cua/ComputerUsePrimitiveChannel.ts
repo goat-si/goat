@@ -225,6 +225,7 @@ export const make = Effect.gen(function* () {
                       ? { _tag: "pause", reason: "screen_locked" }
                       : { _tag: "end", reason: "stopped_all" },
                     pending.request.args,
+                    terminalState,
                   )
                 : refusal(
                     pending.request.callId,
@@ -415,7 +416,7 @@ export const make = Effect.gen(function* () {
       input.expectedConnectionGeneration !== binding.connectionId
     )
       return yield* Effect.fail(
-        terminalFailure(terminal(), input.tool, input.args) ?? {
+        terminalFailure(mergeTerminal({ reason: terminal() }, {}), input.tool, input.args) ?? {
           code: "stale_reference" as const,
           effectStarted: false,
           nextStep: "Bind the desktop app again after the driver reconnects.",
@@ -444,12 +445,18 @@ export const make = Effect.gen(function* () {
     if (!offered) {
       record.pending.delete(request.requestId);
       return yield* Effect.fail(
-        terminalFailure(terminal(), input.tool, input.args) ?? desktopNotReady("unbound"),
+        terminalFailure(mergeTerminal({ reason: terminal() }, {}), input.tool, input.args) ??
+          desktopNotReady("unbound"),
       );
     }
     let timedOut = false;
     const deadlineFailure = () =>
-      terminalFailure(terminal(), input.tool, input.args, pending.sent) ?? {
+      terminalFailure(
+        mergeTerminal({ reason: terminal() }, {}),
+        input.tool,
+        input.args,
+        pending.sent,
+      ) ?? {
         code: "deadline" as const,
         effectStarted: pending.sent,
         nextStep: pending.sent
@@ -756,7 +763,7 @@ export const make = Effect.gen(function* () {
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const previousFailure = terminalFailure(
-          terminalReason(beganEpoch?.reason),
+          mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
           input.tool,
           input.args,
         );
@@ -778,19 +785,29 @@ export const make = Effect.gen(function* () {
               ),
             },
           ).reason;
-          const failure = terminalFailure(terminal, input.tool, input.args);
+          const failure = terminalFailure(
+            mergeTerminal({ reason: terminal }, {}),
+            input.tool,
+            input.args,
+          );
           if (failure !== undefined) return yield* Effect.fail(failure);
         }
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(
-            terminalFailure(terminalReason(beganEpoch?.reason), input.tool, input.args) ??
-              desktopNotReady("none"),
+            terminalFailure(
+              mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
+              input.tool,
+              input.args,
+            ) ?? desktopNotReady("none"),
           );
         began ??= current.controlId;
         if (current.controlId !== began)
           return yield* Effect.fail(
-            terminalFailure(terminalReason(beganEpoch?.reason), input.tool, input.args) ??
-              desktopNotReady("unbound"),
+            terminalFailure(
+              mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
+              input.tool,
+              input.args,
+            ) ?? desktopNotReady("unbound"),
           );
         const value = attachments.get(input.threadId);
         const registered = value?.registration;
@@ -807,7 +824,7 @@ export const make = Effect.gen(function* () {
           waiters.set(beganEpoch, (waiters.get(beganEpoch) ?? 0) + 1);
         }
         const capturedFailure = terminalFailure(
-          terminalReason(beganEpoch?.reason),
+          mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
           input.tool,
           input.args,
         );
@@ -816,7 +833,11 @@ export const make = Effect.gen(function* () {
         if (registered !== undefined && record !== undefined && binding !== undefined) {
           if (deadlineMillis - now < MIN_CALL_MS)
             return yield* Effect.fail(
-              terminalFailure(terminalReason(record.terminal), input.tool, input.args) ?? {
+              terminalFailure(
+                mergeTerminal({ reason: terminalReason(record.terminal) }, {}),
+                input.tool,
+                input.args,
+              ) ?? {
                 code: "deadline" as const,
                 effectStarted: false,
                 nextStep: "This cell has too little time left for this call; run it in a new cell.",
@@ -842,7 +863,7 @@ export const make = Effect.gen(function* () {
         )
           return yield* Effect.fail(
             terminalFailure(
-              mergeTerminal({ reason: record?.terminal }, { reason: beganEpoch?.reason }).reason,
+              mergeTerminal({ reason: record?.terminal }, { reason: beganEpoch?.reason }),
               input.tool,
               input.args,
             ) ?? desktopNotReady("unbound"),

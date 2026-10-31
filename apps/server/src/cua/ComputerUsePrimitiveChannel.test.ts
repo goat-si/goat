@@ -237,7 +237,12 @@ describe("ComputerUsePrimitiveChannel", () => {
     }),
   );
   it("terminal deadlines preserve possible input and never suggest a retry", () => {
-    const failure = terminalFailure("screen_locked", "click", {}, true);
+    const failure = terminalFailure(
+      { reason: "screen_locked", possibleCommit: false },
+      "click",
+      {},
+      true,
+    );
     assert.equal(failure?.safety?.possibleCommit, true);
     assert.equal(failure?.safety?.retryClass, "never");
     assert.notInclude(failure?.nextStep ?? "", "call did not run");

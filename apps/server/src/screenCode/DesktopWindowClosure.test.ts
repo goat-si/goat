@@ -10,7 +10,7 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
   "window closure keeps a terminal %s read failure",
   (reason) =>
     Effect.gen(function* () {
-      const failure = terminalFailure(reason, "list_windows", {});
+      const failure = terminalFailure({ reason, possibleCommit: false }, "list_windows", {});
       if (failure === undefined) return yield* Effect.die("missing terminal failure");
       const result = yield* waitForOutcome({
         status: "satisfied",

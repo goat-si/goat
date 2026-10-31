@@ -76,8 +76,8 @@ export const callTerminalError = (
     { reason: cellReason },
   );
   return terminalFailure(
-    merged.reason,
-    merged.possibleCommit ? "click" : isScreenRead(call.method) ? "list_apps" : call.method,
+    merged,
+    isScreenRead(call.method) ? "list_apps" : call.method,
     call.args,
     dispatched || merged.possibleCommit,
   );
@@ -197,12 +197,7 @@ export const cellTerminalError = (
       possibleCommit: error.effectStarted || error.safety?.possibleCommit,
     },
   );
-  const terminal = terminalFailure(
-    merged.reason,
-    merged.possibleCommit ? "click" : "list_apps",
-    {},
-    merged.possibleCommit,
-  );
+  const terminal = terminalFailure(merged, "list_apps", {}, merged.possibleCommit);
   if (terminal === undefined) return assessed;
   const safety =
     assessed.safety ??

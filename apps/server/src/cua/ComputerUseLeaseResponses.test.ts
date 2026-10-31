@@ -9,12 +9,28 @@ const cause = { _tag: "end", reason: "stopped" } as const;
 describe("cut-off and off-screen answers for menu_bar_extras", () => {
   it("a cut-off list or system read changed nothing; a cut-off open may have acted", () => {
     for (const operation of ["system", "list"]) {
-      const answer = parsed(cutOff(1, "menu_bar_extras", cause, { operation })).result;
+      const answer = parsed(
+        cutOff(
+          1,
+          "menu_bar_extras",
+          cause,
+          { operation },
+          { reason: undefined, possibleCommit: false },
+        ),
+      ).result;
       assert.include(answer.content[0].text, READ_CUT_OFF);
       assert.isUndefined(answer.structuredContent.effect);
       assert.deepInclude(answer.structuredContent.safety, { possibleCommit: false });
     }
-    const opened = parsed(cutOff(1, "menu_bar_extras", cause, { operation: "open" })).result;
+    const opened = parsed(
+      cutOff(
+        1,
+        "menu_bar_extras",
+        cause,
+        { operation: "open" },
+        { reason: undefined, possibleCommit: false },
+      ),
+    ).result;
     assert.include(opened.content[0].text, MAY_HAVE_ACTED);
     assert.equal(opened.structuredContent.effect, "unverifiable");
   });
@@ -44,13 +60,20 @@ it("person stop is terminal and preserves uncertainty for an interrupted write",
   ).result;
   assert.equal(notSent.structuredContent.code, "stopped_by_person");
   assert.equal(notSent.structuredContent.safety.retryClass, "never");
-  const interrupted = parsed(cutOff(2, "click", cause)).result;
+  const interrupted = parsed(
+    cutOff(2, "click", cause, undefined, { reason: undefined, possibleCommit: false }),
+  ).result;
   assert.equal(interrupted.structuredContent.code, "stopped_by_person");
   assert.isTrue(interrupted.structuredContent.safety.possibleCommit);
-  const interruptedRead = parsed(cutOff(3, "list_windows", cause)).result;
+  const interruptedRead = parsed(
+    cutOff(3, "list_windows", cause, undefined, { reason: undefined, possibleCommit: false }),
+  ).result;
   assert.equal(interruptedRead.structuredContent.safety.retryClass, "never");
   const stoppedAll = parsed(
-    cutOff(4, "list_windows", { _tag: "end", reason: "stopped_all" }),
+    cutOff(4, "list_windows", { _tag: "end", reason: "stopped_all" }, undefined, {
+      reason: undefined,
+      possibleCommit: false,
+    }),
   ).result;
   assert.equal(stoppedAll.structuredContent.code, "stopped_by_person");
   assert.equal(stoppedAll.structuredContent.safety.retryClass, "never");
@@ -58,7 +81,12 @@ it("person stop is terminal and preserves uncertainty for an interrupted write",
 
 it("screen lock never retries interrupted reads or writes", () => {
   for (const tool of ["list_windows", "click"]) {
-    const answer = parsed(cutOff(5, tool, { _tag: "pause", reason: "screen_locked" })).result;
+    const answer = parsed(
+      cutOff(5, tool, { _tag: "pause", reason: "screen_locked" }, undefined, {
+        reason: undefined,
+        possibleCommit: false,
+      }),
+    ).result;
     assert.equal(answer.structuredContent.code, "screen_locked");
     assert.equal(answer.structuredContent.safety.retryClass, "never");
   }

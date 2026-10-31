@@ -251,12 +251,7 @@ export const primitiveReplySink = (
       mergeTerminal(terminalReplyState(rawResult, status), terminalErrorState(envelope?.error)),
       context?.terminalState?.() ?? {},
     );
-    const failure = terminalFailure(
-      terminal.reason,
-      terminal.possibleCommit ? "click" : request.tool,
-      request.args,
-      terminal.possibleCommit,
-    );
+    const failure = terminalFailure(terminal, request.tool, request.args, terminal.possibleCommit);
     return yield* (
       reply?.({
         requestId: request.requestId,

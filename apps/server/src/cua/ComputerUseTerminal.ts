@@ -37,16 +37,20 @@ export const mergeTerminal = (
 export type ComputerUseTerminalState = ReturnType<typeof mergeTerminal>;
 
 export const terminalFailure = (
-  reason: ComputerUseTerminalReason | undefined,
+  state: ComputerUseTerminalState,
   tool: string,
   args: unknown,
   dispatched = false,
 ): ScreenRunError | undefined => {
+  const reason = state.reason;
   if (reason === undefined) return undefined;
+  const mayHaveInput = state.possibleCommit;
+  dispatched = dispatched || mayHaveInput;
+  const read = !mayHaveInput && isReadOnlyCall(tool, args);
   const safety: ActionOutcomeSafety = dispatched
     ? {
         ...classifyActionOutcome({
-          effect: isReadOnlyCall(tool, args) ? "read" : "write",
+          effect: read ? "read" : "write",
           status: "indeterminate",
           dispatched: true,
         }),
@@ -57,7 +61,7 @@ export const terminalFailure = (
     code: reason,
     effectStarted: safety.possibleCommit,
     nextStep: dispatched
-      ? `${isReadOnlyCall(tool, args) ? "This read was interrupted before it answered." : MAY_HAVE_ACTED} ${reason === "screen_locked" ? `${PAUSE_STATE.screen_locked}. ${PAUSE_NEXT.screen_locked}` : LEASE_END_MESSAGES.stopped}`
+      ? `${read ? "This read was interrupted before it answered." : MAY_HAVE_ACTED} ${reason === "screen_locked" ? `${PAUSE_STATE.screen_locked}. ${PAUSE_NEXT.screen_locked}` : LEASE_END_MESSAGES.stopped}`
       : reason === "screen_locked"
         ? PAUSE_MESSAGES.screen_locked
         : LEASE_END_MESSAGES.stopped,
@@ -134,11 +138,6 @@ export const terminalErrorState = (value: unknown) => {
     terminalReplyState({ isError: true, structuredContent: error.value.data }),
   );
 };
-
-export const terminalReplyReason = (
-  value: unknown,
-  status?: "settled" | "not_started" | "unknown_outcome",
-): ComputerUseTerminalReason | undefined => terminalReplyState(value, status).reason;
 
 export const terminalReason = (
   latched: ComputerUseTerminalReason | undefined,

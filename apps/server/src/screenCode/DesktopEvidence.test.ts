@@ -15,7 +15,7 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
     Effect.gen(function* () {
       const tracker = new CellWindowTracker();
       tracker.recordBefore(42, undefined);
-      const failure = terminalFailure(reason, "list_windows", {});
+      const failure = terminalFailure({ reason, possibleCommit: false }, "list_windows", {});
       if (failure === undefined) return yield* Effect.die("missing terminal failure");
       const result = yield* finishCellTracker(
         { tracker, connectionGeneration: "driver:one" },

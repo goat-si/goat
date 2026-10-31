@@ -222,7 +222,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       }
       const refuse = request.sink.answer(
         request.method === "tools/call"
-          ? cutOff(request.id, request.tool, cause, request.args)
+          ? cutOff(request.id, request.tool, cause, request.args, {
+              reason: undefined,
+              possibleCommit: false,
+            })
           : refusal(request.id, request.method, interruptionDetail(cause), message),
         request.sink === providerSink ? undefined : "unknown_outcome",
       );

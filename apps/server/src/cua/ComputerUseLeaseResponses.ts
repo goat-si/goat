@@ -22,6 +22,7 @@ import {
 } from "./ComputerUseLeaseMessages.ts";
 
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
+import { mergeTerminal, type ComputerUseTerminalState } from "./ComputerUseTerminal.ts";
 import type { Stopping } from "./leaseUpdateFences.ts";
 
 export type JsonRpcId = string | number;
@@ -109,11 +110,31 @@ export const interruptionRefusal = (cause: Interruption) =>
 export const cutOff = (
   id: JsonRpcId,
   tool: string | undefined,
-  cause: Interruption,
-  args?: unknown,
-  possibleInput = false,
+  originalCause: Interruption,
+  args: unknown,
+  state: ComputerUseTerminalState,
 ) => {
-  const read = !possibleInput && isReadOnlyCall(tool, args);
+  const reason = mergeTerminal(state, {
+    reason:
+      originalCause._tag === "pause" && originalCause.reason === "screen_locked"
+        ? "screen_locked"
+        : originalCause._tag === "end" &&
+            (originalCause.reason === "stopped" || originalCause.reason === "stopped_all")
+          ? "stopped_by_person"
+          : undefined,
+  }).reason;
+  const cause: Interruption =
+    reason === "stopped_by_person" &&
+    !(
+      originalCause._tag === "end" &&
+      (originalCause.reason === "stopped" || originalCause.reason === "stopped_all")
+    )
+      ? { _tag: "end", reason: "stopped" }
+      : reason === "screen_locked" &&
+          !(originalCause._tag === "pause" && originalCause.reason === "screen_locked")
+        ? { _tag: "pause", reason: "screen_locked" }
+        : originalCause;
+  const read = !state.possibleCommit && isReadOnlyCall(tool, args);
   const outcomeSafety = classifyActionOutcome({
     effect: read ? "read" : "write",
     status: "indeterminate",

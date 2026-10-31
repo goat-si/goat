@@ -68,7 +68,7 @@ export const finalTerminalLine = (
   const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
   return {
     line: merged.possibleCommit
-      ? cutOff(message.id, tool, cause, message.params?.arguments, true)
+      ? cutOff(message.id, tool, cause, message.params?.arguments, merged)
       : refusal(
           message.id,
           message.method,

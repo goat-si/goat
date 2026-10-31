@@ -259,9 +259,13 @@ export class ScreenHostBridge {
     )
       return deny(
         terminalFailure(
-          state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
-            ? state.cutoffReason
-            : undefined,
+          {
+            reason:
+              state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
+                ? state.cutoffReason
+                : undefined,
+            possibleCommit: false,
+          },
           isScreenRead(call.method) ? "list_apps" : call.method,
           call.args,
         ) ?? {
@@ -628,7 +632,7 @@ export class ScreenHostBridge {
       const terminal =
         state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
           ? terminalFailure(
-              state.cutoffReason,
+              { reason: state.cutoffReason, possibleCommit: false },
               isScreenRead(call.method) ? "list_apps" : call.method,
               call.args,
               dispatched,

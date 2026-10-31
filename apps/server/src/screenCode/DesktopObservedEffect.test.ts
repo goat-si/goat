@@ -16,7 +16,7 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
   "a terminal %s during tree confirmation preserves prior input uncertainty",
   (reason) =>
     Effect.gen(function* () {
-      const failure = terminalFailure(reason, "get_window_state", {});
+      const failure = terminalFailure({ reason, possibleCommit: false }, "get_window_state", {});
       if (failure === undefined) return yield* Effect.die("expected terminal failure");
       const result = yield* confirmByTree(
         { category: "suspected_noop" },
