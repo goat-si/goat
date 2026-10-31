@@ -13448,7 +13448,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ),
       );
     },
-  }).pipe(Effect.forkDetach);
+  }).pipe(Effect.forkScoped);
 
   const recoverDelegatedTasks = Effect.gen(function* () {
     yield* projectionStore.getRecoveryThreadIds("subagent-results").pipe(
