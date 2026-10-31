@@ -60,6 +60,7 @@ import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
 import { makeProxyBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
+import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -515,6 +516,37 @@ const claimGate = (name: string, args: object, expected: string, authority?: "cl
     assert.include(gated.refused, expected);
     return finalFresh(gated.refused, input);
   });
+const claimUnsupported: Driver = (input) =>
+  Effect.gen(function* () {
+    const line = yield* makeProxyBrowserClaims().unsupported(
+      { claimId: "claim", claimGeneration: 1, origins: "[]", pid: 55 },
+      () => Effect.succeed(false),
+      1,
+      "tools/call",
+    );
+    if (line === undefined) return yield* Effect.die("expected unsupported claim refusal");
+    assert.include(line, "does not support browser claims");
+    return finalFresh(line, input);
+  });
+const admissionRefusal = (scope: boolean): Driver =>
+  sync((input) => {
+    const decision = scope
+      ? {
+          status: "admitted" as const,
+          permissions: { apps: ["approved"], validUntilMillis: 60_000 },
+        }
+      : { status: "refused" as const, detail: "screen_shared" as const };
+    const admitted = proxyCallAdmission(
+      1,
+      proxyMessage("click", { pid: 55, window_id: 7 }),
+      decision,
+      new Map([[55, { id: "other", name: "Other" }]]),
+      false,
+    );
+    if (admitted.refused === undefined) throw new Error("expected admission refusal");
+    assert.include(admitted.refused, scope ? "app_not_approved" : "screen_shared");
+    return finalFresh(admitted.refused, input);
+  });
 const proxyRefusal =
   (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>, detail: string): Driver =>
   (input) =>
@@ -537,6 +569,21 @@ const sites: ReadonlyArray<{
   readonly run: Driver;
   readonly undispatched?: boolean;
 }> = [
+  {
+    name: "ComputerUseLeaseCallPermissions.admission",
+    undispatched: true,
+    run: admissionRefusal(false),
+  },
+  {
+    name: "ComputerUseLeaseCallPermissions.scope",
+    undispatched: true,
+    run: admissionRefusal(true),
+  },
+  {
+    name: "ComputerUseLeaseProxyBrowserClaims.unsupported",
+    undispatched: true,
+    run: claimUnsupported,
+  },
   {
     name: "ComputerUseLeaseProxyPrimitive.staleGeneration",
     undispatched: true,
