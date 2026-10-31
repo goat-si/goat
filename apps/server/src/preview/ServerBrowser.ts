@@ -97,6 +97,12 @@ import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
+import {
+  applyRendering,
+  applySetting,
+  broadcastViewport,
+  UNATTACHED_FILL_VIEWPORT,
+} from "./ServerBrowserRendering.ts";
 import { inputFence } from "./PreviewInputFence.ts";
 import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
 import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowserClipboard.ts";
@@ -106,7 +112,7 @@ import { pushBounded } from "./boundedBuffer.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { READ_OPERATIONS } from "./readOperations.ts";
-import { inPageFetch } from "./inPageFetch.ts";
+import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
 import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
 import { secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
@@ -144,7 +150,6 @@ const AGENT_CURSOR_CLICK_LEAD_MS = 40;
 const sleepUntil = (deadline: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
 
-const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
 const ACTION_TIMELINE_LIMIT = 50;
@@ -520,68 +525,6 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-  };
-
-  const layoutSize = (tab: ServerTab) => {
-    const size = tab.page.viewportSize();
-    if (!size || tab.desktop) return size;
-    return {
-      width: Math.max(1, Math.round(size.width / tab.zoomFactor)),
-      height: Math.max(1, Math.round(size.height / tab.zoomFactor)),
-    };
-  };
-
-  const applyZoom = async (tab: ServerTab) => {
-    if (tab.desktop) return;
-    const size = tab.page.viewportSize();
-    if (!size) return;
-    if (tab.zoomFactor === 1) {
-      await tab.page.setViewportSize(size);
-      return;
-    }
-    const layout = layoutSize(tab)!;
-    await tab.cdp.send("Emulation.setDeviceMetricsOverride", {
-      width: layout.width,
-      height: layout.height,
-      deviceScaleFactor: RENDER_SCALE * tab.zoomFactor,
-      mobile: false,
-    });
-  };
-
-  const broadcastViewport = (tab: ServerTab) => {
-    const size = layoutSize(tab);
-    if (!size) return;
-    for (const viewer of tab.viewers) viewer.push({ _tag: "viewport", ...size });
-  };
-
-  const applySetting = async (tab: ServerTab, setting: PreviewViewportSetting) => {
-    tab.setting = setting;
-
-    if (tab.desktop) return;
-    const size =
-      fixedViewportSize(setting) ??
-      [...tab.viewers]
-        .map((viewer) => viewer.requestedSize)
-        .filter((requested) => requested !== null)
-        .sort((left, right) => right.order - left.order)[0] ??
-      UNATTACHED_FILL_VIEWPORT;
-    await tab.page.setViewportSize({ width: size.width, height: size.height });
-    await applyZoom(tab);
-    broadcastViewport(tab);
-  };
-
-  const applyRendering = async (tab: ServerTab, snapshot: PreviewSessionSnapshot) => {
-    const colorScheme = snapshot.colorScheme ?? "system";
-    if (colorScheme !== tab.colorScheme) {
-      tab.colorScheme = colorScheme;
-      await tab.page.emulateMedia({ colorScheme: colorScheme === "system" ? null : colorScheme });
-    }
-    const zoomFactor = snapshot.zoomFactor ?? 1;
-    if (zoomFactor !== tab.zoomFactor && !tab.desktop) {
-      tab.zoomFactor = zoomFactor;
-      await applyZoom(tab);
-      broadcastViewport(tab);
-    }
   };
 
   const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
@@ -1844,7 +1787,8 @@ const make = Effect.gen(function* () {
     const input = request.input;
     await secretFill.guard(tab, request);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
-    const actionGate = () => tabActionGate(tab, request, blockedTabs, deadlineMs, signal);
+    const actionGate = (destination?: string) =>
+      tabActionGate(tab, request, blockedTabs, deadlineMs, signal, destination);
     switch (request.operation) {
       case "back":
       case "forward":
@@ -1874,20 +1818,24 @@ const make = Effect.gen(function* () {
       }
       case "resize": {
         const setting = resolvePreviewViewport(input as PreviewAutomationResizeInput);
+        const gate = actionGate();
+        await gate();
         await runPromise(
           manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
         );
         const sized = await AgentTabState.measuredResize(tab, UNATTACHED_FILL_VIEWPORT, () =>
-          applySetting(tab, setting),
+          applySetting(tab, setting, gate.channel),
         );
         return { tabId: tab.tabId, setting, ...sized(setting) };
       }
       case "setColorScheme": {
         const { colorScheme } = input as PreviewAutomationSetColorSchemeInput;
+        const gate = actionGate();
+        await gate();
         const snapshot = await runPromise(
           manager.adjust({ threadId: tab.threadId, tabId: tab.tabId, colorScheme }),
         );
-        await applyRendering(tab, snapshot);
+        await applyRendering(tab, snapshot, gate.channel);
         return { tabId: tab.tabId, colorScheme };
       }
       case "read":
@@ -1919,11 +1867,18 @@ const make = Effect.gen(function* () {
         return secretFill.signInState(tab, tab.threadId);
       case "fetch": {
         const fetchInput = input as PreviewAutomationFetchInput;
-        return inPageFetch(tab.page, tab.control, {
-          ...fetchInput,
-          timeoutMs: fetchInput.timeoutMs ?? request.timeoutMs,
-          deadline: deadlineMs,
-        });
+        const destination = resolveFetchUrl(fetchInput.url, tab.page.url());
+        await blockedTabs.assertTab(tab, request.runId, destination);
+        return inPageFetch(
+          tab.page,
+          tab.control,
+          {
+            ...fetchInput,
+            timeoutMs: fetchInput.timeoutMs ?? request.timeoutMs,
+            deadline: deadlineMs,
+          },
+          actionGate(destination),
+        );
       }
       case "scrollCollect":
         return recordAction(tab, "scrollCollect", () =>

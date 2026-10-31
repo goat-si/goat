@@ -521,3 +521,72 @@ it.effect("a blocked popup at the tab limit still fences its opener", () =>
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+it.effect("fetch on a fenced tab sends no new HTTP request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      const result = yield* f
+        .call(f.tabId, "fetch", { url: `${f.allowed}/fetch-fenced` })
+        .pipe(Effect.result);
+      blocked(result);
+      expect(f.hits.some((hit) => hit.endsWith("/fetch-fenced"))).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("fetch to a blocked destination sends no HTTP request", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const result = yield* f
+        .call(f.tabId, "fetch", { url: `${f.blocked}/fetch-blocked` })
+        .pipe(Effect.result);
+      blocked(result);
+      expect(f.hits.some((hit) => hit.endsWith("/fetch-blocked"))).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a blocked visit during resize prevents a second viewport command", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(resume).pipe(Effect.tap(() => Effect.sync(latch.resolve))),
+      );
+      const original = f.page.setViewportSize.bind(f.page);
+      const viewport = vi.spyOn(f.page, "setViewportSize").mockImplementation(async (size) => {
+        await original(size);
+        Deferred.doneUnsafe(entered, Effect.void);
+        await latch.promise;
+      });
+      const resize = yield* f
+        .call(f.tabId, "resize", { mode: "freeform", width: 900, height: 700 })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      const taking = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkChild);
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(resize);
+      yield* Fiber.join(taking);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure).toMatchObject({ reason: "blocked_url" });
+      expect(viewport).toHaveBeenCalledOnce();
+    }),
+  ).pipe(Effect.provide(layer)),
+);

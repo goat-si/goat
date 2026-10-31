@@ -4,7 +4,6 @@ export const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]>
   "status",
   "snapshot",
   "logs",
-  "fetch",
   "read",
   "waitFor",
   "signInState",

@@ -14,7 +14,7 @@ interface Fence {
   readonly assertTab: (tab: Tab, runId: string | undefined, url?: string) => Promise<void>;
   readonly gate: (tab: Tab, runId: string | undefined, base: DispatchGate) => DispatchGate;
   readonly isFenced: (tab: Tab, runId: string | undefined) => boolean;
-  readonly blockedFrame: (tab: Tab, runId: string | undefined) => boolean;
+  readonly blockedFrame: (tab: Tab, runId: string | undefined, destination?: string) => boolean;
 }
 
 export const tabActionGate = (
@@ -23,6 +23,7 @@ export const tabActionGate = (
   fence: Fence,
   deadline: number,
   signal?: AbortSignal,
+  destination?: string,
 ) => {
   if (!signal) throw new BrowserControlInterrupted("The agent action has no cancellation signal.");
   const generation = tab.control.generation;
@@ -37,7 +38,7 @@ export const tabActionGate = (
       tab.control.assertObservedGeneration(generation);
     },
     isFenced: () => fence.isFenced(tab, request.runId),
-    blockedFrame: () => fence.blockedFrame(tab, request.runId),
+    blockedFrame: () => fence.blockedFrame(tab, request.runId, destination),
   });
   return Object.assign(fence.gate(tab, request.runId, base), { deadline, signal, channel });
 };

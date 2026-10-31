@@ -143,10 +143,14 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   };
   const isFenced = (tab: Tab, runId: string | undefined) =>
     runId !== undefined && entries.has(entryKey(keyOf(tab), runId));
-  const blockedFrame = (tab: Tab, runId: string | undefined) => {
+  const blockedFrame = (tab: Tab, runId: string | undefined, destination?: string) => {
     if (!settings.blockedBrowserHostsSnapshot) throw new Error("Blocked-host snapshot unavailable");
     const hosts = runSync(settings.blockedBrowserHostsSnapshot);
-    if (!tab.page.frames().some((frame) => isBlockedBrowserUrl(frame.url(), hosts))) return false;
+    if (
+      !tab.page.frames().some((frame) => isBlockedBrowserUrl(frame.url(), hosts)) &&
+      !(destination && isBlockedBrowserUrl(destination, hosts))
+    )
+      return false;
     if (runId && active(tab.threadId, runId))
       entries.set(entryKey(keyOf(tab), runId), { threadId: tab.threadId, runId });
     tab.control?.cutBlockedUrl();
