@@ -111,7 +111,7 @@ import { watchPrivateMode } from "./PreviewPrivateMode.ts";
 import { pushBounded } from "./boundedBuffer.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
-import { READ_OPERATIONS } from "./readOperations.ts";
+import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
 import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
 import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
@@ -1698,7 +1698,8 @@ const make = Effect.gen(function* () {
     }
     const tab = await requireTab(request);
     const mutating = !READ_OPERATIONS.has(request.operation);
-    if (mutating && request.operation !== "close") await blockedTabs.assertTab(tab, request.runId);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation))
+      await blockedTabs.assertTab(tab, request.runId);
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     if (mutating && !tab.control.agentMayAct(request.agentSessionId ?? ""))
       throw new BrowserControlInterrupted(
@@ -1740,6 +1741,7 @@ const make = Effect.gen(function* () {
     // or any tab a human drives, its own included) observes instead of queueing.
     if (READ_OPERATIONS.has(request.operation) && !tab.control.agentCanActNow(agentSessionId)) {
       return tab.control.observe(async () => {
+        await blockedTabs.assertTab(tab, request.runId);
         if (tab.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"}.',
@@ -1751,8 +1753,7 @@ const make = Effect.gen(function* () {
     return tab.control.agent(
       agentSessionId,
       async (signal) => {
-        if (!READ_OPERATIONS.has(request.operation))
-          await blockedTabs.assertTab(tab, request.runId);
+        await blockedTabs.assertTab(tab, request.runId);
         if (tab.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',

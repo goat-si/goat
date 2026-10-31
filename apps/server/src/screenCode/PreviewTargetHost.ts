@@ -405,6 +405,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const page = yield* broker
           .invoke({
             scope: context.invocation,
+            runId: context.runId,
             operation: "read",
             input: { ...read.input, ...(scope ? { scope } : {}) },
             exact: exact(bound.tab, false),
@@ -810,6 +811,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const waited = yield* broker
           .invoke({
             scope: context.invocation,
+            runId: context.runId,
             operation: "waitFor",
             input,
             // A wait only reads, so it watches whatever document the tab holds, on any origin.

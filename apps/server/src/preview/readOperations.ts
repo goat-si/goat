@@ -8,3 +8,7 @@ export const READ_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]>
   "waitFor",
   "signInState",
 ]);
+
+// Status reports state, while close and recordingStop let the agent end resources.
+export const FENCED_ALLOWED_OPERATIONS: ReadonlySet<PreviewAutomationRequest["operation"]> =
+  new Set(["status", "close", "recordingStop"]);

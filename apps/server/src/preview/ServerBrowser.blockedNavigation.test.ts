@@ -45,6 +45,10 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       contexts.push(context);
       return context;
     }
+    async scratchPage() {
+      browser ??= await chromium.launch({ headless: true });
+      return browser.newPage();
+    }
     async close() {
       for (const context of contexts.splice(0)) await context.close();
       await browser?.close();
@@ -587,6 +591,82 @@ it.effect("a blocked visit during resize prevents a second viewport command", ()
       if (result._tag === "Failure")
         expect(result.failure).toMatchObject({ reason: "blocked_url" });
       expect(viewport).toHaveBeenCalledOnce();
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect.each([
+  ["open", { reuseExistingTab: true, show: false }],
+  ["navigate", { url: "http://127.0.0.1/" }],
+  ["snapshot", { captureImage: false }],
+  ["click", { x: 1, y: 1 }],
+  ["type", { text: "x" }],
+  ["press", { key: "Enter" }],
+  ["scroll", { deltaY: 1 }],
+  ["evaluate", { expression: "1" }],
+  ["waitFor", { text: "next" }],
+  ["recordingStart", {}],
+  ["resize", { mode: "freeform", width: 800, height: 600 }],
+  ["setColorScheme", { colorScheme: "dark" }],
+  ["claim", {}],
+  ["dialog", { accept: true }],
+  ["upload", { paths: [] }],
+  ["hover", { x: 1, y: 1 }],
+  ["select", { locator: "#next", values: [] }],
+  ["drag", { from: { x: 1, y: 1 }, to: { x: 2, y: 2 } }],
+  ["back", {}],
+  ["forward", {}],
+  ["reload", {}],
+  ["logs", {}],
+  ["fetch", { url: "/probe" }],
+  ["scrollCollect", { url: "/probe" }],
+  ["fillSecret", {}],
+  ["read", {}],
+  ["signInState", {}],
+] as const)("a fenced tab refuses %s before browser commands", ([operation, input]) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      const evaluate = vi.spyOn(f.page, "evaluate");
+      const evaluateHandle = vi.spyOn(f.page, "evaluateHandle");
+      const navigate = vi.spyOn(f.page, "goto");
+      const hits = f.hits.length;
+      const result = yield* f.call(f.tabId, operation, input).pipe(Effect.result);
+      blocked(result);
+      expect(evaluate).not.toHaveBeenCalled();
+      expect(evaluateHandle).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalled();
+      expect(f.hits).toHaveLength(hits);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("status and close remain available after a tab is fenced", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      expect((yield* f.call(f.tabId, "status", {}).pipe(Effect.result))._tag).toBe("Success");
+      expect((yield* f.call(f.tabId, "close", {}).pipe(Effect.result))._tag).toBe("Success");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("recordingStop can finish an active recording after a tab is fenced", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      expect((yield* f.call(f.tabId, "recordingStart", {}).pipe(Effect.result))._tag).toBe(
+        "Success",
+      );
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
+      expect((yield* f.call(f.tabId, "recordingStop", {}).pipe(Effect.result))._tag).toBe(
+        "Success",
+      );
     }),
   ).pipe(Effect.provide(layer)),
 );
