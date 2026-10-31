@@ -41,6 +41,7 @@ import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollecti
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
+  appendCellNotices,
   cellResultSafety,
   cellTerminalError,
   completionCellError,
@@ -670,13 +671,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
               (cellWindows) => {
                 const notices = cleanupJournal.get(id) ?? [];
                 cleanupJournal.delete(id);
-                const journal = [
-                  ...result.journal,
-                  ...notices.map((entry, index) => ({
-                    ...entry,
-                    sequence: result.journal.length + index + 1,
-                  })),
-                ].slice(-64);
+                const journal = appendCellNotices(result.journal, notices);
                 const classified = cellResultSafety(result);
                 const receipts = journal.map((entry) => entry.receipt);
                 const merged = completionCellError(

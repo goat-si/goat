@@ -4,6 +4,7 @@ import type {
   ScreenHostCall,
   ScreenRunError,
   ScreenRunResult,
+  ScreenJournalEntry,
 } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { ScreenRunError as ScreenRunErrorSchema } from "@goat/contracts";
@@ -195,6 +196,15 @@ export const completionCellError = (
     reason,
   );
 };
+
+export const appendCellNotices = (
+  journal: readonly ScreenJournalEntry[],
+  notices: readonly ScreenJournalEntry[],
+) =>
+  [
+    ...journal,
+    ...notices.map((entry, index) => ({ ...entry, sequence: journal.length + index + 1 })),
+  ].slice(-64);
 
 export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
   result.error === undefined
