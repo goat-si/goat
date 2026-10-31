@@ -158,6 +158,17 @@ const pageResult = (
 const contextDestroyed = (cause: unknown) =>
   cause instanceof Error && cause.message.includes("Execution context was destroyed");
 
+const changedPage = (cause: unknown) =>
+  cause instanceof Error &&
+  "detail" in cause &&
+  typeof cause.detail === "object" &&
+  cause.detail !== null &&
+  "reason" in cause.detail &&
+  cause.detail.reason === "pageChanged";
+
+/** Reads in all: a replaced document is read once more, and frames that came or went (ad slots do) twice more. */
+const MAX_READS = 4;
+
 /** Resolves on the first frame navigation since it was created, bounded by the read's deadline. */
 const watchNavigation = (page: Page) => {
   let seen = false;
@@ -194,10 +205,12 @@ export const pageRead = (
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
     const tracker = attachNetworkTracker(page);
     const deadline = Date.now() + (input.timeoutMs ?? 10_000);
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let navigations = 0;
+    for (let attempt = 0; attempt < MAX_READS; attempt++) {
       const navigation = watchNavigation(page);
       const documentId = tracker.state().documentId;
       const initialUrl = page.url();
+      const frames = page.frames();
       try {
         const { read } = await openReaders(page, cdp);
         const before = await read().catch(() => {
@@ -288,9 +301,17 @@ export const pageRead = (
       } catch (cause) {
         // A replaced document can destroy its context before its navigation event arrives here.
         const destroyed = contextDestroyed(cause);
-        if (!destroyed && tracker.state().documentId === documentId && page.url() === initialUrl)
-          throw cause;
-        if (attempt === 1 || Date.now() >= deadline) throw readFailure("pageChanged");
+        if (!destroyed && tracker.state().documentId === documentId && page.url() === initialUrl) {
+          // The secret readers cover the frames that were there; new readers cover the ones there now.
+          const now = page.frames();
+          const framesChanged =
+            now.length !== frames.length || now.some((frame, i) => frame !== frames[i]);
+          if (!framesChanged || !changedPage(cause) || attempt === MAX_READS - 1) throw cause;
+          if (Date.now() >= deadline) throw cause;
+          continue;
+        }
+        if (++navigations > 1 || attempt === MAX_READS - 1 || Date.now() >= deadline)
+          throw readFailure("pageChanged");
         if (destroyed) await navigation.next(Math.max(1, deadline - Date.now()));
         await page
           .waitForLoadState("load", { timeout: Math.max(1, deadline - Date.now()) })

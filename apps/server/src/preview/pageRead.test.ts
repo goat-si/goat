@@ -421,3 +421,17 @@ it("withholds a scoped frame read when its secret reader never answers", () =>
       read({ scope: { selector: "iframe >> internal:control=enter-frame >> main" } }),
     ).rejects.toMatchObject({ detail: { reason: "pageChanged" } });
   }));
+
+it("reads again with the frames there now when a frame appears during the read", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Headline</main>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    // As an ad slot does: a frame the read's secret readers did not open for.
+    await page.evaluate(
+      "document.body.append(Object.assign(document.createElement('iframe'), { srcdoc: '<p>Ad</p>' }))",
+    );
+    const result = await reading;
+    expect(result.text).toContain("Headline");
+  }));
