@@ -1,7 +1,15 @@
 import * as Schema from "effect/Schema";
 import type { ActionOutcomeSafety, ScreenRunError } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
-import { isReadOnlyCall, LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import {
+  isReadOnlyCall,
+  LEASE_END_MESSAGES,
+  PAUSE_MESSAGES,
+  MAY_HAVE_ACTED,
+  READ_CUT_OFF,
+  PAUSE_STATE,
+  PAUSE_NEXT,
+} from "./ComputerUseLeaseMessages.ts";
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 
 export type ComputerUseTerminalReason = "stopped_by_person" | "screen_locked";
@@ -26,8 +34,11 @@ export const terminalFailure = (
   return {
     code: reason,
     effectStarted: safety.possibleCommit,
-    nextStep:
-      reason === "screen_locked" ? PAUSE_MESSAGES.screen_locked : LEASE_END_MESSAGES.stopped,
+    nextStep: dispatched
+      ? `${isReadOnlyCall(tool, args) ? READ_CUT_OFF : MAY_HAVE_ACTED} ${reason === "screen_locked" ? `${PAUSE_STATE.screen_locked}. ${PAUSE_NEXT.screen_locked}` : LEASE_END_MESSAGES.stopped}`
+      : reason === "screen_locked"
+        ? PAUSE_MESSAGES.screen_locked
+        : LEASE_END_MESSAGES.stopped,
     safety,
   };
 };

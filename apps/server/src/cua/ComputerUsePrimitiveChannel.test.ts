@@ -14,6 +14,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+import { terminalFailure } from "./ComputerUseTerminal.ts";
 
 const threadId = ThreadId.make("thread:primitive");
 const controlId = "control:primitive";
@@ -142,6 +143,12 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it("terminal deadlines preserve possible input and never suggest a retry", () => {
+    const failure = terminalFailure("screen_locked", "click", {}, true);
+    assert.equal(failure?.safety?.possibleCommit, true);
+    assert.equal(failure?.safety?.retryClass, "never");
+    assert.notInclude(failure?.nextStep ?? "", "call did not run");
+  });
   it.effect("a terminal proxy refusal preserves its not-started outcome", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
