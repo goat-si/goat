@@ -83,7 +83,7 @@ export const terminalFailure = (
 
 const decodeTerminalReply = Schema.decodeUnknownOption(
   Schema.Struct({
-    isError: Schema.optionalKey(Schema.Boolean),
+    isError: Schema.optionalKey(Schema.Unknown),
     structuredContent: Schema.Struct({
       code: Schema.optionalKey(Schema.Unknown),
       refusal: Schema.optionalKey(Schema.Unknown),
@@ -96,8 +96,8 @@ const decodeRefusal = Schema.decodeUnknownOption(
 );
 const decodeSafety = Schema.decodeUnknownOption(
   Schema.Struct({
-    retryClass: Schema.optionalKey(Schema.String),
-    possibleCommit: Schema.optionalKey(Schema.Boolean),
+    retryClass: Schema.optionalKey(Schema.Unknown),
+    possibleCommit: Schema.optionalKey(Schema.Unknown),
   }),
 );
 

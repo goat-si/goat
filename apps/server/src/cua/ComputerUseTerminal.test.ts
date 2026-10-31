@@ -292,3 +292,24 @@ it.each(["screen_locked", "stopped_by_person"] as const)(
     assert.equal(failure?.safety?.retryClass, "never");
   },
 );
+
+it("preserves possible input when an unrelated retry field is malformed", () => {
+  const reply = {
+    isError: true,
+    structuredContent: { code: "screen_locked", safety: { possibleCommit: true, retryClass: 123 } },
+  };
+  const state = terminalReplyState(reply, "settled");
+  assert.equal(state.reason, "screen_locked");
+  assert.isTrue(state.possibleCommit);
+  assert.isFalse(state.terminalSafety);
+});
+
+it("preserves terminal evidence when a failed reply has a malformed error marker", () => {
+  const reply = {
+    isError: "bad",
+    structuredContent: { code: "screen_locked", safety: { possibleCommit: true } },
+  };
+  const state = terminalReplyState(reply, "unknown_outcome");
+  assert.equal(state.reason, "screen_locked");
+  assert.isTrue(state.possibleCommit);
+});
