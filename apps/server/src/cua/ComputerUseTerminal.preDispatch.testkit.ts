@@ -520,12 +520,43 @@ const cancelledPrimitive = (input: Input) =>
     return finalize(JSON.stringify({ id: 1, result: reply.result }), input);
   });
 
+const replacedAdmission = (input: Input) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    const h = yield* harness({
+      elsewhere: new Set([900]),
+      placementGate: gate,
+      autoAppListing: true,
+    });
+    yield* h.push(active());
+    yield* h.send(call(1, "click", { pid: 10, window_id: 20, x: 1, y: 1 }));
+    yield* h.checking;
+    yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+    yield* h.push(active());
+    yield* h.restarted;
+    yield* Deferred.succeed(gate, undefined);
+    const asked = yield* h.nextToDriver;
+    assert.equal(asked.params?.name, "list_windows");
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: asked.id,
+        result: { content: [], structuredContent: { windows: [{ pid: 10, window_id: 20 }] } },
+      }),
+    );
+    const answer = JSON.stringify(yield* h.nextToProvider);
+    assert.include(answer, '"detail":"waiting_for_human"');
+    return finalize(answer, input);
+  });
+
 export const preDispatchSites: ReadonlyArray<{
   readonly name: string;
   readonly undispatched: true;
   readonly implicitReason?: ComputerUseTerminalReason;
   readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
 }> = [
+  { name: "ComputerUseLeaseProxy.replacedAdmission", undispatched: true, run: replacedAdmission },
   { name: "ComputerUseLeaseProxyThread.reconnecting", undispatched: true, run: reconnecting },
   { name: "ComputerUseLeaseProxy.cancelledPrimitive", undispatched: true, run: cancelledPrimitive },
   {
