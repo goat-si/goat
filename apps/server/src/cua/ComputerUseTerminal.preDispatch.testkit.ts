@@ -25,7 +25,7 @@ import {
   terminalSink,
 } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { forwardPrimitiveRequests } from "./ComputerUseLeaseProxyOptions.ts";
-import { call } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
@@ -398,7 +398,76 @@ const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) 
     return replaceWithTerminal(answer.failure);
   });
 
+const proxyAdmission =
+  (kind: "duplicate" | "incompleteWindow" | "wrongDisplay" | "paused" | "noTicket") =>
+  (input: Input) =>
+    Effect.gen(function* () {
+      const h = yield* harness({
+        autoAppListing: true,
+        ...(kind === "incompleteWindow" || kind === "wrongDisplay"
+          ? { elsewhere: new Set([900]) }
+          : {}),
+        ...(kind === "noTicket"
+          ? {
+              humanInput: true,
+              onAgentInput: () => Effect.void,
+              reservation: (request) =>
+                Effect.succeed(
+                  request.action === "reserve"
+                    ? { status: "admitted", reservationId: null }
+                    : { status: "released" },
+                ),
+            }
+          : {}),
+      });
+      yield* h.push(active());
+      if (kind === "duplicate") {
+        yield* h.send(call(1, "list_apps"));
+        yield* h.nextToDriver;
+        yield* h.send(call(1, "list_apps"));
+      } else if (kind === "paused") {
+        yield* h.push({ state: "paused", controlId: CONTROL, reason: "takeover" });
+        yield* h.send(call(1, "list_apps"));
+      } else {
+        const args =
+          kind === "incompleteWindow"
+            ? { window_id: 5 }
+            : kind === "wrongDisplay"
+              ? { pid: 900, window_id: 5 }
+              : { pid: 4, window_id: 9 };
+        yield* h.send(call(1, "click", args));
+      }
+      const answer = JSON.stringify(yield* h.nextToProvider);
+      const detail =
+        kind === "duplicate"
+          ? "invalid_target"
+          : kind === "paused"
+            ? "waiting_for_human"
+            : kind === "noTicket"
+              ? "unauthorized"
+              : "wrong_display";
+      assert.include(answer, `"detail":"${detail}"`);
+      return finalize(answer, input);
+    });
+
 export const preDispatchSites = [
+  {
+    name: "ComputerUseLeaseProxy.duplicateId",
+    undispatched: true,
+    run: proxyAdmission("duplicate"),
+  },
+  {
+    name: "ComputerUseLeaseProxy.incompleteWindow",
+    undispatched: true,
+    run: proxyAdmission("incompleteWindow"),
+  },
+  {
+    name: "ComputerUseLeaseProxy.wrongDisplay",
+    undispatched: true,
+    run: proxyAdmission("wrongDisplay"),
+  },
+  { name: "ComputerUseLeaseProxy.paused", undispatched: true, run: proxyAdmission("paused") },
+  { name: "ComputerUseLeaseProxy.noTicket", undispatched: true, run: proxyAdmission("noTicket") },
   {
     name: "ComputerUsePrimitiveChannel.retainedWaiter",
     undispatched: true,
