@@ -381,12 +381,10 @@ it.effect("a standalone listing keeps executable aliases paired with bundle ids"
       Effect.succeed({ capability: "available", reason: "fixture", environment: [] }),
       {
         requestListing: () =>
-          Effect.succeed(
-            Option.some({
-              apps: ["com.example.App", "/opt/app"],
-              catalog: [{ id: "com.example.App", name: "App", executables: ["/opt/app"] }],
-            }),
-          ),
+          Effect.succeedSome({
+            apps: ["com.example.App", "/opt/app"],
+            catalog: [{ id: "com.example.App", name: "App", executables: ["/opt/app"] }],
+          }),
       },
     );
     expect(yield* service.appCatalog).toEqual([

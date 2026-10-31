@@ -136,6 +136,7 @@ export const harness = Effect.fn(function* (
     /** Feeds the proxy the host's cursor events, offered with `cursor`. */
     readonly cursorEvents?: boolean;
     readonly autoAppListing?: boolean;
+    readonly autoToolListing?: boolean;
   } = {},
 ) {
   const input = yield* Queue.unbounded<string, Cause.Done>();
@@ -341,6 +342,7 @@ export const harness = Effect.fn(function* (
               ).pipe(Effect.asVoid);
             if (
               options.autoAppListing === true &&
+              options.autoToolListing !== false &&
               typeof request?.id === "string" &&
               request.id.startsWith("goat-proxy:tools:")
             )

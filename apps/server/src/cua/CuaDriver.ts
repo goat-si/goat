@@ -524,7 +524,9 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       if (!(yield* enabled)) return Option.none();
       const apps = yield* (
         options.listedApps ??
-          standaloneListing.pipe(Effect.map(Option.map((listing) => listing.apps)))
+          standaloneListing.pipe(
+            Effect.map((listing) => Option.map(listing, (value) => value.apps)),
+          )
       );
       return (yield* enabled) ? apps : Option.none();
     }),
