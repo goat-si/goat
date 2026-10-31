@@ -383,12 +383,26 @@ const make = Effect.gen(function* () {
               code: "invalid_request",
               message: `Pass modelSelection: the project has no default model. ${goatCallText("provider.list")} lists providers and models.`,
             });
-          const startedRuntimeMode =
+          const defaultedRuntimeMode =
             projectDefaults !== undefined && input.runtimeMode === undefined
               ? yield* resolveRuntimeMode(runtimeMode, projectDefaults.defaultRuntimeMode).pipe(
                   Effect.orElseSucceed(() => runtimeMode),
                 )
               : runtimeMode;
+          // An explicit mode the provider lacks is refused; an inherited or default one steps
+          // down to the broadest mode the provider offers.
+          const startedRuntimeMode = yield* resolveRuntimeMode(
+            defaultedRuntimeMode,
+            input.runtimeMode === undefined ? undefined : defaultedRuntimeMode,
+            {
+              modelSelection,
+              supportedRuntimeModes: Option.isNone(providerRegistry)
+                ? undefined
+                : (yield* providerRegistry.value.getProviders).find(
+                    (provider) => provider.instanceId === modelSelection.instanceId,
+                  )?.supportedRuntimeModes,
+            },
+          );
           const startsRun = input.message !== undefined || attachments.length > 0;
           yield* checkModelSelection(modelSelection, input.modelSelection !== undefined);
           const adapter = yield* adapters
