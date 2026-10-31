@@ -9,15 +9,19 @@ import {
   type ScreenRunError,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+import { active, call as proxyCall, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
 import { parse } from "./ComputerUseLeaseProtocol.ts";
 import {
   cutOff,
@@ -251,6 +255,95 @@ const received: Driver = (input) =>
       ),
     );
   });
+const interruptedProxy: Driver = (input) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    const h = yield* harness({
+      personStop: true,
+      screenshots: {
+        scrub: (line) => line,
+        admit: (reply) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(reply.line),
+          ),
+      },
+    });
+    yield* h.push(active());
+    yield* h.driverStarted;
+    yield* h.send(proxyCall(1, "list_apps"));
+    yield* h.nextToDriver;
+    const earlier = input.reasons.length > 1 ? input.reasons[0] : "unavailable";
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          isError: true,
+          structuredContent: {
+            code: earlier,
+            effect: "applied",
+            safety: { possibleCommit: input.possible, retryClass: "never" },
+          },
+        },
+      }),
+    );
+    yield* Deferred.await(entered);
+    const last = input.reasons.at(-1);
+    if (last === "stopped_by_person") {
+      yield* h.escape;
+      yield* h.escapeReported;
+    } else yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+    yield* h.killed;
+    const result = yield* h.nextToProvider;
+    return replaceWithTerminal(terminalReplyState(result.result));
+  });
+const threadProxy: Driver = (input) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    const h = yield* threadHarness({
+      screenshots: {
+        scrub: (line) => line,
+        admit: (reply) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(reply.line),
+          ),
+      },
+    });
+    yield* h.push(snapshot("A"));
+    const driver = yield* h.started;
+    yield* h.applied;
+    yield* h.send(proxyCall(1, "list_apps"));
+    yield* Queue.take(driver.sent);
+    const earlier = input.reasons.length > 1 ? input.reasons[0] : "unavailable";
+    yield* Queue.offer(
+      driver.replies,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          isError: true,
+          structuredContent: {
+            code: earlier,
+            effect: "applied",
+            safety: { possibleCommit: input.possible, retryClass: "never" },
+          },
+        },
+      }),
+    );
+    yield* Deferred.await(entered);
+    const last = input.reasons.at(-1);
+    if (last === "stopped_by_person")
+      yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+    else yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    const result = yield* h.next;
+    return replaceWithTerminal(terminalReplyState(result.result));
+  });
 const claims: Driver = (input) =>
   Effect.gen(function* () {
     let line = "";
@@ -401,7 +494,9 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
     ),
   },
   { name: "terminalSink", run: proxy },
-  { name: "ComputerUseLeaseProxy.interrupt", run: received },
+  { name: "ComputerUseLeaseProxy.interrupt", run: interruptedProxy },
+  { name: "ComputerUseLeaseProxyThread.output", run: threadProxy },
+  { name: "ComputerUseLeaseProxyOptions.retainedTerminal", run: received },
   { name: "ComputerUseLeaseProxy.offScreenForRequest", run: offScreen },
   { name: "ComputerUseLeaseProxyBrowserClaims.refuseReply", run: claims },
   { name: "bounded primitive reply", run: compact },
