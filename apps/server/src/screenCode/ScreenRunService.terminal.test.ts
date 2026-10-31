@@ -408,111 +408,124 @@ it.live.each(["lock", "stop", "lock then stop", "stop then lock", "lock then res
     }),
 );
 
-it.live.each(["stop", "lock", "lock then stop", "stop then lock", "lock reply then stop"])(
-  "outbound terminal after final collection: %s",
-  (order) =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void, unknown>();
-      const release = yield* Deferred.make<void>();
-      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
-      const clock = yield* Clock.Clock;
-      let afterCollection = false;
-      let blocked = false;
-      let notify: Parameters<
-        NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
-      >[0] = () => {};
-      const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
-        Effect.provide(
-          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-            proxy: undefined,
-            currentControl: () =>
-              Effect.succeedSome({
-                threadId: ThreadId.make("thread"),
-                controlId: "A",
-                expiresAt: DateTime.makeUnsafe(60000),
+it.live.each([
+  "stop",
+  "lock",
+  "lock then stop",
+  "stop then lock",
+  "lock reply then stop",
+  "finish turn then stop",
+])("outbound terminal after final collection: %s", (order) =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void, unknown>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    const clock = yield* Clock.Clock;
+    let afterCollection = false;
+    let blocked = false;
+    let notify: Parameters<
+      NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+    >[0] = () => {};
+    const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () =>
+            Effect.succeedSome({
+              threadId: ThreadId.make("thread"),
+              controlId: "A",
+              expiresAt: DateTime.makeUnsafe(60000),
+            }),
+          onAuthorityChange: (listener) => {
+            notify = listener;
+            return () => {};
+          },
+          releaseForeground: () => Effect.succeed(false),
+        }),
+      ),
+    );
+    const { host } = desktopFixture({});
+    const service = yield* ScreenRunService.pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          leases,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          desktopHost: {
+            ...host,
+            finishCell: () =>
+              Effect.sync(() => {
+                afterCollection = true;
+                if (order === "lock reply then stop")
+                  notify({
+                    kind: "pause",
+                    threadId: ThreadId.make("thread"),
+                    controlId: "A",
+                    terminal: "screen_locked",
+                  });
+                return {};
               }),
-            onAuthorityChange: (listener) => {
-              notify = listener;
-              return () => {};
-            },
-            releaseForeground: () => Effect.succeed(false),
+          },
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+    const pending = yield* service
+      .runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation,
+        source: "return 1;",
+      })
+      .pipe(
+        Effect.provideService(
+          Clock.Clock,
+          Object.assign(Object.create(clock), {
+            currentTimeMillis: Effect.suspend(() => {
+              if (afterCollection && !blocked) {
+                blocked = true;
+                return Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(clock.currentTimeMillis),
+                );
+              }
+              return clock.currentTimeMillis;
+            }),
           }),
         ),
+        Effect.tapCause((e) => Deferred.fail(entered, e)),
+        Effect.result,
+        Effect.forkChild,
       );
-      const { host } = desktopFixture({});
-      const service = yield* ScreenRunService.pipe(
-        Effect.provide(
-          ScreenRunService.layerWithRuntime({
-            leases,
-            invocation: {
-              command: process.execPath,
-              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-            },
-            assetResolver: () => resolveScreenRuntimeAsset("dev"),
-            desktopHost: {
-              ...host,
-              finishCell: () =>
-                Effect.sync(() => {
-                  afterCollection = true;
-                  if (order === "lock reply then stop")
-                    notify({
-                      kind: "pause",
-                      threadId: ThreadId.make("thread"),
-                      controlId: "A",
-                      terminal: "screen_locked",
-                    });
-                  return {};
-                }),
-            },
-          }).pipe(Layer.provide(NodeServices.layer)),
-        ),
-      );
-      const pending = yield* service
-        .runCell({
-          runId: "r",
-          turnId: "t",
-          threadId: "thread",
-          environmentId: "env",
-          invocation,
-          source: "return 1;",
-        })
-        .pipe(
-          Effect.provideService(
-            Clock.Clock,
-            Object.assign(Object.create(clock), {
-              currentTimeMillis: Effect.suspend(() => {
-                if (afterCollection && !blocked) {
-                  blocked = true;
-                  return Deferred.succeed(entered, undefined).pipe(
-                    Effect.andThen(Deferred.await(release)),
-                    Effect.andThen(clock.currentTimeMillis),
-                  );
-                }
-                return clock.currentTimeMillis;
-              }),
-            }),
-          ),
-          Effect.tapCause((e) => Deferred.fail(entered, e)),
-          Effect.result,
-          Effect.forkChild,
-        );
-      yield* Deferred.await(entered);
-      const emit = (terminal: "stopped_by_person" | "screen_locked") =>
-        notify({
-          kind: terminal === "screen_locked" ? "pause" : "stop",
-          threadId: ThreadId.make("thread"),
-          controlId: "A",
-          terminal,
-        });
-      if (order.startsWith("lock")) emit("screen_locked");
-      if (order.includes("stop")) emit("stopped_by_person");
-      if (order === "stop then lock" || order === "lock") emit("screen_locked");
-      yield* Deferred.succeed(release, undefined);
-      const answer = yield* Fiber.join(pending);
-      expect(answer._tag).toBe("Failure");
-      if (answer._tag === "Failure")
-        expect(answer.failure.code).toBe(order === "lock" ? "screen_locked" : "stopped_by_person");
-    }),
+    yield* Deferred.await(entered);
+    if (order === "finish turn then stop")
+      yield* service.finishTurn({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        reason: "completed",
+      });
+    const emit = (terminal: "stopped_by_person" | "screen_locked") =>
+      notify({
+        kind: terminal === "screen_locked" ? "pause" : "stop",
+        threadId: ThreadId.make("thread"),
+        controlId: "A",
+        terminal,
+      });
+    if (order.startsWith("lock")) emit("screen_locked");
+    if (order.includes("stop")) emit("stopped_by_person");
+    if (order === "stop then lock" || order === "lock") emit("screen_locked");
+    yield* Deferred.succeed(release, undefined);
+    const answer = yield* Fiber.join(pending);
+    expect(answer._tag).toBe("Failure");
+    if (answer._tag === "Failure")
+      expect(answer.failure.code).toBe(order === "lock" ? "screen_locked" : "stopped_by_person");
+  }),
 );
 
 it.effect("the final cell latch preserves possible input from an earlier terminal failure", () =>

@@ -54,6 +54,7 @@ export const finishCellResponse =
     readonly cellId: string;
     readonly cells: ReturnType<typeof makeCellAuthority>;
     readonly terminals: Map<string, ComputerUseTerminalReason>;
+    readonly onFinished?: () => void;
   }) =>
   <R>(
     work: Effect.Effect<
@@ -68,6 +69,7 @@ export const finishCellResponse =
       consumed = true;
       if (options.cells.get(options.id) === options.cellId) options.cells.delete(options.id);
       options.terminals.delete(options.id);
+      options.onFinished?.();
     };
     return work.pipe(
       Effect.result,

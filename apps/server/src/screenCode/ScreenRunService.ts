@@ -737,7 +737,15 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           Effect.ensuring(
             options.primitiveChannel?.cancel(input.runId, input.turnId) ?? Effect.void,
           ),
-          finishCellResponse({ id, cellId, cells: activeCells, terminals: cellTerminals }),
+          finishCellResponse({
+            id,
+            cellId,
+            cells: activeCells,
+            terminals: cellTerminals,
+            onFinished: () => {
+              if (closingTurns.has(id)) turns.delete(id);
+            },
+          }),
         );
     }),
     cutCell: Effect.fn("ScreenRunService.cutCell")(function* (input: {
@@ -806,7 +814,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         deliveries.delete(targetId);
       }
       options.desktopHost?.finishTurn(input.runId, input.turnId);
-      turns.delete(turnKey(input.runId, input.turnId));
+      if (activeCells.get(id) === undefined) turns.delete(id);
       const failed = outcomes.filter((outcome) => outcome.status === "failed");
       for (const outcome of failed) recordCleanupFailure(input.runId, input.turnId, outcome.tabId);
       if (cleanup && !Exit.isSuccess(cleanup)) recordCleanupFailure(input.runId, input.turnId);
