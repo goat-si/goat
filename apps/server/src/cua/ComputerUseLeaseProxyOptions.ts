@@ -82,6 +82,15 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
     if (hops !== undefined) hops.forwardAt = now;
   });
 
+export interface ReplyContext {
+  readonly tool?: string | undefined;
+  readonly request?: Envelope | undefined;
+  readonly terminalState?: () => {
+    readonly reason?: ComputerUseTerminalReason | undefined;
+    readonly possibleCommit?: boolean | undefined;
+  };
+}
+
 export interface ReplySink {
   readonly terminal?: (() =>
     | import("./ComputerUseTerminal.ts").ComputerUseTerminalReason
@@ -90,13 +99,7 @@ export interface ReplySink {
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],
-    context?: {
-      readonly tool?: string | undefined;
-      readonly terminalState?: () => {
-        readonly reason?: ComputerUseTerminalReason | undefined;
-        readonly possibleCommit?: boolean | undefined;
-      };
-    },
+    context?: ReplyContext,
   ) => Effect.Effect<unknown>;
 }
 
@@ -153,13 +156,7 @@ export const primitiveReplySink = (
   answer: Effect.fn("ComputerUseLeaseProxyOptions.answer")(function* (
     line: string,
     status: ComputerUsePrimitiveReply["status"] = "not_started",
-    context?: {
-      readonly tool?: string | undefined;
-      readonly terminalState?: () => {
-        readonly reason?: ComputerUseTerminalReason | undefined;
-        readonly possibleCommit?: boolean | undefined;
-      };
-    },
+    context?: ReplyContext,
   ) {
     const answeredAt = yield* Clock.currentTimeMillis;
     const envelope = parse(line);
@@ -421,10 +418,7 @@ export interface LeaseProxyOptions<EU, ED> {
     readonly terminal?: "stopped_by_person" | "screen_locked";
   }) => Effect.Effect<void>;
   /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
-  readonly output: (
-    line: string,
-    context?: { readonly tool?: string | undefined },
-  ) => Effect.Effect<void>;
+  readonly output: (line: string, context?: ReplyContext) => Effect.Effect<void>;
   /** The server's view of this thread's control, newest last. Ending or failing ends it. */
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */

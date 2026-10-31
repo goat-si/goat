@@ -30,6 +30,54 @@ const decodeTerminal = Schema.decodeUnknownOption(
   ),
 );
 
+export const finalTerminalLine = (
+  line: string,
+  status: import("@goat/contracts").ComputerUsePrimitiveReply["status"] | undefined,
+  message: Envelope | undefined,
+  terminal: {
+    readonly reason?: ComputerUseTerminalReason | undefined;
+    readonly possibleCommit?: boolean | undefined;
+  },
+): {
+  line: string;
+  status: import("@goat/contracts").ComputerUsePrimitiveReply["status"] | undefined;
+} => {
+  if (message?.method !== "tools/call" || message.id == null) return { line, status };
+  const already = decodeTerminal(line);
+  const reply = terminalReplyState(
+    already._tag === "Some" ? already.value.result : undefined,
+    status,
+  );
+  const merged = mergeTerminal(
+    mergeTerminal(terminal, reply),
+    terminalErrorState(already._tag === "Some" ? already.value.error : undefined),
+  );
+  const reason = merged.reason;
+  if (
+    reason === undefined ||
+    (reply.wireReason === reason &&
+      reply.terminalSafety &&
+      (!merged.possibleCommit || reply.possibleCommit))
+  )
+    return { line, status };
+  const cause: Interruption =
+    reason === "screen_locked"
+      ? { _tag: "pause", reason: "screen_locked" }
+      : { _tag: "end", reason: "stopped" };
+  const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
+  return {
+    line: merged.possibleCommit
+      ? cutOff(message.id, tool, cause, message.params?.arguments, true)
+      : refusal(
+          message.id,
+          message.method,
+          reason === "screen_locked" ? "screen_locked" : "stopped",
+          reason === "screen_locked" ? PAUSE_MESSAGES.screen_locked : LEASE_END_MESSAGES.stopped,
+        ),
+    status: merged.possibleCommit ? "unknown_outcome" : "not_started",
+  };
+};
+
 export const terminalSink = (
   sink: ReplySink,
   message: Envelope,
@@ -42,50 +90,15 @@ export const terminalSink = (
     Effect.suspend(() => {
       const finalContext = {
         ...context,
+        request: message,
         terminalState: () =>
           mergeTerminal(context?.terminalState?.() ?? {}, {
-            reason: terminal(),
+            reason: terminalReason(terminal()),
             possibleCommit: dispatched(),
           }),
       };
-      if (message.method !== "tools/call" || message.id == null)
-        return sink.answer(line, status, finalContext);
-      const already = decodeTerminal(line);
-      const reply = terminalReplyState(
-        already._tag === "Some" ? already.value.result : undefined,
-        status,
-      );
-      const merged = mergeTerminal(
-        mergeTerminal({ reason: terminalReason(terminal()), possibleCommit: dispatched() }, reply),
-        terminalErrorState(already._tag === "Some" ? already.value.error : undefined),
-      );
-      const reason = merged.reason;
-      if (reason === undefined) return sink.answer(line, status, finalContext);
-      if (
-        reply.wireReason === reason &&
-        reply.terminalSafety &&
-        (!merged.possibleCommit || reply.possibleCommit)
-      )
-        return sink.answer(line, status, finalContext);
-      const cause: Interruption =
-        reason === "screen_locked"
-          ? { _tag: "pause", reason: "screen_locked" }
-          : { _tag: "end", reason: "stopped" };
-      const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
-      return sink.answer(
-        merged.possibleCommit
-          ? cutOff(message.id, tool, cause, message.params?.arguments, merged.possibleCommit)
-          : refusal(
-              message.id,
-              message.method,
-              reason === "screen_locked" ? "screen_locked" : "stopped",
-              reason === "screen_locked"
-                ? PAUSE_MESSAGES.screen_locked
-                : LEASE_END_MESSAGES.stopped,
-            ),
-        merged.possibleCommit ? "unknown_outcome" : "not_started",
-        finalContext,
-      );
+      const result = finalTerminalLine(line, status, message, finalContext.terminalState());
+      return sink.answer(result.line, result.status, finalContext);
     }).pipe(Effect.ensuring(Effect.sync(() => terminal.release?.()))),
 });
 

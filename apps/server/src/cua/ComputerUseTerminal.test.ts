@@ -1,7 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { mergeTerminal, terminalReplyState } from "./ComputerUseTerminal.ts";
-import { makePersonStopFence, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
+import {
+  finalTerminalLine,
+  makePersonStopFence,
+  terminalSink,
+} from "./ComputerUseLeaseProxyPersonStop.ts";
 
 it("merges terminal reasons and possible input monotonically", () => {
   assert.deepEqual(mergeTerminal({}, { reason: "screen_locked" }), {
@@ -211,4 +215,36 @@ it.effect.each(["result lock then Stop", "RPC Stop under lock"])(
       assert.include(output, '"retryClass":"never"');
       assert.include(output, '"possibleCommit":true');
     }),
+);
+
+it.effect("applies a late terminal latch after an outbound transformation", () =>
+  Effect.gen(function* () {
+    let terminal: "stopped_by_person" | undefined;
+    let written = "";
+    const sink = terminalSink(
+      {
+        answer: (_line, status, context) =>
+          Effect.sync(() => {
+            terminal = "stopped_by_person";
+            const shaped = JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { isError: true, structuredContent: { code: "unavailable" } },
+            });
+            written = finalTerminalLine(
+              shaped,
+              status,
+              context?.request,
+              context?.terminalState?.() ?? {},
+            ).line;
+          }),
+      },
+      { id: 1, method: "tools/call", params: { name: "list_apps" } },
+      () => terminal,
+      () => false,
+    );
+    yield* sink.answer(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
+    assert.include(written, '"code":"stopped_by_person"');
+    assert.include(written, '"retryClass":"never"');
+  }),
 );

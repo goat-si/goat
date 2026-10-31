@@ -49,7 +49,8 @@ import {
   type LeaseTransportUpdate,
   followLeaseStream,
 } from "./ComputerUseLeaseStreamFollower.ts";
-import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import type { LeaseProxyOptions, ReplyContext } from "./ComputerUseLeaseProxyOptions.ts";
+import { finalTerminalLine } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
@@ -753,14 +754,21 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
         () => undefined,
       ).pipe(Stream.catchCause(() => Stream.empty)),
-      output: (line: string, context?: { readonly tool?: string | undefined }) =>
+      output: (line: string, context?: ReplyContext) =>
         Effect.sync(() => {
           const listed = driverToolsHidden
             ? withoutDriverTools(line)
             : drawsOverlay
               ? helperCursorListing(line)
               : line;
-          process.stdout.write(guide(listed, context) + "\n");
+          const shaped = guide(listed, context);
+          const final = finalTerminalLine(
+            shaped,
+            undefined,
+            context?.request,
+            context?.terminalState?.() ?? {},
+          );
+          process.stdout.write(final.line + "\n");
         }),
       answersCursorTools: drawsOverlay,
       ...(platform === "linux" ? { executableOf: linuxExecutable } : {}),

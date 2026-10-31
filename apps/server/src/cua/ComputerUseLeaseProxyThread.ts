@@ -189,7 +189,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             : WAITING,
     );
     return terminalSink(
-      { answer: (line) => options.output(line) },
+      { answer: (line, _status, context) => options.output(line, context) },
       { id, ...(method === undefined ? {} : { method }) },
       () => latch?.reason,
       () => dispatched,
@@ -590,7 +590,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     if (decoded.kind === "invalid") {
       const latch = (current ?? predecessor)?.terminal;
       return yield* terminalSink(
-        { answer: (answer) => options.output(answer) },
+        { answer: (answer, _status, context) => options.output(answer, context) },
         { id: null },
         () => latch?.reason,
         () => false,
