@@ -382,9 +382,13 @@ export class ScreenHostBridge {
         this.invalidTargets.get(turn)?.has(call.targetRef.id))
     ) {
       const why =
-        call.targetRef.turnId !== context.turnId
-          ? "turn_ended"
-          : this.invalidTargets.get(turn)?.get(call.targetRef.id);
+        call.targetRef.environmentId !== context.environmentId
+          ? "different_environment"
+          : call.targetRef.turnId !== context.turnId
+            ? "turn_ended"
+            : call.targetRef.runId !== context.runId
+              ? "different_run"
+              : this.invalidTargets.get(turn)?.get(call.targetRef.id);
       const nextStep =
         call.targetRef.kind === "app" ? this.staleTargetStep?.(call.targetRef.id, why) : undefined;
       return deny({

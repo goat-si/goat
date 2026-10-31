@@ -31,9 +31,15 @@ export const staleTargets = (
         ? "Permission was lost."
         : why === "turn_ended"
           ? "The target was bound in an earlier turn."
-          : why === "replaced"
-            ? "The window was replaced by another binding."
-            : `The control changed (${why}).`;
+          : why === "different_run"
+            ? "The target was bound in a different run."
+            : why === "different_environment"
+              ? "The target was bound in a different environment."
+              : why === "replaced"
+                ? "The window was replaced by another binding."
+                : why === "invalidated"
+                  ? "The target was invalidated."
+                  : `The control changed (${why}).`;
     const rebind =
       entry.bundleId === undefined
         ? "Use screen.discover() to find the window and bind it again."
