@@ -153,6 +153,51 @@ afterEach(async () => {
 });
 
 describe("integrated PDF surface", () => {
+  it("preserves reading position and zoom across revisions but resets for another PDF", async () => {
+    const showRevision = async (revision: number, documentId = "fixture") => {
+      await act(async () => {
+        root.render(
+          <BrowserDocumentFrame
+            src={`/${documentId}.pdf?revision=${revision}`}
+            documentKey={`${documentId}:${revision}`}
+            documentId={documentId}
+            title="Fixture"
+            pdf
+          />,
+        );
+      });
+      await act(() => vi.dynamicImportSettled());
+    };
+    await showRevision(1);
+    await click("Zoom in");
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="PDF page number"]')!;
+    await type(input, "15");
+    await act(() =>
+      input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    const viewport = host.querySelector<HTMLElement>(".overflow-auto")!;
+    await act(() => {
+      viewport.scrollTop += 120;
+      viewport.scrollLeft = 45;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    const top = viewport.scrollTop;
+    const zoom = host.querySelector('[role="toolbar"]')?.textContent?.match(/\d+%/)?.[0];
+    await showRevision(2);
+    const reloadedViewport = host.querySelector<HTMLElement>(".overflow-auto")!;
+    expect(reloadedViewport.scrollTop).toBeCloseTo(top);
+    expect(reloadedViewport.scrollLeft).toBe(45);
+    expect(host.querySelector('[role="toolbar"]')?.textContent).toContain(zoom);
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="PDF page number"]')?.value).toBe(
+      "15",
+    );
+    await showRevision(1, "other");
+    expect(host.querySelector<HTMLElement>(".overflow-auto")?.scrollTop).toBe(0);
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="PDF page number"]')?.value).toBe(
+      "1",
+    );
+  });
+
   it.each([false, true])(
     "leaves the selected occurrence centered below the fold (next match: %s)",
     async (next) => {

@@ -5,6 +5,7 @@ import { Spinner } from "~/components/ui/spinner";
 
 import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { refreshedRevision, workspaceAssetResource } from "./filePreviewMode";
+import { usePdfViewState } from "./pdf/usePdfViewState";
 
 /**
  * HTML runs in a sandboxed frame with an opaque origin, so a page cannot reach
@@ -29,6 +30,8 @@ export function WorkspaceBrowserPreview(props: {
     absolutePath: props.absolutePath,
   });
   const workspaceRevision = refreshedRevision(props.workspaceMutationId, props.refreshRequestId);
+  const documentId = `${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}`;
+  const pdfViewState = usePdfViewState(documentId);
   const assetUrl = useAssetUrlState(
     props.environmentId,
     resource,
@@ -66,6 +69,8 @@ export function WorkspaceBrowserPreview(props: {
     <BrowserDocumentFrame
       src={`${assetUrl.url}${revisionSuffix}`}
       documentKey={`${props.environmentId}:${resource._tag}:${props.threadRef.threadId}:${props.absolutePath}:${revision}`}
+      documentId={documentId}
+      pdfViewState={pdfViewState}
       title={props.title}
       pdf={pdf}
       onRetry={refreshAssetUrl}

@@ -16,7 +16,7 @@ vi.mock("~/assets/assetUrls", async () => ({
   useAssetUrlRefresh: () => async () => null,
 }));
 
-it("keeps the PDF page across URL renewals and resets it when the file changes", async () => {
+it("keeps the PDF page across renewals and revision loading, resetting only for another file", async () => {
   const original = URL.createObjectURL(new Blob([fixture], { type: "application/pdf" }));
   const edited = URL.createObjectURL(new Blob([fixture], { type: "application/pdf" }));
   using _urls = {
@@ -25,14 +25,14 @@ it("keeps the PDF page across URL renewals and resets it when the file changes",
       URL.revokeObjectURL(edited);
     },
   };
-  const preview = (mutation: string) => (
+  const preview = (mutation: string, absolutePath = "/repo/planning.pdf") => (
     <div style={{ height: 600, width: 800, display: "flex" }}>
       <WorkspaceBrowserPreview
         environmentId={EnvironmentId.make("test")}
         threadRef={{ environmentId: EnvironmentId.make("test"), threadId: ThreadId.make("test") }}
         draft={false}
         workspaceRoot="/repo"
-        absolutePath="/repo/planning.pdf"
+        absolutePath={absolutePath}
         title="Planning"
         workspaceMutationId={mutation}
         refreshRequestId={0}
@@ -69,7 +69,7 @@ it("keeps the PDF page across URL renewals and resets it when the file changes",
     fileRevision: "two",
   });
   await screen.rerender(preview("third"));
-  await expect.element(pageNumber).toHaveValue(1);
+  await expect.element(pageNumber).toHaveValue(2);
   expect(screen.getByRole("region", { name: "Planning PDF viewer" }).element()).not.toBe(opened);
 
   assetUrlState.mockReturnValue({
@@ -82,5 +82,7 @@ it("keeps the PDF page across URL renewals and resets it when the file changes",
   await expect.element(pageNumber).not.toBeInTheDocument();
   assetUrlState.mockReturnValue({ _tag: "Success", url: `${original}#initial`, expiresAt: 0 });
   await screen.rerender(preview("fourth"));
+  await expect.element(pageNumber).toHaveValue(2);
+  await screen.rerender(preview("fifth", "/repo/other.pdf"));
   await expect.element(pageNumber).toHaveValue(1);
 });
