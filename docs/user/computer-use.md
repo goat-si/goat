@@ -178,7 +178,7 @@ at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
 use the page until you leave that field. If the screen locks, computer use pauses
-and the tile reads **Screen locked**. Unlock the screen and choose **Hand back**
+and the computer-use card reads **Screen locked**. Unlock the screen and choose **Hand back**
 to continue.
 
 The GOAT menu bar or taskbar menu offers the same stops, per app or all at
