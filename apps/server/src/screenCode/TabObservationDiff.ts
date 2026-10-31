@@ -120,9 +120,12 @@ export const diffTabObservation = (
     else changed.push(`+ ${line}`);
   }
   const focused = (data: NonNullable<ReturnType<typeof rows>>) => {
+    // Containers of the focused element can keep [active]; the innermost, last marked row is the focus.
+    let last: string | undefined;
     for (const [key, row] of data.byIdentity) {
-      if (elementLine(row.line.split("\n", 1)[0] ?? "").focused) return key;
+      if (elementLine(row.line.split("\n", 1)[0] ?? "").focused) last = key;
     }
+    if (last !== undefined) return last;
     return data.plain.some((line) => elementLine(line).focused) ? null : undefined;
   };
   const oldFocus = focused(old);

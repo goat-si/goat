@@ -190,6 +190,26 @@ describe("tab observation elements", () => {
     expect(fourth.indexedText).toBe(`no change since ${third.observationId}`);
   });
 
+  it("follows focus to the innermost marked row while an outer container stays active", () => {
+    const observations = new ScreenObservations();
+    const first = observe(
+      observations,
+      '- generic [active] [ref=e1]:\n  - textbox "First" [focused] [ref=e2]\n  - textbox "Second" [ref=e3]',
+    );
+    const second = observe(
+      observations,
+      '- generic [active] [ref=e1]:\n  - textbox "First" [ref=e2]\n  - textbox "Second" [focused] [ref=e3]',
+      { base: first },
+    );
+    expect(second.indexedText).toBe("focus [2]");
+    const third = observe(
+      observations,
+      '- generic [active] [ref=e1]:\n  - textbox "First" [ref=e2]\n  - textbox "Second" [ref=e3]',
+      { base: second },
+    );
+    expect(third.indexedText).toBe("focus [0]");
+  });
+
   it("keeps focus-like text in values and child text as content", () => {
     const observations = new ScreenObservations();
     const first = observe(
