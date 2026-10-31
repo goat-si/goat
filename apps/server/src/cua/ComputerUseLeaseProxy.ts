@@ -79,7 +79,6 @@ import {
   cutOff,
   interruptionDetail,
   interruptionRefusal,
-  offScreenAnswer,
   refusal,
   unsentOutcome,
   unsentCallRefusal,
@@ -92,6 +91,7 @@ import {
   outstandingCall,
   rememberDriverReply,
   retainedTerminal,
+  offScreenForRequest,
   reservedProviderRequest,
   type OutstandingCall,
   type ReplySink,
@@ -249,10 +249,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (sessions.size > 0)
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
-
   const release = Admission.makeProxyRelease(options);
   const releaseLater = Admission.makeProxyReleaseLater(options, scope);
-
   const pauseForScreenLock = Effect.fn("ComputerUseLeaseProxy.screenLocked")(function* () {
     yield* overlay.screenLocked();
     yield* lifecycleLock.withPermits(1)(pause("screen_locked"));
@@ -365,31 +363,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           outstanding.delete(key);
           if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
           if (verdict === "other") {
-            yield* request.sink.answer(
-              offScreenAnswer(
-                request.id,
-                request.method,
-                request.tool,
-                "other",
-                request.args,
-                retainedTerminal(request),
-              ),
-              "settled",
-            );
+            yield* request.sink.answer(offScreenForRequest(request, "other"), "settled");
             return yield* end("wrong_display");
           }
           if (verdict === "unknown")
-            return yield* request.sink.answer(
-              offScreenAnswer(
-                request.id,
-                request.method,
-                request.tool,
-                "unknown",
-                request.args,
-                retainedTerminal(request),
-              ),
-              "settled",
-            );
+            return yield* request.sink.answer(offScreenForRequest(request, "unknown"), "settled");
           if (verdict === "proof") proven = current;
         } else {
           batches.remember(current, request.method, message);

@@ -32,7 +32,12 @@ import * as Stream from "effect/Stream";
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { BrowserClaimReport } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { SCREEN_CALL_EXPIRED } from "./ComputerUseLeaseMessages.ts";
-import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
+import {
+  type JsonRpcId,
+  refusal,
+  reservedIdAnswer,
+  offScreenAnswer,
+} from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
@@ -157,6 +162,16 @@ export const rememberDriverReply = (request: OutstandingCall, message: Envelope)
 
 export const retainedTerminal = (request: OutstandingCall) =>
   replaceWithTerminal(request.received ?? "none");
+
+export const offScreenForRequest = (request: OutstandingCall, verdict: "other" | "unknown") =>
+  offScreenAnswer(
+    request.id,
+    request.method,
+    request.tool,
+    verdict,
+    request.args,
+    retainedTerminal(request),
+  );
 
 export const primitiveReplySink = (
   request: ComputerUsePrimitiveRequest,

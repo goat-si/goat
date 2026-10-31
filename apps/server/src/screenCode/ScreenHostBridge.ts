@@ -627,7 +627,7 @@ export class ScreenHostBridge {
         state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
           ? terminalFailure(
               replaceWithTerminal(
-                result._tag === "Success" ? (result.success.safety ?? "none") : "none",
+                result._tag === "Success" ? (result.success.safety ?? "none") : result.failure,
                 state.cutoffReason,
               ),
               isScreenRead(call.method) ? "list_apps" : call.method,
@@ -778,7 +778,6 @@ export class ScreenHostBridge {
       ...(value === undefined ? {} : { value: value as NonNullable<ScreenHostReply["value"]> }),
     } satisfies ScreenHostReply;
   });
-
   handle = Effect.fn("ScreenHostBridge.handle")(function* (
     this: ScreenHostBridge,
     raw: unknown,
