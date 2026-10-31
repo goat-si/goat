@@ -25,16 +25,12 @@ const evCall = (...[method, args, ref]: Parameters<typeof call>) => ({
   deadlineMillis: 10000,
 });
 
-// A close or open shortcut re-reads windows a few times, so its caller moves the clock past them.
-const invokeEv = (
-  host: ReturnType<typeof fixture>["host"],
-  c: ReturnType<typeof evCall>,
-  advance: "60 millis" | "1 second" = "60 millis",
-) =>
+// A verified input re-reads windows a few times while nothing new shows, so the clock passes them.
+const invokeEv = (host: ReturnType<typeof fixture>["host"], c: ReturnType<typeof evCall>) =>
   Effect.gen(function* () {
     const fiber = yield* host.invoke(c, context).pipe(Effect.forkChild);
     yield* Effect.yieldNow;
-    yield* TestClock.adjust(advance);
+    yield* TestClock.adjust("1 second");
     return yield* Fiber.join(fiber);
   });
 
@@ -109,7 +105,6 @@ it.effect(
       const closedWithWitness = yield* invokeEv(
         host,
         evCall("press_key", { key: "w", modifiers: ["command"] }, ref),
-        "1 second",
       );
       expect(closedWithWitness.category).toBe("unverifiable");
       expect(closedWithWitness.evidence).toContain("observed:window_not_listed");
@@ -156,7 +151,6 @@ it.effect(
       const uRes = yield* invokeEv(
         unverifiedHost,
         evCall("press_key", { key: "w", modifiers: ["command"] }, uBound.value as ScreenTargetRef),
-        "1 second",
       );
       expect(uRes.category).toBe("unverifiable");
       expect(uRes.evidence).toContain("observed:window_list_unverified");
@@ -838,6 +832,8 @@ it.effect(
       // Only pre-input verify_state has run so far; post-input verify_state is still waiting on the 60 ms settle sleep.
       expect(sent.filter((s) => s.tool === "verify_state")).toHaveLength(1);
       yield* TestClock.adjust("30 millis");
+      // No window opened, so the listing is read three more times before the click answers.
+      yield* TestClock.adjust("300 millis");
       const clickOut = yield* Fiber.join(clickFiber);
       expect(sent.filter((s) => s.tool === "verify_state")).toHaveLength(2);
       expect(clickOut.evidence).toContain('observed:element_state:value "0"→"1"');

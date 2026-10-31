@@ -101,6 +101,44 @@ it.effect("says why a secret fill could not use its secretRef", () =>
 );
 
 it.effect.each([
+  {
+    detail: { fetchFailure: "cors" },
+    tag: "PreviewAutomationExecutionError",
+    expected: { _tag: "PreviewAutomationExecutionError", fetchFailure: "cors" },
+  },
+  {
+    detail: { noMatch: true },
+    tag: "PreviewAutomationInvalidSelectorError",
+    expected: { _tag: "PreviewAutomationInvalidSelectorError", noMatch: true },
+  },
+])(
+  "keeps the server browser's reason a read or target failed ($tag)",
+  ({ detail, tag, expected }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const broker = yield* makeBroker;
+        const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+        const host = makeHost({ clientId, supportedOperations: ["fetch"] });
+        const requests = requestsFrom(yield* broker.connect(host, SERVER_BROWSER));
+        yield* Stream.runForEach(requests, (request) =>
+          broker.respond({
+            clientId,
+            connectionId: request.connectionId,
+            requestId: request.requestId,
+            ok: false,
+            error: { _tag: tag, message: "Fetching failed.", detail },
+          }),
+        ).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        const error = yield* broker
+          .invoke<void>({ scope, operation: "fetch", input: { url: "https://news.example/" } })
+          .pipe(Effect.flip);
+        expect(error).toMatchObject(expected);
+      }),
+    ),
+);
+
+it.effect.each([
   { clientId: SERVER_BROWSER_AUTOMATION_CLIENT_ID, shown: true },
   { clientId: "client-1", shown: false },
 ])("tells the agent why its own server browser failed ($clientId)", ({ clientId, shown }) =>

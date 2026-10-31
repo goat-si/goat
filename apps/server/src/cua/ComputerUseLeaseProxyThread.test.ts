@@ -556,6 +556,7 @@ it.effect.each(["shared", "narrowing", "foreground", "stop", "replacement", "ter
       const updates = yield* Queue.unbounded<ComputerUseLeaseThreadUpdate>();
       const applied = yield* Queue.unbounded();
       const outcome = yield* Queue.unbounded<string>();
+      const driverReplies = yield* Queue.unbounded<string>();
       const reserved = yield* Deferred.make<void>();
       gate = yield* Deferred.make<void>();
       const expiresAt = "2100-01-01T00:00:00Z";
@@ -578,8 +579,24 @@ it.effect.each(["shared", "narrowing", "foreground", "stop", "replacement", "ter
         output: (line) => Queue.offer(outcome, line).pipe(Effect.asVoid),
         onLeaseUpdateApplied: (update) => Queue.offer(applied, update).pipe(Effect.asVoid),
         startDriver: Effect.succeed({
-          send: () => Queue.offer(outcome, "DISPATCHED").pipe(Effect.asVoid),
-          lines: Stream.never,
+          send: (line) => {
+            const message = JSON.parse(line) as { id?: string };
+            return typeof message.id === "string" && message.id.startsWith("goat-proxy:apps:")
+              ? Queue.offer(
+                  driverReplies,
+                  JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: {
+                      structuredContent: {
+                        apps: [{ pid: 1, bundle_id: "com.apple.calculator", name: "Calculator" }],
+                      },
+                    },
+                  }),
+                ).pipe(Effect.asVoid)
+              : Queue.offer(outcome, "DISPATCHED").pipe(Effect.asVoid);
+          },
+          lines: Stream.fromQueue(driverReplies),
           kill: Effect.void,
         }),
         revokeSessions: () => Effect.void,

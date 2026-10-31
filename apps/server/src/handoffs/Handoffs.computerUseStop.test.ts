@@ -135,7 +135,10 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
           windowTitle: "Browser",
         });
         assert.equal(attached.agentResult.status, "attached");
-        const proxy = yield* harness();
+        const proxy = yield* harness({
+          autoAppListing: true,
+          autoListedApps: [{ pid: 42, bundle_id: app, name: "Browser" }],
+        });
         yield* proxy.push({
           ...active(undefined, [app]),
           browserClaims: yield* claims.claimsFor(threadId),

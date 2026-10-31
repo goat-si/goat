@@ -1,12 +1,7 @@
 /** The lease proxy cuts off outstanding calls and closes the driver when control ends. */
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
-import {
-  type ComputerUseLeaseUpdate,
-  type ComputerUsePauseReason,
-  type ComputerUseForegroundGrant,
-  type ComputerUsePrimitiveRequest,
-} from "@goat/contracts";
+import type * as Contracts from "@goat/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -20,11 +15,7 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
 import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
 import { typeManifestRefusal } from "./ComputerUseManifestRefusal.ts";
-import {
-  makeProxyRelease,
-  makeProxyReleaseLater,
-  reserveProxyCall,
-} from "./ComputerUseLeaseProxyAdmission.ts";
+import * as Admission from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -32,7 +23,9 @@ import { makeLeaseFences } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
-import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
+import { approvedApps, takesScreen } from "./ComputerUseScope.ts";
+import { makeIdentityCache } from "./ComputerUseIdentityCache.ts";
+import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
 import { makeProxyCallScope } from "./ComputerUseLeaseProxyPointBasis.ts";
 import {
   makeProxyBrowserClaims,
@@ -112,11 +105,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   const deadlineWake = yield* Queue.sliding<void>(1);
   let deadline = DateTime.toEpochMillis(options.expiresAt);
   let finished: LeaseEnd | undefined;
-  let paused: ComputerUsePauseReason | undefined;
+  let paused: Contracts.ComputerUsePauseReason | undefined;
   let idle = false;
   const personStop = makePersonStopFence();
   let apps: ReadonlySet<string> | undefined;
-  let foreground: ReadonlyArray<ComputerUseForegroundGrant> = [];
+  let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
   let shared = false;
   // An older applied update cannot lift the latest receipt's restriction (sharedNow).
@@ -148,7 +141,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const batches = makeProxyCallScope(handshakeAnswers, () => lifecycle.current, claims.report);
-  const listed = new Map<number, ListedApp>();
+  const identities = makeIdentityCache();
+  const listed = identities.listed;
   const labels = makeAppLabels();
   const sessions = new Set<string>();
   // The control's window survives pauses: the server keeps it until the control ends.
@@ -252,8 +246,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
 
-  const release = makeProxyRelease(options);
-  const releaseLater = makeProxyReleaseLater(options, scope);
+  const release = Admission.makeProxyRelease(options);
+  const releaseLater = Admission.makeProxyReleaseLater(options, scope);
 
   const pauseForScreenLock = Effect.fn("ComputerUseLeaseProxy.screenLocked")(function* () {
     yield* overlay.screenLocked();
@@ -277,7 +271,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const listing = own
           ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
           : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
-        learnApps(message.result, listed, listing, options.executableOf, labels);
+        identities.learn(message.result, listing, options.executableOf, labels);
         if (own) {
           const waiter = ownAnswers.get(message.id);
           ownAnswers.delete(message.id);
@@ -296,6 +290,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         if (personStop.beginLock(message)) {
           yield* pauseForScreenLock().pipe(Effect.forkIn(scope));
         }
+        identities.forget(message, request.args);
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
@@ -462,7 +457,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   );
   yield* unanswered.followCancels(options.subscribePrimitiveCancels);
   const pause = Effect.fn("ComputerUseLeaseProxy.pause")(function* (
-    reason: ComputerUsePauseReason,
+    reason: Contracts.ComputerUsePauseReason,
   ) {
     if (finished !== undefined) return;
     const wasPaused = paused !== undefined;
@@ -476,7 +471,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     yield* Queue.offer(deadlineWake, undefined);
   }, Effect.uninterruptible);
   const activate = Effect.fn("ComputerUseLeaseProxy.activate")(function* (
-    update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
+    update: Extract<Contracts.ComputerUseLeaseUpdate, { readonly state: "active" }>,
   ) {
     if (!personStop.activate(update, paused, interruptionsSeen)) return;
     const next = approvedApps(update.apps);
@@ -491,6 +486,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       (yield* Deferred.isDone(confirmed)) &&
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
+    identities.scope(apps, next);
     apps = next;
     batches.grant(update.apps);
     shared = update.shared === true;
@@ -503,6 +499,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     interruptionsSeen = count;
     const nextIdleEpoch = update.idleEpoch ?? 0;
     const missedIdle = idleEpochSeen !== undefined && nextIdleEpoch > idleEpochSeen;
+    identities.turn(update.identityEpoch ?? 0, missedIdle || idle);
     idleEpochSeen = nextIdleEpoch;
     if (paused !== undefined || idle) {
       paused = undefined;
@@ -581,7 +578,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     },
   });
 
-  // Held here, not in the agent's calls: expiry acts while a call is outstanding or none comes.
   yield* watchLeaseProxyDeadlines({
     wake: deadlineWake,
     controlDeadline: () => deadline,
@@ -616,8 +612,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       ...(options.placement === undefined ? {} : { placement: options.placement }),
       end,
     },
-    refusal: (id, message, listApps, claimApproved) => ({
-      claimApproved,
+    refusal: (id, message, listApps, claimPid) => ({
+      claimPid,
       id,
       message,
       finished: () => finished,
@@ -636,7 +632,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     deadline: () => deadline,
     expire: end("expired"),
   });
-
   const refreshManifest = refreshDriverManifest({
     stamp: options.manifestStamp,
     current: () => lifecycle.current,
@@ -650,7 +645,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     incoming: string,
     rawSink: ReplySink,
     expectedConnection?: string,
-    primitive?: ComputerUsePrimitiveRequest,
+    primitive?: Contracts.ComputerUsePrimitiveRequest,
   ) {
     yield* beginHops(primitive);
     const keyCall = resolveKeyCall(incoming);
@@ -664,7 +659,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
     // A received pause or end fences calls before the lifecycle lock becomes available.
-    let selectedForeground: ComputerUseForegroundGrant | undefined;
+    let selectedForeground: Contracts.ComputerUseForegroundGrant | undefined;
     let selectedClaim: SelectedClaim | undefined;
     const notSent = (requestId: JsonRpcId) =>
       personStop.refusal(requestId, message?.method) ??
@@ -731,6 +726,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         options.manifestStamp === undefined || lifecycle.current === undefined || !active()
           ? undefined
           : yield* refreshManifest;
+      if (refreshed !== undefined) identities.clear();
       if (refreshed !== undefined) admitted = refreshed;
       if (
         expectedConnection !== undefined &&
@@ -761,10 +757,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         if (needsProof) yield* proveDisplay(primitiveAllowed);
       }
       if (personStop.pending()) return yield* sink.answer(notSent(id));
-      const refused = yield* refuseCall(id, message, primitiveAllowed, selectedClaim !== undefined);
+      const refused = yield* refuseCall(id, message, primitiveAllowed, selectedClaim?.pid);
       if (personStop.pending()) return yield* sink.answer(notSent(id));
       if (held()) return yield* sink.answer(notSent(id));
       if (refused !== undefined) return yield* sink.answer(refused);
+      const narrowed = narrowBatch(id, line, message, listed, options.bundleIds);
+      if ("refused" in narrowed) return yield* sink.answer(narrowed.refused);
+      ({ line, message } = narrowed);
       if (admitted !== undefined && lifecycle.current !== admitted)
         return yield* sink.answer(
           refusal(
@@ -863,13 +862,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     let reservationId: string | undefined;
     let permissionDeadline = Infinity;
     if (isRequest && message?.method === "tools/call") {
-      const admission = yield* reserveProxyCall(options, {
+      const admission = yield* Admission.reserveProxyCall(options, {
         id,
         message,
         connectionId: current.connectionId,
         callId: String(ownRequests++),
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
+        claimPid: selectedClaim?.pid,
         foreground,
         scope: { listed, apps, labels },
       });

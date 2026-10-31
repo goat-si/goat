@@ -159,6 +159,33 @@ it.effect("a window that shows after the key returned is read again until it doe
 );
 
 it.effect(
+  "a same-process window that lists only after a verified Enter returned is in opened",
+  () =>
+    Effect.gen(function* () {
+      const { host } = desktop(listing([7]), [listing([7]), listing([7, 97679])]);
+      const out = ok(yield* input(host, yield* bind(host), "press_key", { key: "Enter" }));
+      const opened = (out.value as { windows?: { opened?: Array<{ window_id: number }> } }).windows
+        ?.opened;
+      expect(opened?.map((each) => each.window_id)).toEqual([97679]);
+      expect(out.category).toBe("confirmed");
+    }),
+);
+
+it.effect("observe names the app's other windows on screen beside the bound one", () =>
+  Effect.gen(function* () {
+    const { host } = desktop(
+      { ...listing([7, 8, 9]), windows: [shown(7), shown(8), shown(9, { is_on_screen: false })] },
+      [],
+    );
+    const ref = yield* bind(host);
+    const seen = (yield* host.observe(call("get_window_state", {}, ref), context)).value;
+    expect((seen as { otherWindows?: unknown }).otherWindows).toEqual([
+      { window_id: 8, title: "W8" },
+    ]);
+  }),
+);
+
+it.effect(
   "a click that opens a top-level window is confirmed; a menu it shows is not a window",
   () =>
     Effect.gen(function* () {

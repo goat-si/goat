@@ -3,6 +3,30 @@ import { assert, describe, it } from "@effect/vitest";
 import { makeAppCatalog, type CatalogApp } from "./appCatalog.ts";
 
 describe("computer use app catalog", () => {
+  it("keeps executable aliases alongside bundle identities", async () => {
+    const catalog = makeAppCatalog(async () => new Map());
+    assert.deepEqual(
+      await catalog(
+        [
+          {
+            bundle_id: "com.example.App",
+            name: "App",
+            executable: "C:\\Shared\\host.exe",
+            bundle_executable: "C:\\Shared\\bundle.exe",
+          },
+          { bundle_id: "com.example.App", name: "App", executable: "C:\\Shared\\other.exe" },
+        ],
+        [],
+      ),
+      [
+        {
+          id: "com.example.App",
+          name: "App",
+          executables: ["C:\\Shared\\host.exe", "C:\\Shared\\bundle.exe", "C:\\Shared\\other.exe"],
+        },
+      ],
+    );
+  });
   it("names exactly the requestable apps, sorted by name, and reads each icon once", async () => {
     const asked: Array<ReadonlyArray<string>> = [];
     const catalog = makeAppCatalog(async (apps: ReadonlyArray<CatalogApp>) => {

@@ -299,6 +299,12 @@ export const ScreenObservation = Schema.Struct({
   image: Schema.optionalKey(ScreenImageMetadata),
   resetReason: Schema.optionalKey(text(200)),
   warnings: Schema.optionalKey(Schema.Array(text(200)).check(Schema.isMaxLength(4))),
+  /** The app's other windows on screen beside the bound one, as the cell last listed them. */
+  otherWindows: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ window_id: natural, title: text(80) })).check(
+      Schema.isMaxLength(8),
+    ),
+  ),
   /** What the observation covered: the whole window or page, interactive controls, or a scope. */
   scope: Schema.optionalKey(text(1024)),
   /** Regions the observation could not include, so absence there proves nothing. */

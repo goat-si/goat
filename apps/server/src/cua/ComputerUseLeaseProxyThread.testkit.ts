@@ -90,6 +90,19 @@ export const threadHarness = Effect.fn("ThreadProxyTest.harness")(function* (
     return {
       send: (line: string) => {
         const m = JSON.parse(line) as { id?: number | string; method?: string };
+        if (typeof m.id === "string" && m.id.startsWith("goat-proxy:apps:"))
+          return Queue.offer(
+            d.replies,
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: m.id,
+              result: {
+                structuredContent: {
+                  apps: [{ pid: 42, bundle_id: "com.apple.calculator", name: "Calculator" }],
+                },
+              },
+            }),
+          ).pipe(Effect.asVoid);
         if (m.method === "initialize" || m.method === "tools/list" || m.method === "ping")
           return Queue.offer(
             d.replies,

@@ -21,6 +21,44 @@ import {
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
 
+it.effect.each(["session", "named"] as const)("organization denial precedes %s approval", (kind) =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      if (kind === "named")
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("org-named"),
+          threadId,
+          messageId: MessageId.make("message:org-named"),
+          text: "Use com.example.Editor",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+      yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
+        Effect.gen(function* () {
+          const first = yield* request({
+            apps: [kind === "session" ? "com.example.Editor" : "com.example.Other"],
+          });
+          if (first.kind !== "needs_human") return assert.fail("expected approval");
+          yield* handoffs.respond(
+            { threadId, handoffId: first.handoff.handoffId, action: "completed" },
+            sessionId,
+          );
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaDeniedApps: ["com.example.Editor"],
+          });
+          assert.deepInclude(yield* request({ apps: ["com.example.Editor"] }), {
+            kind: "refused",
+            code: "app_not_allowed",
+          });
+        }),
+      );
+    }),
+  ),
+);
+
 it.effect.each([
   { original: "Please help", edit: "Use com.example.Editor", expected: "needs_human" },
   { original: "Use com.example.Editor", edit: "Please help", expected: "available" },

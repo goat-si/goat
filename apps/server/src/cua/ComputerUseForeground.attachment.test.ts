@@ -109,6 +109,11 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     Stream.provideService(ServerSettings.ServerSettingsService, settings),
   );
   const h = yield* harness({
+    autoAppListing: true,
+    autoListedApps: [
+      { pid: 42, bundle_id: "com.example.AppA", name: "App A" },
+      { pid: 43, bundle_id: "com.example.AppB", name: "App B" },
+    ],
     humanInput: agentInputGate !== undefined,
     ...(agentInputGate === undefined ? {} : { agentInputGate }),
     overlay: true,
@@ -375,7 +380,12 @@ describe("foreground through real computer-use attachment", () => {
         );
         assert.equal((yield* h.nextToProvider).id, "foreground-B");
         yield* h.nextReservation;
-        yield* h.send(call(1, "run_script", { script: "opaque approved work" }));
+        yield* h.send(
+          call(1, "run_script", {
+            script: "opaque approved work",
+            app_scope: { apps: ["com.example.AppA"] },
+          }),
+        );
         assert.equal((yield* h.nextToDriver).id, 1);
         const reserved = yield* h.nextReservation;
         assert.equal(
@@ -394,7 +404,12 @@ describe("foreground through real computer-use attachment", () => {
         assert.deepEqual(remaining._tag === "active" ? remaining.apps : remaining, apps);
         assert.isUndefined(remaining._tag === "active" ? remaining.foreground : remaining);
         assert.isFalse(yield* leases.foregroundAvailable(threadId, "Check the build status"));
-        yield* h.send(call(2, "run_script", { script: "expired desktop work" }));
+        yield* h.send(
+          call(2, "run_script", {
+            script: "expired desktop work",
+            app_scope: { apps: ["com.example.AppB"] },
+          }),
+        );
         const refused = (yield* h.nextToProvider).result as {
           structuredContent: { detail: string };
         };
@@ -502,7 +517,12 @@ describe("foreground through real computer-use attachment", () => {
         yield* runMigrations();
         const grant = yield* foregroundGrant(threadId, "handoff:ending", { minutes: 5 });
         const { h } = yield* attach(true);
-        yield* h.send(call(1, "run_script", { script: "opaque work" }));
+        yield* h.send(
+          call(1, "run_script", {
+            script: "opaque work",
+            app_scope: { apps: ["com.example.AppA"] },
+          }),
+        );
         yield* h.nextToDriver;
         yield* h.nextReservation;
         if (ending === "expiry") yield* TestClock.adjust("5 minutes");
@@ -536,7 +556,12 @@ describe("foreground through real computer-use attachment", () => {
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
         assert.equal((yield* h.nextToProvider).id, 1);
         yield* h.nextReservation;
-        yield* h.send(call(2, "run_script", { script: "press 7 x 6 =" }));
+        yield* h.send(
+          call(2, "run_script", {
+            script: "press 7 x 6 =",
+            app_scope: { apps: ["com.example.AppA"] },
+          }),
+        );
         assert.equal((yield* h.nextToDriver).id, 2);
       }).pipe(Effect.provide(layer)),
   );

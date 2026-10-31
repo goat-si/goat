@@ -65,6 +65,7 @@ export const SETTINGS_ACCESS = {
   cuaFullAccessAutoAdmit: person(GRANTS_AGENTS),
   cuaMovePointer: person(GRANTS_AGENTS),
   cuaAllowedApps: person(GRANTS_AGENTS),
+  cuaDeniedApps: person("An organization or person sets the computer use safety boundary."),
   deviceOnboardingCompleted: agent,
   deviceHosts: person("It adds machines this server connects to over SSH."),
   easDeviceHosts: person(HOLDS_SECRETS),

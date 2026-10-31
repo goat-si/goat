@@ -15,7 +15,7 @@ it.effect("retries a timed-out capture hide and forwards a later capture after i
         }),
       { captureHideConfirmed: () => !visible },
     );
-    const h = yield* harness({ overlay });
+    const h = yield* harness({ overlay, autoAppListing: true });
     yield* h.push(active());
     const window = { pid: 4, window_id: 9 };
     yield* h.send(call(1, "click", window));

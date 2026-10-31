@@ -8,9 +8,12 @@ import {
   unknownWriteSafety,
   call,
   CONTROL,
-  harness,
+  harness as makeHarness,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () => {
   it.effect(

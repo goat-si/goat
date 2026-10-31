@@ -57,6 +57,8 @@ import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import { makeDesktopBrowserManifest } from "./DesktopBrowserManifest.ts";
 import { currentBlock } from "./cuaDriverBlock.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
+import { standaloneCatalog, type CuaAppListing } from "./CuaAppListing.ts";
+export { catalogName } from "./CuaAppListing.ts";
 import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import { honoredSignals } from "./ComputerUsePrivateMode.ts";
@@ -232,7 +234,7 @@ export interface CuaDriverOptions {
    */
   readonly requestListing?: (
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
-  ) => Effect.Effect<Option.Option<ReadonlyArray<string>>>;
+  ) => Effect.Effect<Option.Option<CuaAppListing>>;
   readonly observeReadiness?: (
     mcp: CuaDriverMcpConfiguration,
     display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>,
@@ -452,7 +454,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       ? Effect.succeedNone
       : Effect.gen(function* () {
           const display = yield* freshProbe;
-          if (display.capability === "unavailable") return Option.none<ReadonlyArray<string>>();
+          if (display.capability === "unavailable") return Option.none<CuaAppListing>();
           return yield* requestListing(display.environment);
         }).pipe(Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeedNone })),
     "5 seconds",
@@ -520,17 +522,19 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     enabled,
     listedApps: Effect.gen(function* () {
       if (!(yield* enabled)) return Option.none();
-      const apps = yield* options.listedApps ?? standaloneListing;
+      const apps = yield* (
+        options.listedApps ??
+          standaloneListing.pipe(
+            Effect.map((listing) => Option.map(listing, (value) => value.apps)),
+          )
+      );
       return (yield* enabled) ? apps : Option.none();
     }),
     appCatalog: Effect.gen(function* () {
       if (!(yield* enabled)) return [];
       const catalog: ReadonlyArray<ComputerUseApp> =
         options.appCatalog === undefined
-          ? Option.getOrElse(yield* standaloneListing, () => []).map((id) => ({
-              id,
-              name: catalogName(id),
-            }))
+          ? standaloneCatalog(yield* standaloneListing)
           : Option.getOrElse(yield* options.appCatalog, () => []);
       return (yield* enabled) ? catalog : [];
     }),
@@ -760,12 +764,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
       });
   },
 );
-
-/** An app's own name when its id is an executable path, so a Linux or Windows entry reads well. */
-export const catalogName = (id: string): string => {
-  const base = id.split(/[\\/]/).pop() ?? id;
-  return (base.replace(/\.(exe|app)$/i, "") || id).slice(0, 255);
-};
 
 export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactory")(function* () {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;

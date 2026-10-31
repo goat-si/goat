@@ -8,6 +8,8 @@ import type {
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Scheduler from "effect/Scheduler";
 import type * as Semaphore from "effect/Semaphore";
 import type { ComputerUseControl, ComputerUseControlState } from "./ComputerUseControl.ts";
 import { type AppBusy, appNeed, makeAppLeases } from "./ComputerUseAppLeases.ts";
@@ -16,6 +18,8 @@ import { markActed } from "./ComputerUseControl.ts";
 import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCallPermissions.ts";
 import { takesScreen } from "./ComputerUseScope.ts";
 import { ComputerUseCallApps } from "./ComputerUseCallApps.ts";
+import { deniedCallApp } from "./ComputerUseCallSafety.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
@@ -143,6 +147,12 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         );
         const state = yield* controlState(threadId, call.controlId);
         const now = DateTime.toEpochMillis(yield* DateTime.now);
+        const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+        const currentSettings = Option.isSome(settings)
+          ? yield* settings.value.getSettings.pipe(Effect.option)
+          : Option.none();
+        if (Option.isSome(settings) && Option.isNone(currentSettings))
+          return { status: "refused", detail: "reconnecting" } as const;
         reservations.reclaimStopped(canAct, now);
         // Release and close do not wait on admission: neither can resurrect a yielding validation.
         if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
@@ -167,6 +177,13 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           return { status: "refused", detail, ...inTheWay } as const;
         if (detail !== undefined) return { status: "refused", detail } as const;
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
+        const denied = deniedCallApp(
+          call,
+          Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
+          controls.get(threadId)?.nonPersonFullAccess === true,
+        );
+        if (denied !== undefined)
+          return { status: "refused", detail: "app_not_allowed", app: denied } as const;
         // Confirmation retains the original ticket and its conflict coverage until cleanup.
         const decision: ComputerUseCallAdmission =
           request.action === "validate"
@@ -189,7 +206,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
             );
         }
         return withCallPermissions(decision, state);
-      }),
+      }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true)),
     );
   });
   /** The control's proxy went away without closing its driver; its app leases end at once. */

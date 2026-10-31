@@ -312,7 +312,12 @@ export class ScreenHostBridge {
         "open_tab",
       ].includes(call.method)
     )
-      return deny(failure("target_missing", call.callId));
+      // A snake_case global passes its arguments as given; without a targetRef it names no target.
+      return deny({
+        ...failure("invalid_argument", call.callId),
+        message: `${call.method} takes the targetRef of a bound target.`,
+        nextStep: `Call the target's own method, such as tab.close() or app.click(), or pass { targetRef: tab.targetRef } from screen.tab() or screen.app().`,
+      });
     if (call.targetRef) {
       let touched = this.turnTargets.get(turn);
       if (!touched) {

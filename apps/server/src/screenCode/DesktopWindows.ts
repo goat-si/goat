@@ -34,6 +34,8 @@ export interface WindowEntry {
   readonly sheetOf?: number;
   readonly is_on_screen: boolean;
   readonly on_current_space?: boolean | null;
+  /** The window server layer; menus and menu bar items list above 0. */
+  readonly layer?: number;
 }
 
 export interface InputWindowsReport {
@@ -93,6 +95,7 @@ export const parseWindowList = (
     const height = finite(bounds?.height) ?? finite(rec.height);
     const sheetOf = natural(rec.sheet_of_window_id) ?? natural(rec.sheetOf);
     const title = clipTitle(rec.title);
+    const layer = natural(rec.layer);
     entries.push({
       window_id: wid,
       pid: wpid,
@@ -103,6 +106,7 @@ export const parseWindowList = (
       ...(rect === undefined ? {} : { bounds: rect }),
       ...(sheetOf === undefined || sheetOf <= 0 ? {} : { sheetOf }),
       is_on_screen: rec.is_on_screen !== false,
+      ...(layer === undefined ? {} : { layer }),
       ...(typeof rec.on_current_space === "boolean" || rec.on_current_space === null
         ? { on_current_space: rec.on_current_space }
         : {}),
@@ -339,6 +343,23 @@ export const hiddenWindowStatus = (
   };
 };
 
+/** A process's other top-level windows on screen in a listing, by id and title, at most eight. */
+export const otherWindowsOf = (
+  windows: ReadonlyArray<WindowEntry> | undefined,
+  exclude: ReadonlyArray<number>,
+): ReadonlyArray<{ readonly window_id: number; readonly title: string }> =>
+  (windows ?? [])
+    .filter(
+      (w) =>
+        !exclude.includes(w.window_id) &&
+        w.is_on_screen &&
+        (w.layer ?? 0) === 0 &&
+        (w.width ?? 2) > 1 &&
+        (w.height ?? 2) > 1,
+    )
+    .slice(0, 8)
+    .map((w) => ({ window_id: w.window_id, title: w.title }));
+
 /** A Go to Folder input of one binding and, once it returned, the windows before and after it. */
 export interface SheetTrigger {
   readonly targetId: string;
@@ -381,6 +402,11 @@ export class CellWindowTracker {
 
   pids(): ReadonlyArray<number> {
     return [...this.startByPid.keys()];
+  }
+
+  /** The process's windows as the cell's latest read after an input listed them. */
+  latest(pid: number): ReadonlyArray<WindowEntry> | undefined {
+    return this.latestByPid.get(pid);
   }
 
   recordBefore(pid: number, list: ReadonlyArray<WindowEntry> | undefined): void {

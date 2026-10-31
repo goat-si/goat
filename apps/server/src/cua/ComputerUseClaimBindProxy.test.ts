@@ -5,7 +5,10 @@ import * as Fiber from "effect/Fiber";
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Bind from "../preview/BrowserClaimBind.ts";
 import { makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.ts";
-import { active, call, harness, CONTROL } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, harness as makeHarness, CONTROL } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 it.effect("admits a host bind only for an approved pending window under app restrictions", () =>
   Effect.gen(function* () {
