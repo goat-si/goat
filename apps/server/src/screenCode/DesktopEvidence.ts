@@ -566,14 +566,15 @@ export const seedBatchBaseline = Effect.fn("DesktopEvidence.seedBatchBaseline")(
   tracker.recordBefore(pid, parseWindowList(raw, pid));
 });
 
-export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(function* (deps: {
-  readonly list: () => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
-  readonly pid: number;
-  readonly windowId: number;
+export const pollDesktopWait = Effect.fn("DesktopEvidence.pollDesktopWait")(function* <A>(deps: {
+  readonly read: () => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly initial: A;
+  readonly sample: (reply: ComputerUsePrimitiveReply) => A;
+  readonly met: (value: A) => boolean;
   readonly timeoutMs: unknown;
   readonly cellDeadlineMillis: number;
 }) {
-  const { list, pid, windowId, timeoutMs, cellDeadlineMillis } = deps;
+  const { read, timeoutMs, cellDeadlineMillis } = deps;
   const started = yield* Clock.currentTimeMillis;
   const requested = typeof timeoutMs === "number" ? Math.max(0, timeoutMs) : 10_000;
   const waitCap = Math.max(
@@ -581,12 +582,12 @@ export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(fu
     Math.min(requested, 10_000, cellDeadlineMillis - started - CELL_RESERVE_MS - MIN_CALL_MS),
   );
   const deadline = started + waitCap;
-  let hidden = hiddenWindowStatus({}, pid, windowId);
+  let value = deps.initial;
   for (let sample = 0; ; sample++) {
     const now = yield* Clock.currentTimeMillis;
     if (sample > 0 && now >= deadline) break;
     const remain = waitCap === 0 ? MIN_CALL_MS : Math.max(1, deadline - now);
-    const polled = yield* list().pipe(
+    const polled = yield* read().pipe(
       Effect.timeoutOption(remain),
       Effect.catchIf(
         (err) => err.code === "deadline" && (sample > 0 || requested < MIN_CALL_MS),
@@ -595,12 +596,31 @@ export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(fu
     );
     if (Option.isNone(polled)) break;
     if (waitCap > 0 && (yield* Clock.currentTimeMillis) > deadline) break;
-    hidden = hiddenWindowStatus(driverValue(polled.value), pid, windowId);
-    if (hidden.met || waitCap === 0) break;
+    value = deps.sample(polled.value);
+    if (deps.met(value) || waitCap === 0) break;
     const after = yield* Clock.currentTimeMillis;
     if (after >= deadline) break;
     yield* Effect.sleep(Math.min(100, deadline - after));
   }
+  return value;
+});
+
+export const pollHiddenWindow = Effect.fn("DesktopEvidence.pollHiddenWindow")(function* (deps: {
+  readonly list: () => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+  readonly pid: number;
+  readonly windowId: number;
+  readonly timeoutMs: unknown;
+  readonly cellDeadlineMillis: number;
+}) {
+  const { list, pid, windowId, timeoutMs, cellDeadlineMillis } = deps;
+  const hidden = yield* pollDesktopWait({
+    read: list,
+    initial: hiddenWindowStatus({}, pid, windowId),
+    sample: (reply) => hiddenWindowStatus(driverValue(reply), pid, windowId),
+    met: (value) => value.met,
+    timeoutMs,
+    cellDeadlineMillis,
+  });
   return {
     value: hidden,
     category: hidden.met ? ("confirmed" as const) : ("unverifiable" as const),
