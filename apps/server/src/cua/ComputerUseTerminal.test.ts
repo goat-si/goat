@@ -1,6 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { mergeTerminal } from "./ComputerUseTerminal.ts";
+import { mergeTerminal, terminalReplyState } from "./ComputerUseTerminal.ts";
 import { makePersonStopFence, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 
 it("merges terminal reasons and possible input monotonically", () => {
@@ -22,6 +22,20 @@ it("merges terminal reasons and possible input monotonically", () => {
     ),
     { reason: "stopped_by_person", possibleCommit: true },
   );
+});
+
+it("merges an already typed terminal reply without dropping possible input", () => {
+  const reply = {
+    isError: true,
+    structuredContent: {
+      code: "stopped_by_person",
+      safety: { retryClass: "never", possibleCommit: true },
+    },
+  };
+  assert.deepEqual(mergeTerminal({ reason: "screen_locked" }, terminalReplyState(reply)), {
+    reason: "stopped_by_person",
+    possibleCommit: true,
+  });
 });
 
 it("the proxy fence never downgrades a person's stop to a lock", () => {

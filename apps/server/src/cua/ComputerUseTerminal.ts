@@ -68,7 +68,10 @@ const decodeTerminalReply = Schema.decodeUnknownOption(
     isError: Schema.Literal(true),
     structuredContent: Schema.Struct({
       code: Schema.Literals(["stopped_by_person", "screen_locked"]),
-      safety: Schema.Struct({ retryClass: Schema.Literal("never") }),
+      safety: Schema.Struct({
+        retryClass: Schema.Literal("never"),
+        possibleCommit: Schema.optionalKey(Schema.Boolean),
+      }),
     }),
   }),
 );
@@ -76,6 +79,16 @@ const decodeTerminalReply = Schema.decodeUnknownOption(
 export const terminalReplyReason = (value: unknown): ComputerUseTerminalReason | undefined => {
   const decoded = decodeTerminalReply(value);
   return decoded._tag === "Some" ? decoded.value.structuredContent.code : undefined;
+};
+
+export const terminalReplyState = (value: unknown) => {
+  const decoded = decodeTerminalReply(value);
+  return decoded._tag === "Some"
+    ? {
+        reason: decoded.value.structuredContent.code,
+        possibleCommit: decoded.value.structuredContent.safety.possibleCommit,
+      }
+    : {};
 };
 
 export const terminalReason = (

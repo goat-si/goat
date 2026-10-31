@@ -138,10 +138,7 @@ export class ScreenHostBridge {
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
-  private terminalObserver?: (
-    context: ScreenHostContext,
-    reason: ComputerUseTerminalReason,
-  ) => void;
+  terminalObserver?: (context: ScreenHostContext, reason: ComputerUseTerminalReason) => void;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
 
   constructor(cursorPhases?: ScreenCursorPhases) {
@@ -150,12 +147,6 @@ export class ScreenHostBridge {
 
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
     this.dispatcher = dispatcher;
-  }
-
-  setTerminalObserver(
-    observer: (context: ScreenHostContext, reason: ComputerUseTerminalReason) => void,
-  ): void {
-    this.terminalObserver = observer;
   }
 
   availability = Effect.fn("ScreenHostBridge.availability")(function* (
@@ -413,8 +404,14 @@ export class ScreenHostBridge {
     const failCell = (error: ScreenRunError) => {
       if (error.code === "stopped_by_person" || error.code === "screen_locked")
         this.terminalObserver?.(context, error.code);
-      const safety = screenFailureSafety(call, error);
-      ownFailure = { ...error, safety, effectStarted: safety.possibleCommit };
+      const safety =
+        callTerminalError(error, undefined, call, error.effectStarted)?.safety ??
+        screenFailureSafety(call, error);
+      ownFailure = {
+        ...error,
+        safety,
+        effectStarted: error.effectStarted || safety.possibleCommit,
+      };
       settle(
         safety.possibleCommit ? "unknown_outcome" : "refused",
         safety.possibleCommit ? "unknown" : "settled",

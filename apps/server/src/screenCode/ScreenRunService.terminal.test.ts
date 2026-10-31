@@ -89,7 +89,11 @@ it.live("screen.run preserves dispatcher Stop when a lock cuts its cell", () =>
       })
       .pipe(Effect.result);
     expect(answer._tag).toBe("Failure");
-    if (answer._tag === "Failure") expect(answer.failure.code).toBe("stopped_by_person");
+    if (answer._tag === "Failure") {
+      expect(answer.failure.code).toBe("stopped_by_person");
+      expect(answer.failure.safety?.retryClass).toBe("never");
+      expect(answer.failure.safety?.possibleCommit).toBe(true);
+    }
   }),
 );
 

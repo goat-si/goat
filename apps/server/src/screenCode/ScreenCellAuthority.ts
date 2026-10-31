@@ -37,9 +37,9 @@ export const watchCellTerminals = (
   cells: ReturnType<typeof makeCellAuthority>,
 ) => {
   const terminals = new Map<string, ComputerUseTerminalReason>();
-  bridge.setTerminalObserver((context, reason) => {
+  bridge.terminalObserver = (context, reason) => {
     const id = `${context.runId}\u0000${context.turnId}`;
     if (cells.get(id) === context.cellId) latchCellTerminal(terminals, id, reason);
-  });
+  };
   return terminals;
 };

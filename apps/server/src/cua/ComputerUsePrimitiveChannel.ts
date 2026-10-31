@@ -32,6 +32,7 @@ import {
   mergeTerminal,
   terminalReason,
   terminalReplyReason,
+  terminalReplyState,
   type ComputerUseTerminalReason,
 } from "./ComputerUseTerminal.ts";
 
@@ -207,18 +208,19 @@ export const make = Effect.gen(function* () {
   const terminalReply = (
     pending: Pending,
     terminal: Control["terminal"],
+    possibleCommit = false,
   ): ComputerUsePrimitiveReply => ({
     ...pending.request,
-    status: pending.sent ? "unknown_outcome" : "not_started",
+    status: pending.sent || possibleCommit ? "unknown_outcome" : "not_started",
     ...(terminal === undefined
       ? {}
       : {
           result: resultOf(
             JSON.parse(
-              pending.sent
+              pending.sent || possibleCommit
                 ? cutOff(
                     pending.request.callId,
-                    pending.request.tool,
+                    possibleCommit ? "click" : pending.request.tool,
                     terminal === "screen_locked"
                       ? { _tag: "pause", reason: "screen_locked" }
                       : { _tag: "end", reason: "stopped_all" },
@@ -474,16 +476,23 @@ export const make = Effect.gen(function* () {
       ),
       Effect.filterOrFail(
         ({ answered, at }) =>
-          mergeTerminal({ reason: pending.terminal }, epoch).reason !== undefined ||
+          mergeTerminal(
+            mergeTerminal({ reason: pending.terminal }, epoch),
+            terminalReplyState(answered.result),
+          ).reason !== undefined ||
           at <= deadlineMillis ||
           answered.status === "not_started",
         deadlineFailure,
       ),
       Effect.map(({ answered }) => {
-        const reason = mergeTerminal({ reason: pending.terminal }, epoch).reason;
+        const merged = mergeTerminal(
+          mergeTerminal({ reason: pending.terminal }, epoch),
+          terminalReplyState(answered.result),
+        );
+        const reason = merged.reason;
         const result =
           reason !== undefined && terminalReplyReason(answered.result) !== reason
-            ? terminalReply(pending, reason)
+            ? terminalReply(pending, reason, merged.possibleCommit)
             : answered;
         return input.authority === "claimBind"
           ? { ...result, driverGeneration: binding.generation + 1 }
