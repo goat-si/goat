@@ -55,13 +55,14 @@ export const replaceWithTerminal = (
   replaced: ComputerUseTerminalSource,
   ...sources: readonly ComputerUseTerminalSource[]
 ): ComputerUseTerminalState => {
-  const stateOf = (source: ComputerUseTerminalSource) => {
+  const stateOf = (source: ComputerUseTerminalSource): ComputerUseTerminalState => {
     if (typeof source === "boolean") return { possibleCommit: source };
     if (typeof source === "string")
       return {
         reason: source === "stopped_by_person" || source === "screen_locked" ? source : undefined,
+        possibleCommit: false,
       };
-    if (source === undefined) return {};
+    if (source === undefined) return { possibleCommit: false };
     const code = source.code;
     const reason = source.reason;
     return mergeTerminal(
