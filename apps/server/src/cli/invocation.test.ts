@@ -88,6 +88,12 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       expect(yield* rootCommand(desktop)).toBe(`sudo '${shim}' browser setup`);
 
       expect(yield* rootCommand({ ...desktop, path: yield* pathWithGoat })).toBe(
+        `sudo '${shim}' browser setup`,
+      );
+
+      const linked = yield* fs.makeTempDirectoryScoped();
+      yield* fs.symlink(shim, path.join(linked, "goat"));
+      expect(yield* rootCommand({ ...desktop, path: linked })).toBe(
         'sudo env "PATH=$PATH" goat browser setup',
       );
 
