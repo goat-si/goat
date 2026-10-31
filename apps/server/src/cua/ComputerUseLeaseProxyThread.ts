@@ -144,8 +144,6 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     ended,
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
   });
-  const answerReconnecting = (id: JsonRpcId, method: string | undefined) =>
-    options.output(refusal(id, method, "reconnecting", RECONNECTING));
   const answerStopped = Effect.fn("ComputerUseLeaseProxyThread.answerStopped")((
     id: JsonRpcId,
     method: string | undefined,
@@ -161,7 +159,12 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       transport === "reconnecting" &&
       latch?.reason === undefined
     )
-      return answerReconnecting(id, method);
+      return terminalSink(
+        { answer: (line, _status, context) => options.output(line, context) },
+        { id, ...(method === undefined ? {} : { method }) },
+        () => latch?.reason,
+        () => false,
+      ).answer(refusal(id, method, "reconnecting", RECONNECTING));
     const candidate =
       given ??
       terminal ??
