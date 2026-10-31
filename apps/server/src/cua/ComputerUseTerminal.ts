@@ -1,6 +1,36 @@
 import * as Schema from "effect/Schema";
+import type { ScreenRunError } from "@goat/contracts";
+import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
+import { isReadOnlyCall, LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 
 export type ComputerUseTerminalReason = "stopped_by_person" | "screen_locked";
+
+export const terminalFailure = (
+  reason: ComputerUseTerminalReason | undefined,
+  tool: string,
+  args: unknown,
+  dispatched = false,
+): ScreenRunError | undefined => {
+  if (reason === undefined) return undefined;
+  const safety = dispatched
+    ? {
+        ...classifyActionOutcome({
+          effect: isReadOnlyCall(tool, args) ? "read" : "write",
+          status: "indeterminate",
+          dispatched: true,
+        }),
+        retryClass: "never",
+      }
+    : refusalSafety(reason === "screen_locked" ? "screen_locked" : "stopped", tool, args);
+  return {
+    code: reason,
+    effectStarted: safety.possibleCommit,
+    nextStep:
+      reason === "screen_locked" ? PAUSE_MESSAGES.screen_locked : LEASE_END_MESSAGES.stopped,
+    safety,
+  };
+};
 
 const decodeTerminalReply = Schema.decodeUnknownOption(
   Schema.Struct({

@@ -26,9 +26,9 @@ import * as Stream from "effect/Stream";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
 import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
-import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 import {
+  terminalFailure,
   terminalReason,
   terminalReplyReason,
   type ComputerUseTerminalReason,
@@ -416,13 +416,14 @@ export const make = Effect.gen(function* () {
       return yield* Effect.fail(desktopNotReady("unbound"));
     }
     let timedOut = false;
-    const deadlineFailure = () => ({
-      code: "deadline" as const,
-      effectStarted: pending.sent,
-      nextStep: pending.sent
-        ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
-        : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
-    });
+    const deadlineFailure = () =>
+      terminalFailure(terminalReason(record.terminal), input.tool, input.args, pending.sent) ?? {
+        code: "deadline" as const,
+        effectStarted: pending.sent,
+        nextStep: pending.sent
+          ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
+          : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
+      };
     return yield* Deferred.await(answer).pipe(
       Effect.timeoutOrElse({
         duration: Math.max(0, deadlineMillis - now) + PROXY_ANSWER_GRACE_MS,
@@ -693,20 +694,8 @@ export const make = Effect.gen(function* () {
               undefined,
               current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
             );
-          if (terminal !== undefined)
-            return yield* Effect.fail({
-              code: terminal,
-              effectStarted: false,
-              nextStep:
-                terminal === "screen_locked"
-                  ? PAUSE_MESSAGES.screen_locked
-                  : LEASE_END_MESSAGES.stopped,
-              safety: refusalSafety(
-                terminal === "screen_locked" ? "screen_locked" : "stopped",
-                input.tool,
-                input.args,
-              ),
-            });
+          const failure = terminalFailure(terminal, input.tool, input.args);
+          if (failure !== undefined) return yield* Effect.fail(failure);
         }
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(desktopNotReady("none"));
