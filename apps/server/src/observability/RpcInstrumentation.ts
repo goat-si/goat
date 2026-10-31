@@ -67,6 +67,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.computerUseStatusChanges]: "server",
   [WS_METHODS.computerUseStop]: "server",
   [WS_METHODS.computerUseStopAll]: "server",
+  [WS_METHODS.computerUseRemoveAllowedApp]: "server",
   [WS_METHODS.computerUseResume]: "server",
   [WS_METHODS.computerUseApps]: "server",
   [WS_METHODS.previewSessionsSubscribe]: "server",

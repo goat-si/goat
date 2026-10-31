@@ -1,6 +1,8 @@
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
 import * as SettingsRpc from "./auth/SettingsRpc.ts";
+import * as SettingsSessionPermit from "./auth/settingsSessionPermit.ts";
+import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import {
@@ -1449,6 +1451,7 @@ export const layerWsRpc = (
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const updateSettings = yield* SettingsRpc.make(currentSession);
+      const authorizeSettings = yield* SettingsSessionPermit.make(currentSession);
       // Service permits are rechecked after waits and inside SQL; this is a token-free Ref read.
       const memoryPermit = (
         required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
@@ -2743,6 +2746,56 @@ export const layerWsRpc = (
         ...(yield* storageRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+        [WS_METHODS.computerUseRemoveAllowedApp]: ({ app }) =>
+          Effect.gen(function* () {
+            if (!canResolveHumanStep(sessionResolver(currentSession), "person_only"))
+              return yield* new EnvironmentAuthorizationError({
+                requiredScope: AuthSettingsWriteScope,
+                message: "Only a person may remove an allowed app.",
+              });
+            const authorize = authorizeSettings({ cuaAllowedApps: [] }).pipe(
+              Effect.andThen(
+                sessions.listActive().pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerSettingsError({
+                        settingsPath: config.settingsPath,
+                        operation: "normalize",
+                        cause,
+                      }),
+                  ),
+                  Effect.flatMap((active) =>
+                    active.some(
+                      (session) =>
+                        session.sessionId === currentSessionId &&
+                        session.client.deviceType !== "bot" &&
+                        canResolveHumanStep(sessionResolver(session), "person_only"),
+                    )
+                      ? Effect.void
+                      : Effect.fail(
+                          new ServerSettingsError({
+                            settingsPath: config.settingsPath,
+                            operation: "normalize",
+                            cause: "A person must remove an allowed app.",
+                          }),
+                        ),
+                  ),
+                ),
+              ),
+            );
+            yield* handoffs.removeComputerUseAllowedApp(app, authorize).pipe(
+              Effect.mapError((cause) =>
+                cause._tag === "HandoffError"
+                  ? new ServerSettingsError({
+                      settingsPath: config.settingsPath,
+                      operation: "normalize",
+                      cause,
+                    })
+                  : cause,
+              ),
+            );
+            return {};
+          }),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation, agentTerminalBinding }) {
@@ -2752,14 +2805,16 @@ export const layerWsRpc = (
                 settingsPath: config.settingsPath,
                 operation: "normalize",
               });
-            if (patch.enableCua === true) yield* ComputerUseSettings.admitEnable();
+            if (patch.enableCua === true) {
+              yield* ComputerUseSettings.admitEnable();
+            }
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            const settings = yield* updateSettings({
+            const update = updateSettings({
               patch: nextPatch,
               ...(providerInstanceMutation === undefined ? {} : { providerInstanceMutation }),
               ...(agentTerminalBinding === undefined ? {} : { agentTerminalBinding }),
@@ -2780,6 +2835,12 @@ export const layerWsRpc = (
                     ),
                   ),
               }),
+            );
+            const settings = yield* ComputerUseSettings.applyPatch(
+              handoffs,
+              patch,
+              update,
+              config.settingsPath,
             );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),

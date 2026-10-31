@@ -155,6 +155,15 @@ it.effect(
           yield* worker.drain();
           const firstAddress = { threadId, handoffId: first.handoffId };
           const secondAddress = { threadId: otherThread, handoffId: second.handoffId };
+          assert.equal(
+            (yield* service
+              .respond(
+                { ...firstAddress, action: "completed", computerUseScope: "session" },
+                owner.sessionId,
+              )
+              .pipe(Effect.result))._tag,
+            "Failure",
+          );
           // Admission needs the same authority as turning computer use on.
           assert.equal(
             (yield* service
@@ -250,6 +259,20 @@ it.effect(
           const kakao = yield* ask(threadId, ["com.kakao.KakaoTalk"]);
           const aside = yield* ask(otherThread, ["at.studio.AsideBrowser"]);
           yield* worker.drain();
+          assert.equal(
+            (yield* service
+              .respond(
+                {
+                  threadId,
+                  handoffId: kakao.handoffId,
+                  action: "completed",
+                  computerUseScope: "session",
+                },
+                operator.sessionId,
+              )
+              .pipe(Effect.result))._tag,
+            "Failure",
+          );
           yield* service.respond(
             { threadId, handoffId: kakao.handoffId, action: "completed" },
             owner.sessionId,

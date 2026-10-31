@@ -4,8 +4,10 @@ import {
   type AuthClientSession,
   type ComputerUseCapabilities,
   type ComputerUseRequestInput,
+  type ComputerUseApp,
   EnvironmentId,
   ScheduledTaskId,
+  type ServerSettingsError,
   ThreadId,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -25,6 +27,7 @@ import {
 } from "../handoffs/Handoffs.testkit.ts";
 import type * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { requestComputerUse } from "./ComputerUseRequests.ts";
@@ -71,10 +74,10 @@ export const leasesDetecting = (
 export const purpose = "Check the build status window";
 export const sessionId = AuthSessionId.make("person:request-tests");
 export const requestWithHandoffs =
-  (handoffs: Handoffs.Handoffs["Service"]) =>
+  (handoffs: Handoffs.Handoffs["Service"], targetThreadId: ThreadId = threadId) =>
   (request: Partial<ComputerUseRequestInput> = {}, wait?: Duration.Duration) =>
     requestComputerUse({
-      threadId,
+      threadId: targetThreadId,
       providerInstanceId: instanceId,
       request: { purpose, minutes: 30, ...request },
       ...(wait === undefined ? {} : { wait }),
@@ -134,6 +137,8 @@ export const withRequests = <A, E, R>(
   from: "person" | "schedule" | "remote" = "person",
   /** Hears what the leases tell the desktop to watch and admit to the driver's manifest. */
   setCuaWatch?: DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]["setCuaWatch"],
+  catalog: ReadonlyArray<ComputerUseApp> = [],
+  settingsLayer?: Layer.Layer<ServerSettings.ServerSettingsService, ServerSettingsError>,
 ) => {
   let current = failure;
   return Effect.gen(function* () {
@@ -177,11 +182,12 @@ export const withRequests = <A, E, R>(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
+        settingsLayer ?? ServerSettings.layerTest({ enableCua: true }),
         leasesDetecting(signals, setCuaWatch),
         Layer.mock(CuaDriver.CuaDriver)({
           enabled: Effect.succeed(true),
           listedApps: Effect.succeed(listedApps),
-          appCatalog: Effect.succeed([]),
+          appCatalog: Effect.succeed(catalog),
           block: Effect.sync(() => CuaDriver.agentBlock(current)),
           acquire: Effect.sync(() => {
             retry.starts += 1;

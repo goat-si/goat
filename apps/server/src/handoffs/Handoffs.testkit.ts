@@ -39,6 +39,7 @@ export const withHarness = <A, E, R>(
     orchestrator: Orchestrator.OrchestratorV2["Service"];
     worker: Worker.OrchestrationEffectWorkerV2["Service"];
   }) => Effect.Effect<A, E, R>,
+  handoffsLayer?: Layer.Layer<Handoffs.Handoffs>,
 ) =>
   Effect.gen(function* () {
     const fake = yield* makeFakeCloudAdapter(true, instanceId);
@@ -87,7 +88,7 @@ export const withHarness = <A, E, R>(
           { name: "human-handoff" },
           Registry.layerFromAdapters([adapter]),
           { runEffectWorker: false, databaseLayer },
-        ).pipe(Layer.provideMerge(databaseLayer)),
+        ).pipe(Layer.provideMerge(databaseLayer), Layer.provide(handoffsLayer ?? Layer.empty)),
       ),
     );
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);

@@ -49,6 +49,8 @@ export const Handoff = Schema.Struct({
   actor: HandoffActor,
   /** A computer use grant's approved apps; a grant without them admits every app. */
   apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+  computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always", "standing"])),
+  computerUseConsentSequence: Schema.optionalKey(Schema.Number),
   computerUseForeground: Schema.optionalKey(
     Schema.Struct({ purpose: TrimmedNonEmptyString, target: Schema.Literal("desktop") }),
   ),
@@ -177,6 +179,7 @@ export type HandoffReadInput = typeof HandoffReadInput.Type;
 export const HandoffRespondInput = Schema.Struct({
   ...HandoffReadInput.fields,
   action: Schema.Literals(["opened", "completed", "declined", "cancelled"]),
+  computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
 });
 export type HandoffRespondInput = typeof HandoffRespondInput.Type;
 export const HandoffOpenResult = Schema.Struct({

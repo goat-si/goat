@@ -1,5 +1,6 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
+import { AllowedApps } from "./computerUse/AllowedApps";
 import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
@@ -41,6 +42,8 @@ import {
 import { SettingsProjectOverridesSection } from "./components/SettingsProjectOverridesSection";
 import { useSettingsEnvironmentFilter } from "./settings-environment-filter";
 import { useSettingsWriter } from "./useSettingsWriter";
+import { serverEnvironment } from "../../state/server";
+import { useAtomCommand } from "../../state/use-atom-command";
 import {
   planMobileBuiltInSkillToggle,
   planMobileBuiltInSkillProjectPatch,
@@ -52,37 +55,11 @@ import {
 } from "./settings-scoped-server";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
-
-type SettingsPage = "new-threads" | "source-control" | "agent-behavior" | "maintenance";
-
-const PAGE_TITLES: Record<SettingsPage, string> = {
-  "new-threads": "New threads",
-  "source-control": "Source control",
-  "agent-behavior": "Agent behavior",
-  maintenance: "Maintenance",
-};
-
-const MESSAGE_NAMED_SKILL_SETTINGS = [
-  {
-    name: "goat-discipline",
-    title: "Development discipline skill",
-    subtitle:
-      "Built in. On a turn whose message names $goat-discipline, agents get GOAT's longer guidance for code changes. Off keeps it out of the $ menu and out of turns.",
-    projectDescription: "Load it in this project when a message names $goat-discipline.",
-  },
-  {
-    name: "goat-docs",
-    title: "GOAT Docs skill",
-    subtitle:
-      "Built in. On a turn whose message names $goat-docs, agents answer questions about GOAT from its user guides and cite them. Off keeps it out of the $ menu and out of turns.",
-    projectDescription: "Load it in this project when a message names $goat-docs.",
-  },
-] as const satisfies ReadonlyArray<{
-  readonly name: BuiltInSkillName;
-  readonly title: string;
-  readonly subtitle: string;
-  readonly projectDescription: string;
-}>;
+import {
+  MESSAGE_NAMED_SKILL_SETTINGS,
+  PAGE_TITLES,
+  type SettingsPage,
+} from "./settingsServerControlConstants";
 
 const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettingKey[]> = {
   "new-threads": ["defaultThreadEnvMode", "worktreeSubmodules", "defaultRuntimeMode"],
@@ -286,6 +263,10 @@ function ServerSettingsDetail(props: {
       ? skillOn(reference, "screen-code")
       : null;
   const writeSettings = useSettingsWriter();
+  const removeAllowedApp = useAtomCommand(serverEnvironment.removeComputerUseAllowedApp, {
+    label: "remove allowed app",
+    reportFailure: true,
+  });
   const write = (patch: ServerSettingsPatch) => {
     if (writeInFlight.current) {
       const queued = queuedPatch.current;
@@ -636,6 +617,25 @@ function ServerSettingsDetail(props: {
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
+                    {!projectSelected ? (
+                      <AllowedApps
+                        targets={displayTargets}
+                        disabled={disabledFor("cuaAllowedApps")}
+                        onRemove={(environmentId, app) => {
+                          if (
+                            writeInFlight.current ||
+                            !readEnvironmentScope(environmentId, AuthSettingsWriteScope)
+                          )
+                            return;
+                          writeInFlight.current = true;
+                          setPendingWrites((count) => count + 1);
+                          void removeAllowedApp({ environmentId, input: { app } }).finally(() => {
+                            writeInFlight.current = false;
+                            setPendingWrites((count) => count - 1);
+                          });
+                        }}
+                      />
+                    ) : null}
                     <ComputerUseAdvancedRow advanced={computerUseAdvanced} />
                     {computerUseAdvanced.expanded ? (
                       <>
