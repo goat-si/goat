@@ -957,7 +957,9 @@ it.effect.each(matrix)(
       const actual = yield* site.run({ possible, reasons: order.reasons });
       assert.equal(
         actual.reason,
-        replaceWithTerminal("none", site.implicitReason, ...order.reasons).reason,
+        site.implicitReason === "stopped_by_person" || order.reasons.includes("stopped_by_person")
+          ? "stopped_by_person"
+          : "screen_locked",
       );
       assert.equal(actual.possibleCommit, possible);
     }),
