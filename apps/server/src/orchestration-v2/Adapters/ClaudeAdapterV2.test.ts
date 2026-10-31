@@ -4187,6 +4187,62 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
   );
 
+  it.effect.each([
+    {
+      content: { type: "advisor_tool_result_error", error_code: "overloaded" },
+      status: "failed",
+    },
+    { content: { type: "advisor_result", text: "Looks right." }, status: "completed" },
+  ] as const)("settles an advisor call from its result content: $status", ({ content, status }) =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("advisor-result"),
+          text: "Check the plan with the advisor",
+          attachments: [],
+        }),
+      );
+      const id = "srvtoolu_advisor";
+      const assistantFrame = (uuid: string, block: unknown) =>
+        claudeSdkFrame({
+          type: "assistant",
+          uuid,
+          session_id: WAKE_NATIVE_SESSION,
+          parent_tool_use_id: null,
+          message: {
+            id: "advisor-message",
+            type: "message",
+            role: "assistant",
+            model: "claude-opus-5-5",
+            content: [block],
+          },
+        });
+      yield* harness.offerAndWait(
+        assistantFrame("advisor-call", { type: "server_tool_use", id, name: "advisor", input: {} }),
+      );
+      yield* harness.offerAndWait(
+        assistantFrame("advisor-result", { type: "advisor_tool_result", tool_use_id: id, content }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "advisor-terminal", result: "Checked" }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      yield* harness.awaitEventsRecorded;
+      const items = harness.events.flatMap((event) =>
+        event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+          ? [event.turnItem]
+          : [],
+      );
+      assert.equal(items.at(-1)?.toolName, "advisor");
+      assert.equal(items.at(-1)?.status, status);
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
   describe("MCP elicitations", () => {
     const testLayer = layerAdapterTest;
     const approvalOnly: ElicitationRequest = {
