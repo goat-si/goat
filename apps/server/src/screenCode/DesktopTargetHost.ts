@@ -54,6 +54,7 @@ import {
 import {
   availabilityFromControlState,
   buildWaitExpectation,
+  desktopCallArgs as callArgs,
   inspectBatchMember,
   INPUT_METHODS,
   prepareDesktopInput,
@@ -85,11 +86,6 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-// Strip guest-only targetRef/batch fields before forwarding arguments to the driver.
-const callArgs = (args: ScreenHostCall["args"]): Record<string, unknown> => {
-  const { targetRef: _t, batch: _b, ...rest } = object(Array.isArray(args) ? args[0] : args) ?? {};
-  return rest;
-};
 const array = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
 const integer = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
