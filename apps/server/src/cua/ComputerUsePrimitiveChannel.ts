@@ -855,7 +855,7 @@ export const make = Effect.gen(function* () {
         )
           return yield* Effect.fail(
             terminalFailure(
-              replaceWithTerminal(beganEpoch, record?.terminal),
+              replaceWithTerminal("none", beganEpoch, record?.terminal),
               input.tool,
               input.args,
             ) ?? desktopNotReady("unbound"),
