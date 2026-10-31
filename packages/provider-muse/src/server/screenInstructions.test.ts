@@ -20,6 +20,7 @@ it.effect.each([true, false])("gates screen guidance by the turn skill, enabled=
       providerInstanceId: INSTANCE_ID,
       endpoint: "http://127.0.0.1:43210/mcp",
       authorizationHeader: "Bearer test",
+      browserToolsAvailable: true,
       builtInSkills: enabled ? ["screen-code"] : [],
       screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
     });
