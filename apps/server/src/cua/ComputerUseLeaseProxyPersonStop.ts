@@ -67,30 +67,39 @@ export const terminalSink = (
 
 export function makePersonStopFence() {
   let reason: "stopped_by_person" | "screen_locked" | undefined;
+  let epoch: { reason?: "stopped_by_person" | "screen_locked" } = {};
   let lockConfirmed = false;
+  const latch = (value: "stopped_by_person" | "screen_locked") => {
+    reason ??= value;
+    epoch.reason ??= reason;
+  };
   return {
     pending: () => reason !== undefined,
     terminal: () => reason,
+    capture: () => {
+      const captured = epoch;
+      return () => captured.reason;
+    },
     beginStop: () => {
       if (reason !== undefined) return false;
-      reason = "stopped_by_person";
+      latch("stopped_by_person");
       return true;
     },
     beginLock: (message: unknown) => {
       if (reason !== undefined || !driverScreenLocked(message)) return false;
-      reason = "screen_locked";
+      latch("screen_locked");
       return true;
     },
     confirm: (update: ComputerUseLeaseUpdate | undefined) => {
       if (update?.state === "paused" && update.reason === "screen_locked") {
-        reason ??= "screen_locked";
+        latch("screen_locked");
         lockConfirmed = true;
       }
       if (
         update?.state === "ended" &&
         (update.reason === "stopped" || update.reason === "stopped_all")
       )
-        reason ??= "stopped_by_person";
+        latch("stopped_by_person");
     },
     activate: (
       update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
@@ -105,7 +114,10 @@ export function makePersonStopFence() {
         lockConfirmed = true;
       }
       if (paused === "screen_locked") {
-        if (reason === "screen_locked") reason = undefined;
+        if (reason === "screen_locked") {
+          reason = undefined;
+          epoch = {};
+        }
         lockConfirmed = false;
       }
       return true;

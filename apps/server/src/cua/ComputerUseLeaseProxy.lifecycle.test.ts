@@ -682,3 +682,129 @@ it.effect.each(["escape", "lock"] as const)("validation refusal cannot overwrite
     assert.include(JSON.stringify(answer), '"retryClass":"never"');
   }),
 );
+
+import * as Round6Channel from "./ComputerUsePrimitiveChannel.ts";
+import * as Round6Leases from "./ComputerUseLeases.ts";
+import * as Round6PubSub from "effect/PubSub";
+import { driverError as round6DriverError } from "../screenCode/DesktopDriverReplies.ts";
+
+it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", (kind) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const stopReport = yield* Deferred.make<void>();
+    const h = yield* harness({
+      personStop: true,
+      personStopGate: stopReport,
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }))
+          : Effect.succeed({ status: "released" }),
+    });
+    yield* h.push(active());
+    const driver = yield* h.driverStarted;
+    const req = (n: number, deadlineMillis: number) => ({
+      state: "primitive-request" as const,
+      requestId: "round6:" + n,
+      registrationId: "registration:one",
+      controlId: CONTROL,
+      connectionGeneration: driver.connectionId,
+      runId: "run:one",
+      turnId: "turn:one",
+      callId: n,
+      deadlineMillis,
+      tool: "list_apps",
+      args: {},
+    });
+    yield* h.sendPrimitive(req(1, 60000));
+    const reservation = yield* h.nextReservation;
+    assert.equal(reservation.action, "reserve");
+    const signals = yield* Round6PubSub.unbounded<void>();
+    const threadId = ThreadId.make("round6:thread");
+    const leases = Round6Leases.ComputerUseLeases.of({
+      currentControl: () => Effect.succeedSome({ controlId: CONTROL }),
+      controlState: () => Effect.succeed({ _tag: "active" }),
+      subscribe: Round6PubSub.subscribe(signals),
+    });
+    const channel = yield* Round6Channel.make.pipe(
+      Effect.provideService(Round6Leases.ComputerUseLeases, leases),
+    );
+    const authority = {
+      threadId,
+      attachmentGeneration: "round6:attachment",
+      proxyChannelToken: "round6:token",
+    };
+    yield* channel.issue({ ...authority, controlId: CONTROL, expiresAt: 60000 });
+    const registered = yield* channel.registerStream({
+      ...authority,
+      proxyInstanceId: "round6:proxy",
+      kind: "thread",
+    });
+    if (registered.status !== "registered") throw new Error("registration");
+    yield* channel.reportControlReady({
+      ...authority,
+      registrationId: registered.registrationId,
+      controlId: CONTROL,
+      connectionId: driver.connectionId,
+      driverGeneration: driver.generation,
+    });
+    const waiting = yield* channel
+      .request({
+        threadId,
+        runId: "run:one",
+        turnId: "turn:one",
+        callId: 2,
+        deadlineMillis: 30000,
+        tool: "list_apps",
+        args: {},
+      })
+      .pipe(Effect.forkChild);
+    const queued = Option.getOrThrow(yield* Stream.runHead(registered.requests));
+    yield* h.sendPrimitive(queued);
+    if (kind === "escape") {
+      yield* h.escape;
+      yield* h.escapeReported;
+    } else {
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+    }
+    yield* h.killed;
+    yield* TestClock.adjust(2000);
+    const answer = yield* h.primitiveReply;
+    yield* channel.reply({
+      ...authority,
+      registrationId: registered.registrationId,
+      reply: answer,
+    });
+    const observed = yield* Fiber.join(waiting);
+    assert.equal(round6DriverError(observed)?.code, "stopped_by_person");
+    yield* Deferred.succeed(gate, undefined);
+    yield* Deferred.succeed(stopReport, undefined);
+    assert.equal(answer.callId, 2);
+    assert.include(
+      JSON.stringify(answer),
+      kind === "escape" ? "stopped_by_person" : "screen_locked",
+    );
+  }),
+);
+
+it.effect("round6 delayed reservation keeps lock through resume", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness({
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }))
+          : Effect.succeed({ status: "released" }),
+    });
+    yield* h.push(active());
+    yield* h.driverStarted;
+    yield* h.send(call(910, "list_apps"));
+    yield* h.nextReservation;
+    yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+    yield* h.killed;
+    yield* h.push({ ...active(), interruptions: { count: 1, last: "screen_locked" } });
+    yield* h.driverStarted;
+    yield* Deferred.succeed(gate, undefined);
+    const answer = yield* h.nextToProvider;
+    assert.include(JSON.stringify(answer), "screen_locked");
+  }),
+);

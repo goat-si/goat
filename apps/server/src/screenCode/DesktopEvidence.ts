@@ -244,8 +244,17 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
     { ...call, deadlineMillis },
     context,
     connectionGeneration,
-  ).pipe(Effect.timeoutOption(effective), Effect.option);
-  const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
+  ).pipe(
+    Effect.timeoutOption(effective),
+    Effect.catchIf(
+      (error) =>
+        error.code !== "user_interacting" &&
+        error.code !== "screen_locked" &&
+        error.code !== "stopped_by_person",
+      () => Effect.succeedNone,
+    ),
+  );
+  const reply = Option.getOrUndefined(sent);
   if (!reply) return undefined;
   const error = driverError(reply);
   if (

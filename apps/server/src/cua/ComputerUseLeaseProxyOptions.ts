@@ -264,6 +264,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
     request: ComputerUsePrimitiveRequest,
   ) => Effect.Effect<unknown, E>,
   onSettled?: (requestId: string) => void,
+  wrap?: (sink: ReplySink, id: string, request: ComputerUsePrimitiveRequest) => ReplySink,
 ) {
   if (requests === undefined) return;
   const waiting = yield* Queue.unbounded<{
@@ -295,7 +296,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
         primitiveHops.set(request, { receivedAt: yield* Clock.currentTimeMillis });
         const first = primitiveReplySink(request, reply);
         let answered = false;
-        const sink: ReplySink = {
+        const guard: ReplySink = {
           answer: (line, status, context) =>
             Effect.suspend(() => {
               if (answered) return Effect.void;
@@ -303,6 +304,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
               return first.answer(line, status, context);
             }),
         };
+        const sink = wrap?.(guard, id, request) ?? guard;
         yield* Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) => Effect.sleep(Math.max(0, request.deadlineMillis - now))),
           Effect.andThen(

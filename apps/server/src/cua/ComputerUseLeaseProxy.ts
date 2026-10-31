@@ -659,7 +659,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (decoded.kind === "invalid") return yield* rawSink.answer(decoded.response);
     let message = decoded.message;
     let dispatched = false;
-    const sink = terminalSink(rawSink, message, personStop.terminal, () => dispatched);
+    const sink = terminalSink(rawSink, message, personStop.capture(), () => dispatched);
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
@@ -986,6 +986,13 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     () => `${PRIMITIVE_ID}${ownRequests++}`,
     forward,
     options.onPrimitiveSettled,
+    (sink, id, request) =>
+      terminalSink(
+        sink,
+        { id, method: "tools/call", params: { name: request.tool, arguments: request.args } },
+        personStop.capture(),
+        () => false,
+      ),
   );
   yield* options.input.pipe(Stream.runForEach((line) => forward(line, providerSink)));
   if (finished === undefined) yield* end("lost");

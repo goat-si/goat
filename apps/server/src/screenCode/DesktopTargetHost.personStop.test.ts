@@ -53,3 +53,52 @@ it.effect("Escape stays terminal through the desktop host while the stop report 
     yield* Deferred.succeed(gate, undefined);
   }),
 );
+
+import { terminalFailure as round6TerminalFailure } from "../cua/ComputerUseTerminal.ts";
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "round6 post-read keeps terminal %s",
+  (reason) =>
+    Effect.gen(function* () {
+      const base = fixture();
+      let stopped = false;
+      let refusedReads = 0;
+      const host = createDesktopTargetHost({
+        leases: base.leases,
+        platform: "darwin",
+        primitiveChannel: {
+          ...base.channel,
+          request: (request) => {
+            if (stopped) {
+              refusedReads++;
+              const failure = round6TerminalFailure(reason, request.tool, request.args);
+              if (failure === undefined) return Effect.die("expected terminal failure");
+              return Effect.fail(failure);
+            }
+            return base.channel.request(request).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (request.tool === "click") stopped = true;
+                }),
+              ),
+            );
+          },
+        },
+      });
+      const bound = yield* host.bindApp(
+        {
+          ...call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+          deadlineMillis: 30000,
+        },
+        context,
+      );
+      const result = yield* host
+        .invoke(
+          { ...call("click", { x: 1, y: 2, verify: true }, bound.value), deadlineMillis: 30000 },
+          context,
+        )
+        .pipe(Effect.result);
+      expect(refusedReads).toBeGreaterThan(0);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.code).toBe(reason);
+    }),
+);
