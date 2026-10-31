@@ -163,7 +163,7 @@ const deadline = (input: Input) =>
     return replaceWithTerminal(terminalReplyState(reply.result, reply.status));
   });
 
-const supervisor = (kind: "reserved" | "notReady") => (input: Input) =>
+const supervisor = (kind: "reserved" | "notReady" | "transportLost") => (input: Input) =>
   Effect.gen(function* () {
     const h = yield* threadHarness();
     yield* h.push(snapshot("A"));
@@ -178,6 +178,10 @@ const supervisor = (kind: "reserved" | "notReady") => (input: Input) =>
         yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
         if (!stopped) yield* h.applied;
       }
+    }
+    if (kind === "transportLost") {
+      yield* h.push({ state: "reconnecting" });
+      yield* h.push({ state: "transport_lost" });
     }
     yield* h.send(call(kind === "reserved" ? "goat-proxy:reserved" : 1, "list_apps"));
     const answer = yield* h.next;
@@ -576,6 +580,11 @@ export const preDispatchSites: ReadonlyArray<{
     run: supervisor("reserved"),
   },
   { name: "ComputerUseLeaseProxyThread.notReady", undispatched: true, run: supervisor("notReady") },
+  {
+    name: "ComputerUseLeaseProxyThread.transportLost",
+    undispatched: true,
+    run: supervisor("transportLost"),
+  },
   { name: "ComputerUseLeaseProxyOptions.queuedDeadline", undispatched: true, run: deadline },
   { name: "ComputerUseLeaseProxyBatch.scope", undispatched: true, run: unsupported("batch") },
   { name: "ComputerUseLeaseProxyPointBasis.check", undispatched: true, run: unsupported("point") },
