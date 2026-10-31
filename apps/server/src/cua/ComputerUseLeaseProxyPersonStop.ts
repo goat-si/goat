@@ -40,8 +40,16 @@ export const terminalSink = (
   ...(terminal.release === undefined ? {} : { release: terminal.release }),
   answer: (line, status, context) =>
     Effect.suspend(() => {
+      const finalContext = {
+        ...context,
+        terminalState: () =>
+          mergeTerminal(context?.terminalState?.() ?? {}, {
+            reason: terminal(),
+            possibleCommit: dispatched(),
+          }),
+      };
       if (message.method !== "tools/call" || message.id == null)
-        return sink.answer(line, status, context);
+        return sink.answer(line, status, finalContext);
       const already = decodeTerminal(line);
       const reply = terminalReplyState(
         already._tag === "Some" ? already.value.result : undefined,
@@ -52,13 +60,13 @@ export const terminalSink = (
         terminalErrorState(already._tag === "Some" ? already.value.error : undefined),
       );
       const reason = merged.reason;
-      if (reason === undefined) return sink.answer(line, status, context);
+      if (reason === undefined) return sink.answer(line, status, finalContext);
       if (
         reply.wireReason === reason &&
         reply.terminalSafety &&
         (!merged.possibleCommit || reply.possibleCommit)
       )
-        return sink.answer(line, status, context);
+        return sink.answer(line, status, finalContext);
       const cause: Interruption =
         reason === "screen_locked"
           ? { _tag: "pause", reason: "screen_locked" }
@@ -76,7 +84,7 @@ export const terminalSink = (
                 : LEASE_END_MESSAGES.stopped,
             ),
         merged.possibleCommit ? "unknown_outcome" : "not_started",
-        context,
+        finalContext,
       );
     }).pipe(Effect.ensuring(Effect.sync(() => terminal.release?.()))),
 });

@@ -7,6 +7,8 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
+import { terminalReplyState } from "./ComputerUseTerminal.ts";
 import { primitiveReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 
 const isComputerUsePrimitiveReply = Schema.is(ComputerUsePrimitiveReply);
@@ -128,5 +130,46 @@ it.effect("a window read over 64 KiB reaches the server whole; one over the cap 
       code: COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE,
       isError: true,
     });
+  }),
+);
+
+it.effect.each([
+  ["stopped_by_person", "text"],
+  ["stopped_by_person", "structured"],
+  ["screen_locked", "text"],
+  ["screen_locked", "structured"],
+] as const)("preserves %s through oversized %s", ([reason, shape]) =>
+  Effect.gen(function* () {
+    let received: ComputerUsePrimitiveReply | undefined;
+    const raw = primitiveReplySink(request, (reply) =>
+      Effect.sync(() => {
+        received = reply;
+      }),
+    );
+    const sink = terminalSink(
+      raw,
+      { id: 1, method: "tools/call", params: { name: "click" } },
+      () => reason,
+      () => true,
+    );
+    const large = "x".repeat(COMPUTER_USE_PRIMITIVE_RESULT_BYTES);
+    yield* sink.answer(
+      JSON.stringify({
+        result: {
+          isError: true,
+          structuredContent: {
+            code: reason,
+            safety: { retryClass: "never", possibleCommit: true },
+            ...(shape === "structured" ? { diagnostic: large } : {}),
+          },
+          content: shape === "text" ? [{ type: "text", text: large }] : [],
+        },
+      }),
+      "settled",
+    );
+    const terminal = terminalReplyState(received?.result, received?.status);
+    assert.equal(terminal.reason, reason);
+    assert.isTrue(terminal.possibleCommit);
+    assert.isTrue(terminal.terminalSafety);
   }),
 );

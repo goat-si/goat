@@ -36,6 +36,13 @@ import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseRes
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
+import {
+  mergeTerminal,
+  terminalErrorState,
+  terminalFailure,
+  terminalReplyState,
+  type ComputerUseTerminalReason,
+} from "./ComputerUseTerminal.ts";
 import { type Envelope, parse, OWN_ID } from "./ComputerUseLeaseProtocol.ts";
 
 export const PRIMITIVE_ID = "goat:primitive:";
@@ -83,7 +90,13 @@ export interface ReplySink {
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],
-    context?: { readonly tool?: string | undefined },
+    context?: {
+      readonly tool?: string | undefined;
+      readonly terminalState?: () => {
+        readonly reason?: ComputerUseTerminalReason | undefined;
+        readonly possibleCommit?: boolean | undefined;
+      };
+    },
   ) => Effect.Effect<unknown>;
 }
 
@@ -140,6 +153,13 @@ export const primitiveReplySink = (
   answer: Effect.fn("ComputerUseLeaseProxyOptions.answer")(function* (
     line: string,
     status: ComputerUsePrimitiveReply["status"] = "not_started",
+    context?: {
+      readonly tool?: string | undefined;
+      readonly terminalState?: () => {
+        readonly reason?: ComputerUseTerminalReason | undefined;
+        readonly possibleCommit?: boolean | undefined;
+      };
+    },
   ) {
     const answeredAt = yield* Clock.currentTimeMillis;
     const envelope = parse(line);
@@ -230,6 +250,16 @@ export const primitiveReplySink = (
       64 * 1024,
     );
     const hops = hopTimes(primitiveHops.get(request), answeredAt);
+    const terminal = mergeTerminal(
+      mergeTerminal(terminalReplyState(rawResult, status), terminalErrorState(envelope?.error)),
+      context?.terminalState?.() ?? {},
+    );
+    const failure = terminalFailure(
+      terminal.reason,
+      terminal.possibleCommit ? "click" : request.tool,
+      request.args,
+      terminal.possibleCommit,
+    );
     return yield* (
       reply?.({
         requestId: request.requestId,
@@ -240,9 +270,19 @@ export const primitiveReplySink = (
         turnId: request.turnId,
         callId: request.callId,
         status,
-        ...(result === undefined ? {} : { result }),
-        ...(error === undefined ? {} : { error }),
-        ...(image === undefined ? {} : { image }),
+        ...(failure === undefined
+          ? {
+              ...(result === undefined ? {} : { result }),
+              ...(error === undefined ? {} : { error }),
+              ...(image === undefined ? {} : { image }),
+            }
+          : {
+              result: {
+                isError: true,
+                structuredContent: { code: failure.code, safety: failure.safety },
+                content: [{ type: "text", text: failure.nextStep }],
+              },
+            }),
         ...(hops === undefined || Object.keys(hops).length === 0 ? {} : { hops }),
       }) ?? Effect.void
     );
