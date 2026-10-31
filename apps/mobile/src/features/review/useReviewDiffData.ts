@@ -1,7 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { formatDiffCount } from "@goat/client-runtime/diff-count";
 
-import { countReviewCommentContexts, parseReviewInlineComments } from "./reviewCommentSelection";
+import { parseReviewInlineComments } from "./reviewCommentSelection";
 import { getCachedNativeReviewDiffData } from "./nativeReviewDiffAdapter";
 import { markReviewEvent, measureReviewWork } from "./reviewPerf";
 import { getCachedReviewParsedDiff } from "./reviewState";
@@ -13,7 +13,12 @@ import {
   type ReviewSectionItem,
 } from "./reviewModel";
 
-import type { EnvironmentId, ReviewDiffFileStat, ReviewDiffPreviewSource } from "@goat/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationMessageContext,
+  ReviewDiffFileStat,
+  ReviewDiffPreviewSource,
+} from "@goat/contracts";
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
@@ -123,8 +128,9 @@ export function useReviewDiffData(input: {
   readonly cwd: string | null;
   readonly selectedSection: ReviewSectionItem | null;
   readonly draftMessage: string;
+  readonly draftContext: OrchestrationMessageContext | undefined;
 }) {
-  const { draftMessage, selectedSection, threadKey } = input;
+  const { draftMessage, draftContext, selectedSection, threadKey } = input;
   const selectedSectionId = selectedSection?.id ?? null;
   const source = selectedSection?.source;
   const lazySource = source?.truncated && source.files ? source : null;
@@ -234,8 +240,8 @@ export function useReviewDiffData(input: {
     [parsedDiff, selectedSection?.files],
   );
   const inlineReviewComments = useMemo(
-    () => parseReviewInlineComments(draftMessage),
-    [draftMessage],
+    () => parseReviewInlineComments(draftMessage, draftContext),
+    [draftMessage, draftContext],
   );
   const selectedSectionInlineComments = useMemo(() => {
     if (!selectedSectionId || inlineReviewComments.length === 0) {
@@ -253,10 +259,7 @@ export function useReviewDiffData(input: {
       ),
     [parsedDiff, selectedSectionInlineComments],
   );
-  const pendingReviewCommentCount = useMemo(
-    () => countReviewCommentContexts(draftMessage),
-    [draftMessage],
-  );
+  const pendingReviewCommentCount = inlineReviewComments.length;
 
   useEffect(() => {
     if (parsedDiff.kind !== "files") {
