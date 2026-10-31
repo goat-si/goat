@@ -46,6 +46,7 @@ vi.mock("../../state/server", () => ({
     providersValueAtom: vi.fn(),
     refreshProviders: Symbol("refreshProviders"),
   },
+  environmentServerConfigsAtom: {},
 }));
 
 import {

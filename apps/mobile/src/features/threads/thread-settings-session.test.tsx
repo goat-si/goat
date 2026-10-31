@@ -140,7 +140,7 @@ describe("ThreadSettingsSessionProvider", () => {
     });
   });
 
-  it("writes the ultrathink step as a prompt prefix instead of a model option", async () => {
+  it("leaves the prompt and options unchanged when Ultrathink comes from a picker", async () => {
     const onPromptChange = vi.fn();
     const onUpdateOptionSelections = vi.fn();
     const descriptors = getProviderOptionDescriptors({ caps: opus.capabilities!, selections: [] });
@@ -153,7 +153,7 @@ describe("ThreadSettingsSessionProvider", () => {
 
     await act(async () => mounted.session().applyOptionChange("effort", "ultrathink"));
 
-    expect(onPromptChange).toHaveBeenCalledWith(expect.stringMatching(/^Ultrathink:/));
+    expect(onPromptChange).not.toHaveBeenCalled();
     expect(onUpdateOptionSelections).not.toHaveBeenCalled();
   });
 });

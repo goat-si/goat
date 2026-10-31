@@ -86,6 +86,7 @@ vi.mock("react-native", async () => {
     View,
     Platform: { OS: "android" },
     Keyboard: { dismiss: () => {} },
+    I18nManager: { isRTL: false },
   };
 });
 vi.mock("expo", () => ({ requireNativeModule: vi.fn(), requireOptionalNativeModule: vi.fn() }));

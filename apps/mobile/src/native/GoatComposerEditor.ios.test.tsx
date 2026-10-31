@@ -108,7 +108,7 @@ vi.mock("expo-modules-core", () => ({
 vi.mock("@react-navigation/native", () => ({ useNavigation: vi.fn() }));
 vi.mock("../state/queries", () => ({}));
 vi.mock("../state/use-composer-drafts", () => ({}));
-vi.mock("../state/server", () => ({ serverEnvironment: {} }));
+vi.mock("../state/server", () => ({ serverEnvironment: {}, environmentServerConfigsAtom: {} }));
 vi.mock("../lib/useUniwindTheme", () => ({ useUniwindTheme: () => ({}) }));
 vi.mock("../lib/nativeComposerTheme", () => ({
   createNativeComposerTheme: () => ({ text: "#000000", placeholder: "#888888" }),
