@@ -4,6 +4,7 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Queue from "effect/Queue";
+import * as SqlClient from "effect/sql/SqlClient";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import { awaitHistory } from "../cua/ComputerUseHistoryBackground.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -87,6 +88,24 @@ it.effect("orders by action completion even when earlier retention evidence arri
       });
       assert.deepEqual(
         older.map((row) => row.method),
+        ["type"],
+      );
+      const legacy = yield* history.listForThread(tab.threadId, {
+        limit: 1,
+        before: { recordedAt: cursor.recordedAt, id: cursor.id },
+      });
+      assert.deepEqual(
+        legacy.map((row) => row.method),
+        ["type"],
+      );
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM computer_use_input_history WHERE id = ${cursor.id}`;
+      const afterDeletion = yield* history.listForThread(tab.threadId, {
+        limit: 1,
+        before: { recordedAt: cursor.recordedAt, id: cursor.id, orderSeq: cursor.orderSeq },
+      });
+      assert.deepEqual(
+        afterDeletion.map((row) => row.method),
         ["type"],
       );
     }),
