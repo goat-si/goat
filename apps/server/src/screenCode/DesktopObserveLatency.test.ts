@@ -129,7 +129,12 @@ it.effect("an observe lists where the proxy and the host spent the driver call",
       platform: "darwin",
     });
     const ref = yield* bind(host as never);
-    const tree = (yield* host.observe(call("get_accessibility_tree", {}, ref), context)).value;
+    const plain = (yield* host.observe(call("get_accessibility_tree", {}, ref), context)).value;
+    expect(plain).not.toHaveProperty("phases.hops");
+    const tree = (yield* host.observe(
+      call("get_accessibility_tree", { debug: true }, ref),
+      context,
+    )).value;
     expect(tree).toMatchObject({
       ms: 10,
       phases: {

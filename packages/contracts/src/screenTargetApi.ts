@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/25";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/26";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
@@ -22,6 +22,8 @@ type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"
 // warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
 // Set screen.debug = true for diagnostic details on every input in this cell, or pass verify: true on supported app inputs to read evidence and include details for that call.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
+// Observation targetRef, targetGeneration, surfaceGeneration and phases remain directly readable but are non-enumerable (lost in spread, JSON and screen.values copies); screen.debug = true makes them enumerable.
+// With screen.debug, app reads also include phases.hops when proxy timing is available.
 // ReadTime on observe and screenshot: host time of the read (the driver call, for a tab the browser's snapshot; tree parsing; rendering; the rest); absent when it would not fit the reply.
 type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted?: boolean; [k: string]: unknown };
 // The picture comes back as an image beside the cell's JSON, under its imageRef; [x, y] count its pixels from the top-left. omitted: it did not fit the cell's image limit.
@@ -129,7 +131,7 @@ export const screenTargetApi = (surfaces: {
     ...(tab ? [SCREEN_TAB] : []),
     "  discover(): Promise<{ apps: unknown; windows: unknown; tabs: unknown; unavailable: object }>; // app and window rows another thread uses now carry inUse: true and holderThreadId (it may have just finished); holdersUnknown: true means some rows could not be checked",
     "  state: object; // survives cells of this turn",
-    "  debug: boolean; // diagnostics for inputs in this cell; initially false",
+    "  debug: boolean; // diagnostics for inputs and observation timing in this cell; initially false",
     "};",
     ...(app
       ? []
