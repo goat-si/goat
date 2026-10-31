@@ -1,4 +1,5 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import { replyTargetId } from "./ScreenHostReplyTarget.ts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -135,43 +136,11 @@ const WAIT_REPLY_RESERVE_MS = 100;
 const key = (runId: string, turnId: string, cellId: string) =>
   `${runId}\u0000${turnId}\u0000${cellId}`;
 
-/** The target a bind_app reply (a ref) or a tab reply ({targetRef}) hands back. */
-const replyTargetId = (value: unknown): string | undefined => {
-  const reply = typeof value === "object" && value !== null ? value : undefined;
-  const ref = reply && "targetRef" in reply ? reply.targetRef : reply;
-  return typeof ref === "object" &&
-    ref !== null &&
-    "id" in ref &&
-    typeof ref.id === "string" &&
-    "kind" in ref &&
-    (ref.kind === "app" || ref.kind === "tab")
-    ? ref.id
-    : undefined;
-};
-
-/** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
-export const observationReplyBudget = (
-  call: ScreenHostCall,
-  limits: ScreenRunLimits,
-  reserveBytes = 0,
-): number => {
-  const envelope = JSON.stringify({
-    t: "reply",
-    runId: call.runId,
-    cellId: call.cellId,
-    callId: call.callId,
-    outcome: "ok",
-    value: null,
-  });
-  return Math.min(
-    limits.treeBytes,
-    limits.returnBytes - (Buffer.byteLength(envelope) - 4) - reserveBytes,
-  );
-};
+export { observationReplyBudget } from "./ScreenObservationBudget.ts";
 
 export class ScreenHostBridge {
   private readonly cells = new Map<string, CellState>();
-  private readonly invalidTargets = new Map<string, Set<string>>();
+  private readonly invalidTargets = new Map<string, Map<string, string>>();
   private readonly turnTargets = new Map<string, Set<string>>();
   private readonly targetRefs = new Map<string, ScreenTargetRef>();
   private readonly cellTargets = new Map<string, Set<string>>();
@@ -188,9 +157,16 @@ export class ScreenHostBridge {
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
+  private readonly staleTargetStep:
+    | ((targetId: string, reason?: string) => string | undefined)
+    | undefined;
 
-  constructor(cursorPhases?: ScreenCursorPhases) {
+  constructor(
+    cursorPhases?: ScreenCursorPhases,
+    staleTargetStep?: (targetId: string, reason?: string) => string | undefined,
+  ) {
     this.cursorPhases = cursorPhases;
+    this.staleTargetStep = staleTargetStep;
   }
 
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
@@ -395,8 +371,22 @@ export class ScreenHostBridge {
         call.targetRef.turnId !== context.turnId ||
         call.targetRef.environmentId !== context.environmentId ||
         this.invalidTargets.get(turn)?.has(call.targetRef.id))
-    )
-      return deny(failure("stale_reference", call.callId));
+    ) {
+      const why =
+        call.targetRef.environmentId !== context.environmentId
+          ? "different_environment"
+          : call.targetRef.turnId !== context.turnId
+            ? "turn_ended"
+            : call.targetRef.runId !== context.runId
+              ? "different_run"
+              : this.invalidTargets.get(turn)?.get(call.targetRef.id);
+      const nextStep =
+        call.targetRef.kind === "app" ? this.staleTargetStep?.(call.targetRef.id, why) : undefined;
+      return deny({
+        ...failure("stale_reference", call.callId),
+        ...(nextStep === undefined ? {} : { nextStep }),
+      });
+    }
     // Until the call settles, neither axis is known; a deadline may collect it as it stands.
     const admittedIndex = record("unverifiable", "admitted", false, [], undefined, axes("unknown"));
     let callDispatched = false;
@@ -941,11 +931,11 @@ export class ScreenHostBridge {
     const turn = `${runId}\u0000${turnId}`;
     let invalid = this.invalidTargets.get(turn);
     if (!invalid) {
-      invalid = new Set();
+      invalid = new Map();
       this.invalidTargets.set(turn, invalid);
     }
     if (invalid.size >= 4096) this.fencedTurns.add(turn);
-    else invalid.add(targetId);
+    else invalid.set(targetId, reason ?? "invalidated");
     const ref = this.targetRefs.get(targetId);
     if (ref)
       this.cursorPhases?.ended(

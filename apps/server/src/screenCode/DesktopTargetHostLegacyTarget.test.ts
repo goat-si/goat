@@ -55,6 +55,12 @@ const driverChecked = (tool: string) => (args: Record<string, unknown>) => {
 const bound = Effect.fn(function* () {
   const f = fixture({
     get_window_state: goat2WindowState,
+    list_windows: {
+      windows: [
+        { pid: 42, window_id: 7, title: "First" },
+        { pid: 42, window_id: 8, title: "Second" },
+      ],
+    },
     set_value: driverChecked("set_value"),
     right_click: driverChecked("right_click"),
   });
@@ -110,7 +116,7 @@ it.effect("setValue with an element from another window is refused before it is 
   Effect.gen(function* () {
     const { host, sent, ref, elementRef } = yield* bound();
     const other = yield* host.bindApp(
-      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 8 }),
       context,
     );
     const result = yield* host

@@ -250,7 +250,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const runCallback = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) =>
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
-  const bridge = new ScreenHostBridge(cursorPhases);
+  const bridge = new ScreenHostBridge(cursorPhases, options.desktopHost?.staleTargetStep);
   const callApps = yield* ComputerUseCallApps;
   if (options.dispatcher) {
     const dispatcher = options.dispatcher;
@@ -503,7 +503,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         bridge.invalidateTargetNow(runId, turnId, targetId, change.kind);
-        options.desktopHost?.invalidateTarget(targetId);
+        options.desktopHost?.invalidateTarget(targetId, change.kind);
         options.tabHost?.invalidateTarget(targetId);
       }
     }
@@ -734,7 +734,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       if (delivery !== undefined) yield* Effect.promise(() => delivery);
       routes.delete(input.targetId);
       deliveries.delete(input.targetId);
-      options.desktopHost?.invalidateTarget(input.targetId);
+      options.desktopHost?.invalidateTarget(input.targetId, input.reason);
       options.tabHost?.invalidateTarget(input.targetId);
     }),
     finishTurn: Effect.fn("ScreenRunService.finishTurn")(function* (input: {
@@ -881,7 +881,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           if (!cut && !affected(targetId, route)) continue;
           if (route.runId !== runId || route.turnId !== turnId) continue;
           yield* bridge.invalidateTarget(runId, turnId, targetId, input.kind);
-          options.desktopHost?.invalidateTarget(targetId);
+          options.desktopHost?.invalidateTarget(targetId, input.kind);
           options.tabHost?.invalidateTarget(targetId);
         }
       }

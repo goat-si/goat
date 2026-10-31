@@ -1,4 +1,6 @@
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
+import { staleTargets } from "./DesktopStaleTargets.ts";
+import { goneHint } from "./DesktopGoneHint.ts";
 import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import * as Clock from "effect/Clock";
@@ -52,6 +54,7 @@ import {
 import {
   availabilityFromControlState,
   buildWaitExpectation,
+  desktopCallArgs as callArgs,
   inspectBatchMember,
   INPUT_METHODS,
   prepareDesktopInput,
@@ -83,11 +86,6 @@ const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
-// Strip guest-only targetRef/batch fields before forwarding arguments to the driver.
-const callArgs = (args: ScreenHostCall["args"]): Record<string, unknown> => {
-  const { targetRef: _t, batch: _b, ...rest } = object(Array.isArray(args) ? args[0] : args) ?? {};
-  return rest;
-};
 const array = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
 const integer = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
@@ -164,7 +162,8 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly bindApp: DesktopMethod;
   readonly observe: DesktopMethod;
   readonly invoke: DesktopMethod;
-  readonly invalidateTarget: (targetId: string) => void;
+  readonly invalidateTarget: (targetId: string, reason?: string) => void;
+  readonly staleTargetStep?: (targetId: string, reason?: string) => string | undefined;
   readonly matchesControl: (targetId: string, controlId: string, windowId?: number) => boolean;
   readonly controlIdForTarget: (targetId: string) => string | undefined;
   readonly windowForTarget?: (
@@ -193,6 +192,7 @@ export const createDesktopTargetHost = (deps: {
   const observations = deps.observations ?? new ScreenObservations();
   const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
   const targets = new Map<string, BoundWindow>();
+  const { dropTarget, staleTargetStep, staleTarget } = staleTargets(targets, observations);
   const cellTrackers = new Map<
     string,
     { tracker: CellWindowTracker; connectionGeneration: string }
@@ -582,7 +582,7 @@ export const createDesktopTargetHost = (deps: {
   );
   const bindWindow = makeBindWindow({
     targets,
-    evict: (id) => observations.evictTarget(id),
+    evict: (id) => dropTarget(id, "replaced"),
     nextEpoch: () => ++epoch,
     labelTarget: deps.labelTarget,
   });
@@ -614,17 +614,21 @@ export const createDesktopTargetHost = (deps: {
   const observe: DesktopTargetHost["observe"] = Effect.fn("DesktopTargetHost.observe")(
     function* (call, context) {
       const bound = resolve(call, context);
-      if (!bound) return yield* Effect.fail(fail("stale_reference"));
+      if (!bound) return yield* Effect.fail(staleTarget(call.targetRef?.id));
       if (
         !["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
           call.method,
         )
       )
         return yield* Effect.fail(fail("unsupported"));
-      return yield* runDesktopObserve(observeDeps, bound, call, context, callArgs(call.args));
+      return yield* runDesktopObserve(observeDeps, bound, call, context, callArgs(call.args)).pipe(
+        Effect.mapError((error) =>
+          goneHint(error, bound, cellTrackers.get(cellKey(context))?.tracker.hints(bound.pid)),
+        ),
+      );
     },
   );
-  const invoke = Effect.fn("DesktopTargetHost.invoke")(function* (
+  const invokeInternal = Effect.fn("DesktopTargetHost.invoke")(function* (
     call: ScreenHostCall,
     context: ScreenHostContext,
     inBatch = false,
@@ -638,7 +642,7 @@ export const createDesktopTargetHost = (deps: {
       return yield* launch(call, callArgs(call.args), context);
     }
     const bound = resolve(call, context);
-    if (!bound) return yield* Effect.fail(fail("stale_reference"));
+    if (!bound) return yield* Effect.fail(staleTarget(call.targetRef?.id));
     // Any call here may change this process's windows, so only an input right after a read of its
     // own window compares with it; another binding's input on the process voids that read too.
     const baseline = bound.fullRows;
@@ -850,6 +854,15 @@ export const createDesktopTargetHost = (deps: {
       args.verify === true,
     );
   });
+  const invoke = (call: ScreenHostCall, context: ScreenHostContext, inBatch = false) =>
+    invokeInternal(call, context, inBatch).pipe(
+      Effect.mapError((error) => {
+        const bound = call.targetRef && targets.get(call.targetRef.id);
+        return bound
+          ? goneHint(error, bound, cellTrackers.get(cellKey(context))?.tracker.hints(bound.pid))
+          : error;
+      }),
+    );
   const withWindow = (
     call: ScreenHostCall,
     operation: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
@@ -943,10 +956,8 @@ export const createDesktopTargetHost = (deps: {
     observe,
     invoke,
     dispatchBatch,
-    invalidateTarget: (targetId) => {
-      observations.evictTarget(targetId);
-      targets.delete(targetId);
-    },
+    invalidateTarget: (targetId, reason = "invalidated") => dropTarget(targetId, reason),
+    staleTargetStep,
     matchesControl: (targetId, controlId, windowId) => {
       const target = targets.get(targetId);
       return (
@@ -968,8 +979,7 @@ export const createDesktopTargetHost = (deps: {
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)
         if (bound.ref.runId === runId && bound.ref.turnId === turnId) {
-          observations.evictTarget(targetId);
-          targets.delete(targetId);
+          dropTarget(targetId, "turn_ended");
         }
     },
     availability: Effect.fn("DesktopTargetHost.availability")(function* (context) {

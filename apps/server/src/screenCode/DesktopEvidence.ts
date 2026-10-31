@@ -434,6 +434,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
     postWins = parseWindowList(postRaw, pid);
   }
   tracker.recordAfter(pid, preWins, postWins);
+  tracker.recordHints(pid, parseWindowList(postRaw, pid, windowId));
   const endedAt = yield* Clock.currentTimeMillis;
   const winDiff = diffInputWindows(
     preWins,
