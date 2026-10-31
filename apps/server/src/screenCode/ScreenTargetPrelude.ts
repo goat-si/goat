@@ -408,7 +408,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       observation = page ? value : remember(value);
       // A page's elements join the read it continues, so numbers and names from every page resolve.
       if (page && seen.observation && value && Array.isArray(value.elements))
-        seen.observation = { ...seen.observation, elements: [...seen.observation.elements, ...value.elements] };
+        seen.observation = { ...seen.observation, elements: [...seen.observation.elements, ...value.elements.filter((item) => !seen.observation.elements.some((known) => known.index === item.index))] };
     }
     catch (raw) { if (!page) seen.observation = undefined; throw __error(raw); }
     if (!tab && arg.screenshot) {

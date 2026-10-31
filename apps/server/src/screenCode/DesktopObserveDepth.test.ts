@@ -182,6 +182,7 @@ it.live(
         const map = await app.observe({ depth: 1 });
         const region = await app.observe({ within: 1 });
         await app.click(3);
+        await app.click("Test");
         let both;
         try { await app.observe({ depth: 1, within: 1 }); } catch (e) { both = [e.code, e.nothingSent]; }
         return [map.scope, region.scope, region.text.includes('Inner'), both];`,
@@ -192,6 +193,7 @@ it.live(
       });
       expect(sent.filter((each) => each.tool === "click")).toMatchObject([
         { args: { element_token: "s1:3" } },
+        { args: { element_token: "s1:0" } },
       ]);
     }).pipe(
       Effect.provide(
@@ -206,4 +208,67 @@ it.live(
       ),
     );
   },
+);
+
+it.effect("children left under an unnumbered row count toward the nearest numbered one", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      get_window_state: window([
+        '- [0] AXWindow "Test"',
+        "  - AXGroup",
+        '    - [2] AXButton "OK"',
+        '    - [3] AXButton "Inner"',
+      ]),
+    });
+    const target = yield* bind(host);
+    const depth = (yield* host.observe(call("get_window_state", { depth: 1 }, target), context))
+      .value as ScreenObservation;
+    expect(depth.indexedText).toContain('- [0] AXWindow "Test" (+2)');
+  }),
+);
+
+it.effect(
+  "within refuses a plain read whose text cannot carry nesting, and a driver restart ends it",
+  () =>
+    Effect.gen(function* () {
+      const spanning = fixture({
+        get_window_state: window([
+          '- [0] AXWindow "Test"',
+          "  - [1] AXGroup",
+          "loose text",
+          '  - [2] AXButton "OK"',
+        ]),
+      });
+      const spanTarget = yield* bind(spanning.host);
+      const plain = (yield* spanning.host.observe(
+        call("get_window_state", {}, spanTarget),
+        context,
+      )).value as ScreenObservation;
+      const refused = yield* spanning.host
+        .observe(
+          call("get_window_state", { within: 1, withinBase: plain.observationId }, spanTarget),
+          context,
+        )
+        .pipe(Effect.flip);
+      expect((refused as ScreenRunError).code).toBe("unsupported");
+
+      const connection = { id: "driver:1" };
+      const { host, sent } = fixture({ get_window_state: window(tree) }, connection);
+      const target = yield* bind(host);
+      const read = (yield* host.observe(call("get_window_state", { depth: 1 }, target), context))
+        .value as ScreenObservation;
+      connection.id = "driver:2";
+      yield* host
+        .invoke(call("click", { elementRef: refOf(read, 2) }, target), context)
+        .pipe(Effect.flip);
+      const reads = sent.filter((each) => each.tool === "get_window_state").length;
+      const stale = yield* host
+        .observe(
+          call("get_window_state", { within: 1, withinBase: read.observationId }, target),
+          context,
+        )
+        .pipe(Effect.flip);
+      expect((stale as ScreenRunError).code).toBe("stale_reference");
+      expect(sent.filter((each) => each.tool === "get_window_state")).toHaveLength(reads);
+    }),
 );

@@ -310,6 +310,9 @@ export const createDesktopTargetHost = (deps: {
     // Only the channel's own generation check fails without the driver's safety label.
     if (first.failure.code !== "stale_reference" || first.failure.safety !== undefined)
       return yield* Effect.fail(first.failure);
+    // A new driver holds none of the old read, so within must not show it either.
+    delete bound.lastTree;
+    delete bound.withinPages;
     if (needs !== "nothing")
       return yield* Effect.fail(
         fail("stale_reference", needs === "points" ? RESTARTED_POINTS : RESTARTED_ELEMENTS),

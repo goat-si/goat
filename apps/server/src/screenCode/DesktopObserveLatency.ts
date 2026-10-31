@@ -266,6 +266,21 @@ const observeWithin = Effect.fn("DesktopObserveLatency.within")(function* (
         "within reads part of the latest whole read of this window; call observe() or observe({depth}) first.",
       ),
     );
+  const problem = structureProblem(
+    string(kept.state.tree_markdown) ?? "",
+    listedOf(
+      array(kept.state.elements)
+        .map(object)
+        .filter((entry) => entry !== undefined),
+    ),
+  );
+  if (problem !== undefined)
+    return yield* Effect.fail(
+      fail(
+        "unsupported",
+        `Part of this read cannot be shown on its own: ${problem}. Use observe({after}) or observe({query}).`,
+      ),
+    );
   const sub = treeWithin(string(kept.state.tree_markdown) ?? "", index);
   if (sub === undefined)
     return yield* Effect.fail(
@@ -417,10 +432,6 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
 ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
   const { observations } = deps;
   const capture = call.method === "screenshot";
-  // Any read starts the tree baseline over; only a whole read below sets it again.
-  delete bound.fullRows;
-  if (!capture && args.after !== undefined)
-    return yield* observePage(deps, bound, call, context, args);
   if (!capture && args.within !== undefined)
     return yield* observeWithin(deps, bound, call, context, args);
   const depth = capture ? undefined : args.depth;
@@ -429,6 +440,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     (typeof depth !== "number" || !Number.isInteger(depth) || depth < 1 || depth > 10)
   )
     return yield* Effect.fail(fail("invalid_argument", "depth is a whole number from 1 to 10."));
+  // Any read starts the tree baseline over; only a whole read below sets it again.
+  delete bound.fullRows;
+  if (!capture && args.after !== undefined)
+    return yield* observePage(deps, bound, call, context, args);
   const startedAt = yield* Clock.currentTimeMillis;
   let driverMs = 0;
   let parseMs = 0;
@@ -737,7 +752,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     const nextRef = followedSheet ? { ...bound.ref, generation: nextEpoch } : bound.ref;
     const scope =
       depth !== undefined
-        ? `window depth ${depth}`
+        ? `${observeScope(followedSheet, fromSheetId, expectedWindowId, false, false) ?? "window"} depth ${depth}`
         : observeScope(
             followedSheet,
             fromSheetId,

@@ -65,7 +65,8 @@ export const treeToDepth = (tree: string, depth: number) => {
   for (let position = 0; position < raw.length; position++) {
     const here = level[position] ?? 0;
     parents.length = here;
-    const parent = parents[here - 1];
+    // A child under an unnumbered kept row counts toward that row's nearest numbered ancestor.
+    const parent = parents.findLast((index) => index !== undefined);
     if (here <= depth) kept.push(raw[position] ?? "");
     else if (here === depth + 1 && parent !== undefined)
       counts.set(parent, (counts.get(parent) ?? 0) + 1);
