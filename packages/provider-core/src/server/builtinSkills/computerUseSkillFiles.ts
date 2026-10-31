@@ -66,7 +66,7 @@ const SCREEN_CODE_APP_NOTES: Readonly<
     "System Settings":
       'System Settings: click a sidebar row to open its pane; `app.press("cmd+[")` goes back. Panes load lazily: wait for a control of the new pane, such as `app.waitFor({ name: "Software Update" })`, before acting. Never change privacy, security or account switches unless the person asked for that exact change.',
     KakaoTalk: [
-      'KakaoTalk: click the chat\'s row in the list by its number or handle, then press Enter on that same row (`app.press("Enter", row)`) to open it; keys without a target are refused here, and background point clicks on the list are ignored.',
+      "KakaoTalk: open a chat by double-clicking its row in the list by number or handle (`app.click(row, { count: 2 })`), then observe that its chat window opened before going on. Enter is refused here except as a requested send, and point clicks are refused, so neither opens a chat.",
       "Opening a chat marks its messages read for the sender. When only reading, use the chat list previews and do not open the chat.",
       'In a chat, use `app.observe({ query: { role: "AXTextArea" } })` to find the message field (labelled "Enter a message" or "Enter public message", or a translation) and its id, distinguishing it from message bubbles. Type with `app.type(text, { id })` and check the draft.',
       'Sending goes to other people: confirm the recipient and the text with the person first. Use `app.press("Enter", { id }, { send: true })` only when the person asked to send that message to that chat.',

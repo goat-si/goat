@@ -34,4 +34,11 @@ describe("screen-code app notes", () => {
   it.each(apps)("never teaches %s an Enter without a target, which chat apps refuse", (name) => {
     expect(screenCodeAppNote("darwin", name)).not.toMatch(/app\.press\("Enter"\)/);
   });
+
+  it("teaches Enter in KakaoTalk only as a requested send, since the host refuses any other Enter there", () => {
+    const presses =
+      screenCodeAppNote("darwin", "KakaoTalk")?.match(/app\.press\("Enter"[^)]*\)/g) ?? [];
+    expect(presses.length).toBeGreaterThan(0);
+    for (const press of presses) expect(press).toContain("send: true");
+  });
 });
