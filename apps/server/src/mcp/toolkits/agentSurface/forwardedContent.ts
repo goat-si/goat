@@ -48,6 +48,7 @@ export const forwardedContentRegistration = <
           const { structuredContent, ...withoutStructured } = result;
           return new McpSchema.CallToolResult({
             ...withoutStructured,
+            // Codex shows the model only structuredContent when present, which would hide the image.
             ...(blocks.some(
               (block) =>
                 typeof block === "object" &&

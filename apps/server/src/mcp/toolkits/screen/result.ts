@@ -17,6 +17,7 @@ export function screenRunMcpResult(encoded: unknown): McpSchema.CallToolResult {
   const { images, ...summary } = encoded;
   return new McpSchema.CallToolResult({
     isError: false,
+    // Codex shows the model only structuredContent when present, so images or the API leave it out.
     ...(images.length > 0 || summary.api !== undefined ? {} : { structuredContent: summary }),
     content: [
       { type: "text", text: encodeJsonText(summary) },
