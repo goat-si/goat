@@ -1,7 +1,12 @@
 // @effect-diagnostics preferSchemaOverJson:off -- The fixture sends JSON-RPC through the proxy.
 import { assert } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -25,6 +30,8 @@ import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.t
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
+import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import {
   replaceWithTerminal,
   terminalReplyState,
@@ -287,7 +294,121 @@ const fencedCell = (input: Input) =>
     return replaceWithTerminal(answer.error);
   });
 
+const channelRefusal = (kind: "retainedWaiter" | "authority") => (input: Input) =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("matrix:channel");
+    const signals = yield* PubSub.unbounded<void>();
+    const expiresAt = DateTime.makeUnsafe(60000);
+    const reason = input.reasons.includes("stopped_by_person")
+      ? "stopped_by_person"
+      : "screen_locked";
+    let notify: Parameters<
+      NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+    >[0] = () => {};
+    const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () => Effect.succeedSome({ threadId, controlId: "A", expiresAt }),
+          controlState: () =>
+            Effect.succeed<ComputerUseLeases.ComputerUseControlState>(
+              kind === "authority"
+                ? reason === "stopped_by_person"
+                  ? { _tag: "ended", reason: "stopped" }
+                  : { _tag: "paused", reason: "screen_locked" }
+                : {
+                    _tag: "active",
+                    expiresAt,
+                    interruptions: { count: 0, last: "screen_locked" },
+                    apps: undefined,
+                    wakeAt: 60000,
+                  },
+            ),
+          subscribe: PubSub.subscribe(signals),
+          onAuthorityChange: (listener) => {
+            notify = listener;
+            return () => {};
+          },
+        }),
+      ),
+    );
+    const channel = yield* PrimitiveChannel.make.pipe(
+      Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
+    );
+    const authority = { threadId, attachmentGeneration: "a", proxyChannelToken: "fixture" };
+    yield* channel.issue({ ...authority, expiresAt: 60000 });
+    const registered = yield* channel.registerStream({
+      ...authority,
+      proxyInstanceId: "p",
+      kind: "thread",
+    });
+    if (registered.status !== "registered") return yield* Effect.die("registration failed");
+    const reading = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const clock = yield* Clock.Clock;
+    let hold = false;
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    const pending = yield* channel
+      .request({
+        threadId,
+        runId: "run",
+        turnId: "turn",
+        callId: 1,
+        deadlineMillis: 30000,
+        tool: "list_apps",
+        args: {},
+      })
+      .pipe(
+        Effect.provideService(Clock.Clock, {
+          ...clock,
+          currentTimeMillis: Effect.suspend(() =>
+            hold
+              ? Deferred.succeed(reading, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(clock.currentTimeMillis),
+                )
+              : clock.currentTimeMillis,
+          ),
+        }),
+        Effect.result,
+        Effect.forkChild({ startImmediately: true }),
+      );
+    if (kind === "retainedWaiter") {
+      hold = true;
+      const first = input.reasons[0];
+      if (first === undefined) return yield* Effect.die("expected a terminal source");
+      notify({
+        kind: first === "screen_locked" ? "pause" : "stop",
+        threadId,
+        controlId: "A",
+        terminal: first,
+      });
+      yield* Deferred.await(reading);
+      for (const terminal of input.reasons.slice(1))
+        notify({
+          kind: terminal === "screen_locked" ? "pause" : "stop",
+          threadId,
+          controlId: "A",
+          terminal,
+        });
+      yield* Deferred.succeed(release, undefined);
+    }
+    const answer = yield* Fiber.join(pending);
+    if (answer._tag !== "Failure") return yield* Effect.die("expected channel refusal");
+    return replaceWithTerminal(answer.failure);
+  });
+
 export const preDispatchSites = [
+  {
+    name: "ComputerUsePrimitiveChannel.retainedWaiter",
+    undispatched: true,
+    run: channelRefusal("retainedWaiter"),
+  },
+  {
+    name: "ComputerUsePrimitiveChannel.authority",
+    undispatched: true,
+    run: channelRefusal("authority"),
+  },
   {
     name: "ComputerUseLeaseProxyPersonStop.lockRefusal",
     undispatched: true,
