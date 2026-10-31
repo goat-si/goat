@@ -480,12 +480,15 @@ export const make = Effect.gen(function* () {
             });
           }
 
+          const truncated = stat.size > PROJECT_READ_FILE_MAX_BYTES || bytesRead < stat.size;
+          // Streaming decode drops a character the byte limit split, instead of ending in U+FFFD.
+          const decodeOptions = { stream: truncated };
           let contents: string;
           let encoding: ProjectTextFormat["encoding"] = "utf-8";
           try {
-            contents = new TextDecoder("utf-8", { fatal: true }).decode(fileBytes);
+            contents = new TextDecoder("utf-8", { fatal: true }).decode(fileBytes, decodeOptions);
           } catch {
-            contents = new TextDecoder("utf-8").decode(fileBytes);
+            contents = new TextDecoder("utf-8").decode(fileBytes, decodeOptions);
             encoding = "unsupported";
           }
           const crlf = /\r\n/.test(contents);
@@ -511,7 +514,7 @@ export const make = Effect.gen(function* () {
               ? { version: workspaceFileVersion(fileBytes) }
               : {}),
             byteLength: stat.size,
-            truncated: stat.size > PROJECT_READ_FILE_MAX_BYTES || bytesRead < stat.size,
+            truncated,
           };
         }),
       (handle) =>

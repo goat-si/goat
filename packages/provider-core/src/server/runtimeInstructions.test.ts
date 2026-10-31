@@ -35,7 +35,7 @@ describe("GOAT pull request instructions", () => {
       instructions,
       "their last line: PR <full URL>, head <SHA>, checks and reviews <state>.",
     );
-    assert.include(instructions, "Never poll or sleep.");
+    assert.include(instructions, "For PR waits, never poll or sleep.");
     assert.include(instructions, "call goat_pull_request_unwatch");
   });
 });
