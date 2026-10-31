@@ -11,6 +11,8 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import type { BrowserContext, Page } from "playwright-core";
@@ -27,6 +29,7 @@ import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
+import { ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
 // One fake Chromium context per test: the page answers everything but what a test withholds.
@@ -343,6 +346,90 @@ it.live("a short call waiting behind a long one on the same tab answers on its o
         .pipe(Effect.flip);
       // Answered by the server browser, before the broker cut off the host with the long call.
       expect(short).toMatchObject({ remoteTag: "PreviewAutomationTimeoutError", timeoutMs: 200 });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a new tab cannot open after its run ends during URL admission", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const end = yield* activity.begin(scope.thread.threadId, "run-end-open");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const descriptor = Object.getOwnPropertyDescriptor(settings, "getSettings");
+      if (!descriptor) return yield* Effect.die("missing settings descriptor");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => Object.defineProperty(settings, "getSettings", descriptor)),
+      );
+      const delayed = settings.getSettings.pipe(
+        Effect.tap(() =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        ),
+      );
+      Object.defineProperty(settings, "getSettings", { ...descriptor, value: delayed });
+      const before = contexts.length;
+      const opening = yield* broker
+        .invoke({
+          scope,
+          runId: "run-end-open",
+          operation: "open",
+          input: { url: "https://safe.test/", reuseExistingTab: false, show: false },
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* end;
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(opening);
+      expect(result._tag).toBe("Failure");
+      expect(contexts).toHaveLength(before);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a new tab cannot navigate after its run ends while its context is prepared", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const end = yield* activity.begin(scope.thread.threadId, "run-end-context");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Effect.forkChild(
+        Deferred.await(release).pipe(Effect.tap(() => Effect.sync(latch.resolve))),
+      );
+      const contextFor = ServerBrowserContexts.prototype.contextFor;
+      const spy = vi
+        .spyOn(ServerBrowserContexts.prototype, "contextFor")
+        .mockImplementation(async function (this: ServerBrowserContexts, ...args) {
+          const context = await contextFor.apply(this, args);
+          Deferred.doneUnsafe(entered, Effect.void);
+          await latch.promise;
+          return context;
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()));
+      const opening = yield* broker
+        .invoke({
+          scope,
+          runId: "run-end-context",
+          operation: "open",
+          input: { url: "https://safe.test/", reuseExistingTab: false, show: false },
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      const context = contexts.at(-1);
+      if (!context) return yield* Effect.die("missing context");
+      const goto = vi.spyOn(context.page, "goto");
+      yield* end;
+      yield* Deferred.succeed(release, undefined);
+      const result = yield* Fiber.join(opening);
+      expect(result._tag).toBe("Failure");
+      expect(goto).not.toHaveBeenCalled();
     }),
   ).pipe(Effect.provide(layer)),
 );

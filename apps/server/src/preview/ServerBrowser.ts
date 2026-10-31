@@ -91,16 +91,20 @@ import { unloadedOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
-import { browserSessionView, type ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+import {
+  browserSessionView,
+  tabOwner,
+  type ServerBrowserSessionView,
+} from "./ServerBrowserSessions.ts";
 import { pointBefore } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
-import { guardedNavigate } from "./ServerBrowserNavigate.ts";
-import { makeActionChannel } from "./actionChannel.ts";
+import { guardedNavigate, resolveNavigationUrl } from "./ServerBrowserNavigate.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import {
   applyRendering,
+  applyOpenRendering,
   applySetting,
   broadcastViewport,
   UNATTACHED_FILL_VIEWPORT,
@@ -117,7 +121,8 @@ import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts"
 import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
 import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
 import { collectWhileScrolling } from "./scrollCollector.ts";
-import { secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
+import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
+import { makeOpenRunSignals } from "./openRunSignals.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import {
   assertReusable,
@@ -364,6 +369,7 @@ const make = Effect.gen(function* () {
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const blockedTabs = yield* makeBlockedTabFence();
+  const openRuns = makeOpenRunSignals();
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
   const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
@@ -593,6 +599,8 @@ const make = Effect.gen(function* () {
   };
 
   const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
+    const openSignal = openRuns.signal(snapshot.threadId, snapshot.automationOwner);
+    openSignal?.throwIfAborted();
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
     const desktop =
@@ -620,17 +628,24 @@ const make = Effect.gen(function* () {
         snapshot.profileId ?? "default",
         isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
       ));
+    openSignal?.throwIfAborted();
     if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
     popupNavigation.watch(context);
     if (!desktop) await prepareContext(context);
+    openSignal?.throwIfAborted();
     const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
+    openSignal?.throwIfAborted();
     attachNetworkTracker(page);
     const cdp = await context.newCDPSession(page);
-    await installPdfDocumentNavigation(cdp);
+    openSignal?.throwIfAborted();
+    await installPdfDocumentNavigation(cdp, openSignal);
+    openSignal?.throwIfAborted();
     // A popup's first request went out before it became a tab; everything after presents as
     // Chrome, a desktop page too, whose Electron UA would name the app.
-    await presentAsChrome(cdp, host);
-    if (!desktop) await recordCopies(cdp);
+    await presentAsChrome(cdp, host, openSignal);
+    openSignal?.throwIfAborted();
+    if (!desktop) await recordCopies(cdp, openSignal);
+    openSignal?.throwIfAborted();
     page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
     page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
     const control = new SessionControl(snapshot.automationOwner ?? null, () =>
@@ -685,9 +700,11 @@ const make = Effect.gen(function* () {
       capturing: 0,
     };
     if (!desktop) {
+      openSignal?.throwIfAborted();
       await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
+      openSignal?.throwIfAborted();
     }
-    await applyRendering(tab, snapshot);
+    await applyOpenRendering(tab, snapshot, blockedTabs, openSignal);
     const observeNavigation = (url: string, run?: BlockedTabRun) => {
       blockedTabs.observe(tab, url, run);
       const opener = tab.openerTabId && tabs.get(tabKey(tab.threadId, tab.openerTabId));
@@ -800,18 +817,13 @@ const make = Effect.gen(function* () {
       const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
       const initialUrl = snapshot.navStatus.url;
       const activeRun = blockedTabs.capture(tab.threadId);
-      const generation = tab.control.generation;
-      const initialChannel = makeActionChannel({
-        page,
-        cdp,
-        signal: new AbortController().signal,
-        controlGeneration: () => {
-          tab.control.assertAgentMayDispatch();
-          tab.control.assertObservedGeneration(generation);
-        },
-        isFenced: () => blockedTabs.isFenced(tab, activeRun?.runId),
-        blockedFrame: () => blockedTabs.blockedFrame(tab, activeRun?.runId, initialUrl),
-      });
+      const initialChannel = initialTabChannel(
+        tab,
+        blockedTabs,
+        activeRun?.runId,
+        initialUrl,
+        openSignal,
+      );
       const initial = () => {
         tab.initialNavigationSent = true;
         return (desktop || adopted) && page.url() === initialUrl
@@ -1156,13 +1168,6 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const tabOwner = (tab: ServerTab) =>
-    tab.control.controller !== null
-      ? ("human" as const)
-      : tab.control.agentId !== null
-        ? ("agent" as const)
-        : ("unclaimed" as const);
-
   // Agent recordings encode here, so they need the client's Browser recording frame rate. The
   // last report outlives the client, which lets agents record while no client is connected.
   let recordingFrameRate = DEFAULT_BROWSER_RECORDING_FRAME_RATE;
@@ -1182,35 +1187,39 @@ const make = Effect.gen(function* () {
     },
     url: string | undefined,
     session: RequestedSession,
+    runSignal?: AbortSignal,
   ) => {
+    runSignal?.throwIfAborted();
     closeIdleAgentTabs();
     assertTabCapacity(request.agentSessionId);
-    return openInSession(
-      {
-        profiles,
-        contexts,
-        desktopAvailable: desktopChannel.available,
-        open: (fields) =>
-          runPromise(
-            manager.open({
-              threadId: ThreadId.make(request.threadId),
-              ...(url ? { url } : {}),
-              runtime: "server",
-              reveal: false,
-              automationOwner: request.agentSessionId,
-              ...fields,
-            }),
-          ),
-        ensureTab,
-        hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
-        discard: async (snapshot, tab) => {
-          if (tab) return dropTab(tab, true);
-          blockedTabs.drop(snapshot.threadId, snapshot.tabId);
-          const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
-          await runPromise(manager.close(key)).catch(constVoid);
+    return openRuns.track(request.threadId, request.agentSessionId, runSignal, () =>
+      openInSession(
+        {
+          profiles,
+          contexts,
+          desktopAvailable: desktopChannel.available,
+          open: (fields) =>
+            runPromise(
+              manager.open({
+                threadId: ThreadId.make(request.threadId),
+                ...(url ? { url } : {}),
+                runtime: "server",
+                reveal: false,
+                automationOwner: request.agentSessionId,
+                ...fields,
+              }),
+            ),
+          ensureTab,
+          hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
+          discard: async (snapshot, tab) => {
+            if (tab) return dropTab(tab, true);
+            blockedTabs.drop(snapshot.threadId, snapshot.tabId);
+            const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
+            await runPromise(manager.close(key)).catch(constVoid);
+          },
         },
-      },
-      session,
+        session,
+      ),
     );
   };
 
@@ -1276,15 +1285,6 @@ const make = Effect.gen(function* () {
     };
     if (status.url === null || tab.dialog) return status;
     return { ...status, title: (await tab.page.title().catch(() => "")) || null };
-  };
-
-  const resolveNavigationUrl = (input: PreviewAutomationNavigateInput) => {
-    if (input.url !== undefined) return normalizePreviewUrl(input.url);
-    const target = input.target!;
-    if (target.kind === "url") return normalizePreviewUrl(target.url);
-
-    const path = target.path ?? "";
-    return `${target.protocol ?? "http"}://localhost:${target.port}${path.startsWith("/") || path === "" ? path : `/${path}`}`;
   };
 
   const startRecording = (
@@ -1537,6 +1537,7 @@ const make = Effect.gen(function* () {
     request: PreviewAutomationRequest,
     deadlineMs: number,
   ): Promise<unknown> => {
+    const runSignal = blockedTabs.runSignal(request.threadId, request.runId);
     const input = request.input;
     switch (request.operation) {
       case "status":
@@ -1594,11 +1595,19 @@ const make = Effect.gen(function* () {
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
             : undefined;
+        const tabSignal = existing ? blockedTabs.signal(existing, request.runId) : undefined;
+        const openSignal = AbortSignal.any([
+          ...(runSignal ? [runSignal] : []),
+          ...(tabSignal ? [tabSignal] : []),
+        ]);
+        openSignal.throwIfAborted();
         if (existing) await blockedTabs.assertTab(existing, request.runId, url);
         else if (url) await blockedTabs.assertUrl(url);
+        openSignal.throwIfAborted();
         const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
         if (existing) assertReusable(existing.session, open, profiles);
-        const tab = existing ?? (await openSessionTab(request, url, profiles.resolve(open)));
+        const tab =
+          existing ?? (await openSessionTab(request, url, profiles.resolve(open), openSignal));
         if (existing?.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1607,12 +1616,15 @@ const make = Effect.gen(function* () {
         return tab.control.agent(
           request.agentSessionId,
           async (signal) => {
+            const actionSignal = AbortSignal.any([signal, openSignal]);
+            actionSignal.throwIfAborted();
             let navigationSent = !existing && url !== undefined && tab.initialNavigationSent;
             if (navigationSent) tab.control.dispatchGate()();
             await checkOpenBlocked(
               () => blockedTabs.assertTab(tab, request.runId, url),
               navigationSent,
             );
+            actionSignal.throwIfAborted();
             if (tab.dialog)
               throw new BrowserControlInterrupted(
                 'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1627,7 +1639,7 @@ const make = Effect.gen(function* () {
                   url,
                   "load",
                   navigationTimeout,
-                  tabActionGate(tab, request, blockedTabs, deadlineMs, signal, url).channel,
+                  tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
                 );
               }
             } else {
@@ -1636,6 +1648,7 @@ const make = Effect.gen(function* () {
               });
               navigationSent = tab.initialNavigationSent;
             }
+            actionSignal.throwIfAborted();
             const reveal = open.open ?? open.show;
             if (reveal !== false) {
               await runPromise(
@@ -1700,12 +1713,24 @@ const make = Effect.gen(function* () {
       SessionControl.requireAgentSession(request);
       const tab = request.tabId && (await runPromise(findTab(request.threadId, request.tabId)));
       if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
-      return blockedTabs.assertTab(tab, request.runId).then(() => ({}));
+      const tabSignal = blockedTabs.signal(tab, request.runId);
+      return blockedTabs.assertTab(tab, request.runId).then(() => {
+        runSignal?.throwIfAborted();
+        tabSignal?.throwIfAborted();
+        return {};
+      });
     }
     const tab = await requireTab(request);
+    const tabSignal = blockedTabs.signal(tab, request.runId);
+    const operationSignal = AbortSignal.any([
+      ...(runSignal ? [runSignal] : []),
+      ...(tabSignal ? [tabSignal] : []),
+    ]);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) operationSignal.throwIfAborted();
     const mutating = !READ_OPERATIONS.has(request.operation);
     if (!FENCED_ALLOWED_OPERATIONS.has(request.operation))
       await blockedTabs.assertTab(tab, request.runId);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) operationSignal.throwIfAborted();
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     if (mutating && !tab.control.agentMayAct(request.agentSessionId ?? ""))
       throw new BrowserControlInterrupted(
@@ -1718,7 +1743,7 @@ const make = Effect.gen(function* () {
         request,
         deadlineMs,
         recordAction,
-        secretBlockedGate(tab, request.runId, blockedTabs),
+        secretBlockedGate(tab, request.runId, blockedTabs, operationSignal),
       );
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
@@ -1737,13 +1762,7 @@ const make = Effect.gen(function* () {
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
-      const channel = tabActionGate(
-        tab,
-        request,
-        blockedTabs,
-        deadlineMs,
-        new AbortController().signal,
-      ).channel;
+      const channel = tabActionGate(tab, request, blockedTabs, deadlineMs, operationSignal).channel;
       await resolveDialog(tab, input as PreviewAutomationDialogInput, channel);
       return statusWithTitle(tab, request.agentSessionId);
     }
@@ -1754,18 +1773,20 @@ const make = Effect.gen(function* () {
     if (READ_OPERATIONS.has(request.operation) && !tab.control.agentCanActNow(agentSessionId)) {
       return tab.control.observe(async () => {
         await blockedTabs.assertTab(tab, request.runId);
+        operationSignal.throwIfAborted();
         if (tab.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"}.',
             "dialogPending",
           );
-        return executeTabOperation(tab, request, deadlineMs);
+        return executeTabOperation(tab, request, deadlineMs, operationSignal, true);
       });
     }
     return tab.control.agent(
       agentSessionId,
       async (signal) => {
         await blockedTabs.assertTab(tab, request.runId);
+        operationSignal.throwIfAborted();
         if (tab.dialog)
           throw new BrowserControlInterrupted(
             'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
@@ -1777,7 +1798,12 @@ const make = Effect.gen(function* () {
           tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
         updateFileChooserInterception(tab);
         try {
-          return await executeTabOperation(tab, request, deadlineMs, signal);
+          return await executeTabOperation(
+            tab,
+            request,
+            deadlineMs,
+            AbortSignal.any([signal, operationSignal]),
+          );
         } finally {
           if (tab.agentOperating)
             tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
@@ -1796,9 +1822,12 @@ const make = Effect.gen(function* () {
     request: PreviewAutomationRequest,
     deadlineMs: number,
     signal?: AbortSignal,
+    observe = false,
   ) => {
+    signal?.throwIfAborted();
     const input = request.input;
     await secretFill.guard(tab, request);
+    signal?.throwIfAborted();
     ServerBrowserScreen.assertScreenExpectation(tab, request);
     const actionGate = (destination?: string) =>
       tabActionGate(
@@ -1808,7 +1837,7 @@ const make = Effect.gen(function* () {
         deadlineMs,
         signal ?? new AbortController().signal,
         destination,
-        signal === undefined,
+        observe,
       );
     switch (request.operation) {
       case "back":

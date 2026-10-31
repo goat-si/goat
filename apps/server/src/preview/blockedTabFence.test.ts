@@ -212,3 +212,40 @@ it.effect("a synchronous frame check sees newly blocked hosts and fences the tur
     ),
   ),
 );
+
+it.effect("a blocked check without an explicit run cuts the active run's observer signal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
+      const fence = yield* makeBlockedTabFence();
+      const threadId = ThreadId.make("implicit-run-cut");
+      const end = yield* activity.begin(threadId, "run");
+      const tab = {
+        threadId,
+        tabId: "tab",
+        closing: false,
+        page: { frames: () => [{ url: () => "https://safe.test/" }] },
+      };
+      const signal = fence.signal(tab, undefined);
+      expect(signal?.aborted).toBe(false);
+      const refusal = yield* Effect.promise(() =>
+        fence.assertTab(tab, undefined, "https://blocked.test/").then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(refusal).toMatchObject({ reason: "blocked_url" });
+      expect(signal?.aborted).toBe(true);
+      yield* end;
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(PreviewAgentActivity.layer, ServerSettings.layerTest()).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-implicit-cut-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);

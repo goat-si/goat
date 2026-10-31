@@ -958,3 +958,35 @@ it.effect("a host blocked during new-tab preparation receives no navigation comm
     }),
   ).pipe(Effect.provide(layer)),
 );
+
+it.effect("an operation waiting in admission cannot navigate after its run ends", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      const descriptor = Object.getOwnPropertyDescriptor(f.settings, "getSettings");
+      if (!descriptor) return yield* Effect.die("missing settings descriptor");
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => Object.defineProperty(f.settings, "getSettings", descriptor)),
+      );
+      const delayed = f.settings.getSettings.pipe(
+        Effect.tap(() =>
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(resume))),
+        ),
+      );
+      Object.defineProperty(f.settings, "getSettings", { ...descriptor, value: delayed });
+      const navigate = vi.spyOn(f.page, "goto");
+      const action = yield* f
+        .call(f.tabId, "navigate", { url: `${f.allowed}/after-end` })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      yield* f.end;
+      yield* Deferred.succeed(resume, undefined);
+      const result = yield* Fiber.join(action);
+      expect(result._tag).toBe("Failure");
+      expect(navigate).not.toHaveBeenCalled();
+      expect(f.hits.some((hit) => hit.endsWith("/after-end"))).toBe(false);
+    }),
+  ).pipe(Effect.provide(layer)),
+);

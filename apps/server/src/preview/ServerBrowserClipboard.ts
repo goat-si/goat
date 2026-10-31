@@ -1,6 +1,7 @@
 import { constVoid } from "effect/Function";
 import type { CDPSession, Frame, Page } from "playwright-core";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
+import { openSetupSend } from "./openRunSignals.ts";
 
 interface ClipboardTab {
   readonly page: Page;
@@ -8,10 +9,11 @@ interface ClipboardTab {
   readonly frameSessions: Map<Frame, CDPSession>;
 }
 
-export const recordCopies = async (cdp: CDPSession) => {
+export const recordCopies = async (cdp: CDPSession, signal?: AbortSignal) => {
+  const send = openSetupSend(cdp, signal);
   // Scripts for new documents run only while this session's Page domain is on.
-  await cdp.send("Page.enable");
-  await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+  await send("Page.enable");
+  await send("Page.addScriptToEvaluateOnNewDocument", {
     source: ViewerInput.CLIPBOARD_SCRIPT,
     worldName: ViewerInput.CLIPBOARD_WORLD,
     runImmediately: true,

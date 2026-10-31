@@ -694,6 +694,7 @@ export const make = Effect.gen(function* () {
     checkBlocked: ((destination: string) => Promise<void>) & {
       readonly isFenced: () => boolean;
       readonly blockedFrame: () => boolean;
+      readonly signal?: AbortSignal | undefined;
     },
   ): Promise<PreviewAutomationFillSecretResult> => {
     const input = Option.getOrUndefined(decodeInput(request.input));
@@ -708,12 +709,16 @@ export const make = Effect.gen(function* () {
         request.agentSessionId,
         (fence) =>
           reserving(tab, async () => {
+            checkBlocked.signal?.throwIfAborted();
             await checkBlocked(tab.page.url());
+            checkBlocked.signal?.throwIfAborted();
             fence.assertMayDispatch();
             const channel = makeActionChannel({
               cdp: tab.cdp,
               page: tab.page,
-              signal: fence.signal,
+              signal: checkBlocked.signal
+                ? AbortSignal.any([fence.signal, checkBlocked.signal])
+                : fence.signal,
               controlGeneration: fence.assertMayDispatch,
               isFenced: checkBlocked.isFenced,
               blockedFrame: checkBlocked.blockedFrame,
@@ -736,6 +741,7 @@ export const make = Effect.gen(function* () {
                 identifier === null ? null : await identifierNameOf(target, channel);
               fence.hold();
               await checkBlocked(destination);
+              checkBlocked.signal?.throwIfAborted();
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
               const consumed = await consume({
@@ -772,6 +778,7 @@ export const make = Effect.gen(function* () {
               });
               watchSignIn(tab, request.threadId);
               await checkBlocked(destination);
+              checkBlocked.signal?.throwIfAborted();
               fence.assertMayDispatch();
               assertBefore(deadlineMs);
               // Fenced before dispatch: a lost reply may still have typed the value.

@@ -10,6 +10,7 @@ import * as NodePath from "node:path";
 import type { Browser, BrowserContext, CDPSession } from "playwright-core";
 
 import { sandboxDisabled } from "./PreviewBrowserHost.ts";
+import { openSetupSend } from "./openRunSignals.ts";
 
 // Playwright needs its files on disk. createRequire also resolves it from a Node SEA executable.
 const requirePlaywright = NodeModule.createRequire(import.meta.url);
@@ -109,14 +110,16 @@ const chromeIdentity = (
 export const presentAsChrome = async (
   cdp: CDPSession,
   host: { readonly platform: NodeJS.Platform; readonly arch: string; readonly release?: string },
+  signal?: AbortSignal,
 ) => {
-  const { userAgent, product } = await cdp.send("Browser.getVersion");
+  const send = openSetupSend(cdp, signal);
+  const { userAgent, product } = await send("Browser.getVersion");
   const identity = chromeIdentity(
     userAgent,
     { platform: host.platform, arch: host.arch, release: host.release ?? NodeOS.release() },
     product,
   );
-  if (identity) await cdp.send("Emulation.setUserAgentOverride", identity);
+  if (identity) await send("Emulation.setUserAgentOverride", identity);
 };
 
 export class ServerBrowserContexts {

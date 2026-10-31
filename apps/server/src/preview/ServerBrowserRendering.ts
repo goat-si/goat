@@ -6,6 +6,7 @@ import type {
 import type { CDPSession, Page } from "playwright-core";
 import type { ActionChannel } from "./actionChannel.ts";
 import { fixedViewportSize } from "./ServerBrowserViewport.ts";
+import { initialTabChannel } from "./tabActionGate.ts";
 
 export const UNATTACHED_FILL_VIEWPORT = { width: 1280, height: 800 } as const;
 const RENDER_SCALE = 2;
@@ -102,3 +103,19 @@ export const applyRendering = async (
     broadcastViewport(tab);
   }
 };
+
+export const applyOpenRendering = (
+  tab: ViewportTab & Parameters<typeof initialTabChannel>[0],
+  snapshot: PreviewSessionSnapshot,
+  fence: Parameters<typeof initialTabChannel>[1] & {
+    capture(threadId: string): { runId: string } | undefined;
+  },
+  signal?: AbortSignal,
+) =>
+  applyRendering(
+    tab,
+    snapshot,
+    signal
+      ? initialTabChannel(tab, fence, fence.capture(tab.threadId)?.runId, tab.page.url(), signal)
+      : undefined,
+  );

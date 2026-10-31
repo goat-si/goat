@@ -38,3 +38,12 @@ export const browserSessionView = async (tab: {
   agentStopped: tab.control.isAgentStopped,
   handoffReason: tab.control.handoffReason,
 });
+
+export const tabOwner = (tab: {
+  readonly control: { readonly controller: string | null; readonly agentId: string | null };
+}) =>
+  tab.control.controller !== null
+    ? ("human" as const)
+    : tab.control.agentId !== null
+      ? ("agent" as const)
+      : ("unclaimed" as const);

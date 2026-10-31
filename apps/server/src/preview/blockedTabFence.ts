@@ -42,6 +42,11 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   const entries = new Map<string, Identity>();
   const pending = new Map<string, { runId: string; check: Promise<void> }>();
   const tokens = new Map<string, object>();
+  const runs = new Map<string, AbortController>();
+  const operations = new Map<
+    string,
+    { threadId: string; runId: string; controller: AbortController }
+  >();
   const keyOf = (tab: Tab) => `${tab.threadId}\u0000${tab.tabId}`;
   const entryKey = (key: string, runId: string) => `${key}\u0000${runId}`;
   const runKey = (threadId: string, runId: string) => `${threadId}\u0000${runId}`;
@@ -55,6 +60,17 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     return value;
   };
   yield* activity.onRunEnd((threadId, runId) => {
+    const key = runKey(threadId, runId);
+    runs.get(key)?.abort(new BrowserControlInterrupted("The agent run ended.", "interrupted"));
+    runs.delete(key);
+    for (const [key, operation] of operations) {
+      if (operation.threadId === threadId && operation.runId === runId) {
+        operation.controller.abort(
+          new BrowserControlInterrupted("The agent run ended.", "interrupted"),
+        );
+        operations.delete(key);
+      }
+    }
     tokens.delete(runKey(threadId, runId));
     const prefix = `${threadId}\u0000`;
     for (const [key, value] of entries)
@@ -64,6 +80,31 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   });
   const blocked = () =>
     new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
+  const runSignal = (threadId: string, runId: string | undefined) => {
+    const actualRun = runId ?? capture(threadId)?.runId;
+    if (!actualRun || !active(threadId, actualRun)) return undefined;
+    const key = runKey(threadId, actualRun);
+    const controller = runs.get(key) ?? new AbortController();
+    runs.set(key, controller);
+    return controller.signal;
+  };
+  const signal = (tab: Tab, runId: string | undefined) => {
+    const actualRun = runId ?? capture(tab.threadId)?.runId;
+    if (!actualRun || !active(tab.threadId, actualRun)) return undefined;
+    const key = entryKey(keyOf(tab), actualRun);
+    let operation = operations.get(key);
+    if (!operation) {
+      operation = { threadId: tab.threadId, runId: actualRun, controller: new AbortController() };
+      operations.set(key, operation);
+      if (entries.has(key)) operation.controller.abort(blocked());
+    }
+    return operation.controller.signal;
+  };
+  const cut = (tab: Tab, runId: string | undefined) => {
+    const actualRun = runId ?? capture(tab.threadId)?.runId;
+    if (actualRun) operations.get(entryKey(keyOf(tab), actualRun))?.controller.abort(blocked());
+    tab.control?.cutBlockedUrl();
+  };
   const capture = (threadId: string): BlockedTabRun | undefined => {
     const runId = runSync(activity.currentRun(ThreadId.make(threadId)));
     if (!runId) return undefined;
@@ -84,7 +125,7 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
       active(tab.threadId, runId)
     ) {
       entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
-      tab.control?.cutBlockedUrl();
+      cut(tab, runId);
     }
     const prior = pending.get(key)?.check ?? Promise.resolve();
     const check = prior.then(async () => {
@@ -98,7 +139,7 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
         isBlockedBrowserUrl(url, current.blockedBrowserHosts)
       ) {
         entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
-        tab.control?.cutBlockedUrl();
+        cut(tab, runId);
       }
     });
     void check.catch(() => undefined);
@@ -119,7 +160,7 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
       const current = await run(settings.getSettings);
       if (check !== pending.get(key)) continue;
       if (runId && entry?.threadId === tab.threadId && entry.runId === runId) {
-        tab.control?.cutBlockedUrl();
+        cut(tab, runId);
         throw blocked();
       }
       if (
@@ -135,7 +176,7 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
           active(tab.threadId, runId)
         )
           entries.set(entryKey(key, runId), { threadId: tab.threadId, runId });
-        tab.control?.cutBlockedUrl();
+        cut(tab, runId);
         throw blocked();
       }
       return;
@@ -153,7 +194,7 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
       return false;
     if (runId && active(tab.threadId, runId))
       entries.set(entryKey(keyOf(tab), runId), { threadId: tab.threadId, runId });
-    tab.control?.cutBlockedUrl();
+    cut(tab, runId);
     return true;
   };
   const gate = (tab: Tab, runId: string | undefined, base: DispatchGate): DispatchGate => {
@@ -182,6 +223,24 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     const key = `${threadId}\u0000${tabId}`;
     pending.delete(key);
     for (const entry of entries.keys()) if (entry.startsWith(`${key}\u0000`)) entries.delete(entry);
+    for (const [entry, operation] of operations)
+      if (entry.startsWith(`${key}\u0000`)) {
+        operation.controller.abort(
+          new BrowserControlInterrupted("The browser tab closed.", "closed"),
+        );
+        operations.delete(entry);
+      }
   };
-  return { assertTab, assertUrl, capture, observe, drop, gate, isFenced, blockedFrame };
+  return {
+    assertTab,
+    assertUrl,
+    capture,
+    observe,
+    drop,
+    gate,
+    isFenced,
+    blockedFrame,
+    signal,
+    runSignal,
+  };
 });

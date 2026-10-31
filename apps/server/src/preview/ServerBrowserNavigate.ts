@@ -1,4 +1,6 @@
 import type { Page } from "playwright-core";
+import type { PreviewAutomationNavigateInput } from "@goat/contracts";
+import { normalizePreviewUrl } from "@goat/shared/preview";
 import type { ActionChannel } from "./actionChannel.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
@@ -41,4 +43,13 @@ export const guardedNavigate = async (
     }
     throw ServerBrowserPage.toOperationError(cause, timeout);
   });
+};
+
+export const resolveNavigationUrl = (input: PreviewAutomationNavigateInput) => {
+  if (input.url !== undefined) return normalizePreviewUrl(input.url);
+  const target = input.target;
+  if (!target) throw new Error("A navigation target is required.");
+  if (target.kind === "url") return normalizePreviewUrl(target.url);
+  const path = target.path ?? "";
+  return `${target.protocol ?? "http"}://localhost:${target.port}${path.startsWith("/") || path === "" ? path : `/${path}`}`;
 };
