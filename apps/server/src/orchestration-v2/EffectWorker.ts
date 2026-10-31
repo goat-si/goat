@@ -35,6 +35,7 @@ import * as RuntimeRequestService from "./RuntimeRequestService.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { makeComputerUseStop } from "./goat/ComputerUseStop.ts";
 import { continueRestartedRun } from "./RestartContinuation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { isNonRetryableProviderTurnControlFailure } from "./providerTurnControlFailure.ts";
@@ -82,10 +83,13 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const stopComputerUse = yield* makeComputerUseStop;
     return OrchestrationEffectExecutorV2.of({
       execute: Effect.fn("OrchestrationEffectExecutorV2.execute")(function (effect, options) {
         const willRetry = options?.willRetry ?? false;
         switch (effect.request.type) {
+          case "computer-use.stop":
+            return stopComputerUse(effect);
           case "provider-runtime.continue": {
             const sourceRunId = effect.request.sourceRunId;
             return continueRestartedRun({ threadId: effect.threadId, sourceRunId }).pipe(

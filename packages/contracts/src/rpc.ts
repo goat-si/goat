@@ -625,6 +625,7 @@ export const WS_METHODS = {
   computerUseStatusChanges: "computerUse.statusChanges",
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
+  computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
   computerUseResume: "computerUse.resume",
   computerUseApps: "computerUse.apps",
   previewSessionsSubscribe: "previewSessions.subscribe",
@@ -842,6 +843,12 @@ const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
   payload: Schema.Struct({}),
   success: ComputerUseStopAllResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsComputerUseRemoveAllowedAppRpc = Rpc.make(WS_METHODS.computerUseRemoveAllowedApp, {
+  payload: Schema.Struct({ app: Schema.String }),
+  success: Schema.Struct({}),
+  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
 /** Hands the screen back to agents after a person's input or takeover paused them. */
@@ -2482,6 +2489,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsComputerUseStatusChangesRpc,
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
+  WsComputerUseRemoveAllowedAppRpc,
   WsComputerUseResumeRpc,
   WsComputerUseAppsRpc,
   WsPreviewSessionsSubscribeRpc,

@@ -198,7 +198,10 @@ const inertDependencies = Layer.mergeAll(
     proxy: undefined,
     foregroundApprovalEpoch: Effect.succeed(0),
   }),
-  Layer.mock(Handoffs.Handoffs)({}),
+  Layer.mock(Handoffs.Handoffs)({
+    withComputerUseToggle: (_enabled, update) => update,
+    withComputerUseSettings: (_patch, update) => update,
+  }),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
     Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),

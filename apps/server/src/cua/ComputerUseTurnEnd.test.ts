@@ -9,6 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { foregroundProxyLayer } from "./ComputerUseForeground.testkit.ts";
 import { run } from "./ComputerUseLeases.projection.testkit.ts";
@@ -55,7 +56,16 @@ it.effect.each([
       }).pipe(
         Effect.provide(
           ComputerUseTurnEnd.layer.pipe(
-            Layer.provideMerge(Layer.merge(foregroundProxyLayer, orchestrator)),
+            Layer.provideMerge(
+              Layer.mergeAll(
+                foregroundProxyLayer,
+                orchestrator,
+                Layer.mock(Handoffs.Handoffs)({
+                  stopComputerUseSessions: () => Effect.succeed([]),
+                  revalidateComputerUse: () => Effect.void,
+                }),
+              ),
+            ),
           ),
         ),
       );
