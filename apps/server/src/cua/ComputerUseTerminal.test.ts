@@ -248,3 +248,33 @@ it.effect("applies a late terminal latch after an outbound transformation", () =
     assert.include(written, '"retryClass":"never"');
   }),
 );
+
+it.effect("a dispatched read without input is not marked as possibly committed", () =>
+  Effect.gen(function* () {
+    let written = "";
+    const sink = terminalSink(
+      {
+        answer: (line) =>
+          Effect.sync(() => {
+            written = line;
+          }),
+      },
+      { id: 1, method: "tools/call", params: { name: "list_apps" } },
+      () => "screen_locked",
+      () => true,
+    );
+    yield* sink.answer(
+      JSON.stringify({
+        result: {
+          isError: true,
+          structuredContent: {
+            code: "screen_locked",
+            safety: { retryClass: "never", possibleCommit: false },
+          },
+        },
+      }),
+      "settled",
+    );
+    assert.include(written, '"possibleCommit":false');
+  }),
+);

@@ -8,6 +8,7 @@ import { driverScreenLocked } from "./ComputerUseDriverOutcome.ts";
 import {
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
+  isReadOnlyCall,
   type Interruption,
 } from "./ComputerUseLeaseMessages.ts";
 import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
@@ -94,7 +95,12 @@ export const terminalSink = (
         terminalState: () =>
           mergeTerminal(context?.terminalState?.() ?? {}, {
             reason: terminalReason(terminal()),
-            possibleCommit: dispatched(),
+            possibleCommit:
+              dispatched() &&
+              !isReadOnlyCall(
+                typeof message.params?.name === "string" ? message.params.name : undefined,
+                message.params?.arguments,
+              ),
           }),
       };
       const result = finalTerminalLine(line, status, message, finalContext.terminalState());
