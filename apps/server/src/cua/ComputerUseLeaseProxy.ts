@@ -75,7 +75,6 @@ import {
   RECONNECTING,
   REQUEST_ID_BUSY,
   SCREEN_CALL_EXPIRED,
-  SCREEN_SHARED,
   WRONG_DISPLAY,
 } from "./ComputerUseLeaseMessages.ts";
 import * as Transport from "./ComputerUseLeaseProxyTransport.ts";
