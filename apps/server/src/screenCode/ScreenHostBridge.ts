@@ -816,7 +816,6 @@ export class ScreenHostBridge {
       effectsStarted: state?.effectsStarted ?? 0,
     };
   }
-
   /** Targets the cell has called, so a change to one tab can spare a cell that never used it. */
   cellTargetIds(runId: string, turnId: string, cellId: string): ReadonlySet<string> {
     return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
@@ -850,7 +849,6 @@ export class ScreenHostBridge {
   ) {
     this.cutCellNow(runId, turnId, cellId, reason);
   });
-
   cutCellNow(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
     if (reason === "stopped_by_person" || reason === "screen_locked") {
