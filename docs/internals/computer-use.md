@@ -788,3 +788,9 @@ thread at a time drives a machine's real GUI, assigned by the epic's lead.
 | P5    | WS10 #1138 Linux helper                          | WS2, WS5, WS6   | conformance suite green on X11 and Wayland; unsupported cells typed                                                |
 | P4    | WS12 #1230 built-in computer use skill           | WS1, WS6, WS7   | skill in the builtin registry replaces the runtime paragraph for every adapter; real-task evidence on a ready host |
 | P6    | WS11 #1139 qualification and visual verification | runs throughout | hard gates met on a signed packaged build per platform; latency within budget                                      |
+
+- `tab.logs({ since? })` reads diagnostics from an inclusive ISO 8601 instant.
+- `tab.evaluate(expression)` uses the browser evaluation guard.
+- `tab.dialog(action, promptText?)` answers a pending browser dialog.
+- `tab.upload(target, files)` supplies absolute file paths to a file input.
+- `tab.fillSecret(target, secretRef)` focuses an observed element or uses a CSS selector with origin-bound secret fill.

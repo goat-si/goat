@@ -74,6 +74,11 @@ const methods = [
   "wait_for",
   "invoke_menu",
   "fetch_tab",
+  "tab_logs",
+  "tab_evaluate",
+  "tab_dialog",
+  "tab_upload",
+  "tab_fill_secret",
 ] as const;
 
 type ChildResult = Pick<

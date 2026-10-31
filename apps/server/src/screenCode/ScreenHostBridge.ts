@@ -703,8 +703,14 @@ export class ScreenHostBridge {
         failCell(error);
         return refused(call, { ...error, safety: screenFailureSafety(call, error) });
       }
+      const existing = state.images.find(
+        (item) => item.bytes === image.bytes && item.mimeType === image.mimeType,
+      );
+      const returnedMetadata = existing ? { ...metadata, imageRef: existing.imageRef } : metadata;
       const size = imageSize(image);
-      if (size > context.limits.imageBytes) {
+      if (existing) {
+        state.metadata.push(returnedMetadata);
+      } else if (size > context.limits.imageBytes) {
         state.metadata.push({ ...metadata, omitted: true });
         state.truncated.push(`image:${metadata.imageRef}`);
       } else {
@@ -712,9 +718,9 @@ export class ScreenHostBridge {
           const old = state.images.shift();
           if (!old) break;
           state.retainedBytes -= imageSize(old);
-          const index = state.metadata.findIndex((item) => item.imageRef === old.imageRef);
-          const previous = state.metadata[index];
-          if (previous) state.metadata[index] = { ...previous, omitted: true };
+          state.metadata = state.metadata.map((item) =>
+            item.imageRef === old.imageRef ? { ...item, omitted: true } : item,
+          );
           state.truncated.push(`image:${old.imageRef}`);
         }
         state.images.push(image);
@@ -727,15 +733,20 @@ export class ScreenHostBridge {
           const record = item as Record<string, unknown>;
           if (record.bytes === image.bytes) {
             const { bytes: _bytes, ...rest } = record;
-            return { ...rest, ...metadata };
+            return { ...rest, ...returnedMetadata };
           }
           return Object.fromEntries(
-            Object.entries(record).map(([name, part]) => [name, stripImage(part)]),
+            Object.entries(record).map(([name, part]) => [
+              name,
+              name === "imageRef" && part === metadata.imageRef
+                ? returnedMetadata.imageRef
+                : stripImage(part),
+            ]),
           );
         }
         return item;
       };
-      value = value === undefined ? metadata : stripImage(value);
+      value = value === undefined ? returnedMetadata : stripImage(value);
     }
     const json = image ? JSON.stringify(value) : undefined;
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {

@@ -42,7 +42,7 @@ import {
   type FleetLayoutAgent,
   type FleetLayoutMachine,
   type FleetPoint,
-} from "./fleetLayout";
+} from "@goat/client-runtime/state/fleet-layout";
 
 /** Animated particles are capped; further running work still shows in the counts. */
 const MAX_PARTICLES = 24;
