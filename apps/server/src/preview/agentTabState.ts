@@ -16,6 +16,7 @@ export interface AgentInput {
   readonly at: number;
   /** The tab's control generation then; a person taking the tab since moves it on. */
   readonly generation: number;
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -53,12 +54,30 @@ type Opener = Omit<Parameters<typeof popupOwner>[0], "lastAgentInput">;
 export class PopupAttribution {
   /** The agent whose input last reached the tab. */
   lastInput: AgentInput | undefined;
-  private readonly openings = new Map<string, string | null>();
+  private readonly openings = new Map<
+    string,
+    { owner: string | null; agentControlled: boolean; signal?: AbortSignal }
+  >();
 
   opened(targetId: string, opener: Opener, now: number) {
-    this.openings.set(targetId, popupOwner({ ...opener, lastAgentInput: this.lastInput }, now));
+    const recent = this.lastInput;
+    const signal =
+      recent &&
+      recent.generation === opener.control.generation &&
+      (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
+        ? recent.signal
+        : undefined;
+    this.openings.set(targetId, {
+      owner: popupOwner({ ...opener, lastAgentInput: recent }, now),
+      agentControlled: !("controller" in opener.control) || opener.control.controller === null,
+      ...(signal ? { signal } : {}),
+    });
     if (this.openings.size > OPENINGS_KEPT)
       this.openings.delete(this.openings.keys().next().value ?? "");
+  }
+
+  opening(targetId: string | undefined) {
+    return targetId === undefined ? undefined : this.openings.get(targetId);
   }
 
   owner(targetId: string | undefined, opener: Opener, now: number) {
@@ -66,7 +85,7 @@ export class PopupAttribution {
     if (opening === undefined)
       return popupOwner({ ...opener, lastAgentInput: this.lastInput }, now);
     this.openings.delete(targetId ?? "");
-    return opening;
+    return opening.owner;
   }
 }
 
@@ -75,11 +94,14 @@ export const watchOpenings = async (
   cdp: Pick<CDPSession, "send" | "on">,
   tab: Opener & { readonly popups: PopupAttribution },
   now: () => number,
+  signal?: AbortSignal,
 ) => {
+  signal?.throwIfAborted();
   const self = (await cdp.send("Target.getTargetInfo")).targetInfo.targetId;
   cdp.on("Target.targetCreated", ({ targetInfo }) => {
     if (targetInfo.openerId === self) tab.popups.opened(targetInfo.targetId, tab, now());
   });
+  signal?.throwIfAborted();
   await cdp.send("Target.setDiscoverTargets", { discover: true });
 };
 

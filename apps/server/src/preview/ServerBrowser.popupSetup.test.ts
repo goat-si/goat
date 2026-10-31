@@ -161,6 +161,7 @@ const fixture = Effect.gen(function* () {
   const allowed = `http://127.0.0.1:${port}`;
   const blocked = `http://localhost:${port}`;
   const service = yield* ServerBrowser.ServerBrowser;
+  const manager = yield* Manager.PreviewManager;
   const broker = yield* Broker.PreviewAutomationBroker;
   const settings = yield* ServerSettings.ServerSettingsService;
   const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
@@ -182,6 +183,7 @@ const fixture = Effect.gen(function* () {
   ) => broker.invoke({ scope, tabId: id, operation, input });
   return {
     service,
+    manager,
     broker,
     page,
     tabId,
@@ -201,6 +203,7 @@ const popupSetup = Effect.gen(function* () {
   const context = f.page.context();
   const create = context.newCDPSession.bind(context);
   const sent: string[] = [];
+  const hook: { beforeReturn?: (target: unknown) => Promise<void> } = {};
   const install = vi.spyOn(context, "newCDPSession").mockImplementation(async (target) => {
     const cdp = await create(target);
     if (target !== f.page) {
@@ -210,29 +213,38 @@ const popupSetup = Effect.gen(function* () {
         return Reflect.apply(send, cdp, args);
       });
     }
+    await hook.beforeReturn?.(target);
     return cdp;
   });
   yield* Effect.addFinalizer(() => Effect.sync(() => install.mockRestore()));
-  return { ...f, sent };
+  return { ...f, sent, hook };
 });
 
-it.effect("a blocked popup is adopted without mutating setup after its request", () =>
+it.effect("a blocked agent popup closes without setup and is not adopted", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* popupSetup;
       const popupReady = f.page.waitForEvent("popup");
-      yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
+      const result = yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
       const popup = yield* Effect.promise(() => popupReady);
-      yield* Effect.promise(() => popup.waitForURL(`${f.blocked}/blocked`));
-      yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+      const closeEvent = yield* Deferred.make<void>();
+      if (popup.isClosed()) yield* Deferred.succeed(closeEvent, undefined);
+      else popup.once("close", () => Deferred.doneUnsafe(closeEvent, Effect.void));
+      const closed = Deferred.await(closeEvent).pipe(Effect.as("closed"));
+      const adopted = Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
         Stream.mapEffect(() => f.service.sessions),
         Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
         Stream.runHead,
+        Effect.as("adopted"),
       );
+      expect(yield* Effect.raceFirst(closed, adopted)).toBe("closed");
+      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "blocked_url" } });
       expect(f.sent).not.toContain("Page.addScriptToEvaluateOnNewDocument");
       expect(f.sent).not.toContain("Fetch.enable");
       expect(f.sent).not.toContain("Page.enable");
-      expect(f.sent).not.toContain("Emulation.setDeviceMetricsOverride");
+      expect(f.sent).not.toContain("Target.setDiscoverTargets");
+      expect(f.sent.filter((method) => method !== "Target.getTargetInfo")).toEqual([]);
+      expect((yield* f.service.sessions).map((tab) => tab.tabId)).toEqual([f.tabId]);
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -243,90 +255,153 @@ it.effect("an allowed popup receives clipboard instrumentation", () =>
       const f = yield* popupSetup;
       const popupReady = f.page.waitForEvent("popup");
       yield* Effect.promise(() =>
-        f.page.evaluate(`window.open(${JSON.stringify(`${f.allowed}/safe`)})`),
+        f.page.locator("#next").evaluate((button, url) => {
+          button.setAttribute("onclick", `window.open('${url}')`);
+        }, `${f.allowed}/safe`),
       );
-      yield* Effect.promise(() => popupReady);
+      yield* f.call(f.tabId, "click", { locator: "#next" });
+      const popup = yield* Effect.promise(() => popupReady);
       yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
         Stream.mapEffect(() => f.service.sessions),
         Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
         Stream.runHead,
       );
       expect(f.sent).toContain("Page.addScriptToEvaluateOnNewDocument");
+      yield* f.end;
+      expect(yield* Effect.promise(() => popup.evaluate(() => 1))).toBe(1);
     }),
   ).pipe(Effect.provide(layer)),
 );
 
-const pendingPopup = Effect.gen(function* () {
-  const f = yield* popupSetup;
-  const popupReady = f.page.waitForEvent("popup");
-  yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
-  const popup = yield* Effect.promise(() => popupReady);
-  yield* Effect.promise(() => popup.waitForURL(`${f.blocked}/blocked`));
-  const found = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
-    Stream.mapEffect(() => f.service.sessions),
-    Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
-    Stream.runHead,
-  );
-  if (found._tag === "None") return yield* Effect.die("popup not adopted");
-  const tabId = PreviewTabId.make(found.value.find((view) => view.tabId !== f.tabId)!.tabId);
-  f.sent.length = 0;
-  yield* f.end;
-  yield* Effect.promise(() => popup.goto(`${f.allowed}/safe`));
-  const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
-  const end = yield* activity.begin(threadId, "next-run");
-  yield* Effect.addFinalizer(() => end);
-  const nextScope = { ...scope, thread: { ...scope.thread, runId: RunId.make("next-run") } };
-  const press = () =>
-    f.broker.invoke({ scope: nextScope, tabId, operation: "press", input: { key: "Enter" } });
-  return { ...f, popup, press };
-});
-
-it.effect("a later run installs popup protection before its first key input", () =>
+it.effect("a person's blocked popup is adopted and fenced for the agent", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const f = yield* pendingPopup;
-      const press = f.popup.keyboard.press.bind(f.popup.keyboard);
-      const input = vi.spyOn(f.popup.keyboard, "press").mockImplementation((...args) => {
-        f.sent.push("agent-key");
-        return press(...args);
+      const f = yield* popupSetup;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
       });
-      yield* f.press();
-      expect(f.sent.indexOf("Page.addScriptToEvaluateOnNewDocument")).toBeGreaterThanOrEqual(0);
-      expect(f.sent.indexOf("agent-key")).toBeGreaterThan(
-        f.sent.indexOf("Page.addScriptToEvaluateOnNewDocument"),
+      yield* viewer.input({ type: "takeControl" });
+      const popupReady = f.page.waitForEvent("popup");
+      yield* Effect.promise(() =>
+        f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/blocked`)})`),
       );
-      input.mockRestore();
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
-it.effect("a later run cannot type when deferred private-mode setup finds a focused password", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* pendingPopup;
-      yield* Effect.promise(() => f.popup.setContent('<input id="secret" type="password">'));
-      yield* Effect.promise(() => f.popup.locator("#secret").focus());
-      const input = vi.spyOn(f.popup.keyboard, "press");
-      const result = yield* f.press().pipe(Effect.result);
-      expect(result).toMatchObject({
+      const popup = yield* Effect.promise(() => popupReady);
+      yield* Effect.promise(() => popup.waitForURL(`${f.blocked}/blocked`));
+      const found = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+        Stream.mapEffect(() => f.service.sessions),
+        Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
+        Stream.runHead,
+      );
+      if (found._tag === "None") return yield* Effect.die("popup not adopted");
+      const tabId = PreviewTabId.make(found.value.find((tab) => tab.tabId !== f.tabId)!.tabId);
+      yield* Effect.promise(() => popup.goto(`${f.allowed}/safe`));
+      expect(yield* f.call(tabId, "press", { key: "Enter" }).pipe(Effect.result)).toMatchObject({
         _tag: "Failure",
-        failure: { reason: "privateMode", dispatched: false },
+        failure: { reason: "blocked_url" },
       });
-      expect(input).not.toHaveBeenCalled();
+      expect(f.sent).toContain("Page.addScriptToEvaluateOnNewDocument");
     }),
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect("a failed deferred setup refuses the first input", () =>
+it.effect("a cut while popup setup waits closes it without sending setup commands", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const f = yield* pendingPopup;
-      const setup = vi.spyOn(f.popup, "addInitScript").mockRejectedValue(new Error("setup failed"));
-      const input = vi.spyOn(f.popup.keyboard, "press");
-      const result = yield* f.press().pipe(Effect.result);
-      expect(result._tag).toBe("Failure");
-      expect(input).not.toHaveBeenCalled();
-      setup.mockRestore();
+      const f = yield* popupSetup;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Deferred.await(release).pipe(
+        Effect.tap(() => Effect.sync(latch.resolve)),
+        Effect.forkChild,
+      );
+      let popupSessions = 0;
+      f.hook.beforeReturn = async (target) => {
+        if (target !== f.page && ++popupSessions === 2) {
+          Deferred.doneUnsafe(entered, Effect.void);
+          await latch.promise;
+        }
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          latch.resolve();
+          delete f.hook.beforeReturn;
+        }),
+      );
+      yield* Effect.promise(() =>
+        f.page.locator("#next").evaluate((button, url) => {
+          button.setAttribute("onclick", `window.open('${url}')`);
+        }, `${f.allowed}/safe`),
+      );
+      const popupReady = f.page.waitForEvent("popup");
+      const clicking = yield* f
+        .call(f.tabId, "click", { locator: "#next" })
+        .pipe(Effect.result, Effect.forkChild);
+      const popup = yield* Effect.promise(() => popupReady);
+      yield* Deferred.await(entered);
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(clicking);
+      expect(f.sent).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+      expect(f.sent).not.toContain("Fetch.enable");
+      expect(f.sent).not.toContain("Page.enable");
+      expect(f.sent.filter((method) => method !== "Target.getTargetInfo")).toEqual([]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a popup navigated after opening blank fences its opener and any adopted tab", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      yield* Effect.promise(() =>
+        f.page.locator("#popupBlank").evaluate((button, url) => {
+          button.setAttribute(
+            "onclick",
+            `const p=window.open('about:blank');p.location.href='${url}'`,
+          );
+        }, `${f.blocked}/slow`),
+      );
+      const popupReady = f.page.waitForEvent("popup");
+      const clicking = yield* f
+        .call(f.tabId, "click", { locator: "#popupBlank" })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(f.slowStarted);
+      yield* Deferred.succeed(f.slowGate, undefined);
+      yield* Fiber.join(clicking);
+      const popup = yield* Effect.promise(() => popupReady);
+      const closeEvent = yield* Deferred.make<void>();
+      if (popup.isClosed()) yield* Deferred.succeed(closeEvent, undefined);
+      else popup.once("close", () => Deferred.doneUnsafe(closeEvent, Effect.void));
+      const closed = Deferred.await(closeEvent).pipe(Effect.as(undefined));
+      const adopted = Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+        Stream.mapEffect(() => f.manager.list({ threadId })),
+        Stream.filter((result) => result.sessions.some((view) => view.tabId !== f.tabId)),
+        Stream.runHead,
+        Effect.map((result) =>
+          result._tag === "Some"
+            ? result.value.sessions.find((view) => view.tabId !== f.tabId)
+            : undefined,
+        ),
+      );
+      const tab = yield* Effect.raceFirst(closed, adopted);
+      if (tab) {
+        expect(
+          yield* f
+            .call(PreviewTabId.make(tab.tabId), "press", { key: "Enter" })
+            .pipe(Effect.result),
+        ).toMatchObject({ _tag: "Failure", failure: { reason: "blocked_url" } });
+      }
+      expect(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "blocked_url" },
+      });
     }),
   ).pipe(Effect.provide(layer)),
 );

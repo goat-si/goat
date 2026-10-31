@@ -21,7 +21,13 @@ export const recordCopies = async (cdp: CDPSession, signal?: AbortSignal) => {
 };
 
 /** Out-of-process frames need their own copy-recording session until target closure. */
-export const recordFrameCopies = async (tab: ClipboardTab, frame: Frame) => {
+export const recordFrameCopies = async (
+  tab: ClipboardTab,
+  frame: Frame,
+  signal?: AbortSignal,
+  retrySignal?: () => AbortSignal | undefined,
+) => {
+  signal?.throwIfAborted();
   if (frame === tab.page.mainFrame() || tab.frameSessions.has(frame)) return;
 
   const cdp = await tab.page
@@ -29,6 +35,7 @@ export const recordFrameCopies = async (tab: ClipboardTab, frame: Frame) => {
     .newCDPSession(frame)
     .catch(() => null);
   if (!cdp) return;
+  signal?.throwIfAborted();
   if (tab.frameSessions.has(frame) || frame.isDetached()) {
     await cdp.detach().catch(constVoid);
     return;
@@ -38,9 +45,13 @@ export const recordFrameCopies = async (tab: ClipboardTab, frame: Frame) => {
     if (tab.frameSessions.get(frame) !== cdp) return;
     tab.frameSessions.delete(frame);
 
-    if (!frame.isDetached()) void recordFrameCopies(tab, frame);
+    const nextSignal = retrySignal ? retrySignal() : signal;
+    if (!frame.isDetached() && !nextSignal?.aborted)
+      void recordFrameCopies(tab, frame, nextSignal, retrySignal).catch(constVoid);
   });
-  await recordCopies(cdp).catch(constVoid);
+  await recordCopies(cdp, signal).catch((cause: unknown) => {
+    if (signal?.aborted) throw cause;
+  });
 };
 
 const takeSessionCopies = async (cdp: CDPSession) => {

@@ -62,15 +62,7 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import type {
-  BrowserContext,
-  CDPSession,
-  Dialog,
-  Download,
-  FileChooser,
-  Frame,
-  Page,
-} from "playwright-core";
+import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
 
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
 import { resolveRootCliCommand } from "../cli/invocation.ts";
@@ -93,6 +85,7 @@ import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
 import {
   browserSessionView,
+  markUsed,
   tabOwner,
   type ServerBrowserSessionView,
 } from "./ServerBrowserSessions.ts";
@@ -113,7 +106,8 @@ import { inputFence } from "./PreviewInputFence.ts";
 import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
 import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowserClipboard.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
-import { watchPrivateMode } from "./PreviewPrivateMode.ts";
+import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
+import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
 import { pushBounded } from "./boundedBuffer.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
@@ -392,16 +386,8 @@ const make = Effect.gen(function* () {
   );
   const sessionChanges = yield* PubSub.sliding<void>(1);
   const pendingTabs = new Map<string, Promise<ServerTab>>();
-
   const closedPendingTabs = new Set<string>();
-  const adoptedPages = new Map<
-    string,
-    {
-      readonly page: Page;
-      readonly openerTabId: string;
-      readonly visits: ReadonlyArray<{ readonly url: string; readonly run: BlockedTabRun }>;
-    }
-  >();
+  const adoptedPages = new Map<string, AdoptedPage>();
   const popupNavigation = new PopupNavigationRequests(
     (context) => {
       const runs = new Map<string, BlockedTabRun>();
@@ -599,9 +585,11 @@ const make = Effect.gen(function* () {
   };
 
   const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
-    const openSignal = openRuns.signal(snapshot.threadId, snapshot.automationOwner);
-    openSignal?.throwIfAborted();
     const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
+    const openSignal = adopted
+      ? adopted.signal
+      : openRuns.signal(snapshot.threadId, snapshot.automationOwner);
+    openSignal?.throwIfAborted();
     adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
     const desktop =
       adopted === undefined && snapshot.serverRendered !== true && (await desktopRenders(snapshot))
@@ -741,15 +729,19 @@ const make = Effect.gen(function* () {
       tab.loading = false;
       void reportLoaded(tab);
     });
+    let setupSignal = adopted?.signal;
     page.on("framenavigated", (frame) => {
       if (frame === page.mainFrame()) observeNavigation(page.url());
       if (frame === page.mainFrame()) tab.documentGeneration++;
       // Same-document navigations (SPA routes) fire no load event.
       if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
-      if (!desktop) void recordFrameCopies(tab, frame);
+      if (!desktop)
+        void recordFrameCopies(tab, frame, setupSignal, () => setupSignal).catch(constVoid);
     });
     // An adopted popup's frames may have loaded before the tab listened.
-    if (adopted) for (const frame of page.frames()) void recordFrameCopies(tab, frame);
+    if (adopted)
+      for (const frame of page.frames())
+        void recordFrameCopies(tab, frame, setupSignal, () => setupSignal).catch(constVoid);
     page.on("requestfailed", (request) => {
       const errorText = request.failure()?.errorText ?? "";
 
@@ -788,10 +780,15 @@ const make = Effect.gen(function* () {
       broadcastControl(tab);
     });
     page.on("download", (download) => void saveDownload(tab, download));
+    openSignal?.throwIfAborted();
     updateFileChooserInterception(tab);
     // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
     page.on("popup", (popup) => void adoptPopup(tab, popup));
-    void AgentTabState.watchOpenings(cdp, tab, () => Date.now()).catch(constVoid);
+    void startBrowserWatchers(tab, () => Date.now(), adopted?.signal)
+      .finally(() => adopted?.release())
+      .catch(constVoid);
+    openSignal?.throwIfAborted();
+    setupSignal = undefined;
     // Playwright cannot reload a crashed page, so it must leave the tab list.
     const key = tabKey(tab.threadId, tab.tabId);
     if (closedPendingTabs.delete(key)) {
@@ -807,7 +804,6 @@ const make = Effect.gen(function* () {
     tabs.set(key, tab);
     tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
     tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
-    void watchPrivateMode(page, (on) => control.setPrivate(on)).catch(constVoid);
     reportLiveTabs();
     // Existing desktop and popup PDFs can start loading before interception attaches.
     if (
@@ -1038,27 +1034,21 @@ const make = Effect.gen(function* () {
         : Option.some({ path: download.path, fileName: download.fileName });
     });
 
-  const preparedContexts = new WeakSet<BrowserContext>();
-  const prepareContext = async (context: BrowserContext) => {
-    if (preparedContexts.has(context)) return;
-    preparedContexts.add(context);
-    await context.grantPermissions(["clipboard-write"]);
-  };
+  const prepareContext = makeContextPreparer();
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const targetId = await AgentTabState.targetIdOf(popup).catch(() => undefined);
-    const agentId = opener.popups.owner(targetId, opener, Date.now());
-    const visits = popupNavigation.take(popup).flatMap((visit) => {
-      const run = visit.runs.get(opener.threadId);
-      return run ? [{ url: visit.url, run }] : [];
-    });
-    for (const visit of visits) blockedTabs.observe(opener, visit.url, visit.run);
-    if (opener.closing || (agentId !== null && atTabLimit(agentId))) {
-      await popup.close().catch(constVoid);
-      return;
-    }
+    const { agentId, visits, refused, signal } = await inspectPopup(
+      opener,
+      popup,
+      blockedTabs,
+      popupNavigation,
+      atTabLimit,
+      () => Date.now(),
+    );
+    if (refused) return;
+    const release = closePopupOnAbort(popup, signal);
+    if (signal?.aborted) return release();
     const url = popup.url();
-
     const controller = [...opener.viewers].find(
       (viewer) => viewer.id === opener.control.controller,
     );
@@ -1074,6 +1064,8 @@ const make = Effect.gen(function* () {
           adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
             page: popup,
             openerTabId: opener.tabId,
+            ...(signal ? { signal } : {}),
+            release,
             visits,
           }),
       }),
@@ -1082,6 +1074,7 @@ const make = Effect.gen(function* () {
         if (agentId === null) controller?.push({ _tag: "popup", tabId: snapshot.tabId });
       },
       async () => {
+        release();
         await popup.close().catch(constVoid);
       },
     );
@@ -1093,8 +1086,17 @@ const make = Effect.gen(function* () {
     if (pending) return pending;
     const existing = tabs.get(key);
     if (existing) return Promise.resolve(existing);
+    const adopted = adoptedPages.get(key);
     const opening = createTab(snapshot)
-      .catch((cause: unknown) => {
+      .catch(async (cause: unknown) => {
+        adopted?.release();
+        if (adopted?.signal?.aborted) {
+          adoptedPages.delete(key);
+          await adopted.page.close().catch(constVoid);
+          await runPromise(
+            manager.close({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId }),
+          ).catch(constVoid);
+        }
         runFork(
           Effect.logWarning(
             isHostSetupError(cause) ? cause.message : "server preview tab failed to start",
@@ -1110,7 +1112,6 @@ const make = Effect.gen(function* () {
     pendingTabs.set(key, opening);
     return opening;
   };
-
   const findTab = Effect.fn("ServerBrowser.findTab")(function* (threadId: string, tabId: string) {
     const existing = tabs.get(tabKey(threadId, tabId));
     if (existing) return existing;
@@ -1522,17 +1523,6 @@ const make = Effect.gen(function* () {
     return tab;
   };
 
-  const markUsed = (request: PreviewAutomationRequest) => {
-    const now = Date.now();
-    for (const tab of tabs.values()) {
-      if (
-        tab.threadId === request.threadId &&
-        (tab.control.agentId === request.agentSessionId || tab.tabId === request.tabId)
-      )
-        tab.usedAt = now;
-    }
-  };
-
   const runOperation = async (
     request: PreviewAutomationRequest,
     deadlineMs: number,
@@ -1796,7 +1786,12 @@ const make = Effect.gen(function* () {
         const generation = tab.control.generation;
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
         if (tab.agentOperating)
-          tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
+          tab.popups.lastInput = {
+            agentId: agentSessionId,
+            at: Date.now(),
+            generation,
+            signal: operationSignal,
+          };
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(
@@ -1807,7 +1802,12 @@ const make = Effect.gen(function* () {
           );
         } finally {
           if (tab.agentOperating)
-            tab.popups.lastInput = { agentId: agentSessionId, at: Date.now(), generation };
+            tab.popups.lastInput = {
+              agentId: agentSessionId,
+              at: Date.now(),
+              generation,
+              signal: operationSignal,
+            };
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);
@@ -2034,7 +2034,7 @@ const make = Effect.gen(function* () {
                   )
                 : result,
             )
-            .finally(() => markUsed(request)),
+            .finally(() => markUsed(tabs.values(), request, Date.now())),
         );
       },
       catch: ServerBrowserPage.toOperationError,

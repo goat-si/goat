@@ -256,26 +256,28 @@ it.effect("a redirect through a blocked host fences the tab after reaching an al
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect("a blocked popup fences the popup and its opener", () =>
+it.effect("a blocked agent popup closes and fences its opener", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
       const popupReady = f.page.waitForEvent("popup");
       yield* f.call(f.tabId, "click", { locator: "#popup" }).pipe(Effect.result);
       const popup = yield* Effect.promise(() => popupReady);
-      yield* Effect.promise(() => popup.waitForURL(`${f.blocked}/blocked`));
-      const newTab = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
-        Stream.mapEffect(() => f.service.sessions),
-        Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
-        Stream.runHead,
+      const closeEvent = yield* Deferred.make<void>();
+      if (popup.isClosed()) yield* Deferred.succeed(closeEvent, undefined);
+      else popup.once("close", () => Deferred.doneUnsafe(closeEvent, Effect.void));
+      const outcome = yield* Effect.raceFirst(
+        Deferred.await(closeEvent).pipe(Effect.as("closed")),
+        Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+          Stream.mapEffect(() => f.service.sessions),
+          Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
+          Stream.runHead,
+          Effect.as("adopted"),
+        ),
       );
-      if (newTab._tag === "None") return yield* Effect.die("popup not adopted");
-      const tab = newTab.value.find((view) => view.tabId !== f.tabId)!;
-      yield* Effect.promise(() => popup.goto(`${f.allowed}/safe`));
+      expect(outcome).toBe("closed");
+      expect((yield* f.service.sessions).map((view) => view.tabId)).toEqual([f.tabId]);
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
-      blocked(
-        yield* f.call(PreviewTabId.make(tab.tabId), "press", { key: "Enter" }).pipe(Effect.result),
-      );
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -323,26 +325,29 @@ it.effect("a blocked visit outside a turn does not fence a later turn", () =>
     }),
   ).pipe(Effect.provide(layer)),
 );
-it.effect("a popup redirect through a blocked host fences the popup and its opener", () =>
+it.effect("a popup redirect through a blocked host closes and fences its opener", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
       const popupReady = f.page.waitForEvent("popup");
       yield* f.call(f.tabId, "click", { locator: "#popupRedirect" }).pipe(Effect.result);
       const popup = yield* Effect.promise(() => popupReady);
-      yield* Effect.promise(() => popup.waitForURL(`${f.allowed}/safe`));
-      const newTab = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
-        Stream.mapEffect(() => f.service.sessions),
-        Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
-        Stream.runHead,
+      const closeEvent = yield* Deferred.make<void>();
+      if (popup.isClosed()) yield* Deferred.succeed(closeEvent, undefined);
+      else popup.once("close", () => Deferred.doneUnsafe(closeEvent, Effect.void));
+      const outcome = yield* Effect.raceFirst(
+        Deferred.await(closeEvent).pipe(Effect.as("closed")),
+        Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+          Stream.mapEffect(() => f.service.sessions),
+          Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
+          Stream.runHead,
+          Effect.as("adopted"),
+        ),
       );
-      if (newTab._tag === "None") return yield* Effect.die("popup not adopted");
-      const tab = newTab.value.find((view) => view.tabId !== f.tabId)!;
+      expect(outcome).toBe("closed");
       expect(f.hits.some((hit) => hit.startsWith("localhost:") && hit.endsWith("/hop"))).toBe(true);
+      expect((yield* f.service.sessions).map((view) => view.tabId)).toEqual([f.tabId]);
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
-      blocked(
-        yield* f.call(PreviewTabId.make(tab.tabId), "press", { key: "Enter" }).pipe(Effect.result),
-      );
     }),
   ).pipe(Effect.provide(layer)),
 );
@@ -369,30 +374,6 @@ it.effect("a script navigation to a blocked host fences the tab", () =>
       yield* Effect.promise(() => arrived);
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
-it.effect("a popup navigated after opening blank fences the popup and its opener", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      const popupReady = f.page.waitForEvent("popup");
-      yield* f.call(f.tabId, "click", { locator: "#popupBlank" }).pipe(Effect.result);
-      const popup = yield* Effect.promise(() => popupReady);
-      yield* Effect.promise(() => popup.waitForURL(`${f.blocked}/blocked`));
-      const newTab = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
-        Stream.mapEffect(() => f.service.sessions),
-        Stream.filter((views) => views.some((view) => view.tabId !== f.tabId)),
-        Stream.runHead,
-      );
-      if (newTab._tag === "None") return yield* Effect.die("popup not adopted");
-      const tab = newTab.value.find((view) => view.tabId !== f.tabId)!;
-      yield* Effect.promise(() => popup.goto(`${f.allowed}/safe`));
-      blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
-      blocked(
-        yield* f.call(PreviewTabId.make(tab.tabId), "press", { key: "Enter" }).pipe(Effect.result),
-      );
     }),
   ).pipe(Effect.provide(layer)),
 );
