@@ -106,6 +106,7 @@ export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")
     return { stopped: false, failed: 0 };
   const stopped = yield* leases.value.stopAllIfCurrent(threadId, controlId);
   if (!stopped) return { stopped: false, failed: 0 };
+  yield* handoffs.stopComputerUseSessions();
   const { failed } = yield* endGrants(leases.value, handoffs, undefined, () => true);
   return { stopped: true, failed };
 }, Effect.uninterruptible);
