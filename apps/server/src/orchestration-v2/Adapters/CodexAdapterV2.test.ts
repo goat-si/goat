@@ -3712,7 +3712,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     answers: ReadonlyArray<{
       readonly id: string;
       readonly text: string;
-      readonly phase?: "commentary" | "final_answer" | null;
+      readonly phase?: "commentary" | "partial_answer" | "final_answer" | null;
       readonly omitPhase?: boolean;
       readonly streamed?: boolean;
       readonly completionDelayMs?: number;
@@ -3806,6 +3806,35 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ],
     });
   };
+
+  it.effect.each([false, true])(
+    "preserves a final answer that repeats a preceding partial answer (streamed: %s)",
+    (streamed) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transcript = finalAnswerTranscript("codex-partial-then-final", [
+            { id: "partial", text: "CODEX_RECOVERY_OK", phase: "partial_answer", streamed },
+            { id: "final", text: "CODEX_RECOVERY_OK", phase: "final_answer", streamed },
+          ]);
+          const harness = yield* makeCodexReplayHarness(transcript);
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-codex-partial-then-final"),
+              text: "Reply with the requested recovery marker.",
+            }),
+          );
+          yield* harness.firstTerminal;
+          assert.deepEqual(
+            assistantMessages(harness.events).map((event) => event.message.text),
+            ["CODEX_RECOVERY_OK", "CODEX_RECOVERY_OK"],
+          );
+        }).pipe(Effect.provide(layerAdapterTest)),
+      ),
+  );
 
   it.effect.each([
     {
