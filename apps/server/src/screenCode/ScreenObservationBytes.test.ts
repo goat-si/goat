@@ -55,9 +55,6 @@ it.live("an unchanged app observation returned by a cell fits 450 bytes", () => 
       changed: unknown;
     };
     const bytes = Buffer.byteLength(JSON.stringify(value.unchanged));
-    console.log(
-      `unchanged observation bytes: ${bytes}; one-row diff bytes: ${Buffer.byteLength(JSON.stringify(value.changed))}`,
-    );
     expect(bytes, `unchanged observation bytes: ${bytes}`).toBeLessThanOrEqual(450);
     expect(value.unchanged.effect).toBe("after click: no change in this window");
     expect(value.unchanged.omitted).toContainEqual({ kind: "frames" });
