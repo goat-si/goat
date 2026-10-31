@@ -223,7 +223,7 @@ it.layer(
     "uses npm's registry for $install installs (exit $exitCode, output $stdout)",
     (fixture) =>
       Effect.gen(function* () {
-        const tempDir = yield* makeTempDir("t3-registry-version");
+        const tempDir = yield* makeTempDir("goat-registry-version");
         const npmBinDir = NodePath.join(tempDir, "npm-bin");
         writeExecutable(NodePath.join(npmBinDir, "npm"));
         const binaryPath =
