@@ -341,6 +341,9 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       response.writeHead(200, {
         "content-type": "text/html",
         ...(request.url === "/csp" ? { "content-security-policy": "connect-src 'self'" } : {}),
+        ...(request.url === "/report-only"
+          ? { "content-security-policy-report-only": "connect-src 'self'" }
+          : {}),
       });
       response.end("<p>local</p>");
     });
@@ -353,12 +356,15 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     await page.route("https://gone.example/**", (route) => route.abort("namenotresolved"));
     await page.route("https://closed.example/**", (route) => route.abort("connectionrefused"));
     const failures = await Promise.all(
-      [`http://localhost:${port}/data`, "https://gone.example/", "https://closed.example/"].map(
-        (url) =>
-          inPageFetch(page, control, { url }).then(
-            () => undefined,
-            (error: unknown) => error,
-          ),
+      [
+        `http://localhost:${port}/data`,
+        "https://gone.example/#section",
+        "https://closed.example/",
+      ].map((url) =>
+        inPageFetch(page, control, { url }).then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
       ),
     );
     expect(failures).toMatchObject([
@@ -383,6 +389,11 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       detail: { fetchFailure: "csp" },
       message: expect.stringContaining("Content-Security-Policy"),
     });
+    // A report-only policy lets the request go; CORS is what refused it.
+    await page.goto(`http://127.0.0.1:${port}/report-only`);
+    await expect(
+      inPageFetch(page, control, { url: `http://localhost:${port}/data` }),
+    ).rejects.toMatchObject({ detail: { fetchFailure: "cors" } });
   });
 
   it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {

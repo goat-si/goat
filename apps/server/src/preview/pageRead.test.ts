@@ -272,6 +272,22 @@ it("reads again instead of refusing when a frame comes or goes during the read, 
     expect(await page.evaluate("window.activeReadObservers")).toBe(0);
   }));
 
+it("still refuses a secret that disappeared during a read whose frames also changed", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Public</main><input type=password value=frame-retry-secret>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    await page.evaluate(
+      "(() => { document.querySelector('input').remove(); document.querySelector('main').textContent = 'frame-retry-secret'; const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); })()",
+    );
+    const outcome = await reading.then(
+      (value) => JSON.stringify(value),
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
+  }));
+
 it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
     let started = () => {};

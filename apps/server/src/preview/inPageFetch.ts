@@ -73,6 +73,8 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
   // The page's Content-Security-Policy refuses some addresses before any request goes out.
   let policyBlocked = false;
   const onViolation = (event) => {
+    // A report-only policy lets the request go; only an enforced one blocked it.
+    if (event.disposition !== "enforce") return;
     try { if (new URL(event.blockedURI).origin === new URL(url).origin) policyBlocked = true; } catch {}
   };
   document.addEventListener("securitypolicyviolation", onViolation);
@@ -298,12 +300,14 @@ const DNS_ERRORS = new Set(["net::ERR_NAME_NOT_RESOLVED", "net::ERR_NAME_RESOLUT
  * network error behind it.
  */
 const watchFetchFailure = (page: FetchPage, url: string) => {
+  // The browser's request URL never carries the fragment.
+  const requested = url.split("#")[0];
   let failed: Request | undefined;
   const onFailed = (request: Request) => {
     let first = request;
     for (let previous = first.redirectedFrom(); previous; previous = previous.redirectedFrom())
       first = previous;
-    if (failed === undefined && request.resourceType() === "fetch" && first.url() === url)
+    if (failed === undefined && request.resourceType() === "fetch" && first.url() === requested)
       failed = request;
   };
   page.on("requestfailed", onFailed);

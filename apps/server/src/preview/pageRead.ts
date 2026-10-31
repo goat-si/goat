@@ -197,6 +197,7 @@ export const pageRead = (
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
     const tracker = attachNetworkTracker(page);
     const deadline = Date.now() + (input.timeoutMs ?? 10_000);
+    let known: { readonly documentId: number; readonly values: Set<string> } | undefined;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const navigation = watchNavigation(page);
       const documentId = tracker.state().documentId;
@@ -213,6 +214,15 @@ export const pageRead = (
           throw framesChanged();
         });
         if (before.some((values) => values === undefined)) throw readFailure("pageChanged");
+        // A retry for moved frames reads the same document: a secret an earlier attempt saw must
+        // still be there, or its old value could now sit unmasked in the page's text.
+        const seen = new Set(before.flatMap((values) => values ?? []));
+        if (known?.documentId === documentId && [...known.values].some((value) => !seen.has(value)))
+          throw readFailure("pageChanged");
+        known = {
+          documentId,
+          values: new Set([...(known?.documentId === documentId ? known.values : []), ...seen]),
+        };
         const cookiesBefore = await tabCookies(page);
         let rendered: Rendered;
         for (;;) {
@@ -248,7 +258,9 @@ export const pageRead = (
           throw readFailure("pageChanged");
         const cookies = [...cookiesBefore, ...(await tabCookies(page))];
         const secrets = maskSecrets(
-          dottedPattern(after.flatMap((values) => values ?? [])),
+          dottedPattern([
+            ...new Set([...known.values, ...after.flatMap((values) => values ?? [])]),
+          ]),
           cookies,
         );
         const mask = (text: string) => filled(secrets(text));

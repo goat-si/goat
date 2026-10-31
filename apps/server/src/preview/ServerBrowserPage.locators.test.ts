@@ -118,3 +118,20 @@ it("lists interactive-only lines flat, so no control reads as nested under anoth
     expect(lines.length).toBeGreaterThan(1);
     for (const line of lines) expect(line).toMatch(/^- [^\n]*[^:]$/);
   }));
+it("acts on a target that already exists while the page is still loading", () =>
+  fixture(async (page) => {
+    const release = Promise.withResolvers<void>();
+    await page.route("https://held.test/**", async (route) => {
+      await release.promise;
+      await route.abort();
+    });
+    try {
+      await page.setContent('<img src="https://held.test/slow.png"><input aria-label=Search>', {
+        waitUntil: "domcontentloaded",
+      });
+      await ServerBrowserPage.type(page, { selector: "input", text: "goat", timeoutMs: 6_000 });
+      expect(await page.locator("input").inputValue()).toBe("goat");
+    } finally {
+      release.resolve();
+    }
+  }));

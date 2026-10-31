@@ -41,6 +41,8 @@ const NO_MATCH_GRACE_MS = 2_000;
 export const requireMatch = async (target: Locator, timeoutMs: number) => {
   const ends = performance.now() + timeoutMs;
   const left = () => Math.max(1, Math.floor(ends - performance.now()));
+  // A target already there needs no wait; only a miss waits for the page to finish loading.
+  if ((await target.count()) > 0) return;
   await target.page().waitForLoadState("load", { timeout: left() });
   const found = await target
     .first()
