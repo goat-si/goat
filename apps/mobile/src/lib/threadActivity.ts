@@ -1,8 +1,6 @@
 import { itemIcon, type ThreadActivityIcon } from "./threadActivityIcons";
 import {
-  resolvePendingUserInputAnswer as resolveSharedAnswer,
   setPendingUserInputCustomAnswer as setSharedCustomAnswer,
-  togglePendingUserInputOptionSelection as toggleSharedOption,
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
 import type {
@@ -90,6 +88,11 @@ import * as DateTime from "effect/DateTime";
 import { IDLE_COMPACTION_TITLES, IDLE_COMPACTING_LABELS } from "@goat/client-runtime/user-message";
 
 export type { PendingUserInputDraftAnswer } from "@goat/client-runtime/state/user-input-draft";
+export {
+  buildPendingUserInputAnswers,
+  isPendingUserInputOptionSelected,
+  togglePendingUserInputOptionSelection,
+} from "@goat/client-runtime/state/user-input-draft";
 
 export type PendingApproval = ThreadPendingApproval;
 export type PendingUserInput = ThreadPendingUserInput;
@@ -461,66 +464,6 @@ export function isSecretRequestActivityGroup(entry: ThreadFeedActivityGroup): bo
 
 function isUserInputActivityGroup(entry: ThreadFeedActivityGroup): boolean {
   return entry.activities.some((activity) => activity.workEntry.questionAnswer !== undefined);
-}
-
-function normalizeDraftAnswer(value: string | undefined): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function resolvePendingUserInputOptionValue(
-  question: ThreadUserInputQuestion,
-  value: string,
-): string | null {
-  if (question.options.some((option) => option.value === value)) {
-    return value;
-  }
-
-  const label = value.trim();
-  return label.length > 0 &&
-    question.options.some((option) => option.value === undefined && option.label.trim() === label)
-    ? label
-    : null;
-}
-
-function normalizeSelectedOptionValues(
-  question: ThreadUserInputQuestion,
-  value: ReadonlyArray<string> | undefined,
-): ReadonlyArray<string> {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return Array.from(
-    new Set(
-      value
-        .map((entry) => resolvePendingUserInputOptionValue(question, entry))
-        .filter((entry): entry is string => entry !== null),
-    ),
-  );
-}
-
-function resolvePendingUserInputAnswer(
-  question: ThreadUserInputQuestion,
-  draft: PendingUserInputDraftAnswer | undefined,
-): string | ReadonlyArray<string> | null {
-  // Legacy label-only options use trimmed labels; native values remain exact.
-  const normalizedQuestion = {
-    ...question,
-    options: question.options.map((option) =>
-      option.value === undefined ? { ...option, label: option.label.trim() } : option,
-    ),
-  };
-  return resolveSharedAnswer(
-    normalizedQuestion,
-    draft === undefined
-      ? undefined
-      : {
-          ...draft,
-          selectedOptionValues: normalizeSelectedOptionValues(question, draft.selectedOptionValues),
-        },
-  );
 }
 
 function capitalizePhrase(value: string): string {
@@ -1955,70 +1898,7 @@ export function setPendingUserInputCustomAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
 ): PendingUserInputDraftAnswer {
-  if (question.allowCustomAnswer === false) return draft ?? {};
-  return setSharedCustomAnswer(
-    draft === undefined
-      ? undefined
-      : {
-          ...draft,
-          selectedOptionValues: normalizeSelectedOptionValues(question, draft.selectedOptionValues),
-        },
-    customAnswer,
-    question,
-  );
-}
-
-export function isPendingUserInputOptionSelected(
-  question: ThreadUserInputQuestion,
-  draft: PendingUserInputDraftAnswer | undefined,
-  optionValue: string,
-): boolean {
-  if (question.allowCustomAnswer !== false && normalizeDraftAnswer(draft?.customAnswer)) {
-    return false;
-  }
-
-  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
-  return (
-    resolvedOptionValue !== null &&
-    normalizeSelectedOptionValues(question, draft?.selectedOptionValues).includes(
-      resolvedOptionValue,
-    )
-  );
-}
-
-export function togglePendingUserInputOptionSelection(
-  question: ThreadUserInputQuestion,
-  draft: PendingUserInputDraftAnswer | undefined,
-  optionValue: string,
-): PendingUserInputDraftAnswer {
-  const resolved = resolvePendingUserInputOptionValue(question, optionValue);
-  if (resolved === null) return draft ?? {};
-  return toggleSharedOption(
-    question,
-    draft === undefined
-      ? undefined
-      : {
-          ...draft,
-          selectedOptionValues: normalizeSelectedOptionValues(question, draft.selectedOptionValues),
-        },
-    resolved,
-  );
-}
-
-export function buildPendingUserInputAnswers(
-  questions: ReadonlyArray<ThreadUserInputQuestion>,
-  draftAnswers: Record<string, PendingUserInputDraftAnswer>,
-): Record<string, string | ReadonlyArray<string>> | null {
-  const answers: Record<string, string | ReadonlyArray<string>> = {};
-
-  for (const question of questions) {
-    const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
-    // An optional question left blank is omitted; it must not hold back the required ones.
-    if (answer !== null) answers[question.id] = answer;
-    else if (question.required !== false) return null;
-  }
-
-  return answers;
+  return setSharedCustomAnswer(draft, customAnswer, question);
 }
 
 interface ThreadFeedBuild {
