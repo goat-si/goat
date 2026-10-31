@@ -5,6 +5,21 @@ import { isHistoryRead } from "./agentInputLog.ts";
 import type { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 
 const isRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+const roles = new Map([
+  ["textbox", "textbox"],
+  ["axtextfield", "textbox"],
+  ["axtextarea", "textbox"],
+  ["button", "button"],
+  ["axbutton", "button"],
+  ["link", "link"],
+  ["axlink", "link"],
+  ["checkbox", "checkbox"],
+  ["axcheckbox", "checkbox"],
+  ["radio", "radio"],
+  ["combobox", "combobox"],
+  ["menuitem", "menuitem"],
+  ["slider", "slider"],
+]);
 
 export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCall")(function* (
   history: Effect.Success<typeof makeComputerUseHistory>,
@@ -15,10 +30,7 @@ export const recordAdmittedCall = Effect.fn("ComputerUseHistory.recordAdmittedCa
   if (isHistoryRead(call.name, call.args)) return;
   const args = isRecord(call.args) ? call.args : {};
   const target = isRecord(args.target) ? args.target : {};
-  const label = [target.role, target.name, target.title]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .join(": ")
-    .slice(0, 160);
+  const label = typeof target.role === "string" ? roles.get(target.role.toLowerCase()) : undefined;
   const typed =
     call.name === "type_text" ? args.text : call.name === "set_value" ? args.value : undefined;
   const appId = call.app ?? call.appLabel?.bundleId;
