@@ -1,8 +1,5 @@
-import {
-  ComputerUseHistoryInput,
-  ComputerUseHistoryResult,
-  ComputerUseHistoryError,
-} from "./computerUseHistory.ts";
+import { ComputerUseHistoryInput, ComputerUseHistoryResult } from "./computerUseHistory.ts";
+import { ComputerUseHistoryError } from "./computerUseHistory.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,

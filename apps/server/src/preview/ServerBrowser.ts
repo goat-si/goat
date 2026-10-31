@@ -1750,9 +1750,12 @@ const make = Effect.gen(function* () {
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
       const dialog = input as PreviewAutomationDialogInput;
-      await recordAction(tab, "dialog", () => resolveDialog(tab, dialog), {
-        ...(dialog.promptText === undefined ? {} : { typedText: dialog.promptText }),
-      });
+      await recordAction(
+        tab,
+        "dialog",
+        () => resolveDialog(tab, dialog),
+        dialog.promptText === undefined ? {} : { typedText: dialog.promptText },
+      );
       return statusWithTitle(tab, request.agentSessionId);
     }
     const agentSessionId = request.agentSessionId!;

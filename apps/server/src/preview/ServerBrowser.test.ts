@@ -1,5 +1,5 @@
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
-import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import { assertDialogHistory } from "./BrowserHistoryAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -402,7 +402,6 @@ it.live.each([
             });
           }
         }
-        // This second capture queues behind the first even if its requesting fiber was cancelled.
         cdp.send.mockImplementation(original);
         yield* broker.invoke({ scope, tabId, operation: "snapshot", input: {} });
         expect(viewerCdp.send.mock.calls.map(([method]) => method)).toEqual([
@@ -432,8 +431,6 @@ it.live("a snapshot that cannot capture times out on the request's own deadline 
       const error = yield* broker
         .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
         .pipe(Effect.flip);
-      // The server browser answered with the deadline the error names, before the broker gave up
-      // on it and cut it off.
       expect(error).toMatchObject({
         _tag: "PreviewAutomationTimeoutError",
         timeoutMs: 200,
@@ -507,7 +504,6 @@ it.live("tells the desktop once per thread when its agent turns start and end", 
     desktopTurns.on("turn", record);
     yield* Effect.addFinalizer(() => Effect.sync(() => desktopTurns.off("turn", record)));
     const endFirst = yield* activity.begin(threadId);
-    // An overlapping turn on the same thread neither starts nor ends focus on its own.
     const endSecond = yield* activity.begin(threadId);
     expect(yield* Queue.take(turns)).toEqual([threadId, true]);
     yield* endFirst;
@@ -618,7 +614,6 @@ it.live.each([
         yield* viewer.input({ type: "text", text: "hello" });
       }).pipe(Effect.forkScoped);
       yield* Effect.addFinalizer(() => Effect.sync(() => committed.resolve()));
-      // The text reaches the page while the first navigation is still uncommitted.
       yield* Effect.promise(() => typed.promise);
       expect(page.goto).toHaveBeenLastCalledWith(
         "http://localhost:5173/fixed",
@@ -1107,7 +1102,6 @@ it.live("interrupts an active wait on takeover and frees the queue for human inp
         _tag: "PreviewAutomationControlInterruptedError",
         reason: "humanControl",
       });
-      // The native read is still pending, but no longer holds the control queue.
       yield* viewer.input({ type: "text", text: "human input" });
       expect(contexts[0]!.sessions.at(-1)!.send).toHaveBeenCalledWith("Input.insertText", {
         text: "human input",
@@ -1236,17 +1230,7 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         input: { accept: true, promptText: "private" },
       });
       expect(yield* Fiber.join(blockedAction)).toBe(true);
-      const history = yield* makeComputerUseHistory;
-      const entries = yield* history.listForThread(scope.thread.threadId);
-      expect(
-        entries.some((entry) => entry.method === "evaluate" && entry.tabHost === "localhost"),
-      ).toBe(true);
-      expect(
-        entries.some((entry) => entry.method === "dialog" && entry.tabHost === "localhost"),
-      ).toBe(true);
-      const dialogEntry = entries.find((entry) => entry.method === "dialog");
-      expect(dialogEntry?.typedLength).toBe(7);
-      expect(dialogEntry?.typedText).toBeNull();
+      yield* assertDialogHistory(scope.thread.threadId);
       expect(dialog.accept).toHaveBeenCalledTimes(1);
       const resolved = yield* broker.invoke<PreviewAutomationStatus>({
         scope,

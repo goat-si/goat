@@ -285,7 +285,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const gone = () =>
           finished !== undefined || lifecycle.current !== current || !outstanding.has(key);
         sink = request.sink;
-        // The marked line is the driver's reply from here on, screenshot rule included.
         if (request.method === "tools/call") {
           tool = request.tool;
           if (captureStalled(line)) stalled = current;
