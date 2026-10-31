@@ -1,6 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { mergeTerminal, terminalFailure, terminalReplyState } from "./ComputerUseTerminal.ts";
+import {
+  mergeTerminal,
+  terminalFailure,
+  terminalReplyState,
+  terminalState,
+} from "./ComputerUseTerminal.ts";
 import {
   finalTerminalLine,
   makePersonStopFence,
@@ -283,10 +288,10 @@ it.effect("a dispatched read without input is not marked as possibly committed",
   }),
 );
 
-it.each(["screen_locked", "stopped_by_person"] as const)(
+it.each(["screen_locked", "stopped_by_person"])(
   "terminal failure keeps possible input for a read: %s",
   (reason) => {
-    const failure = terminalFailure({ reason, possibleCommit: true }, "list_apps", {}, false);
+    const failure = terminalFailure(terminalState(reason, true), "list_apps", {}, false);
     assert.equal(failure?.code, reason);
     assert.isTrue(failure?.safety?.possibleCommit);
     assert.equal(failure?.safety?.retryClass, "never");
