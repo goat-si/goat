@@ -45,64 +45,62 @@ it.effect("upgrades schema 61 and maintains indexed background roster flags", ()
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-it.effect(
-  "migrates the packaged launch fixture through every GOAT migration and preserves its thread",
-  () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-fixture-" });
-      const dbPath = `${directory}/statev2.sqlite`;
-      yield* fs.copyFile(
-        NodeURL.fileURLToPath(
-          new URL("../../../../../scripts/fixtures/desktop-launch/statev2.sqlite", import.meta.url),
-        ),
-        dbPath,
+it.effect("migrates the packaged launch fixture through 122 and preserves its thread", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-fixture-" });
+    const dbPath = `${directory}/statev2.sqlite`;
+    yield* fs.copyFile(
+      NodeURL.fileURLToPath(
+        new URL("../../../../../scripts/fixtures/desktop-launch/statev2.sqlite", import.meta.url),
+      ),
+      dbPath,
+    );
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepStrictEqual(
+        yield* runMigrations({ toMigrationInclusive: 122 }),
+        migrationManifest.filter(([id]) => id > 69 && id <= 122),
       );
-      yield* Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        assert.deepStrictEqual(
-          yield* runMigrations({ toMigrationInclusive: 122 }),
-          migrationManifest.filter(([id]) => id > 69 && id <= 122),
-        );
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 122 }), []);
-        const recorded = yield* sql<{ migration_id: number; name: string }>`
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 122 }), []);
+      const recorded = yield* sql<{ migration_id: number; name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
-        assert.deepStrictEqual(
-          recorded.map((row) => [row.migration_id, row.name] as const),
-          migrationManifest.filter(([id]) => id <= 122),
-        );
-        const columns = yield* sql<{
-          name: string;
-        }>`PRAGMA table_xinfo(orchestration_v2_projection_provider_threads)`;
-        assert.isTrue(columns.some((column) => column.name === "has_pending_background_work"));
-        const store = yield* ProjectionStore.ProjectionStoreV2;
-        const projection = yield* store.getThreadProjection(ThreadId.make("launch-check-thread"));
-        assert.equal(projection.thread.title, "Release launch check");
-        assert.isTrue(
-          projection.messages.some(
-            (message) => message.text === "The release opens and shows this thread.",
-          ),
-        );
-        for (const table of [
-          "auth_sessions",
-          "provider_session_runtime",
-          "scheduled_tasks",
-          "scheduled_task_runs",
-          "orchestration_v2_projection_provider_sessions",
-          "orchestration_v2_projection_runs",
-          "orchestration_v2_effect_outbox",
-        ]) {
-          const rows = yield* sql.unsafe<{ count: number }>(
-            `SELECT count(*) AS count FROM "${table}"`,
-          );
-          assert.equal(rows[0]?.count, 0, `${table} must stay empty during migration`);
-        }
-      }).pipe(
-        Effect.provide(
-          ProjectionStore.layer.pipe(
-            Layer.provideMerge(NodeSqliteClient.layer({ filename: dbPath })),
-          ),
+      assert.deepStrictEqual(
+        recorded.map((row) => [row.migration_id, row.name] as const),
+        migrationManifest.filter(([id]) => id <= 122),
+      );
+      const columns = yield* sql<{
+        name: string;
+      }>`PRAGMA table_xinfo(orchestration_v2_projection_provider_threads)`;
+      assert.isTrue(columns.some((column) => column.name === "has_pending_background_work"));
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const projection = yield* store.getThreadProjection(ThreadId.make("launch-check-thread"));
+      assert.equal(projection.thread.title, "Release launch check");
+      assert.isTrue(
+        projection.messages.some(
+          (message) => message.text === "The release opens and shows this thread.",
         ),
       );
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      for (const table of [
+        "auth_sessions",
+        "provider_session_runtime",
+        "scheduled_tasks",
+        "scheduled_task_runs",
+        "orchestration_v2_projection_provider_sessions",
+        "orchestration_v2_projection_runs",
+        "orchestration_v2_effect_outbox",
+      ]) {
+        const rows = yield* sql.unsafe<{ count: number }>(
+          `SELECT count(*) AS count FROM "${table}"`,
+        );
+        assert.equal(rows[0]?.count, 0, `${table} must stay empty during migration`);
+      }
+    }).pipe(
+      Effect.provide(
+        ProjectionStore.layer.pipe(
+          Layer.provideMerge(NodeSqliteClient.layer({ filename: dbPath })),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
