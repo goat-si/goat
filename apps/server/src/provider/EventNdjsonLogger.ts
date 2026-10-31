@@ -139,6 +139,7 @@ interface StoreState {
   readonly pending: Array<PendingRecord>;
   readonly pendingBytes: number;
   readonly sinks: ReadonlyMap<string, AsyncFileSink>;
+  readonly writtenSinceRetention: ReadonlySet<string>;
   readonly flushScheduled: boolean;
   readonly closed: boolean;
   readonly lastRetentionAt: number;
@@ -537,6 +538,7 @@ const drainPending = Effect.fnUntraced(function* (input: {
   }
 
   const sinks = new Map(input.state.sinks);
+  const writtenSegments = new Set(input.state.writtenSinceRetention);
   const failures: Array<FileOperationFailure> = [];
   const attributionByStream = new Map<
     EventNdjsonStream,
@@ -562,6 +564,7 @@ const drainPending = Effect.fnUntraced(function* (input: {
       sink = created.success;
       sinks.set(threadSegment, sink);
     }
+    writtenSegments.add(threadSegment);
 
     const written = yield* writeBatchedMessages(
       sink,
@@ -588,6 +591,13 @@ const drainPending = Effect.fnUntraced(function* (input: {
 
   const retentionDue =
     input.now - input.state.lastRetentionAt >= input.options.retentionCheckIntervalMs;
+  if (retentionDue) {
+    // A sink idle for a whole retention interval reopens from disk on its next
+    // write, so retention may remove its files without leaving a stale size.
+    for (const threadSegment of sinks.keys()) {
+      if (!writtenSegments.has(threadSegment)) sinks.delete(threadSegment);
+    }
+  }
   const retention = retentionDue
     ? yield* Effect.promise(() =>
         enforceRetention({
@@ -617,6 +627,7 @@ const drainPending = Effect.fnUntraced(function* (input: {
       pending: [],
       pendingBytes: 0,
       sinks,
+      writtenSinceRetention: retentionDue ? new Set() : writtenSegments,
       flushScheduled: input.timerFired ? false : input.state.flushScheduled,
       closed: input.close,
       lastRetentionAt: retentionDue ? input.now : input.state.lastRetentionAt,
@@ -683,6 +694,7 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
     pending: [],
     pendingBytes: 0,
     sinks: new Map(),
+    writtenSinceRetention: new Set(),
     flushScheduled: false,
     closed: false,
     lastRetentionAt: initializedAt,

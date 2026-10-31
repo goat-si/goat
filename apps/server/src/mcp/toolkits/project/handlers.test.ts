@@ -35,6 +35,7 @@ import * as ProviderAdapters from "../../../orchestration-v2/ProviderAdapterRegi
 import * as AttachmentLifecycle from "../../../assets/AttachmentLifecycle.testkit.ts";
 import * as ThreadLaunch from "../../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as Project from "../../../project/ProjectService.ts";
 import * as RemoteDispatchCoordinator from "../../../remoteReports/RemoteDispatchCoordinator.ts";
@@ -1492,5 +1493,49 @@ it.effect("tells the agent how to restore a missing project folder, and watches 
         'Project "Client target" points at /projects/client-target, which does not exist on this machine. No thread was created. Clone it back with goat_call {path:"project.clone", args:{remoteUrl:"https://github.com/acme/client-target.git", destinationPath:"/projects/client-target"}}, or point the project at an existing checkout with goat_call {path:"project.update", args:{projectId:"project", workspaceRoot}}, then launch again.',
     });
     expect(launch.registrations).toEqual([]);
+  }),
+);
+
+it.effect("deleting a project through MCP also discards its clone record", () =>
+  Effect.gen(function* () {
+    const discarded: Array<ProjectId> = [];
+    const harness = clientLaunchHarness({ runtimeModeCeiling: "full-access", launched: [] });
+    const dependencies = Layer.merge(
+      harness.dependencies,
+      Layer.mergeAll(
+        Layer.mock(Project.ProjectService)({
+          delete: (input) =>
+            Effect.succeed({
+              id: input.projectId,
+              title: "client-target",
+              workspaceRoot: "/projects/client-target",
+              repositoryIdentity: null,
+              faviconPath: null,
+              defaultModelSelection: null,
+              defaultThreadEnvMode: null,
+              autoPull: false,
+              projectIcon: null,
+              scripts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              deletedAt: "2026-01-01T00:00:00.000Z",
+            }),
+        }),
+        Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({
+          discard: (projectId) => Effect.sync(() => void discarded.push(projectId)),
+        }),
+      ),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(Layer.provide(dependencies)),
+      ),
+    );
+
+    yield* toolkit
+      .handle("goat_project_delete", { projectId: harness.projectId })
+      .pipe(Stream.unwrap, Stream.runCollect, Effect.provide(dependencies));
+
+    expect(discarded).toEqual([harness.projectId]);
   }),
 );

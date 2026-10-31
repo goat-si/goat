@@ -316,6 +316,16 @@ describe("goat_thread_list lineage", () => {
     },
   );
 
+  it.effect("an empty statuses list is no filter", () =>
+    Effect.gen(function* () {
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      const all = yield* service.listThreads(scope, { projectId });
+      assert.isAbove(all.threads.length, 0);
+      const unfiltered = yield* service.listThreads(scope, { projectId, statuses: [] });
+      assert.deepEqual(unfiltered.threads, all.threads);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("refuses self from a caller that is not a GOAT thread", () =>
     Effect.gen(function* () {
       const service = yield* OrchestratorMcpService.OrchestratorMcpService;

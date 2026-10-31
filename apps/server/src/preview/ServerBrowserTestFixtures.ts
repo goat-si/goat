@@ -11,7 +11,7 @@ export const mockCopy: { page: string; key: string; focusedFrame: MockFrame | nu
   focusedFrame: null,
 };
 
-function makeFrame() {
+export function makeFrame() {
   const frame = {
     copy: "",
     detached: false,

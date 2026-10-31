@@ -20,6 +20,7 @@ import { McpSchema, McpServer } from "effect/ai";
 
 import { referenceFixture, referenceTestLayer } from "../project/RepositoryReferences.testkit.ts";
 import * as Projects from "../project/ProjectService.ts";
+import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as Folders from "../project/ManagedProjectFolders.ts";
 import * as Repositories from "../sourceControl/SourceControlRepositoryService.ts";
 import * as HostThreads from "./HostThreadsMcpService.ts";
@@ -114,6 +115,7 @@ const toolkitFixture = Effect.gen(function* () {
     Layer.provide(liveThreadsLayer),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(Layer.mock(Projects.ProjectService)({})),
+    Layer.provide(Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({})),
     Layer.provide(Layer.mock(Folders.ManagedProjectFolders)({ namedProjectsRoot: f.root })),
     Layer.provide(Layer.mock(Repositories.SourceControlRepositoryService)({})),
     Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),

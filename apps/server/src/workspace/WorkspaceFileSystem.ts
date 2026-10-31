@@ -625,6 +625,9 @@ export const make = Effect.gen(function* () {
         const currentTarget = yield* resolveWriteTarget(input);
         if (currentTarget.realTargetPath !== target.realTargetPath)
           return yield* new WorkspaceFileChangedOnDiskError({});
+        const replacesFile = yield* fileSystem
+          .exists(target.realTargetPath)
+          .pipe(Effect.orElseSucceed(() => false));
         const format = input.textFormat;
         if (format && (format.encoding !== "utf-8" || format.lineEnding === "mixed")) {
           return yield* new WorkspaceUnsupportedTextFormatError({});
@@ -691,7 +694,9 @@ export const make = Effect.gen(function* () {
             ),
           (prepared) => Effect.promise(prepared.cleanup),
         );
-        yield* workspaceEntries.refresh(input.cwd);
+        // Editor autosave overwrites existing files, which leaves the indexed paths unchanged, and
+        // fff's watcher applies the new contents on its own. A forced rescan re-walks the workspace.
+        if (!replacesFile) yield* workspaceEntries.refresh(input.cwd);
         return { relativePath: target.relativePath, version: workspaceFileVersion(bytes) };
       }),
     );

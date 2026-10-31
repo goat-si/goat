@@ -18,7 +18,10 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 const FULL_CATALOG_DRIVERS: ReadonlySet<string> = new Set(["codex", "claudeAgent", "muse", "grok"]);
 const LISTED_MODEL_LIMIT = 8;
 
-/** Provider words do not restrict model matches; an empty search shows pinned and current models. */
+/**
+ * Whole provider words select the provider; partial words filter models when any match. An
+ * empty search shows pinned and current models.
+ */
 export function listCapabilityModels(input: {
   readonly provider: ServerProvider;
   readonly preferences:
@@ -33,12 +36,23 @@ export function listCapabilityModels(input: {
     .toSorted((a, b) => (rank.get(a.slug) ?? rank.size) - (rank.get(b.slug) ?? rank.size));
   const { instanceId, driver, displayName } = input.provider;
   const providerText = `${instanceId} ${driver} ${displayName ?? ""}`.toLowerCase();
-  const modelTerms = input.searchTerms.filter((term) => !providerText.includes(term));
+  // Whole ids like "codex-work" and their parts both name the provider.
+  const providerWords = new Set([
+    ...providerText.split(/\s+/),
+    ...providerText.split(/[^\p{L}\p{N}]+/u),
+  ]);
+  const modelText = (model: ServerProviderModel) =>
+    `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
+  // Part of a provider word ("agent" in "claudeAgent") names the provider unless a model matches it.
+  const modelTerms = input.searchTerms.filter(
+    (term) =>
+      !providerWords.has(term) &&
+      (!providerText.includes(term) || visible.some((model) => modelText(model).includes(term))),
+  );
   if (modelTerms.length > 0) {
-    const matches = visible.filter((model) => {
-      const text = `${model.slug} ${model.name} ${model.subProvider ?? ""}`.toLowerCase();
-      return modelTerms.every((term) => text.includes(term));
-    });
+    const matches = visible.filter((model) =>
+      modelTerms.every((term) => modelText(model).includes(term)),
+    );
     // A slug matching a term exactly is listed first, above the cap: a caller asking for a
     // model by name can trust a yes/no from the response without paging through the omitted.
     const exact = new Set(

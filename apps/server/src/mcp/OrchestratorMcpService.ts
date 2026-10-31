@@ -2263,7 +2263,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
       );
       const inherited = parent?.thread.modelSelection;
-      const searchTerms = input.search?.toLowerCase().split(/\s+/) ?? [];
+      const searchTerms = input.search?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
       return {
         parentThreadId: parent?.thread.id ?? null,
         inheritedProviderInstanceId: inherited?.instanceId ?? null,
@@ -3508,7 +3508,11 @@ const make = Effect.gen(function* () {
             .listProjectThreads({ projectId, includeSubagents: input.includeSubagents !== false })
             .pipe(Effect.mapError(listFailure));
       const nowMs = yield* Clock.currentTimeMillis;
-      const statuses = input.statuses === undefined ? null : new Set(input.statuses);
+      // An empty list is no filter: clients that fill every optional field send `[]`.
+      const statuses =
+        input.statuses === undefined || input.statuses.length === 0
+          ? null
+          : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
       const filtered = projectThreads
         .filter(

@@ -30,6 +30,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
+import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -110,6 +111,7 @@ const ProjectDeleteTool = Tool.make(agentSurfaceRegistry["project.delete"].name,
     force: Schema.optionalKey(Schema.Boolean),
     clientRequestId: Schema.optional(KeyedClientRequestId),
   }),
+  dependencies: [...shared.dependencies, ProjectCloneTracker.ProjectCloneTracker],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["project.delete"]));
 const ProjectCloneTool = Tool.make(agentSurfaceRegistry["project.clone"].name, {
   ...shared,
