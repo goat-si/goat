@@ -51,11 +51,11 @@ import {
   buildFileDiffIdentityKey,
   getDiffCollapseIconClassName,
   getDiffLineStat,
-  findPatchFile,
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
 } from "../lib/diffRendering";
+import { selectVisibleDiffFiles } from "./DiffPanel.logic";
 import { DiffPanelAwaitingCheckpoint, useDiffPanelTurn } from "./diffs/DiffPanelTurn";
 import { PREFERRED_HIGHLIGHTER } from "../lib/syntaxHighlighting";
 import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "../lib/diffCollapse";
@@ -509,11 +509,14 @@ export default function DiffPanel({
   const testFileCount = renderableFiles.filter((file) =>
     isTestChangedFile(resolveFileDiffPath(file)),
   ).length;
-  // Hiding is display-only: lazy loading indexes into the full list. A requested file stays visible.
-  const isFileShown = (file: FileDiffMetadata) => {
-    const path = resolveFileDiffPath(file);
-    return !hideTestFiles || path === selectedFilePath || !isTestChangedFile(path);
-  };
+  const { selectedPatchFile, visibleFiles } = selectVisibleDiffFiles(
+    renderableFiles,
+    selectedFilePath,
+    activeCwd,
+    hideTestFiles,
+  );
+  const visibleFileSet = new Set(visibleFiles);
+  const isFileShown = (file: FileDiffMetadata) => visibleFileSet.has(file);
   const shownFileEntries = renderableFileEntries.filter(({ fileDiff }) => isFileShown(fileDiff));
   const shownFileKeys = shownFileEntries.map((file) => file.fileKey);
   const defaultCollapsedDiffFileKeys = settings.diffFilesCollapsed
@@ -556,7 +559,7 @@ export default function DiffPanel({
   );
   const allDiffFilesCollapsed = areAllDiffFilesCollapsed(shownFileKeys, collapsedDiffFileKeys);
   const diffLineStat = sourceLineStat ?? getDiffLineStat(renderableFiles);
-  const fileTreeEntries = diffFileTreeEntries(renderableFiles.filter(isFileShown));
+  const fileTreeEntries = diffFileTreeEntries(visibleFiles);
   const treeRevealScope = JSON.stringify([collapseScopeKey, diffSelection]);
   const codeViewReveal = useCodeViewFileReveal(treeRevealScope);
   const revealDiffFile = useStableCallback((filePath: string) => {
@@ -577,9 +580,6 @@ export default function DiffPanel({
     return true;
   });
 
-  const selectedPatchFile = selectedFilePath
-    ? findPatchFile(renderableFiles, selectedFilePath, activeCwd)
-    : null;
   const selectedPatchFilePath = selectedPatchFile ? resolveFileDiffPath(selectedPatchFile) : null;
   const externalRevealRef = useRef<string | null>(null);
   useEffect(() => {
