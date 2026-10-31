@@ -276,7 +276,19 @@ export const primitiveReplySink = (
           : {
               result: {
                 isError: true,
-                structuredContent: { code: failure.code, safety: failure.safety },
+                structuredContent: {
+                  code: failure.code,
+                  ...(failure.safety === undefined
+                    ? {}
+                    : {
+                        safety: {
+                          possibleCommit: failure.safety.possibleCommit,
+                          retryClass: failure.safety.retryClass,
+                          writeStatus: failure.safety.writeStatus,
+                          code: failure.safety.code,
+                        },
+                      }),
+                },
                 content: [{ type: "text", text: failure.nextStep }],
               },
             }),

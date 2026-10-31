@@ -15,9 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
-import { terminalFailure, terminalReplyState } from "./ComputerUseTerminal.ts";
-import { primitiveReplySink } from "./ComputerUseLeaseProxyOptions.ts";
-import { terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
+import { terminalFailure } from "./ComputerUseTerminal.ts";
 
 const threadId = ThreadId.make("thread:primitive");
 const controlId = "control:primitive";
@@ -978,43 +976,5 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
       const answer = yield* Fiber.join(waiting);
       assert.equal(answer._tag, "Success");
       if (answer._tag === "Success") assert.include(JSON.stringify(answer.success), terminal);
-    }),
-);
-
-it.effect.each(["stopped_by_person", "screen_locked"] as const)(
-  "retains oversized %s replies through the primitive channel",
-  (reason) =>
-    Effect.gen(function* () {
-      const f = yield* fixture();
-      yield* f.channel.reportControlReady(f.report(1));
-      const pending = yield* f.request().pipe(Effect.forkChild({ startImmediately: true }));
-      const request = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
-      const raw = primitiveReplySink(request, (reply) =>
-        f.channel.reply({ ...authority, registrationId: f.registered.registrationId, reply }),
-      );
-      const sink = terminalSink(
-        raw,
-        { id: 1, method: "tools/call", params: { name: "click" } },
-        () => reason,
-        () => true,
-      );
-      yield* sink.answer(
-        JSON.stringify({
-          result: {
-            isError: true,
-            structuredContent: {
-              code: reason,
-              safety: { possibleCommit: true, retryClass: "never" },
-            },
-            content: [{ type: "text", text: "x".repeat(1024 * 1024) }],
-          },
-        }),
-        "settled",
-      );
-      const answer = yield* Fiber.join(pending);
-      const result = terminalReplyState(answer.result, answer.status);
-      assert.equal(result.reason, reason);
-      assert.isTrue(result.possibleCommit);
-      assert.isTrue(result.terminalSafety);
     }),
 );
