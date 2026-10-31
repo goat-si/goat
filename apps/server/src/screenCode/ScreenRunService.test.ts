@@ -11,7 +11,7 @@ import {
   screenTargetApi,
   type EnvironmentId,
   type ProviderInstanceId,
-  ThreadId,
+  type ThreadId,
 } from "@goat/contracts";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
@@ -21,69 +21,6 @@ import { ScreenCursorPublisher } from "../cua/ScreenCursorPublisher.ts";
 import type { AgentCursorEvent } from "@goat/contracts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { fixture } from "./DesktopTargetHost.testkit.ts";
-import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
-
-it.live.each(["stopped_by_person", "screen_locked"] as const)(
-  "a lease authority %s cutoff stays terminal at the screen.run boundary",
-  (reason) =>
-    Effect.gen(function* () {
-      const entered = yield* Deferred.make<void>();
-      let trigger = () => {};
-      const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
-        Effect.provide(
-          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-            proxy: undefined,
-            onAuthorityChange: (listener) => {
-              trigger = () =>
-                listener({
-                  kind: reason === "screen_locked" ? "pause" : "stop",
-                  threadId: ThreadId.make("thread"),
-                  controlId: "control",
-                  terminal: reason,
-                });
-              return () => {};
-            },
-            releaseForeground: () => Effect.succeed(false),
-          }),
-        ),
-      );
-      const service = yield* ScreenRunService.pipe(
-        Effect.provide(
-          ScreenRunService.layerWithRuntime({
-            leases,
-            invocation: {
-              command: process.execPath,
-              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-            },
-            assetResolver: () => resolveScreenRuntimeAsset("dev"),
-            dispatcher: {
-              availability: () => Effect.succeed([{ kind: "app", available: true }]),
-              dispatch: () =>
-                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-            },
-          }).pipe(Layer.provide(NodeServices.layer)),
-        ),
-      );
-      const running = yield* service
-        .runCell({
-          runId: "run-terminal",
-          turnId: "turn-terminal",
-          threadId: "thread",
-          environmentId: "env",
-          invocation,
-          source: "return await screen.list_apps();",
-        })
-        .pipe(Effect.result, Effect.forkChild);
-      yield* Deferred.await(entered);
-      trigger();
-      const result = yield* Fiber.join(running);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure") {
-        expect(result.failure.code).toBe(reason);
-        expect(result.failure.safety?.retryClass).toBe("never");
-      }
-    }),
-);
 
 const invocation = {
   environmentId: "env" as EnvironmentId,

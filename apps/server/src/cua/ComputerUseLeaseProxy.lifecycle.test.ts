@@ -807,11 +807,14 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
 it.effect("round6 delayed reservation keeps lock through resume", () =>
   Effect.gen(function* () {
     const gate = yield* Deferred.make<void>();
+    let first = true;
     const h = yield* harness({
-      reservation: (request) =>
-        request.action === "reserve"
-          ? Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }))
-          : Effect.succeed({ status: "released" }),
+      reservation: (request) => {
+        if (request.action !== "reserve") return Effect.succeed({ status: "released" });
+        if (!first) return Effect.succeed({ status: "admitted", reservationId: "ticket:next" });
+        first = false;
+        return Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }));
+      },
     });
     yield* h.push(active());
     yield* h.driverStarted;
@@ -824,5 +827,16 @@ it.effect("round6 delayed reservation keeps lock through resume", () =>
     yield* Deferred.succeed(gate, undefined);
     const answer = yield* h.nextToProvider;
     assert.include(JSON.stringify(answer), "screen_locked");
+    yield* h.send(call(911, "list_apps"));
+    const forwarded = yield* h.nextToDriver;
+    assert.equal(forwarded.id, 911);
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 911,
+        result: { content: [{ type: "text", text: "new generation" }] },
+      }),
+    );
+    assert.include(JSON.stringify(yield* h.nextToProvider), "new generation");
   }),
 );
