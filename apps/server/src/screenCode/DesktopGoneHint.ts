@@ -10,12 +10,19 @@ export const goneHint = (
   if (error.detail !== "window_gone" || bound.bundleId === undefined) return error;
   windows = windows?.filter((window) => window.window_id !== bound.windowId);
   if (!windows?.length) return error;
-  const choices = windows.map(
-    (window) =>
-      `window_id: ${window.window_id}, title: ${JSON.stringify(window.title)}${window.sheetOf === undefined ? "" : `, sheet parent: ${window.sheetOf}`}${window.pid === bound.pid ? "" : `, another process (pid ${window.pid})`}: screen.app({ bundle_id: ${JSON.stringify(bound.bundleId)}, window_id: ${window.window_id} })`,
-  );
+  const prefix = "That window is closed. Windows seen open in this cell: ";
+  const choices: string[] = [];
+  for (const window of windows) {
+    const choice = `window_id: ${window.window_id}, title: ${JSON.stringify(window.title)}${window.sheetOf === undefined ? "" : `, sheet parent: ${window.sheetOf}`}${window.pid === bound.pid ? "" : `, another process (pid ${window.pid})`}: screen.app({ bundle_id: ${JSON.stringify(bound.bundleId)}, window_id: ${window.window_id} })`;
+    if (
+      `${prefix}${[...choices, choice].join("; ")}. More windows: screen.discover().`.length > 1024
+    )
+      break;
+    choices.push(choice);
+  }
+  if (!choices.length) return error;
   return {
     ...error,
-    nextStep: `That window is closed. Windows seen open in this cell: ${choices.join("; ")}.`,
+    nextStep: `${prefix}${choices.join("; ")}.${choices.length < windows.length ? " More windows: screen.discover()." : ""}`,
   };
 };
