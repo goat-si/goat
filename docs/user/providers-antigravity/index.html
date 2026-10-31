@@ -70,9 +70,14 @@ uses <code>.exe</code> files.</p>
 Leave the field blank to use the managed runtime, or a compatible executable on
 <code>PATH</code> if no managed runtime is installed.</p>
 <h2 id="models-and-threads">Models and threads</h2>
-<p>The model list comes from your Antigravity account and can differ from other
-Antigravity apps. A resumed thread keeps its selected model. If access to that
-model ends, select another available model before continuing.</p>
+<p>The model list comes from your Antigravity account. Compatible runtimes can include
+Claude and GPT models when your plan has them. Pick a thinking level in the composer’s effort menu; it
+shows only the levels the selected model supports. A resumed thread keeps its
+selected model. If access to that model ends, select another available model
+before continuing.</p>
+<p>Antigravity creates empty <code>.gemini/skills</code> and <code>.agents/skills</code> folders in the
+workspace when a session starts. Git does not track empty folders, so they never
+appear in commits.</p>
 <p>Use Antigravity’s native <code>/plan</code> command for planning. GOAT’s separate Plan mode
 is unavailable. Tool approvals follow <a href="/goat/docs/user/permission-modes/">Permission modes</a>.
 Questions with fixed choices still need one of the offered answers, even in

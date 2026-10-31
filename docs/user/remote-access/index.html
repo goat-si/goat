@@ -572,6 +572,16 @@ tab closes. Audio does not play on your device.</p>
 <p>On a phone, tap the floating preview’s corner dot to show its controls, then
 <strong>Pop into separate window</strong> to keep watching in picture-in-picture over other
 apps.</p>
+<h3 id="local-servers">Local servers</h3>
+<p>The browser lists ports held by processes your terminals started. GOAT
+reads which process holds each port and never connects to it, so a
+listed port opens as <code>http://localhost:&lt;port&gt;</code> and might not be a web page. For
+an HTTPS server or a specific path, set the <strong>Preview URL</strong> on the project
+script that starts it; GOAT checks that address and opens it as written.</p>
+<p>To stop listing ports, set <code>GOAT_PORT_DISCOVERY=0</code> in the environment that
+starts the GOAT server, such as
+<a href="/goat/docs/user/background-service/#configure-the-service-environment"><code>service.env</code></a> for
+the background service, and restart it. Script preview URLs still appear.</p>
 <h3 id="browser-host-setup">Browser host setup</h3>
 <p>macOS, Windows, and Linux desktops run the browser as is. Some Linux hosts need
 one-time setup: Ubuntu 23.10 and later block the sandbox the browser runs in,
@@ -586,8 +596,17 @@ desktop app installed, it names the full path of the app’s own <code>goat</cod
 any missing libraries and system fonts with apt; pages that load without text
 can mean the host has no fonts. It is safe to run again. Without <code>sudo</code>, it only
 reports what it would change.</p>
-<p>The browser always runs in Chrome’s sandbox. Where you cannot change the host,
-set <code>GOAT_SERVER_BROWSER_SANDBOX=0</code> for the environment to run without it.</p>
+<p>The browser runs in Chrome’s sandbox by default. Chrome cannot start that sandbox
+as root. If your GOAT server runs as root, run it as a nonroot user to keep
+sandboxing enabled. <code>goat browser setup</code> does not fix this root restriction.</p>
+<p>If you need to run as root, or cannot enable the sandbox on your host, set
+<code>GOAT_SERVER_BROWSER_SANDBOX=0</code> in the <strong>GOAT server’s environment</strong> and restart
+the server. This disables Chrome’s sandbox. For a manual launch:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="sh"><code><span class="line"><span style="color:#E1E4E8">GOAT_SERVER_BROWSER_SANDBOX</span><span style="color:#F97583">=</span><span style="color:#9ECBFF">0</span><span style="color:#B392F0"> goat</span><span style="color:#9ECBFF"> serve</span></span></code></pre>
+<p>For a systemd service, add <code>Environment=GOAT_SERVER_BROWSER_SANDBOX=0</code> under
+<code>[Service]</code> in its configuration, run <code>sudo systemctl daemon-reload</code>, then restart
+your GOAT service. Setting the variable in an agent’s terminal does not change the
+environment of an already running GOAT server.</p>
 <h2 id="connect-an-outside-agent">Connect an outside agent</h2>
 <p>Claude Code, Codex, ChatGPT and other agents GOAT did not start can drive
 threads on an environment through its MCP server. See

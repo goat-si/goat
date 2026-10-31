@@ -35,7 +35,7 @@ Settings.</p>
 selected provider instance. Sensitive values remain redacted in Settings and
 terminal metadata while the terminal process can use them.</p>
 <h2 id="import-your-projects">Import your projects</h2>
-<p>GOAT finds directories that Claude Code or Codex has used. Git repositories
+<p>GOAT finds directories that Claude Code, Codex or Pi has used. Git repositories
 are listed first, newest activity on top. When the remote is on GitHub, the
 group shows the repository as <code>owner/name</code>. Clones with the same remote share
 one group. Directories that are not git repositories sit under “Other folders”.</p>
@@ -47,8 +47,12 @@ directories under <code>Documents/Codex</code>, and anything under <code>Downloa
 offered.</p>
 <p>A large or malformed history can reach the scan limit. GOAT keeps the
 projects it found and warns when projects or conversations may be missing.</p>
-<p>Imported projects include Codex and Claude conversations active within the last
-30 days. You can continue those conversations in GOAT.</p>
+<p>Imported projects include Claude, Codex and Pi conversations active within the last
+30 days. You can continue those conversations in GOAT. Pi is off by default:
+enable it in Settings, then open <code>/welcome</code> to import its sessions. Pi sessions
+are read from each enabled Pi provider’s session directory, which follows
+<code>PI_CODING_AGENT_SESSION_DIR</code> and <code>PI_CODING_AGENT_DIR</code> in its environment. A
+Pi conversation imports its active branch, the one Pi reopens.</p>
 <p>Conversation import is best effort. GOAT keeps the first user prompt and the
 newest remaining visible user and assistant messages, with 200 messages total.
 It omits tool activity and attachments. For Codex, it omits generated setup

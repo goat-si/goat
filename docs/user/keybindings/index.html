@@ -15,8 +15,9 @@ does the same. Change these shortcuts in <strong>Settings → Keybindings</stron
 <strong>Composer: Opposite Queue or Steer Action</strong>, <strong>Composer: Start in Background</strong>,
 or <strong>Composer: Send and Start New Thread</strong>. These bindings take priority over the
 send shortcut. Click the send button to use the configured follow-up behavior.</p>
-<p>When an active turn has queued messages, <code>mod+Shift+Enter</code> sends the first as a
-steer. While the composer uses <code>mod+Shift+Enter</code> for the opposite action, first click
+<p>When a thread has queued messages, <code>mod+Shift+Enter</code> sends the first one as a steer
+while a turn is running, or as a new turn when the thread is stopped. While the
+composer uses <code>mod+Shift+Enter</code> for the opposite action, first click
 elsewhere in the thread, outside the composer and any terminal. Change it under
 <strong>Queue: Send First Queued Message</strong> in Keybindings.</p>
 <p>Use <code>mod+shift+m</code> to choose a model and <code>mod+shift+h</code> to choose a host.
@@ -189,7 +190,8 @@ expression restricts when it runs.</p>
 <code>previewOpen</code>, <code>rightPanelOpen</code>, <code>modelPickerOpen</code>, <code>usagePageOpen</code>, <code>notesPageOpen</code>,
 <code>composerFocus</code>, <code>draftThreadRoute</code>, <code>turnRunning</code>, <code>editableFocus</code>, <code>fileViewFocus</code>,
 <code>fileTreeFocus</code>, <code>isWeb</code>, and <code>isDesktop</code>.
-<code>draftThreadRoute</code> is true in a new thread before you send its first message.
+<code>draftThreadRoute</code> is true in a new thread, including a restored draft, before you
+send its first message.
 <code>editableFocus</code> is true while a text field, the composer, or another editor has
 the keyboard. <code>fileViewFocus</code> is true while the Files panel or an open file has
 the keyboard, and <code>fileTreeFocus</code> while the Files panel has it. <code>isWeb</code> is true in a browser tab. <code>isDesktop</code> is true in the
