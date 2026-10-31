@@ -900,8 +900,8 @@ export const createDesktopTargetHost = (deps: {
       (each, index) =>
         Effect.suspend(() => {
           if (!markDispatched(index))
-            return Effect.fail({
-              code: "stopped" as const,
+            return Effect.fail<ScreenRunError>({
+              code: "stopped",
               callId: each.callId,
               effectStarted: false,
               nextStep: "Refresh the screen target and retry if appropriate.",
