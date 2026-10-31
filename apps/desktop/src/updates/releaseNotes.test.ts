@@ -86,10 +86,34 @@ describe("normalizeDesktopUpdateReleaseNotes", () => {
         releasedAt: "2026-10-29T10:00:00.000Z",
         stats: "12 changes from 3 contributors",
         intro: "Link machines (beta).",
-        items: fixes.map((_, index) => `Fix ${index + 1}`),
+        items: fixes.slice(0, 8).map((_, index) => `Fix ${index + 1}`),
         totalItems: 10,
       },
     ]);
+  });
+
+  it("bounds generated summary items, highlights and stats while counting every change", () => {
+    const fixes = Array.from({ length: 12 }, (_, index) => `Fix ${index + 1}: ${"x".repeat(300)}`);
+    const [release] = normalizeDesktopUpdateReleaseNotes(
+      [
+        `**v1.2.4** · ${"stats ".repeat(60)}`,
+        "## Highlights",
+        "h".repeat(300),
+        "Another highlight.",
+        "## Fixes",
+        ...fixes.map((fix) => `- ${fix}`),
+        "<details><summary>Full changelog</summary>",
+        "- Full release entry",
+        "</details>",
+      ].join("\n"),
+      "1.2.4",
+      "latest",
+    ).releaseNotes;
+
+    expect(release).toMatchObject({ version: "1.2.4", totalItems: 14 });
+    expect(release?.items).toEqual(fixes.slice(0, 8).map((fix) => `${fix.slice(0, 217)}...`));
+    expect(release?.intro).toBe(`${"h".repeat(217)}...`);
+    expect(release?.stats).toHaveLength(220);
   });
 
   it("does not count Markdown or HTML section headings as changes", () => {

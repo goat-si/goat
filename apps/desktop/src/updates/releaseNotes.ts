@@ -103,26 +103,32 @@ interface ExtractedReleaseNoteItems {
  */
 function extractReleaseNoteSummary(summary: string): ExtractedReleaseNoteItems {
   let stats: string | undefined;
-  const intro: string[] = [];
+  let intro = "";
+  let totalItems = 0;
   const items: string[] = [];
   for (const rawLine of stripMarkup(summary).split("\n")) {
     const line = rawLine.trim().replace(/\s+/g, " ");
     if (line === "" || /^#{1,6}\s+/.test(line)) continue;
     if (stats === undefined && /^v\S+ · /.test(line)) {
-      stats = line.slice(line.indexOf(" · ") + 3);
+      stats = truncateReleaseNoteItem(line.slice(line.indexOf(" · ") + 3));
       continue;
     }
     const text = line
       .replace(/^[-*]\s+/, "")
       .replace(/\s*\((?:#\d+(?:,\s*)?)+\)\.?$/, "")
       .trim();
-    if (/^[-*]\s+/.test(line)) items.push(text);
-    else intro.push(text);
+    totalItems += 1;
+    if (/^[-*]\s+/.test(line)) {
+      if (items.length < MAX_RELEASE_NOTE_ITEMS_PER_GROUP)
+        items.push(truncateReleaseNoteItem(text));
+    } else if (intro.length < MAX_RELEASE_NOTE_ITEM_LENGTH) {
+      intro = truncateReleaseNoteItem(intro ? `${intro} ${text}` : text);
+    }
   }
   return {
     items,
-    totalItems: items.length + intro.length,
-    ...(intro.length > 0 ? { intro: intro.join(" ") } : {}),
+    totalItems,
+    ...(intro ? { intro } : {}),
     ...(stats ? { stats } : {}),
   };
 }
