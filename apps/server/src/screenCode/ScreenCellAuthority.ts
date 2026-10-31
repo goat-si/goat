@@ -88,7 +88,20 @@ export const finishCellResponse =
           const error = completionCellError(outcome.success.error, receipts, terminal);
           return error === undefined
             ? Effect.succeed(outcome.success)
-            : Effect.fail({ ...error, cellId: options.cellId, receipts: receipts.slice(-16) });
+            : Effect.fail({
+                ...error,
+                cellId: options.cellId,
+                receipts: receipts.slice(-16),
+                ...(outcome.success.windowsOpened === undefined
+                  ? {}
+                  : { windowsOpened: outcome.success.windowsOpened }),
+                ...(outcome.success.windowsOpenedTruncated === undefined
+                  ? {}
+                  : { windowsOpenedTruncated: outcome.success.windowsOpenedTruncated }),
+                ...(outcome.success.windowsOpenedUnverified === undefined
+                  ? {}
+                  : { windowsOpenedUnverified: outcome.success.windowsOpenedUnverified }),
+              });
         }),
       ),
       Effect.ensuring(Effect.sync(cleanup)),

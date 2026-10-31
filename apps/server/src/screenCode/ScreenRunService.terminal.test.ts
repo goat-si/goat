@@ -8,7 +8,13 @@ import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
-import { EnvironmentId, ProviderInstanceId, ThreadId, type ScreenRunError } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  type ScreenRunError,
+  type ScreenRunResult,
+} from "@goat/contracts";
 import type { ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import { finishCellResponse, makeCellAuthority } from "./ScreenCellAuthority.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
@@ -547,5 +553,32 @@ it.effect("the final cell latch preserves possible input from an earlier termina
     }
     expect(cells.get("run")).toBeUndefined();
     expect(terminals.has("run")).toBe(false);
+  }),
+);
+
+it.effect("a late terminal result retains cell window evidence", () =>
+  Effect.gen(function* () {
+    const cells = makeCellAuthority(undefined);
+    const terminals = new Map<string, ComputerUseTerminalReason>();
+    yield* cells.begin("run", "cell", "thread");
+    terminals.set("run", "stopped_by_person");
+    const answer = yield* Effect.succeed({
+      runId: "run",
+      turnId: "turn",
+      cellId: "cell",
+      status: "completed",
+      console: [],
+      journal: [],
+      truncated: [],
+      availability: [],
+      imageMetadata: [],
+      images: [],
+      windowsOpenedUnverified: true,
+    } satisfies ScreenRunResult).pipe(
+      finishCellResponse({ id: "run", cellId: "cell", cells, terminals }),
+      Effect.result,
+    );
+    expect(answer._tag).toBe("Failure");
+    if (answer._tag === "Failure") expect(answer.failure.windowsOpenedUnverified).toBe(true);
   }),
 );
