@@ -55,56 +55,18 @@ import { SshProgressBinding } from "./sshProgressBinding.ts";
 export { SshProgressBinding } from "./sshProgressBinding.ts";
 
 import {
-  PROVIDER_CONTINUATION_PATHS,
   isProviderContinuationPath,
   type ProviderContinuationPath,
 } from "./providerContinuationPaths.ts";
+import {
+  decodePrivatePayload,
+  encodePrivatePayload,
+  type PrivatePayload,
+} from "./handoffPrivatePayload.ts";
 export {
   isProviderContinuationPath,
   type ProviderContinuationPath,
 } from "./providerContinuationPaths.ts";
-const ContinuationPayload = Schema.Struct({
-  version: Schema.Literal(1),
-  kind: Schema.Literal("continuation"),
-  human: HandoffHuman,
-  args: Schema.Record(Schema.String, Schema.Unknown),
-  approvedBySessionId: Schema.optional(AuthSessionId),
-  sshProgress: Schema.optional(SshProgressBinding),
-  namespace: Schema.optional(Schema.Literals(PROVIDER_CONTINUATION_PATHS)),
-  /** What an approved provider change has done so far; its owning service decodes it. */
-  progress: Schema.optional(Schema.Unknown),
-});
-const PrivatePayload = Schema.fromJsonString(
-  Schema.Union([
-    ContinuationPayload,
-    Schema.Struct({
-      version: Schema.Literal(1),
-      kind: Schema.Literal("progress_only"),
-      sshProgress: SshProgressBinding,
-      retainUntil: Schema.Number,
-    }),
-    // A finished provider change keeps what it did, apart from the arguments it ran with.
-    Schema.Struct({
-      version: Schema.Literal(1),
-      kind: Schema.Literal("provider_outcome"),
-      namespace: Schema.Literals(PROVIDER_CONTINUATION_PATHS),
-      progress: Schema.Unknown,
-      retainUntil: Schema.Number,
-    }),
-    // Legacy non-SSH payloads remain readable, but are never resumed as SSH work.
-    Schema.Struct({
-      version: Schema.optional(Schema.Literal(0)),
-      kind: Schema.optional(Schema.Literal("legacy")),
-      human: HandoffHuman,
-      args: Schema.Record(Schema.String, Schema.Unknown),
-    }),
-    // A person ended this computer use grant after approving it; the sweep drops it with the rest.
-    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_ended") }),
-    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_consumed") }),
-  ]),
-);
-const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
-const decodePrivatePayload = Schema.decodeUnknownEffect(PrivatePayload);
 const decodeHandoff = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.toCodecJson(Handoff)),
 );
@@ -113,7 +75,9 @@ const decodeAddress = Schema.decodeUnknownEffect(
   Schema.Struct({ threadId: Handoff.fields.requestedBy.fields.threadId, handoffId: TurnItemId }),
 );
 const unavailable = (cause: unknown) => new HandoffError({ reason: "unavailable", cause });
+
 type Continuations = Effect.Success<ReturnType<typeof makeComputerUseContinuations>>;
+
 export class Handoffs extends Context.Service<
   Handoffs,
   {
@@ -295,7 +259,7 @@ const make = Effect.gen(function* () {
       });
       return yield* decodePrivatePayload(plain).pipe(Effect.mapError(unavailable));
     });
-  const savePrivate = (id: string, payload: typeof PrivatePayload.Type, replace = false) =>
+  const savePrivate = (id: string, payload: PrivatePayload, replace = false) =>
     Effect.gen(function* () {
       const plain = yield* encodePrivatePayload(payload).pipe(Effect.mapError(unavailable));
       const encrypted = yield* Effect.try({
