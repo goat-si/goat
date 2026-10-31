@@ -77,6 +77,7 @@ describe("ComputerUseLeaseRoute reports", () => {
       const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            proxy: undefined,
             stopAllIfCurrent: () => Effect.succeed(true),
             grants: Effect.succeed([]),
             release: () => Effect.void,
