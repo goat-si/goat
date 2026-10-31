@@ -28,7 +28,13 @@ export function ThreadComputerUseHistory(props: {
     if (result._tag === "Failure") throw new Error("Could not load input history.");
     return result.value;
   };
-  return <ThreadComputerUseHistoryView canRead={canRead} load={load} />;
+  return (
+    <ThreadComputerUseHistoryView
+      key={JSON.stringify([props.environmentId, props.threadId])}
+      canRead={canRead}
+      load={load}
+    />
+  );
 }
 
 export function ThreadComputerUseHistoryForItem(props: {

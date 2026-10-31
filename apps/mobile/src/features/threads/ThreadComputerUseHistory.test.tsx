@@ -1,3 +1,4 @@
+import { act } from "react";
 import { expect, it, vi } from "vite-plus/test";
 const permission = vi.hoisted(() => ({ allowed: true, request: vi.fn() }));
 import { EnvironmentId, OrchestrationV2TurnItemJson, ThreadId } from "@goat/contracts";
@@ -17,7 +18,10 @@ import { useThreadHistoryMenu } from "./useThreadHistoryMenu";
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 import { ThreadComputerUseHistoryView } from "./ThreadComputerUseHistoryView";
-import { ThreadComputerUseHistoryForItem } from "./ThreadComputerUseHistory";
+import {
+  ThreadComputerUseHistory,
+  ThreadComputerUseHistoryForItem,
+} from "./ThreadComputerUseHistory";
 
 const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 
@@ -152,5 +156,54 @@ it("opens empty thread history from the menu only with read permission", async (
     await denied.unmount();
     other.dispose();
     permission.allowed = true;
+  }
+});
+
+it.each([false, true])("isolates history after switching threads, delayed=%s", async (delayed) => {
+  const env = EnvironmentId.make("environment:a");
+  const a = ThreadId.make("thread:a");
+  const b = ThreadId.make("thread:b");
+  const reply = Promise.withResolvers<unknown>();
+  const row = {
+    id: 1,
+    threadId: a,
+    recordedAt: 0,
+    targetKind: "app",
+    appId: "fixture.app",
+    appName: "Fixture",
+    tabHost: null,
+    method: "thread_A_only_action",
+    targetLabel: null,
+    verdict: "sent",
+    refusalCode: null,
+    typedLength: null,
+    typedText: null,
+  };
+  permission.allowed = true;
+  permission.request
+    .mockReset()
+    .mockImplementationOnce(() => reply.promise)
+    .mockResolvedValue({ _tag: "Success", value: { entries: [], nextCursor: null } });
+  const harness = createNativeMemoryHarness();
+  const view = renderNative(harness, <ThreadComputerUseHistory environmentId={env} threadId={a} />);
+  try {
+    await view.render();
+    await view.click("Show input history");
+    if (!delayed)
+      await act(async () =>
+        reply.resolve({ _tag: "Success", value: { entries: [row], nextCursor: null } }),
+      );
+    await view.rerender(<ThreadComputerUseHistory environmentId={env} threadId={b} />);
+    if (delayed)
+      await act(async () =>
+        reply.resolve({ _tag: "Success", value: { entries: [row], nextCursor: null } }),
+      );
+    expect(view.container.textContent).not.toContain("thread_A_only_action");
+    await view.click("Show input history");
+    expect(view.container.textContent).toContain("No input history.");
+    expect(permission.request.mock.calls[1]?.[0].input.threadId).toBe(b);
+  } finally {
+    await view.unmount();
+    harness.dispose();
   }
 });

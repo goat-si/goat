@@ -94,3 +94,48 @@ it("offers thread history without work entries only with read permission", async
   );
   expect(screen.getByRole("button", { name: "Show input history" }).elements()).toHaveLength(0);
 });
+
+it.each([false, true])(
+  "does not show or retain A history in B when A reply is delayed=%s",
+  async (delayed) => {
+    const environmentId = EnvironmentId.make("environment:a");
+    const a = ThreadId.make("thread:a");
+    const b = ThreadId.make("thread:b");
+    const reply = Promise.withResolvers<unknown>();
+    const row = {
+      id: 1,
+      threadId: a,
+      recordedAt: 0,
+      targetKind: "app",
+      appId: "fixture.app",
+      appName: "Fixture",
+      tabHost: null,
+      method: "thread_A_only_action",
+      targetLabel: null,
+      verdict: "sent",
+      refusalCode: null,
+      typedLength: null,
+      typedText: null,
+    };
+    mocks.canRead = true;
+    mocks.request
+      .mockReset()
+      .mockImplementationOnce(() => reply.promise)
+      .mockResolvedValue({ _tag: "Success", value: { entries: [], nextCursor: null } });
+    await using screen = await render(
+      <ComputerUseHistorySection environmentId={environmentId} threadId={a} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Show input history" }));
+    if (!delayed) {
+      reply.resolve({ _tag: "Success", value: { entries: [row], nextCursor: null } });
+      await expect.element(screen.getByText(/thread_A_only_action/)).toBeVisible();
+    }
+    await screen.rerender(<ComputerUseHistorySection environmentId={environmentId} threadId={b} />);
+    if (delayed) reply.resolve({ _tag: "Success", value: { entries: [row], nextCursor: null } });
+    await expect.element(screen.getByRole("button", { name: "Show input history" })).toBeVisible();
+    expect(screen.getByText(/thread_A_only_action/).elements()).toHaveLength(0);
+    await userEvent.click(screen.getByRole("button", { name: "Show input history" }));
+    await expect.element(screen.getByText("No input history.")).toBeVisible();
+    expect(mocks.request.mock.calls[1]?.[0].input.threadId).toBe(b);
+  },
+);

@@ -14,11 +14,22 @@ import { ComputerUseHistoryRows } from "./ComputerUseHistoryRows";
 
 const command = createComputerUseHistoryCommand(connectionAtomRuntime);
 
-export function ComputerUseHistorySection(props: {
+type HistoryProps = {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly hideWithoutPermission?: boolean;
-}) {
+};
+
+export function ComputerUseHistorySection(props: HistoryProps) {
+  return (
+    <ComputerUseHistoryContent
+      key={JSON.stringify([props.environmentId, props.threadId])}
+      {...props}
+    />
+  );
+}
+
+function ComputerUseHistoryContent(props: HistoryProps) {
   const canRead = useAtomValue(command.permissionAtom(props.environmentId));
   const request = useAtomCommand(command, { reportFailure: false });
   const [entries, setEntries] = useState<ReadonlyArray<typeof ComputerUseHistoryEntry.Type>>([]);
