@@ -275,8 +275,9 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
           "This browser call has no approved claim.",
         ),
       };
+    let selected: SelectedClaim | undefined;
     if (browser.args !== undefined) {
-      const selected: SelectedClaim = {
+      selected = {
         claimId: browser.claimId,
         claimGeneration: browser.claimGeneration,
         origins: JSON.stringify(browser.args.origin_scope),
@@ -284,17 +285,6 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       };
       line = replaceCallArguments(line, browser.args);
       message = { ...message, params: { ...message.params, arguments: browser.args } };
-      if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
-        return {
-          refused: refusal(
-            "none",
-            id,
-            message.method,
-            "outside_manifest",
-            "Desktop access to a claimed browser is not permitted.",
-          ),
-        };
-      return { line, message, selected };
     }
     if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
       return {
@@ -306,7 +296,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
           "Desktop access to a claimed browser is not permitted.",
         ),
       };
-    return { line, message, selected: undefined };
+    return { line, message, selected };
   };
   const allowed = (selected: SelectedClaim | undefined, message: Envelope) =>
     (selected === undefined ||
