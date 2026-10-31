@@ -26,6 +26,7 @@ import {
   actionDeadline,
   pinTarget,
   remaining,
+  requireMatch,
   revealFramesOf,
   waitUntilSelectable,
   waitUntilWritable,
@@ -786,6 +787,7 @@ export const type = async (
   const locator = targetLocator(page, input);
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
+  if (locator !== null) await requireMatch(locator, deadline);
   const present = locator !== null || (await target.count()) > 0;
   const handle = present ? await pinTarget(target, deadline) : null;
   try {
@@ -897,7 +899,9 @@ export const select = async (
   readiness: Readiness = {},
 ): Promise<PreviewAutomationSelectResult> => {
   const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
-  const handle = await elementOf(targetLocator(page, input)!, remaining(deadline));
+  const target = targetLocator(page, input)!;
+  await requireMatch(target, deadline);
+  const handle = await elementOf(target, remaining(deadline));
   try {
     const ready = await waitUntilSelectable(handle, input.values, deadline, readiness);
     const found = await handle.evaluate((element) => {

@@ -220,7 +220,9 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
             ...failure,
             code: safety.possibleCommit
               ? ("unknown_outcome" as const)
-              : failure.code === "target_ambiguous" || failure.code === "invalid_argument"
+              : failure.code === "target_ambiguous" ||
+                  failure.code === "target_missing" ||
+                  failure.code === "invalid_argument"
                 ? failure.code
                 : ("downstream_failure" as const),
             effectStarted: safety.possibleCommit,

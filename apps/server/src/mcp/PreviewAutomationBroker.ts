@@ -381,7 +381,8 @@ const classifyResponseError = (
         ...context,
         ...remoteDiagnostics,
         ...(staleRef ? { staleRef } : {}),
-        ...(Number.isSafeInteger(matchCount) && Number(matchCount) >= 2
+        ...(Number.isSafeInteger(matchCount) &&
+        (Number(matchCount) === 0 || Number(matchCount) >= 2)
           ? { matchCount: Number(matchCount) }
           : {}),
       });

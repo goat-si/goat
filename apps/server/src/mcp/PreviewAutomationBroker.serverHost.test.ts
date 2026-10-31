@@ -160,6 +160,36 @@ it.effect("names how many elements an ambiguous selector matched", () =>
   ),
 );
 
+it.effect("keeps a selector that matched nothing apart from an invalid one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const host = makeHost({ clientId, supportedOperations: ["type"] });
+      const requests = requestsFrom(yield* broker.connect(host, SERVER_BROWSER));
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationInvalidSelectorError",
+            message: "No element matches the selector.",
+            detail: { matchCount: 0, beforeInput: true },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      const error = yield* broker
+        .invoke<void>({ scope, operation: "type", input: { locator: "input[name=q]", text: "x" } })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({ _tag: "PreviewAutomationInvalidSelectorError", matchCount: 0 });
+      expect(error.message).toContain("matches no element");
+    }),
+  ),
+);
+
 it.effect("names the tab an open made whose page never connected", () =>
   Effect.scoped(
     Effect.gen(function* () {

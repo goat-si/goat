@@ -107,6 +107,26 @@ export const pinTarget = async (target: Locator, deadline: number) => {
   return handle;
 };
 
+/** Room for a field that renders just after the call; a selector that names nothing ends there. */
+const NO_MATCH_GRACE_MS = 1_000;
+
+/** Refuses, before any input, a selector that matches no element within the grace. */
+export const requireMatch = async (target: Locator, deadline: number) => {
+  if ((await target.count()) > 0) return;
+  await target
+    .first()
+    .waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, remaining(deadline)) })
+    .catch((cause: unknown) => {
+      throw isTimeout(cause)
+        ? new ServerBrowserOperationError(
+            "PreviewAutomationInvalidSelectorError",
+            "No element matches the selector, so no input was sent.",
+            { matchCount: 0, ...beforeInput },
+          )
+        : cause;
+    });
+};
+
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
 const selectable = ([element, wanted]: readonly [unknown, ReadonlyArray<string>]) => {
   const select = element as {

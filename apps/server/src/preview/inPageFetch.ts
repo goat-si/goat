@@ -1,7 +1,7 @@
 // @effect-diagnostics globalTimers:off - Playwright calls run outside the Effect runtime.
 /** Reads same-origin session content in the page; fields, hidden markup and credentials stay out. */
 import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
-import type { Page } from "playwright-core";
+import type { Page, Request } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
 import { REDACTED, redactCookieValues } from "./cookieValues.ts";
@@ -33,7 +33,12 @@ export interface InPageFetchResult {
 }
 
 type PageOutcome =
-  | { readonly error: string; readonly timedOut: boolean }
+  | {
+      readonly error: string;
+      readonly timedOut: boolean;
+      /** Why the request got no readable answer, when the page could tell. */
+      readonly failure?: "cors" | "network";
+    }
   | {
       readonly url: string;
       readonly status: number;
@@ -66,12 +71,29 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
-      credentials: "same-origin",
-      redirect: "follow",
-      cache: "no-store",
-      signal: controller.signal,
-    });
+    let response;
+    try {
+      response = await fetch(url, {
+        credentials: "same-origin",
+        redirect: "follow",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      // Every refusal reads "Failed to fetch". An opaque no-cors request without cookies that gets
+      // an answer shows the server answered and only CORS kept it from this page.
+      let answered = false;
+      try {
+        await fetch(url, { mode: "no-cors", credentials: "omit", cache: "no-store", signal: controller.signal });
+        answered = true;
+      } catch {}
+      return {
+        error: String((error && error.message) || error),
+        timedOut: controller.signal.aborted,
+        failure: answered ? "cors" : "network",
+      };
+    }
     const contentType = response.headers.get("content-type") || "";
     const head = { url: response.url || url, status: response.status, ok: response.ok, contentType };
     const mime = contentType.split(";")[0].trim().toLowerCase();
@@ -259,10 +281,12 @@ export const truncateText = (text: string, maxChars: number) =>
  * prompt that opened while it ran, even briefly, withholds the whole answer.
  */
 export const inPageFetch = (
-  page: Pick<Page, "evaluateHandle" | "url" | "context">,
+  page: FetchPage,
   control: Pick<SessionControl, "observe">,
   input: InPageFetchInput,
 ) => control.observe(() => fetchInPage(page, input));
+
+type FetchPage = Pick<Page, "evaluateHandle" | "url" | "context" | "on" | "off">;
 
 type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
 
@@ -319,8 +343,36 @@ const readHeldBody = async (
   return body;
 };
 
+const NAME_NOT_RESOLVED = /ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED/;
+
+/** A failure the page can only call "Failed to fetch", named by what the browser saw. */
+const fetchFailed = (
+  url: string,
+  failure: "cors" | "network" | undefined,
+  browserError: string | undefined,
+  pageMessage: string,
+) => {
+  const kind = browserError !== undefined && NAME_NOT_RESOLVED.test(browserError) ? "dns" : failure;
+  // A failure after the answer began, such as a cut body, keeps the page's own words.
+  if (kind === undefined)
+    return new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      `Fetching ${url} failed: ${pageMessage}`,
+    );
+  const because =
+    kind === "cors"
+      ? "The server answered, but its CORS policy keeps this page from reading it; open the URL in a tab and read it there."
+      : kind === "dns"
+        ? "The host name did not resolve."
+        : `No answer came back (${browserError ?? pageMessage}); the address may be unreachable or refused, or the page's security policy blocked it.`;
+  return new ServerBrowserOperationError(
+    "PreviewAutomationExecutionError",
+    `Fetching ${url} failed: ${kind}. ${because}`,
+  );
+};
+
 const fetchInPage = async (
-  page: Pick<Page, "evaluateHandle" | "url" | "context">,
+  page: FetchPage,
   input: InPageFetchInput,
 ): Promise<InPageFetchResult> => {
   const url = resolveFetchUrl(input.url, page.url());
@@ -341,31 +393,51 @@ const fetchInPage = async (
     timeoutMs,
     secretPattern: SECRET_NAME.source,
   });
-  // Page-side code is passed as source: the server compiles without DOM types. The handle keeps a
-  // binary body in the page, out of reach of page scripts, until it is read and disposed.
-  const pending = page.evaluateHandle<Held>(
-    `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`,
-  );
-  const held = await beforeDeadline(pending, deadline, url).catch((cause: unknown) => {
-    // A handle that arrives after the deadline is released as soon as it does.
-    void pending.then((late) => late.dispose()).catch(() => undefined);
-    throw cause;
-  });
+  // The page sees only "Failed to fetch"; the browser's own error names a name lookup that failed.
+  let browserError: string | undefined;
+  const failed = (request: Request) => {
+    if (request.url() === url) browserError = request.failure()?.errorText ?? browserError;
+  };
+  page.on("requestfailed", failed);
   try {
-    return await shapeOutcome(page, held, url, format, maxChars, timeoutMs, deadline);
+    // Page-side code is passed as source: the server compiles without DOM types. The handle keeps a
+    // binary body in the page, out of reach of page scripts, until it is read and disposed.
+    const pending = page.evaluateHandle<Held>(
+      `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`,
+    );
+    const held = await beforeDeadline(pending, deadline, url).catch((cause: unknown) => {
+      // A handle that arrives after the deadline is released as soon as it does.
+      void pending.then((late) => late.dispose()).catch(() => undefined);
+      throw cause;
+    });
+    try {
+      return await shapeOutcome(
+        page,
+        held,
+        url,
+        format,
+        maxChars,
+        timeoutMs,
+        deadline,
+        () => browserError,
+      );
+    } finally {
+      void held.dispose().catch(() => undefined);
+    }
   } finally {
-    void held.dispose().catch(() => undefined);
+    page.off("requestfailed", failed);
   }
 };
 
 const shapeOutcome = async (
-  page: Pick<Page, "evaluateHandle" | "url" | "context">,
+  page: FetchPage,
   held: { evaluate<R, A>(read: (value: Held, arg: A) => R, arg: A): Promise<R> },
   url: string,
   format: "text" | "markdown",
   maxChars: number,
   timeoutMs: number,
   deadline: number,
+  browserError: () => string | undefined,
 ): Promise<InPageFetchResult> => {
   const outcome = await beforeDeadline(
     held.evaluate((value) => value.outcome, undefined),
@@ -380,10 +452,7 @@ const shapeOutcome = async (
           "PreviewAutomationTimeoutError",
           `Fetching ${url} did not finish within ${timeoutMs}ms.`,
         )
-      : new ServerBrowserOperationError(
-          "PreviewAutomationExecutionError",
-          `Fetching ${url} failed: ${failed}`,
-        );
+      : fetchFailed(url, outcome.failure, browserError(), failed);
   }
   // Every cookie the browser would send to the request, its redirect target, the tab's frames or
   // what the tab fetched before, HttpOnly ones included.

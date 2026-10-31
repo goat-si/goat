@@ -205,3 +205,34 @@ it.effect("a double click a dialog cut short after its first press is never conf
     expect(reply?.value).toMatchObject({ effect: "unverifiable", pressesCompleted: 1 });
   }),
 );
+
+it.effect("a fetch that failed in the page is a definite failure that changed nothing", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    fixture.state.failure = new PreviewAutomationExecutionError({
+      ...actionErrorContext,
+      operation: "fetch",
+      reason: "Fetching https://other.example/ failed: cors. The server answered.",
+    });
+    const reply = yield* fixture.dispatch("fetch_tab", { url: "https://other.example/" });
+    expect(reply?.error).toMatchObject({ code: "downstream_failure", effectStarted: false });
+    expect(reply?.error?.message).toContain("failed: cors");
+    expect(reply?.error?.nextStep).not.toContain("Observe the tab");
+  }),
+);
+
+it.effect("a selector that matches nothing fails unsent as missing", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    fixture.state.failure = new PreviewAutomationInvalidSelectorError({
+      ...actionErrorContext,
+      operation: "type",
+      remoteTag: "PreviewAutomationInvalidSelectorError",
+      matchCount: 0,
+    });
+    const reply = yield* fixture.dispatch("type_text", { selector: "input[name=q]", text: "x" });
+    expect(reply?.error).toMatchObject({ code: "target_missing", effectStarted: false });
+    expect(reply?.error?.message).toContain("matches no element");
+  }),
+);

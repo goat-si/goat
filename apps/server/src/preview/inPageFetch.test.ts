@@ -126,6 +126,8 @@ describe("inPageFetch privacy", () => {
       };
     }),
     context: () => ({ cookies: async () => [] }),
+    on: () => undefined,
+    off: () => undefined,
   });
 
   it("never touches a private tab", async () => {
@@ -165,6 +167,8 @@ describe("inPageFetch privacy", () => {
           dispose: async () => disposed.resolve(),
         }),
         context: () => ({ cookies: async () => [] }),
+        on: () => undefined,
+        off: () => undefined,
       };
       // Queued as the server queues tab work: the next action waits for the fetch to settle.
       const fetching = control
@@ -341,5 +345,26 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     const long = await inPageFetch(page, control, { url: "/long", maxChars: 50 });
     expect(long.truncated).toBe(true);
     expect(long.text).toHaveLength(50);
+  });
+
+  it("names why a fetch failed: cors when the server answered, dns or network when nothing did", async () => {
+    // Playwright allows a fulfilled cross-origin answer unless it names another origin.
+    await page.route("https://other.example/**", (route) =>
+      route.fulfill({
+        contentType: "text/plain",
+        headers: { "access-control-allow-origin": "https://elsewhere.example" },
+        body: "cross-origin",
+      }),
+    );
+    await page.route("https://missing.invalid/**", (route) => route.abort("namenotresolved"));
+    await page.route("https://refused.example/**", (route) => route.abort("connectionrefused"));
+    const failure = (url: string) =>
+      inPageFetch(page, control, { url }).then(
+        () => "answered",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+    expect(await failure("https://other.example/data")).toMatch(/failed: cors\b/);
+    expect(await failure("https://missing.invalid/")).toMatch(/failed: dns\b/);
+    expect(await failure("https://refused.example/")).toMatch(/failed: network\b/);
   });
 });

@@ -23,6 +23,7 @@ export const previewTargetFailure = (
     operation !== "snapshot" &&
     operation !== "status" &&
     operation !== "read" &&
+    operation !== "fetch" &&
     operation !== "waitFor" &&
     !beforeInput.has(error._tag);
   const message = NodeUtil.stripVTControlCharacters(error.message)
@@ -33,6 +34,14 @@ export const previewTargetFailure = (
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 200);
+  if (error._tag === "PreviewAutomationInvalidSelectorError" && error.matchCount === 0)
+    return {
+      code: "target_missing",
+      effectStarted: false,
+      message,
+      nextStep:
+        "Observe the tab and name the element by its number, { role, name } or text=..., or waitFor it first.",
+    };
   if (error._tag === "PreviewAutomationInvalidSelectorError" && !error.staleRef)
     return {
       code: error.matchCount === undefined ? "invalid_argument" : "target_ambiguous",
@@ -42,6 +51,15 @@ export const previewTargetFailure = (
         error.matchCount === undefined
           ? "Name the element by a number from observe(), { role, name }, text=..., or a CSS selector."
           : "Narrow the selector to one element, or use a number from observe().",
+    };
+  // A fetch reads in the page and changes nothing there, so its failure is final, not unknown.
+  if (operation === "fetch")
+    return {
+      code: "downstream_failure",
+      effectStarted: false,
+      message,
+      nextStep:
+        "Nothing in the tab changed. For cors, open the URL in its own tab and read it; dns and network mean the address gave no answer.",
     };
   return {
     code: effectStarted ? "unknown_outcome" : "downstream_failure",

@@ -300,3 +300,17 @@ it("refuses a selector it cannot parse before the pointer moves", () =>
     });
     expect(moves).toEqual([]);
   }));
+
+it("fails typing into a selector that matches nothing as a miss, before its timeout", () =>
+  fixture(async (page) => {
+    await page.setContent('<input role="combobox" aria-label="Search">');
+    const refused = await ServerBrowserPage.type(page, {
+      locator: "input[name=q]",
+      text: "goat",
+      timeoutMs: 5_000,
+    }).catch((cause: unknown) => cause);
+    expect(ServerBrowserPage.toOperationError(refused)).toMatchObject({
+      tag: "PreviewAutomationInvalidSelectorError",
+      detail: { matchCount: 0 },
+    });
+  }));

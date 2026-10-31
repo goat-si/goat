@@ -912,12 +912,15 @@ export class PreviewAutomationInvalidSelectorError extends Schema.TaggedError<Pr
     selectorKind: Schema.optional(Schema.Literals(["locator", "selector"])),
     selectorLength: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     staleRef: Schema.optional(Schema.Boolean),
-    matchCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(2))),
+    /** 0 for a selector that matched nothing; 2 or more for one that matched several. */
+    matchCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   },
 ) {
   override get message(): string {
     if (this.staleRef)
       return "This element ref is stale. Navigation, dialogs, and new snapshots replace refs; take a fresh snapshot and use its refs.";
+    if (this.matchCount === 0)
+      return `Preview automation ${this.operation}: the selector matches no element, so no input was sent. Take a snapshot and use its ref or locator.`;
     if (this.matchCount !== undefined)
       return `Preview automation ${this.operation}: the selector matches ${this.matchCount} elements; input needs one. Narrow it (text=..., a parent, ">> nth=0" for the first) or use a snapshot ref.`;
     if (this.selectorKind !== undefined && this.selectorLength !== undefined) {
