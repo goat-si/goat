@@ -2,6 +2,8 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ComputerUsePauseReason, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -87,16 +89,23 @@ layer("ComputerUseLeases controls", (it) => {
         const owner = ThreadId.make("thread-delayed-lock");
         yield* Effect.addFinalizer(() => leases.stop(owner));
         const control = yield* leases.control(owner, Option.none());
-        yield* run(owner, "run-delayed-lock", 1, "completed");
-        assert.isTrue(yield* leases.turnEnded(owner));
+        const gate = yield* Deferred.make<void>();
         const screenLocked = leases.screenLocked;
         if (screenLocked === undefined) return yield* Effect.die("missing screenLocked");
-        assert.isTrue(yield* screenLocked(owner, control.controlId));
+        const report = yield* Deferred.await(gate).pipe(
+          Effect.andThen(screenLocked(owner, control.controlId)),
+          Effect.forkChild,
+        );
+        yield* run(owner, "run-delayed-lock", 1, "completed");
+        assert.isTrue(yield* leases.turnEnded(owner));
+        yield* Deferred.succeed(gate, undefined);
+        assert.isTrue(yield* Fiber.join(report));
         const listed = (yield* leases.sessions).find(
           ({ control: entry }) => entry.controlId === control.controlId,
         );
         assert.deepInclude(listed?.state, { _tag: "paused", reason: "screen_locked" });
         yield* leases.resume;
+        assert.equal((yield* leases.controlState(owner, control.controlId))._tag, "active");
       }),
     ),
   );
