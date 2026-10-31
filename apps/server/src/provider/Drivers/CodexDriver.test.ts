@@ -159,8 +159,23 @@ it.layer(layerTest)("CodexDriver", (it) => {
           const serverConfig = yield* ServerConfig.ServerConfig;
           const home = NodePath.join(serverConfig.stateDir, "startup-home");
           const methods: string[] = [];
-          const spawner = ChildProcessSpawner.make(() =>
+          const spawner = ChildProcessSpawner.make((command) =>
             Effect.gen(function* () {
+              if (ChildProcess.isStandardCommand(command) && command.args[0] === "--version") {
+                return ChildProcessSpawner.makeHandle({
+                  pid: ChildProcessSpawner.ProcessId(4242),
+                  exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+                  isRunning: Effect.succeed(false),
+                  kill: () => Effect.void,
+                  unref: Effect.succeed(Effect.void),
+                  stdin: Sink.drain,
+                  stdout: Stream.encodeText(Stream.make(`codex-cli ${executable.version}\n`)),
+                  stderr: Stream.empty,
+                  all: Stream.empty,
+                  getInputFd: () => Sink.drain,
+                  getOutputFd: () => Stream.empty,
+                });
+              }
               const output = yield* Queue.unbounded<Uint8Array>();
               yield* Effect.addFinalizer(() => Queue.shutdown(output));
               return ChildProcessSpawner.makeHandle({
