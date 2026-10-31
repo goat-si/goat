@@ -181,7 +181,7 @@ it.effect(
 );
 
 it.effect(
-  "T41/T41c: acted element state change is read only for unique non-lifted driver labels, and confirms the input",
+  "T41/T41c: acted element state change is observed only for unique non-lifted driver labels, and never confirms",
   () =>
     Effect.gen(function* () {
       let vCalls = 0;
@@ -252,7 +252,7 @@ it.effect(
       if (!bold || !liftedRow) throw new Error("Missing elements");
 
       const clickedBold = yield* invokeEv(host, evCall("click", { elementRef: bold.ref }, ref));
-      expect(clickedBold.category).toBe("confirmed");
+      expect(clickedBold.category).toBe("unverifiable");
       expect(clickedBold.evidence).toContain('observed:element_state:value "0"→"1"');
 
       const clickedLifted = yield* invokeEv(

@@ -35,7 +35,7 @@ import {
 } from "./DesktopInputGuards.ts";
 import { aimOf, type Placed, type Rect } from "./DesktopFrames.ts";
 import { waitForOutcome } from "./DesktopWindowClosure.ts";
-import { windowIntentOf } from "./DesktopWindowIntent.ts";
+import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import {
   annotatePointerResult,
   applyDesktopPointerArgs,
@@ -72,7 +72,7 @@ import { noteHops } from "./DesktopHops.ts";
 import { runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
-import { confirmByTree } from "./DesktopTreeEffect.ts";
+import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
 
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
@@ -111,8 +111,8 @@ export interface BoundWindow {
   pages?: DesktopPages;
   /** Rows of the current observation and its pages, for watched-element evidence and action checks. */
   rows?: ReadonlyArray<DesktopRow>;
-  /** Those rows when a full read gave them and no input has gone to the window since. */
-  fullRows?: ReadonlyArray<DesktopRow>;
+  /** Those rows when a whole, uncut read gave them and no call has gone to the window since. */
+  fullRows?: TreeBaseline;
   boundWindows?: ReadonlyArray<WindowEntry> | undefined;
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
@@ -616,6 +616,9 @@ export const createDesktopTargetHost = (deps: {
       return yield* launch(call, callArgs(call.args), context);
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(fail("stale_reference"));
+    // Any call here may change the window, so only the input right after a read compares with it.
+    const baseline = bound.fullRows;
+    delete bound.fullRows;
     if (call.method === "select_text")
       return yield* selectText(bound, callArgs(call.args), call, context);
     const withInputEvidence = (
@@ -626,8 +629,6 @@ export const createDesktopTargetHost = (deps: {
       verify: boolean,
     ) =>
       Effect.suspend(() => {
-        const baseline = bound.fullRows;
-        delete bound.fullRows;
         bound.needsSettleBeforeCapture = true;
         delete bound.inputDrivenAt;
         const driven = (at: number) => void (bound.inputDrivenAt = at);
@@ -676,6 +677,8 @@ export const createDesktopTargetHost = (deps: {
                 {},
               ).pipe(Effect.map(() => bound.fullRows)),
               call.deadlineMillis,
+              windowIntentOf(tool, forwarded, acted) === "close" ||
+                hitCloseButton(tool, result.value),
             ),
           ),
         );

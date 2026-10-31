@@ -16,6 +16,13 @@ const COMPLETED_WRITE = classifyActionOutcome({
   dispatched: true,
 });
 
+/** A whole, uncut tree read of one window under one driver, the only read a change is told from. */
+export interface TreeBaseline {
+  readonly rows: ReadonlyArray<DesktopRow>;
+  readonly windowId: number;
+  readonly connectionGeneration: string;
+}
+
 const bareRole = (role: string) => role.toLowerCase().replace(/^ax/, "");
 // Focus and frames move on any click, and indexes shift with the rows above; neither is an effect.
 const keyOf = (row: DesktopRow) =>
@@ -50,21 +57,33 @@ const treeChange = (
 /**
  * A suspected no-op read once more when a full read came right before it. The cell would stop
  * on it anyway, so this read retiring the earlier refs costs nothing; a read that fails or finds
- * the tree unchanged leaves the driver's verdict.
+ * the tree unchanged, another window or driver, or a close (proven only by the window list),
+ * leaves the driver's verdict.
  */
 export const confirmByTree = Effect.fn("DesktopTreeEffect.confirmByTree")(function* (
   result: ScreenHostDispatchResult,
-  baseline: ReadonlyArray<DesktopRow> | undefined,
-  read: Effect.Effect<ReadonlyArray<DesktopRow> | undefined, ScreenRunError>,
+  baseline: TreeBaseline | undefined,
+  read: Effect.Effect<TreeBaseline | undefined, ScreenRunError>,
   deadlineMillis: number,
+  closing: boolean,
 ) {
-  if (result.category !== "suspected_noop" || baseline === undefined || baseline.length === 0)
+  if (
+    closing ||
+    result.category !== "suspected_noop" ||
+    baseline === undefined ||
+    baseline.rows.length === 0
+  )
     return result;
   const now = yield* Clock.currentTimeMillis;
   if (deadlineMillis - now - CELL_RESERVE_MS < driverCallCapMs("get_window_state", {}))
     return result;
   const after = yield* read.pipe(Effect.orElseSucceed(() => undefined));
-  const change = after === undefined ? undefined : treeChange(baseline, after);
+  const change =
+    after === undefined ||
+    after.windowId !== baseline.windowId ||
+    after.connectionGeneration !== baseline.connectionGeneration
+      ? undefined
+      : treeChange(baseline.rows, after.rows);
   if (change === undefined) return result;
   return {
     ...result,

@@ -692,7 +692,20 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       isDiff && !numbersChanged && bound.rows
         ? retainPairingTitles(bound.rows, tree.shown, rows)
         : tree.shown;
-    if (!capture && query === undefined && !interactive) bound.fullRows = bound.rows;
+    // Only a whole read compares: a cut or filtered one adds or drops rows the window still has.
+    if (
+      !capture &&
+      query === undefined &&
+      !interactive &&
+      !filtered &&
+      state.truncated !== true &&
+      limit === READ_BOUNDS[0]
+    )
+      bound.fullRows = {
+        rows: bound.rows,
+        windowId: expectedWindowId,
+        connectionGeneration: bound.connectionGeneration,
+      };
     else delete bound.fullRows;
     bound.elementsByToken = inspectTreeElements(
       tree.elements,

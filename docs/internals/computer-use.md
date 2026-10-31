@@ -61,14 +61,16 @@ provider (Codex, Claude, ...)
   input, and the acted element only when a unique label with text or selection names it (a 60 ms
   settle follows that read); those reads run in parallel. Diagnostics are exposed under
   `result.debug` only with `verify: true` or `screen.debug = true`; the verdict and driver
-  warnings remain at the top level, including `suspected_noop`. A proven window open or close, or
-  a change in the acted element's own value or selection between the reads around it, upgrades a
-  verdict to `confirmed`. A verified input whose window list shows nothing new reads it three
+  warnings remain at the top level, including `suspected_noop`; element changes are evidence, since
+  a label and a frame cannot prove the element was not replaced. A proven window open or close
+  upgrades a verdict to `confirmed`. A verified input whose window list shows nothing new reads it three
   more times, 100 ms apart: the driver's own window watch reports within 120 ms, and a chat window
-  can list later. A driver `suspected_noop` stops the cell's later input, so when a full tree read
-  came right before the input, one more read of the bound window follows it, and rows that differ
-  confirm it; that read retires the agent's refs, which the stopped cell could not use anyway
-  (`DesktopTreeEffect.ts`). Without such proof an input that opens or closes a window keeps
+  can list later. A driver `suspected_noop` stops the cell's later input, so when a whole, uncut
+  tree read of the same window under the same driver came right before the input, with no other
+  call between, one more read follows it, and rows that differ confirm it. A close is never
+  confirmed this way: a sheet asking to save also changes the tree. That read retires the agent's
+  refs, which the stopped cell could not use anyway (`DesktopTreeEffect.ts`). Without such proof
+  an input that opens or closes a window keeps
   `unverifiable` even when the driver says done, and the cell's end read lists the new windows
   (flagged unverified when no baseline window is still listed). A cell's window
   baseline comes from its bind, or from one read for the first input on a process, and its end

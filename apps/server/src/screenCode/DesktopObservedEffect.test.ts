@@ -184,25 +184,45 @@ const settled = (host: Host, input: ScreenHostCall) =>
     return yield* Fiber.join(fiber);
   });
 
-const sidebarClick = (after: ReturnType<typeof sidebarRead>, observeFirst = true) =>
+interface SidebarCase {
+  /** The read before the input; a cut one is no baseline. */
+  readonly first?: Record<string, unknown>;
+  readonly observeFirst?: boolean;
+  /** Another call between that read and the input. */
+  readonly between?: boolean;
+  /** The input: the sidebar click, or cmd+w, a close only the window list can prove. */
+  readonly close?: boolean;
+}
+
+const sidebarClick = (after: ReturnType<typeof sidebarRead>, options: SidebarCase = {}) =>
   Effect.gen(function* () {
     let reads = 0;
     const { host, sent } = fixture({
       click: { effect: "suspected_noop" },
+      press_key: (args: { key?: string }) =>
+        args.key === "w" ? { effect: "suspected_noop" } : { effect: "confirmed" },
       get_window_state: () =>
-        reads++ === 0 ? sidebarRead("s1", "Friends", ["Kim", "Lee"]) : after,
+        reads++ === 0 ? (options.first ?? sidebarRead("s1", "Friends", ["Kim", "Lee"])) : after,
     });
     const ref = (yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
       context,
     )).value as ScreenTargetRef;
-    const seen = observeFirst
-      ? ((yield* host.observe(call("get_window_state", {}, ref), context))
-          .value as ScreenObservation)
-      : undefined;
+    const seen =
+      options.observeFirst === false
+        ? undefined
+        : ((yield* host.observe(call("get_window_state", {}, ref), context))
+            .value as ScreenObservation);
+    if (options.between === true)
+      yield* settled(host, {
+        ...call("press_key", { key: "Escape" }, ref),
+        deadlineMillis: 10_000,
+      });
     const chats = seen?.elements.find((element) => element.name === "chatrooms");
     const out = yield* settled(host, {
-      ...call("click", chats ? { elementRef: chats.ref } : { x: 10, y: 10 }, ref),
+      ...(options.close === true
+        ? call("press_key", { key: "w", modifiers: ["cmd"] }, ref)
+        : call("click", chats ? { elementRef: chats.ref } : { x: 10, y: 10 }, ref)),
       deadlineMillis: 10_000,
     });
     return { out, reads: sent.filter((each) => each.tool === "get_window_state").length };
@@ -230,8 +250,25 @@ it.effect(
       expect(unchanged.out.category).toBe("suspected_noop");
       expect(unchanged.reads).toBe(2);
       // Without a read before the input there is nothing to compare, so nothing is read after it.
-      const unread = yield* sidebarClick(sidebarRead("s2", "Chats", ["Team room"]), false);
+      const unread = yield* sidebarClick(sidebarRead("s2", "Chats", ["Team room"]), {
+        observeFirst: false,
+      });
       expect(unread.out.category).toBe("suspected_noop");
       expect(unread.reads).toBe(0);
     }),
+);
+
+it.effect("a tree change never confirms after a cut read, after another call, or for a close", () =>
+  Effect.gen(function* () {
+    const changed = sidebarRead("s2", "Chats", ["Team room", "Family"]);
+    const cut = yield* sidebarClick(changed, {
+      first: { ...sidebarRead("s1", "Friends", ["Kim"]), truncated: true },
+    });
+    const between = yield* sidebarClick(changed, { between: true });
+    const close = yield* sidebarClick(changed, { close: true });
+    for (const each of [cut, between, close]) {
+      expect(each.out.category).toBe("suspected_noop");
+      expect(each.reads).toBe(1);
+    }
+  }),
 );

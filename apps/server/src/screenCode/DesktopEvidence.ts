@@ -471,17 +471,11 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
       ...hopsPhase(call),
     },
   };
-  // The acted element's own state changed between the reads around the input: the tree shows it.
-  const elementChanged =
-    !closing &&
-    elDiff.length > 0 &&
-    (base?.category === "unverifiable" || base?.category === "suspected_noop");
   const upgrade =
-    elementChanged ||
-    (proven &&
-      base?.category !== "confirmed" &&
-      base?.category !== "refused" &&
-      base?.category !== "suspected_noop");
+    proven &&
+    base?.category !== "confirmed" &&
+    base?.category !== "refused" &&
+    base?.category !== "suspected_noop";
   // Only the listing confirms a close: a driver that says the press landed has not shown it closed.
   const unproven = closing && !closedByClose && base?.category === "confirmed";
   return {
