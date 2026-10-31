@@ -275,7 +275,7 @@ export class ScreenHostBridge {
           state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
             ? state.cutoffReason
             : undefined,
-          call.method,
+          isScreenRead(call.method) ? "list_apps" : call.method,
           call.args,
         ) ?? {
           ...failure("stopped", call.callId),
@@ -624,7 +624,7 @@ export class ScreenHostBridge {
         state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
           ? state.cutoffReason
           : undefined,
-        call.method,
+        isScreenRead(call.method) ? "list_apps" : call.method,
         call.args,
         callDispatched,
       );
@@ -634,7 +634,12 @@ export class ScreenHostBridge {
       const dispatched = callDispatched;
       const terminal =
         state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
-          ? terminalFailure(state.cutoffReason, call.method, call.args, dispatched)
+          ? terminalFailure(
+              state.cutoffReason,
+              isScreenRead(call.method) ? "list_apps" : call.method,
+              call.args,
+              dispatched,
+            )
           : undefined;
       const safety =
         terminal?.safety ??
