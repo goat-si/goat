@@ -288,6 +288,23 @@ it("still refuses a secret that disappeared during a read whose frames also chan
     expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
   }));
 
+it("refuses a secret that changed and was echoed while frames moved, even if its old value stays", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Public</main><input type=password value=fictional-first-secret>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    // The default value keeps the first secret; the live value moves on twice.
+    await page.evaluate(
+      "(() => { const input = document.querySelector('input'); input.value = 'fictional-intermediate-secret'; document.querySelector('main').textContent = 'fictional-intermediate-secret'; const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); input.value = 'fictional-last-secret'; })()",
+    );
+    const outcome = await reading.then(
+      (value) => JSON.stringify(value),
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
+  }));
+
 it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
     let started = () => {};

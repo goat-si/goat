@@ -394,6 +394,15 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     await expect(
       inPageFetch(page, control, { url: `http://localhost:${port}/data` }),
     ).rejects.toMatchObject({ detail: { fetchFailure: "cors" } });
+    // A request the network dropped stays a network failure, even if a second one gets through.
+    let flaky = 0;
+    await page.route(`http://127.0.0.1:${port}/flaky`, (route) =>
+      flaky++ === 0 ? route.abort("connectionreset") : route.fulfill({ body: "ok" }),
+    );
+    await expect(inPageFetch(page, control, { url: "/flaky" })).rejects.toMatchObject({
+      detail: { fetchFailure: "network" },
+      message: expect.stringContaining("ERR_CONNECTION_RESET"),
+    });
   });
 
   it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {

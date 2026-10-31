@@ -319,12 +319,13 @@ const watchFetchFailure = (page: FetchPage, url: string) => {
           fetchFailure: "csp",
           reason: "this page's Content-Security-Policy does not allow requests there",
         } as const;
-      if (outcome.reachable)
+      const errorText = failed?.failure()?.errorText ?? "";
+      // CORS shows as a bare ERR_FAILED; a concrete network error wins over a later probe's answer.
+      if (outcome.reachable && (errorText === "" || errorText === "net::ERR_FAILED"))
         return {
           fetchFailure: "cors",
           reason: "the site does not allow this page to read it (CORS)",
         } as const;
-      const errorText = failed?.failure()?.errorText ?? "";
       if (DNS_ERRORS.has(errorText))
         return {
           fetchFailure: "dns",

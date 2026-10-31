@@ -214,15 +214,16 @@ export const pageRead = (
           throw framesChanged();
         });
         if (before.some((values) => values === undefined)) throw readFailure("pageChanged");
-        // A retry for moved frames reads the same document: a secret an earlier attempt saw must
-        // still be there, or its old value could now sit unmasked in the page's text.
+        // A retry for moved frames reads the same document, and holds it to what a single read
+        // holds: the secrets match the earlier attempt's exactly, or a value seen in between could
+        // sit unmasked in the page's text.
         const seen = new Set(before.flatMap((values) => values ?? []));
-        if (known?.documentId === documentId && [...known.values].some((value) => !seen.has(value)))
+        if (
+          known?.documentId === documentId &&
+          (known.values.size !== seen.size || [...known.values].some((value) => !seen.has(value)))
+        )
           throw readFailure("pageChanged");
-        known = {
-          documentId,
-          values: new Set([...(known?.documentId === documentId ? known.values : []), ...seen]),
-        };
+        known = { documentId, values: seen };
         const cookiesBefore = await tabCookies(page);
         let rendered: Rendered;
         for (;;) {
