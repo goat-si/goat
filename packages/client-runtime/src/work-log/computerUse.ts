@@ -224,7 +224,7 @@ const HISTORY_PREVIEW_ACTION =
   /^(?:open|navigate|click|type|fill|fill_secret|press|scroll|hover|drag|select|evaluate|dialog)$/u;
 
 export function hasComputerUseHistory(item: OrchestrationV2TurnItem | undefined): boolean {
-  if (item?.type !== "dynamic_tool") return false;
+  if (item?.type !== "dynamic_tool" || item.toolName === null) return false;
   if (cuaDriverToolName(item.toolName) !== undefined) return true;
   const name = item.toolName.toLowerCase();
   if (/^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ])|goat-\S+_)?goat_screen_run$/u.test(name))

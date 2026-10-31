@@ -18,11 +18,12 @@ import {
 import { toolCallLines } from "./itemDetail.ts";
 import { toolItemForDisplay } from "./presentation.ts";
 
-const call = (toolName: string, input: unknown) =>
+const call = (toolName: string | null, input: unknown) =>
   ({ type: "dynamic_tool", toolName, input }) as unknown as OrchestrationV2TurnItem;
 
 describe("hasComputerUseHistory", () => {
   it("recognizes computer and browser input without matching unrelated tools", () => {
+    expect(hasComputerUseHistory(call(null, {}))).toBe(false);
     for (const name of [
       "cua-driver.click",
       "mcp__goat__goat_screen_run",
