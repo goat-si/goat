@@ -1538,6 +1538,7 @@ const make = Effect.gen(function* () {
     deadlineMs: number,
   ): Promise<unknown> => {
     const runSignal = blockedTabs.runSignal(request.threadId, request.runId);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) runSignal?.throwIfAborted();
     const input = request.input;
     switch (request.operation) {
       case "status":

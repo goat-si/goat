@@ -308,9 +308,88 @@ it.effect("a blocked visit outside a turn does not fence a later turn", () =>
       yield* f.end;
       yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
-      expect((yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result))._tag).toBe(
-        "Success",
+      const stale = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
+      expect(stale).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "interrupted", dispatched: false },
+      });
+      const neverStarted = {
+        ...scope,
+        thread: { ...scope.thread, runId: RunId.make("never-started") },
+      };
+      expect(
+        yield* f.broker
+          .invoke({
+            scope: neverStarted,
+            tabId: f.tabId,
+            operation: "press",
+            input: { key: "Enter" },
+          })
+          .pipe(Effect.result),
+      ).toMatchObject({ _tag: "Failure", failure: { reason: "interrupted", dispatched: false } });
+      expect((yield* f.call(f.tabId, "status", {}).pipe(Effect.result))._tag).toBe("Success");
+      const { runId: _runId, ...threadWithoutRun } = scope.thread;
+      const noRunScope = { ...scope, thread: threadWithoutRun };
+      expect(
+        (yield* f.broker
+          .invoke({
+            scope: noRunScope,
+            tabId: f.tabId,
+            operation: "press",
+            input: { key: "Enter" },
+          })
+          .pipe(Effect.result))._tag,
+      ).toBe("Success");
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const endNext = yield* activity.begin(threadId, "next-run");
+      const nextScope = { ...scope, thread: { ...scope.thread, runId: RunId.make("next-run") } };
+      expect(
+        (yield* f.broker
+          .invoke({ scope: nextScope, tabId: f.tabId, operation: "press", input: { key: "Enter" } })
+          .pipe(Effect.result))._tag,
+      ).toBe("Success");
+      yield* endNext;
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a captured request is refused when its run ends before browser admission", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const captured = yield* Deferred.make<void>();
+      const admit = yield* Deferred.make<void>();
+      const keydown = vi.fn();
+      yield* Effect.promise(() => f.page.exposeFunction("recordStaleKey", keydown));
+      yield* Effect.promise(() =>
+        f.page.evaluate(() => {
+          document.addEventListener("keydown", () =>
+            (globalThis as unknown as { recordStaleKey: () => void }).recordStaleKey(),
+          );
+        }),
       );
+      const pending = yield* Effect.gen(function* () {
+        const capturedScope = scope;
+        yield* Deferred.succeed(captured, undefined);
+        yield* Deferred.await(admit);
+        return yield* f.broker
+          .invoke({
+            scope: capturedScope,
+            tabId: f.tabId,
+            operation: "press",
+            input: { key: "Enter" },
+          })
+          .pipe(Effect.result);
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(captured);
+      yield* f.end;
+      yield* Deferred.succeed(admit, undefined);
+      const result = yield* Fiber.join(pending);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "interrupted", dispatched: false },
+      });
+      expect(keydown).not.toHaveBeenCalled();
     }),
   ).pipe(Effect.provide(layer)),
 );

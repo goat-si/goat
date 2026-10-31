@@ -82,7 +82,11 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     new BrowserControlInterrupted("This browser host is blocked.", "blocked_url");
   const runSignal = (threadId: string, runId: string | undefined) => {
     const actualRun = runId ?? capture(threadId)?.runId;
-    if (!actualRun || !active(threadId, actualRun)) return undefined;
+    if (!actualRun) return undefined;
+    if (!active(threadId, actualRun))
+      return AbortSignal.abort(
+        new BrowserControlInterrupted("The agent run ended.", "interrupted", true),
+      );
     const key = runKey(threadId, actualRun);
     const controller = runs.get(key) ?? new AbortController();
     runs.set(key, controller);
