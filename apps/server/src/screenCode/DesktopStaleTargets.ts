@@ -1,0 +1,46 @@
+import type { BoundWindow } from "./DesktopTargetHost.ts";
+import type { ScreenObservations } from "./ScreenObservations.ts";
+import { fail } from "./DesktopDriverReplies.ts";
+
+export const staleTargets = (
+  targets: Map<string, BoundWindow>,
+  observations: ScreenObservations,
+) => {
+  const dropped = new Map<string, { bundleId?: string; windowId: number; reason: string }>();
+  const dropTarget = (targetId: string, reason: string) => {
+    const bound = targets.get(targetId);
+    if (bound) {
+      if (dropped.size >= 4096) {
+        const oldest = dropped.keys().next().value;
+        if (oldest !== undefined) dropped.delete(oldest);
+      }
+      dropped.set(targetId, { bundleId: bound.bundleId, windowId: bound.windowId, reason });
+    }
+    observations.evictTarget(targetId);
+    targets.delete(targetId);
+  };
+  const staleTargetStep = (targetId: string, override?: string) => {
+    const bound = targets.get(targetId);
+    const entry =
+      dropped.get(targetId) ??
+      (bound && { bundleId: bound.bundleId, windowId: bound.windowId, reason: "invalidated" });
+    if (!entry) return undefined;
+    const why = override ?? entry.reason;
+    const reason =
+      why === "permission_denied"
+        ? "Permission was lost."
+        : why === "turn_ended"
+          ? "The target was bound in an earlier turn."
+          : why === "replaced"
+            ? "The window was replaced by another binding."
+            : `The control changed (${why}).`;
+    const rebind =
+      entry.bundleId === undefined
+        ? "Use screen.discover() to find the window and bind it again."
+        : `Rebind with screen.app({ bundle_id: ${JSON.stringify(entry.bundleId)}, window_id: ${entry.windowId} }).`;
+    return `${reason} ${rebind}`;
+  };
+  const staleTarget = (targetId: string | undefined) =>
+    fail("stale_reference", targetId === undefined ? undefined : staleTargetStep(targetId));
+  return { dropTarget, staleTargetStep, staleTarget };
+};

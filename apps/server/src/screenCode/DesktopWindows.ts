@@ -80,6 +80,7 @@ const toSummary = (entry: WindowEntry): ScreenWindowSummary => ({
 export const parseWindowList = (
   value: unknown,
   pid: number,
+  includeSheetOf?: number,
 ): ReadonlyArray<SheetWindowEntry> | undefined => {
   const raw = object(value)?.windows;
   if (!Array.isArray(raw)) return undefined;
@@ -88,7 +89,14 @@ export const parseWindowList = (
     const rec = object(item);
     const wid = natural(rec?.window_id);
     const wpid = natural(rec?.pid) ?? pid;
-    if (!rec || wid === undefined || wid <= 0 || wpid !== pid) continue;
+    const sheetParent = natural(rec?.sheet_of_window_id) ?? natural(rec?.sheetOf);
+    if (
+      !rec ||
+      wid === undefined ||
+      wid <= 0 ||
+      (wpid !== pid && (includeSheetOf === undefined || sheetParent !== includeSheetOf))
+    )
+      continue;
     const bounds = object(rec.bounds);
     const rect = boundsOf(bounds);
     const width = finite(bounds?.width) ?? finite(rec.width);
@@ -380,6 +388,7 @@ export class CellWindowTracker {
   private readonly startByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
   private readonly latestByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
   private readonly seenOpened = new Map<number, Map<number, ScreenWindowSummary>>();
+  private readonly hintsByPid = new Map<number, ReadonlyArray<WindowEntry>>();
   /** Bindings that sent input to each process in this cell, and the Go to Folder input awaiting its windows. */
   private readonly inputTargets = new Map<number, Set<string>>();
   private readonly armed = new Map<number, SheetTrigger>();
@@ -407,6 +416,14 @@ export class CellWindowTracker {
   /** The process's windows as the cell's latest read after an input listed them. */
   latest(pid: number): ReadonlyArray<WindowEntry> | undefined {
     return this.latestByPid.get(pid);
+  }
+
+  recordHints(pid: number, windows: ReadonlyArray<WindowEntry> | undefined): void {
+    if (windows !== undefined) this.hintsByPid.set(pid, windows);
+  }
+
+  hints(pid: number): ReadonlyArray<WindowEntry> | undefined {
+    return this.hintsByPid.get(pid) ?? this.latest(pid);
   }
 
   recordBefore(pid: number, list: ReadonlyArray<WindowEntry> | undefined): void {

@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as TestClock from "effect/testing/TestClock";
@@ -16,6 +17,7 @@ import {
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
 
 type Host = ReturnType<typeof fixture>["host"];
 
@@ -306,6 +308,84 @@ it.effect("observing a window that closed names it gone instead of a driver fail
       detail: "window_gone",
       effectStarted: false,
     });
+  }),
+);
+
+it.effect("a gone window names an open window seen after a click without rebinding", () =>
+  Effect.gen(function* () {
+    let clicked = false;
+    const acted = yield* Deferred.make<void>();
+    const f = fixture({
+      list_windows: () =>
+        clicked
+          ? {
+              windows: [
+                shown(5762),
+                shown(5763, { pid: 99, sheet_of_window_id: 7, title: "Save" }),
+              ],
+            }
+          : listing([7]),
+      get_window_state: () =>
+        clicked
+          ? new DriverError({ code: "window_id_not_found" })
+          : {
+              pid: 42,
+              window_id: 7,
+              tree_markdown: "Apply",
+              elements_complete: true,
+              elements: [{ role: "button", label: "Apply", element_token: "s:1" }],
+            },
+      click: () => {
+        clicked = true;
+        return { effect: "confirmed" };
+      },
+    });
+    const { sent } = f;
+    const host = createDesktopTargetHost({
+      primitiveChannel: {
+        ...f.channel,
+        request: (request) =>
+          f.channel
+            .request(request)
+            .pipe(
+              Effect.tap(() =>
+                request.tool === "click" ? Deferred.succeed(acted, undefined) : Effect.void,
+              ),
+            ),
+      },
+      leases: f.leases,
+      platform: "darwin",
+    });
+    const ref = yield* bind(host);
+    const seen = (yield* host.observe(call("get_window_state", {}, ref), context))
+      .value as ScreenObservation;
+    const element = seen.elements[0];
+    if (!element) throw new Error("missing element");
+    const inputFiber = yield* host
+      .invoke(
+        {
+          ...call("click", { elementRef: element.ref, verify: true }, ref),
+          deadlineMillis: 10_000,
+        },
+        context,
+      )
+      .pipe(Effect.forkChild);
+    yield* Deferred.await(acted);
+    yield* TestClock.adjust("2 seconds");
+    yield* Fiber.join(inputFiber);
+    const before = sent.length;
+    const failed = yield* host
+      .observe(call("get_window_state", {}, ref), context)
+      .pipe(Effect.flip);
+    expect(failed).toMatchObject({ code: "target_missing", detail: "window_gone" });
+    expect(failed.nextStep).toContain("window_id: 5762");
+    expect(failed.nextStep).toContain(
+      'screen.app({ bundle_id: "org.example.Editor", window_id: 5762 })',
+    );
+    expect(failed.nextStep).toContain(
+      'window_id: 5763, title: "Save", sheet parent: 7, another process (pid 99)',
+    );
+    expect(sent.slice(before).map((entry) => entry.tool)).toEqual(["get_window_state"]);
   }),
 );
 
