@@ -142,6 +142,43 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("a late typed terminal reply survives before the cutoff report", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.channel.reportControlReady(f.report(1));
+      const waiting = yield* f.channel
+        .request({
+          threadId,
+          runId: "run:late",
+          turnId: "turn:late",
+          callId: 1,
+          deadlineMillis: 30000,
+          tool: "list_apps",
+          args: {},
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      const request = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      yield* TestClock.adjust(2500);
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: f.registered.registrationId,
+          reply: {
+            ...request,
+            status: "unknown_outcome",
+            result: {
+              isError: true,
+              structuredContent: { code: "stopped_by_person", safety: { retryClass: "never" } },
+            },
+          },
+        }),
+      );
+      const answer = yield* Fiber.join(waiting);
+      assert.equal(answer._tag, "Success");
+      if (answer._tag === "Success")
+        assert.include(JSON.stringify(answer.success), "stopped_by_person");
+    }),
+  );
   it.effect("an old lock cutoff cannot poison a newer driver generation", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

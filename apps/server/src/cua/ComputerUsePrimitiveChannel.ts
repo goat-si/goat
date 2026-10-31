@@ -28,7 +28,11 @@ import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.
 import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
-import { terminalReason, type ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
+import {
+  terminalReason,
+  terminalReplyReason,
+  type ComputerUseTerminalReason,
+} from "./ComputerUseTerminal.ts";
 
 const resultOf = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }));
 
@@ -750,6 +754,8 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
+          const replyTerminal = terminalReplyReason(input.reply.result);
+          if (replyTerminal !== undefined) record.terminal ??= replyTerminal;
           if (record.terminal !== undefined) {
             settle(pending, record.terminal);
             return true;

@@ -1,4 +1,21 @@
+import * as Schema from "effect/Schema";
+
 export type ComputerUseTerminalReason = "stopped_by_person" | "screen_locked";
+
+const decodeTerminalReply = Schema.decodeUnknownOption(
+  Schema.Struct({
+    isError: Schema.Literal(true),
+    structuredContent: Schema.Struct({
+      code: Schema.Literals(["stopped_by_person", "screen_locked"]),
+      safety: Schema.Struct({ retryClass: Schema.Literal("never") }),
+    }),
+  }),
+);
+
+export const terminalReplyReason = (value: unknown): ComputerUseTerminalReason | undefined => {
+  const decoded = decodeTerminalReply(value);
+  return decoded._tag === "Some" ? decoded.value.structuredContent.code : undefined;
+};
 
 export const terminalReason = (
   latched: ComputerUseTerminalReason | undefined,
