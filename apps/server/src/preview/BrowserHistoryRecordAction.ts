@@ -2,6 +2,7 @@
 import type { PreviewAutomationActionEvent } from "@goat/contracts";
 import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import { pushBounded } from "./boundedBuffer.ts";
 import { browserFailure, recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
 import type { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
@@ -16,7 +17,8 @@ type Tab = {
 
 export function makeBrowserHistoryRecordAction(
   history: Effect.Success<typeof makeComputerUseHistory>,
-  run: (effect: ReturnType<typeof recordBrowserAction>) => Promise<void>,
+  fork: (effect: Effect.Effect<void>) => unknown,
+  serverScope: Scope.Scope,
 ) {
   return <A>(
     tab: Tab,
@@ -39,14 +41,16 @@ export function makeBrowserHistoryRecordAction(
     };
     pushBounded(tab.actionTimeline, event, 50);
     const url = details?.url ?? tab.page.url();
-    const record = async (outcome: {
+    const record = (outcome: {
       verdict: "sent" | "refused" | "unknown_outcome";
       refusalCode?: string;
-    }) => {
-      const evidence = await (details?.finishRetention?.() ?? Promise.resolve(false));
-      const keep = outcome.verdict === "sent" && evidence;
-      await run(
-        recordBrowserAction(history, {
+    }) =>
+      Effect.gen(function* () {
+        const finishRetention = details?.finishRetention;
+        const evidence =
+          finishRetention === undefined ? false : yield* Effect.tryPromise(finishRetention);
+        const keep = outcome.verdict === "sent" && evidence;
+        yield* recordBrowserAction(history, {
           threadId: tab.threadId,
           url: action === "back" || action === "forward" ? tab.page.url() : url,
           action,
@@ -54,17 +58,17 @@ export function makeBrowserHistoryRecordAction(
           ...outcome,
           ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
           ...(keep ? { keepTypedText: true, normalField: true, secretProtected: false } : {}),
-        }),
-      );
-    };
+        });
+      });
     const schedule = (outcome: {
       verdict: "sent" | "refused" | "unknown_outcome";
       refusalCode?: string;
     }) => {
-      Effect.runFork(
+      fork(
         scheduleHistory(
           browserHistoryPrefix(tab.threadId) + event.id,
-          Effect.tryPromise(() => record(outcome)),
+          record(outcome),
+          serverScope,
         ),
       );
     };

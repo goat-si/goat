@@ -22,6 +22,7 @@ it.live("records trusted normal typing only with consent outside secret protecti
     Effect.gen(function* () {
       yield* runMigrations();
       const history = yield* makeComputerUseHistory;
+      const owner = yield* Effect.scope;
       const requests = yield* Queue.unbounded<{
         effect: ReturnType<typeof recordBrowserAction>;
         resolve: () => void;
@@ -38,7 +39,13 @@ it.live("records trusted normal typing only with consent outside secret protecti
         new Promise<void>((resolve, reject) => {
           Queue.offerUnsafe(requests, { effect, resolve, reject });
         });
-      const record = makeBrowserHistoryRecordAction(history, run);
+      const record = makeBrowserHistoryRecordAction(
+        history,
+        (effect) => {
+          void run(effect);
+        },
+        owner,
+      );
       yield* Effect.promise(async () => {
         const browser = await chromium.launch({ headless: true });
         try {

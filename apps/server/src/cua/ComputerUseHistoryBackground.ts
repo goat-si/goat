@@ -1,5 +1,6 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 
@@ -48,14 +49,19 @@ export const scheduleHistory = Effect.fn("ComputerUseHistory.schedule")(function
         : Effect.void,
     ),
     Effect.catchCause((cause) => Effect.logWarning("Computer use history write failed", { cause })),
-    Effect.ensuring(
+  );
+  const fiber =
+    scope === undefined ? yield* Effect.forkDetach(task) : yield* Effect.forkIn(task, scope);
+  yield* Fiber.await(fiber).pipe(
+    Effect.andThen(
       Effect.sync(() => {
         if (key !== undefined && pending.get(key) === done) pending.delete(key);
-      }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid),
+      }),
     ),
+    Effect.andThen(Deferred.succeed(done, undefined)),
+    Effect.asVoid,
+    Effect.forkDetach,
   );
-  if (scope === undefined) yield* Effect.forkDetach(task);
-  else yield* Effect.forkIn(task, scope);
 });
 
 export const awaitHistory = (key: string) =>

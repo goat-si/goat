@@ -353,6 +353,7 @@ const make = Effect.gen(function* () {
   const secretFill = yield* ServerBrowserSecretFill.make;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const history = yield* makeComputerUseHistory;
+  const serverScope = yield* Effect.scope;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -1554,7 +1555,7 @@ const make = Effect.gen(function* () {
       }
     };
 
-  const recordAction = makeBrowserHistoryRecordAction(history, runPromise);
+  const recordAction = makeBrowserHistoryRecordAction(history, runFork, serverScope);
 
   const requireTab = async (request: PreviewAutomationRequest) => {
     SessionControl.requireAgentSession(request);

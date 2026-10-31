@@ -44,3 +44,12 @@ it.effect("interrupts a blocked background write when its server scope closes", 
     yield* awaitHistory("ticket:server-close");
   }),
 );
+
+it.effect("clears bookkeeping when a write is scheduled into a closed server scope", () =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    yield* Scope.close(scope, Exit.void);
+    yield* scheduleHistory("ticket:closed-scope", Effect.never, scope);
+    yield* awaitHistory("ticket:closed-scope");
+  }),
+);
