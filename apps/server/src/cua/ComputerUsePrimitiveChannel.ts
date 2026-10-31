@@ -404,11 +404,11 @@ export const make = Effect.gen(function* () {
     controlId: string,
     registered: Registration,
     record: Control,
+    epoch: Control["epoch"],
     binding: NonNullable<Control["binding"]>,
     now: number,
     deadlineMillis: number,
   ) {
-    const epoch = record.epoch;
     const terminal = () => mergeTerminal({ reason: record.terminal }, epoch).reason;
     if (
       input.expectedConnectionGeneration !== undefined &&
@@ -810,6 +810,7 @@ export const make = Effect.gen(function* () {
             current.controlId,
             registered,
             record,
+            beganEpoch ?? record.epoch,
             binding,
             now,
             deadlineMillis,
