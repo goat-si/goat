@@ -1,7 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { call, foregroundActive, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { call, foregroundActive, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 const treeReply = (id: number, rows: string) =>
   JSON.stringify({

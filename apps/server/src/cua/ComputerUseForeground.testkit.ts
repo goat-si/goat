@@ -130,6 +130,7 @@ export const foregroundProxy = Effect.fn("foreground.fixtureProxy")(function* (
   const grant = yield* foregroundGrant(threadId, "handoff:lifecycle-foreground", { minutes: 5 });
   const humanReports = yield* Queue.unbounded<"paused" | "agents" | "refused">();
   const h = yield* harness({
+    autoAppListing: true,
     controlId: control.controlId,
     expiresAt: DateTime.formatIso(control.expiresAt),
     leaseUpdates: leaseUpdates({ threadId, controlId: control.controlId }).pipe(
