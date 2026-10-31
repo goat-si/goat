@@ -33,6 +33,8 @@ import { SessionControl } from "./SessionControl.ts";
 let browser: Browser | undefined;
 const contexts: BrowserContext[] = [];
 let shareNextContext = false;
+let afterSecretReply: (() => Promise<void>) | undefined;
+let interceptSecretReply = false;
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
   ServerBrowserContexts: class {
@@ -43,6 +45,29 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       }
       browser ??= await chromium.launch({ headless: true });
       const context = await browser.newContext();
+      const create = context.newCDPSession.bind(context);
+      if (interceptSecretReply)
+        vi.spyOn(context, "newCDPSession").mockImplementation(async (target) => {
+          const cdp = await create(target);
+          const send = cdp.send.bind(cdp);
+          vi.spyOn(cdp, "send").mockImplementation((...args) => {
+            const result: ReturnType<typeof send> = Reflect.apply(send, cdp, args);
+            if (
+              args[0] !== "Runtime.callFunctionOn" ||
+              args[1] === undefined ||
+              !("functionDeclaration" in args[1]) ||
+              !args[1].functionDeclaration.startsWith(
+                "function (value, origin, identifier, account)",
+              )
+            )
+              return result;
+            return result.then(async (value) => {
+              await afterSecretReply?.();
+              return value;
+            });
+          });
+          return cdp;
+        });
       contexts.push(context);
       return context;
     }
@@ -77,7 +102,9 @@ const layer = ServerBrowser.layer.pipe(
       ServerSettings.layerTest(),
       Manager.layer,
       Broker.layer,
-      Layer.mock(SecretRequests.SecretRequests)({}),
+      Layer.mock(SecretRequests.SecretRequests)({
+        consumeForOrigin: () => Effect.succeed("synthetic-password"),
+      }),
       Layer.succeed(ServerEnvironment.ServerEnvironment, {
         getEnvironmentId: Effect.succeed(scope.environmentId),
         getDescriptor: Effect.die("unused"),
@@ -617,4 +644,127 @@ it.effect("a person's unattributed blocked popup fences all active tabs in its c
       });
     }),
   ).pipe(Effect.provide(layer)),
+);
+
+const secretPopup = (timing: "during" | "after" | "takeover") =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      interceptSecretReply = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          interceptSecretReply = false;
+        }),
+      );
+      const f = yield* fixture;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Deferred.await(release).pipe(
+        Effect.tap(() => Effect.sync(latch.resolve)),
+        Effect.forkScoped,
+      );
+      afterSecretReply = async () => {
+        Deferred.doneUnsafe(entered, Effect.void);
+        await latch.promise;
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          afterSecretReply = undefined;
+          latch.resolve();
+        }),
+      );
+      yield* Effect.promise(() =>
+        f.page.evaluate(
+          `document.body.innerHTML = '<input id="pw" type="password">'; ${
+            timing === "during"
+              ? `document.querySelector('#pw').addEventListener('input', () => window.open('about:blank'));`
+              : ""
+          }`,
+        ),
+      );
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      const popupReady = f.page.waitForEvent("popup");
+      const filling = yield* f
+        .call(f.tabId, "fillSecret", {
+          secretRef: "secret-ref:12345678901234567890123456789012",
+          selector: "#pw",
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Deferred.await(entered);
+      if (timing === "takeover") {
+        const taken = yield* Deferred.make<void>();
+        const handed = yield* Deferred.make<void>();
+        const take = SessionControl.prototype.take;
+        const releaseOwner = SessionControl.prototype.release;
+        const takeSpy = vi.spyOn(SessionControl.prototype, "take").mockImplementation(function (
+          this: SessionControl,
+          ...args
+        ) {
+          const work = Reflect.apply(take, this, args);
+          Deferred.doneUnsafe(taken, Effect.void);
+          return work;
+        });
+        const releaseSpy = vi
+          .spyOn(SessionControl.prototype, "release")
+          .mockImplementation(function (this: SessionControl, ...args) {
+            const work = Reflect.apply(releaseOwner, this, args);
+            Deferred.doneUnsafe(handed, Effect.void);
+            return work;
+          });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            takeSpy.mockRestore();
+            releaseSpy.mockRestore();
+          }),
+        );
+        const taking = yield* viewer.input({ type: "takeControl" }).pipe(Effect.forkChild);
+        yield* Deferred.await(taken);
+        const handing = yield* viewer.input({ type: "releaseControl" }).pipe(Effect.forkChild);
+        yield* Deferred.await(handed);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(filling);
+        yield* Fiber.join(taking);
+        yield* Fiber.join(handing);
+        yield* Effect.promise(() => f.page.evaluate("window.open('about:blank')"));
+        const popup = yield* Effect.promise(() => popupReady);
+        if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+        expect((yield* f.service.sessions).map((tab) => tab.tabId)).toEqual([f.tabId]);
+        return;
+      }
+      if (timing === "after") {
+        yield* Deferred.succeed(release, undefined);
+        expect((yield* Fiber.join(filling))._tag).toBe("Success");
+        yield* Effect.promise(() => f.page.evaluate("window.open('about:blank')"));
+      }
+      const popup = yield* Effect.promise(() => popupReady);
+      const adopted = yield* Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+        Stream.mapEffect(() => f.service.sessions),
+        Stream.filter((tabs) => tabs.some((tab) => tab.tabId !== f.tabId)),
+        Stream.runHead,
+      );
+      expect(adopted._tag).toBe("Some");
+      if (timing === "during") {
+        yield* Deferred.succeed(release, undefined);
+        expect((yield* Fiber.join(filling))._tag).toBe("Success");
+      }
+      yield* Effect.promise(() => f.page.goto(`${f.blocked}/blocked`));
+      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+    }),
+  );
+
+it.effect("a takeover during secret fill leaves a later popup unlinked and closed", () =>
+  secretPopup("takeover").pipe(Effect.provide(layer)),
+);
+it.effect("a popup opened during secret fill is adopted and closes when the tab is cut", () =>
+  secretPopup("during").pipe(Effect.provide(layer)),
+);
+it.effect("a popup opened just after secret fill is adopted and closes when the tab is cut", () =>
+  secretPopup("after").pipe(Effect.provide(layer)),
 );
