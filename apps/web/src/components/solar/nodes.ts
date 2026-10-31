@@ -61,6 +61,7 @@ export const CONTEXT_MENU_ICONS: Readonly<Record<string, IconNode>> = {
   "refresh-cw": solar.refresh,
   settings: solar.settings,
   "folder-tree": solar.folderTree,
+  "text-search": solar.fileSearch,
   trash: solar.trashBinMinimalistic,
 };
 
