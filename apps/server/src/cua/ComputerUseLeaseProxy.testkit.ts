@@ -136,6 +136,11 @@ export const harness = Effect.fn(function* (
     /** Feeds the proxy the host's cursor events, offered with `cursor`. */
     readonly cursorEvents?: boolean;
     readonly autoAppListing?: boolean;
+    readonly autoListedApps?: ReadonlyArray<{
+      readonly pid: number;
+      readonly bundle_id: string;
+      readonly name: string;
+    }>;
     readonly autoToolListing?: boolean;
   } = {},
 ) {
@@ -331,11 +336,13 @@ export const harness = Effect.fn(function* (
                   id: request.id,
                   result: {
                     structuredContent: {
-                      apps: [1, 4, 5, 6, 7, 8, 10, 42, 900].map((pid) => ({
-                        pid,
-                        bundle_id: pid === 42 ? "com.apple.calculator" : `com.example.app${pid}`,
-                        name: `App ${pid}`,
-                      })),
+                      apps:
+                        options.autoListedApps ??
+                        [1, 4, 5, 6, 7, 8, 10, 42, 900].map((pid) => ({
+                          pid,
+                          bundle_id: pid === 42 ? "com.apple.calculator" : `com.example.app${pid}`,
+                          name: `App ${pid}`,
+                        })),
                     },
                   },
                 }),

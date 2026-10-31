@@ -10,6 +10,7 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { batchAppScope } from "./ComputerUseBatchScope.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 
@@ -42,6 +43,9 @@ export const fixture = Effect.fn("reservations.fixture")(function* () {
       idleEpoch: 0,
       name,
       args,
+      ...(batchAppScope(name, args) === undefined
+        ? {}
+        : { safetyApps: batchAppScope(name, args)?.apps }),
       ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
     });
   const release = (
