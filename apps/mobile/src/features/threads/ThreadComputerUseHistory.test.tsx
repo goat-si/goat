@@ -1,19 +1,16 @@
 import { expect, it, vi } from "vite-plus/test";
-const permission = vi.hoisted(() => ({ allowed: true, request: vi.fn() }));
 import { EnvironmentId, OrchestrationV2TurnItemJson, ThreadId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 vi.mock(import("@effect/atom-react"), async (original) => ({
   ...(await original()),
-  useAtomValue: () => permission.allowed,
+  useAtomValue: () => true,
 }));
 vi.mock("@goat/client-runtime/state/computer-use-history", () => ({
   createComputerUseHistoryCommand: () => ({ permissionAtom: () => null }),
 }));
 vi.mock("../../connection/runtime", () => ({ connectionAtomRuntime: null }));
-vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => permission.request }));
+vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 import { createNativeMemoryHarness, renderNative } from "../../testing/memoryNativeHarness";
-import { Pressable, Text } from "react-native";
-import { useThreadHistoryMenu } from "./useThreadHistoryMenu";
 vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 import { ThreadComputerUseHistoryView } from "./ThreadComputerUseHistoryView";
@@ -101,56 +98,5 @@ it("loads and pages newest-first input history with refusal details", async () =
   } finally {
     await view.unmount();
     harness.dispose();
-  }
-});
-
-function HistoryMenuFixture() {
-  const history = useThreadHistoryMenu(
-    EnvironmentId.make("environment:a"),
-    ThreadId.make("thread:empty"),
-  );
-  return (
-    <>
-      {history.actions.map((action) => (
-        <Pressable
-          key={action.id}
-          accessibilityLabel={action.title}
-          onPress={() => history.select(action.id)}
-        >
-          <Text>{action.title}</Text>
-        </Pressable>
-      ))}
-      {history.dialog}
-    </>
-  );
-}
-
-it("opens empty thread history from the menu only with read permission", async () => {
-  permission.allowed = true;
-  permission.request.mockResolvedValue({
-    _tag: "Success",
-    value: { entries: [], nextCursor: null },
-  });
-  const harness = createNativeMemoryHarness();
-  const view = renderNative(harness, <HistoryMenuFixture />);
-  try {
-    await view.render();
-    await view.click("Input history");
-    await view.click("Show input history");
-    expect(view.container.textContent).toContain("No input history.");
-  } finally {
-    await view.unmount();
-    harness.dispose();
-  }
-  permission.allowed = false;
-  const other = createNativeMemoryHarness();
-  const denied = renderNative(other, <HistoryMenuFixture />);
-  try {
-    await denied.render();
-    expect(denied.container.textContent).not.toContain("Input history");
-  } finally {
-    await denied.unmount();
-    other.dispose();
-    permission.allowed = true;
   }
 });

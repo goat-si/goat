@@ -169,10 +169,9 @@ automatically.
 
 ## Watching agents
 
-Open the thread details on web and choose **Show input history**, or long-press
-the thread in the mobile thread list and choose **Input history**, to see the
-apps or browser hosts the agent used, its actions and their outcomes. You can
-also open history from a computer-use or built-in browser action in the thread.
+Expand a computer-use or built-in browser action in the thread and choose **Show
+input history** to see the apps or browser hosts the agent used, its actions and
+their outcomes.
 History is kept for 30 days. Typing is recorded as a length unless you enable
 **Keep typed text** in computer-use settings and GOAT confirms it reached a
 normal browser field. Desktop typing is never kept as text.

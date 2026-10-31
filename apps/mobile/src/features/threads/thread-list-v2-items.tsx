@@ -12,7 +12,6 @@ import {
 } from "./thread-list-v2-row-appearance";
 import { RowPressable } from "../../components/ui/RowPressable";
 import { CustomSnoozeSheet } from "./CustomSnoozeSheet";
-import { ThreadHistoryReadOnly, useThreadHistoryMenu } from "./useThreadHistoryMenu";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadArrangementOpenAtom } from "../../state/thread-order";
 import { threadEnvironment } from "../../state/threads";
@@ -633,7 +632,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleDelete = useCallback(() => onDeleteThread(thread), [onDeleteThread, thread]);
   const handleRename = useCallback(() => onRenameThread(thread), [onRenameThread, thread]);
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
-  const history = useThreadHistoryMenu(thread.environmentId, thread.id);
   const handleRegenerateTitle = useCallback(
     () => onRegenerateThreadTitle(thread),
     [onRegenerateThreadTitle, thread],
@@ -833,7 +831,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
-      history.select(nativeEvent.event);
       if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
@@ -874,7 +871,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       }
     },
     [
-      history.select,
       onNewThreadOnBranch,
       onMarkThreadUnread,
       thread,
@@ -1354,15 +1350,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
 
   if (!canOperateThread)
-    return (
-      <ThreadHistoryReadOnly history={history}>
-        <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>
-      </ThreadHistoryReadOnly>
-    );
+    return <View style={rowAppearance.swipeContainerStyle}>{rowContent(() => {})}</View>;
 
   return (
     <View collapsable={false}>
-      {history.dialog}
       {customSnoozeOpen && (
         <CustomSnoozeSheet onClose={() => setCustomSnoozeOpen(false)} onSnooze={handleSnooze} />
       )}
@@ -1387,7 +1378,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         {(close) => (
           <Menu
             actions={[
-              ...history.actions,
               ...(thread.branch
                 ? [
                     {
