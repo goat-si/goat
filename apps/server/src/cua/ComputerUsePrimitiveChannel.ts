@@ -386,11 +386,13 @@ export const make = Effect.gen(function* () {
       input.expectedConnectionGeneration !== undefined &&
       input.expectedConnectionGeneration !== binding.connectionId
     )
-      return yield* Effect.fail({
-        code: "stale_reference" as const,
-        effectStarted: false,
-        nextStep: "Bind the desktop app again after the driver reconnects.",
-      });
+      return yield* Effect.fail(
+        terminalFailure(terminalReason(record.terminal), input.tool, input.args) ?? {
+          code: "stale_reference" as const,
+          effectStarted: false,
+          nextStep: "Bind the desktop app again after the driver reconnects.",
+        },
+      );
     const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
     const request: ComputerUsePrimitiveRequest = {
       state: "primitive-request",
@@ -413,7 +415,10 @@ export const make = Effect.gen(function* () {
     const offered = yield* Queue.offer(registered.queue, request);
     if (!offered) {
       record.pending.delete(request.requestId);
-      return yield* Effect.fail(desktopNotReady("unbound"));
+      return yield* Effect.fail(
+        terminalFailure(terminalReason(record.terminal), input.tool, input.args) ??
+          desktopNotReady("unbound"),
+      );
     }
     let timedOut = false;
     const deadlineFailure = () =>
@@ -677,6 +682,7 @@ export const make = Effect.gen(function* () {
       let now = started;
       // The call belongs to the control it began under; a successor never inherits it.
       let began: string | undefined;
+      let beganRecord: Control | undefined;
       // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
@@ -698,20 +704,30 @@ export const make = Effect.gen(function* () {
           if (failure !== undefined) return yield* Effect.fail(failure);
         }
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
-          return yield* Effect.fail(desktopNotReady("none"));
+          return yield* Effect.fail(
+            terminalFailure(terminalReason(beganRecord?.terminal), input.tool, input.args) ??
+              desktopNotReady("none"),
+          );
         began ??= current.controlId;
-        if (current.controlId !== began) return yield* Effect.fail(desktopNotReady("unbound"));
+        if (current.controlId !== began)
+          return yield* Effect.fail(
+            terminalFailure(terminalReason(beganRecord?.terminal), input.tool, input.args) ??
+              desktopNotReady("unbound"),
+          );
         const value = attachments.get(input.threadId);
         const registered = value?.registration;
         const record = registered?.controls.get(current.controlId);
+        beganRecord ??= record;
         const binding = record?.binding;
         if (registered !== undefined && record !== undefined && binding !== undefined) {
           if (deadlineMillis - now < MIN_CALL_MS)
-            return yield* Effect.fail({
-              code: "deadline" as const,
-              effectStarted: false,
-              nextStep: "This cell has too little time left for this call; run it in a new cell.",
-            });
+            return yield* Effect.fail(
+              terminalFailure(terminalReason(record.terminal), input.tool, input.args) ?? {
+                code: "deadline" as const,
+                effectStarted: false,
+                nextStep: "This cell has too little time left for this call; run it in a new cell.",
+              },
+            );
           return yield* send(
             input,
             current.controlId,
@@ -729,7 +745,13 @@ export const make = Effect.gen(function* () {
           registered === undefined ||
           now >= waitUntil
         )
-          return yield* Effect.fail(desktopNotReady("unbound"));
+          return yield* Effect.fail(
+            terminalFailure(
+              terminalReason(record?.terminal ?? beganRecord?.terminal),
+              input.tool,
+              input.args,
+            ) ?? desktopNotReady("unbound"),
+          );
         yield* Deferred.await(changed).pipe(Effect.timeoutOption(waitUntil - now));
         now = yield* Clock.currentTimeMillis;
       }

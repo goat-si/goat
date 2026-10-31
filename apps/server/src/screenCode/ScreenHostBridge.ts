@@ -860,13 +860,20 @@ export class ScreenHostBridge {
 
   cutCellNow(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
-    if (reason === "stopped_by_person" || reason === "screen_locked")
+    if (
+      (reason === "stopped_by_person" || reason === "screen_locked") &&
+      !this.terminalCells.has(id)
+    )
       this.terminalCells.set(id, reason);
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
-      if (reason === "stopped_by_person" || reason === "screen_locked") state.cutoffReason = reason;
-      if (reason === "permission_denied" || reason === "target_permission_denied")
+      const terminal = this.terminalCells.get(id);
+      if (terminal !== undefined) state.cutoffReason = terminal;
+      if (
+        terminal === undefined &&
+        (reason === "permission_denied" || reason === "target_permission_denied")
+      )
         state.cutoffReason = "permission_denied";
       if (reason === "pause" || reason === "takeover" || reason === "waiting_for_human")
         state.paused = true;

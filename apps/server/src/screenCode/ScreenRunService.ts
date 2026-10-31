@@ -496,7 +496,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        if (change.terminal !== undefined) cellTerminals.set(id, change.terminal);
+        if (change.terminal !== undefined && !cellTerminals.has(id))
+          cellTerminals.set(id, change.terminal);
         bridge.cutCellNow(runId, turnId, cellId, change.terminal ?? change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
@@ -865,7 +866,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         if (cut && cellId) {
-          if (input.terminal !== undefined) cellTerminals.set(id, input.terminal);
+          if (input.terminal !== undefined && !cellTerminals.has(id))
+            cellTerminals.set(id, input.terminal);
           yield* bridge.cutCell(runId, turnId, cellId, input.terminal ?? input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }
