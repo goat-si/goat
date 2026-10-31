@@ -27,6 +27,7 @@ it.effect.each([
   "stop then lock",
   "nested stop",
   "status without isError",
+  "lock then reconnect stopped",
 ])("a pending primitive merges %s", (order) =>
   Effect.gen(function* () {
     const threadId = ThreadId.make("thread:epochs");
@@ -36,6 +37,7 @@ it.effect.each([
     const release = yield* Deferred.make<void>();
     const clock = yield* Clock.Clock;
     let hold = false;
+    let recoveredStop = false;
     yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
     let notify: Parameters<
       NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
@@ -47,13 +49,17 @@ it.effect.each([
           currentControl: () =>
             Effect.succeedSome({ controlId, threadId, expiresAt: DateTime.makeUnsafe(60000) }),
           controlState: () =>
-            Effect.succeed({
-              _tag: "active",
-              expiresAt: DateTime.makeUnsafe(60000),
-              interruptions: { count: 0, last: "screen_locked" },
-              apps: undefined,
-              wakeAt: 60000,
-            }),
+            Effect.succeed<ComputerUseLeases.ComputerUseControlState>(
+              recoveredStop
+                ? { _tag: "ended", reason: "stopped" }
+                : {
+                    _tag: "active",
+                    expiresAt: DateTime.makeUnsafe(60000),
+                    interruptions: { count: 0, last: "screen_locked" },
+                    apps: undefined,
+                    wakeAt: 60000,
+                  },
+            ),
           subscribe: PubSub.subscribe(signals),
           onAuthorityChange: (listener) => {
             notify = listener;
@@ -139,6 +145,16 @@ it.effect.each([
     if (order === "stop then lock") stop();
     yield* channel.reportControlCutoff({ ...report, terminal: "screen_locked" });
     yield* Deferred.await(reading);
+    if (order === "lock then reconnect stopped") {
+      yield* channel.closeStream({ threadId, registrationId: registered.registrationId });
+      recoveredStop = true;
+      const reconnected = yield* channel.registerStream({
+        ...authority,
+        proxyInstanceId: "next",
+        kind: "thread",
+      });
+      if (reconnected.status !== "registered") return assert.fail("expected re-registration");
+    }
     if (order === "lock then resume then stop") {
       yield* channel.reportControlReady({ ...report, connectionId: "g2", driverGeneration: 2 });
       const later = yield* channel
@@ -166,7 +182,7 @@ it.effect.each([
       });
       assert.equal((yield* Fiber.join(later)).status, "settled");
     }
-    if (order !== "stop then lock") stop();
+    if (order !== "stop then lock" && order !== "lock then reconnect stopped") stop();
     yield* Deferred.succeed(release, undefined);
     const answer = yield* Fiber.join(pending);
     assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');

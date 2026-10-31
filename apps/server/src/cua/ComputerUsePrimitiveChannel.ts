@@ -604,7 +604,10 @@ export const make = Effect.gen(function* () {
             ),
           },
         ).reason;
-        if (terminal !== undefined) latch(control(registered, current.controlId), terminal);
+        if (terminal !== undefined) {
+          latchWaiting(input.threadId, current.controlId, terminal);
+          latch(control(registered, current.controlId), terminal);
+        }
       }
       const requests = Stream.merge(
         Stream.merge(Stream.fromQueue(queue), Stream.fromQueue(cancellations)),
