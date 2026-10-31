@@ -172,3 +172,43 @@ it.effect("the proxy sink merges a terminal RPC error with the result", () =>
     assert.include(output, '"possibleCommit":true');
   }),
 );
+
+it.effect.each(["result lock then Stop", "RPC Stop under lock"])(
+  "retains explicit possible input on a read: %s",
+  (order) =>
+    Effect.gen(function* () {
+      let output = "";
+      const sink = terminalSink(
+        {
+          answer: (line) =>
+            Effect.sync(() => {
+              output = line;
+            }),
+        },
+        { id: 1, method: "tools/call", params: { name: "list_apps" } },
+        () => (order === "result lock then Stop" ? "stopped_by_person" : "screen_locked"),
+        () => false,
+      );
+      const value =
+        order === "result lock then Stop"
+          ? {
+              result: {
+                isError: true,
+                structuredContent: {
+                  code: "screen_locked",
+                  safety: { retryClass: "never", possibleCommit: true },
+                },
+              },
+            }
+          : {
+              error: {
+                code: -32000,
+                data: { code: "stopped_by_person", safety: { possibleCommit: true } },
+              },
+            };
+      yield* sink.answer(JSON.stringify(value), "unknown_outcome");
+      assert.include(output, '"code":"stopped_by_person"');
+      assert.include(output, '"retryClass":"never"');
+      assert.include(output, '"possibleCommit":true');
+    }),
+);

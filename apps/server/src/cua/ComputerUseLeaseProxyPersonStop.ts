@@ -66,7 +66,7 @@ export const terminalSink = (
       const tool = typeof message.params?.name === "string" ? message.params.name : undefined;
       return sink.answer(
         merged.possibleCommit
-          ? cutOff(message.id, tool, cause, message.params?.arguments)
+          ? cutOff(message.id, tool, cause, message.params?.arguments, merged.possibleCommit)
           : refusal(
               message.id,
               message.method,

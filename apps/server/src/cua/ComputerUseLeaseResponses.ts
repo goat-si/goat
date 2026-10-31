@@ -111,8 +111,9 @@ export const cutOff = (
   tool: string | undefined,
   cause: Interruption,
   args?: unknown,
+  possibleInput = false,
 ) => {
-  const read = isReadOnlyCall(tool, args);
+  const read = !possibleInput && isReadOnlyCall(tool, args);
   const outcomeSafety = classifyActionOutcome({
     effect: read ? "read" : "write",
     status: "indeterminate",
