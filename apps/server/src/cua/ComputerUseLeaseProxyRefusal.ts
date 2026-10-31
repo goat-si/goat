@@ -8,6 +8,8 @@ import * as Scheduler from "effect/Scheduler";
 import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
+import { batchAppScope } from "./ComputerUseBatchScope.ts";
+import { batchNeedsListing } from "./ComputerUseBatchIdentity.ts";
 import {
   appKey,
   takesScreen,
@@ -78,7 +80,7 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
 interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
-  readonly claimApproved?: boolean;
+  readonly claimPid?: number | undefined;
   readonly finished: () => LeaseEnd | undefined;
   readonly paused: () => "human_input" | "takeover" | "private" | undefined;
   readonly idle: () => boolean;
@@ -100,16 +102,35 @@ interface ProxyCallCheck {
 export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (
   input: ProxyCallCheck,
 ) {
-  const judge = (): ScopeVerdict =>
-    input.claimApproved === true
-      ? { _tag: "allow" }
-      : scopeVerdict({
-          name: input.message.params?.name,
-          args: input.message.params?.arguments,
-          apps: input.apps(),
-          appOf: (pid) => input.listed.get(pid),
-          bundleIds: input.host.bundleIds,
-        });
+  const toFile = input.toFile();
+  const foregroundRequired = requiresForeground({
+    name: typeof input.message.params?.name === "string" ? input.message.params.name : "unknown",
+    args: input.message.params?.arguments,
+  });
+  const initialTime = yield* Clock.currentTimeMillis;
+  const initiallyDenied =
+    foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
+  const batch = batchAppScope(input.message.params?.name, input.message.params?.arguments);
+  const unresolvedBatch = () =>
+    batch?.apps.find(
+      (wanted) =>
+        ![...input.listed.values()].some(
+          (app) =>
+            (!input.host.bundleIds || app.bundleId !== undefined) &&
+            [app.id, app.name, app.executable].some(
+              (value) => value !== undefined && appKey(value) === appKey(wanted),
+            ),
+        ),
+    );
+  const judge = () =>
+    scopeVerdict({
+      name: input.message.params?.name,
+      args:
+        input.claimPid === undefined ? input.message.params?.arguments : { pid: input.claimPid },
+      apps: input.claimPid === undefined ? input.apps() : undefined,
+      appOf: (pid) => input.listed.get(pid),
+      bundleIds: input.host.bundleIds,
+    });
   // A pid allowed only by the binary it ran when last listed may run another one of the same name
   // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
   // only a listing taken for this call confirms it.
@@ -123,6 +144,19 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   };
   let verdict = judge();
   if (
+    toFile === undefined &&
+    !initiallyDenied &&
+    verdict._tag === "allow" &&
+    (unresolvedBatch() !== undefined || batchNeedsListing(input.message, input.listed)) &&
+    input.finished() === undefined &&
+    input.paused() === undefined
+  ) {
+    yield* input.listApps;
+    verdict = judge();
+  }
+  if (
+    toFile === undefined &&
+    !initiallyDenied &&
     (verdict._tag === "resolve" || !confirmed(verdict, () => false)) &&
     input.finished() === undefined &&
     input.paused() === undefined
@@ -154,16 +188,31 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (input.message.params?.name === "get_desktop_state")
     return refusal(input.id, input.message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
-  const toFile = input.toFile();
   if (toFile !== undefined)
     return refusal(input.id, input.message.method, "desktop_capture_off", toFile);
+  if (initiallyDenied && verdict._tag === "resolve")
+    return refusal(
+      input.id,
+      input.message.method,
+      "foreground_not_approved",
+      FOREGROUND_NOT_APPROVED,
+    );
+  const missing = verdict._tag === "allow" ? unresolvedBatch() : undefined;
+  if (missing !== undefined)
+    return refusal(
+      input.id,
+      input.message.method,
+      "app_not_allowed",
+      scopeMessage("app_not_allowed", missing),
+      missing,
+    );
   if (verdict._tag === "resolve")
     return refusal(
       input.id,
       input.message.method,
-      "app_not_approved",
+      "app_not_allowed",
       scopeMessage(
-        "app_not_approved",
+        "app_not_allowed",
         input.listed.get(verdict.pid)?.id ?? `the app with pid ${verdict.pid}`,
       ),
     );
@@ -180,13 +229,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   if (input.tokenFirstRefuses())
     return refusal(input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
   const now = yield* Clock.currentTimeMillis;
-  if (
-    requiresForeground({
-      name: typeof input.message.params?.name === "string" ? input.message.params.name : "unknown",
-      args: input.message.params?.arguments,
-    }) &&
-    !input.foreground().some((grant) => grant.expiresAtMillis > now)
-  )
+  if (foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > now))
     return refusal(
       input.id,
       input.message.method,

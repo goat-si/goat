@@ -56,6 +56,7 @@ const fakeLeases = (input: {
   const blocked: Array<{ readonly threadId: string; readonly block: unknown }> = [];
   /** Every control on every app asked for, by whether it was for unattended work. */
   const everyApp: Array<boolean> = [];
+  const nonPerson: Array<boolean | undefined> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
     holder: () => Effect.succeed(Option.fromNullishOr(input.holder)),
@@ -63,9 +64,10 @@ const fakeLeases = (input: {
     state: () => Effect.die("unused"),
     attached: () => Effect.succeedNone,
     nameApps: () => Effect.void,
-    everyAppControl: (threadId, unattended) =>
+    everyAppControl: (threadId, unattended, run) =>
       Effect.sync(() => {
         everyApp.push(unattended);
+        nonPerson.push(run?.nonPerson);
         return input.claimLost === true
           ? Option.none()
           : Option.some({
@@ -119,7 +121,7 @@ const fakeLeases = (input: {
     blocked: (threadId, block) => Effect.sync(() => void blocked.push({ threadId, block })),
     blockedTurns: Effect.die("unused"),
   });
-  return { leases: Option.some(service), minted, blocked, everyApp };
+  return { leases: Option.some(service), minted, blocked, everyApp, nonPerson };
 };
 const interactiveControl = {
   controlId: "control:interactive",
@@ -443,6 +445,7 @@ describe("computerUseAttachment", () => {
         assert.deepEqual(leases.everyApp, [
           origin._tag === "unattended" && origin.reason !== "launched_remotely",
         ]);
+        assert.deepEqual(leases.nonPerson, [origin._tag === "unattended"]);
         assert.deepEqual(leases.minted, []);
       }),
   );

@@ -12,7 +12,7 @@ import {
 
 it.effect("a settle read cut off by pause carries no mutation uncertainty or fresh sample", () =>
   Effect.gen(function* () {
-    const h = yield* harness();
+    const h = yield* harness({ autoAppListing: true });
     yield* h.push(active());
     yield* h.send(call(1, "wait_for_window_settle", { pid: 4, window_id: 9 }));
     assert.equal((yield* h.nextToDriver).id, 1);

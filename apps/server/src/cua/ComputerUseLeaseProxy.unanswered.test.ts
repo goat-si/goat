@@ -9,9 +9,12 @@ import {
   call,
   CONTROL,
   foregroundActive,
-  harness,
+  harness as makeHarness,
   type ToolAnswer,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 const listApps = (requestId: string, connectionGeneration: string, deadlineMillis: number) => ({
   state: "primitive-request" as const,
@@ -138,7 +141,13 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
         const h = yield* harness();
         yield* h.push(foregroundActive());
         const first = yield* h.driverStarted;
-        yield* h.send(call("script", "run_script", { script: "1", timeout_ms: 120_000 }));
+        yield* h.send(
+          call("script", "run_script", {
+            script: "1",
+            timeout_ms: 120_000,
+            app_scope: { apps: ["com.apple.calculator"] },
+          }),
+        );
         yield* h.nextToDriver;
         yield* h.sendPrimitive({
           ...listApps("click:queued", first.connectionId, 3_000),
@@ -631,7 +640,14 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
             jsonrpc: "2.0",
             id: "prov:script",
             method: "tools/call",
-            params: { name: "run_script", arguments: { script: "1", timeout_ms: "120000" } },
+            params: {
+              name: "run_script",
+              arguments: {
+                script: "1",
+                timeout_ms: "120000",
+                app_scope: { apps: ["com.apple.calculator"] },
+              },
+            },
           }),
         );
         const provScript = yield* h.nextToDriver;
@@ -703,7 +719,11 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
             method: "tools/call",
             params: {
               name: "run_script",
-              arguments: { script: "while(true){}", timeout_ms: 5_000 },
+              arguments: {
+                script: "while(true){}",
+                timeout_ms: 5_000,
+                app_scope: { apps: ["com.apple.calculator"] },
+              },
             },
           }),
         );
@@ -718,8 +738,8 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
           turnId: "cell:one",
           callId: 2,
           deadlineMillis: 418_200,
-          tool: "list_windows",
-          args: { pid: 42 },
+          tool: "list_apps",
+          args: {},
         });
         yield* h.nextToDriver;
         yield* TestClock.adjust("20 seconds");
@@ -737,7 +757,7 @@ describe("ComputerUseLeaseProxy holds calls behind an overdue one", () => {
               jsonrpc: "2.0",
               id,
               method: "tools/call",
-              params: { name: "scroll", arguments: {} },
+              params: { name: "scroll", arguments: { pid: 42, window_id: 1 } },
             }),
           );
           yield* h.nextToDriver;

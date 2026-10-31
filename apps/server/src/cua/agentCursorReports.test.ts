@@ -234,7 +234,7 @@ describe("agent cursor reports", () => {
     "tells the preview where the overlay draws the cursor, at most four times a second",
     () =>
       Effect.gen(function* () {
-        const h = yield* harness({ overlay: true, cursors: true });
+        const h = yield* harness({ overlay: true, cursors: true, autoAppListing: true });
         yield* h.push(active());
         const window = { pid: 4, window_id: 9 };
         yield* h.send(call(1, "get_window_state", window));

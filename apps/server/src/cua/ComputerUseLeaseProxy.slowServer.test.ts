@@ -19,7 +19,10 @@ import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { LEASE_END_MESSAGES } from "./ComputerUseLeaseMessages.ts";
-import { active, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 import { postReservation, type ReservationPost } from "./ComputerUseLeaseProxyReservation.ts";
 import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";

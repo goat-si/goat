@@ -43,6 +43,137 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
   ),
 );
 
+it.effect("updates the origin policy when a full access control is reused", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-origin-policy");
+    yield* threadIn(owner, "full-access");
+    yield* leases.everyAppControl(owner, false, { nonPerson: true });
+    assert.isTrue(Option.getOrThrow(yield* leases.currentControl(owner)).nonPersonFullAccess);
+    yield* leases.everyAppControl(owner, false, { nonPerson: false });
+    assert.isFalse(Option.getOrThrow(yield* leases.currentControl(owner)).nonPersonFullAccess);
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("increments the app identity epoch when another turn reuses the control", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-cache-epoch");
+    yield* threadIn(owner, "full-access");
+    const first = Option.getOrThrow(
+      yield* leases.everyAppControl(owner, false, { runId: RunId.make("run:first") }),
+    );
+    const before = yield* leases.controlState(owner, first.controlId);
+    yield* leases.everyAppControl(owner, false, { runId: RunId.make("run:second") });
+    const after = yield* leases.controlState(owner, first.controlId);
+    assert.deepInclude(before, { _tag: "active", identityEpoch: 0 });
+    assert.deepInclude(after, { _tag: "active", identityEpoch: 1 });
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("a new organization denial refuses a pending ticket on validation", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const owner = ThreadId.make("thread-denial-validation");
+    yield* threadIn(owner, "full-access");
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    const result = yield* leases.callReservation(owner, {
+      action: "reserve",
+      controlId: control.controlId,
+      connectionId: "connection",
+      callId: "one",
+      interruptions: 0,
+      idleEpoch: 0,
+      name: "click",
+      args: { pid: 42, window_id: 7 },
+      app: "com.example.Editor",
+    });
+    assert.equal(result.status, "admitted");
+    if (result.status !== "admitted" || result.reservationId === null)
+      return assert.fail("missing ticket");
+    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Editor"] });
+    const check = yield* leases.callReservation(owner, {
+      action: "validate",
+      controlId: control.controlId,
+      connectionId: "connection",
+      reservationId: result.reservationId,
+    });
+    assert.deepInclude(check, { status: "refused", detail: "app_not_allowed" });
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("a denial committed during admission prevents the call", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const owner = ThreadId.make("thread-denial-race");
+    yield* threadIn(owner, "full-access");
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    const reading = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const pending = yield* leases
+      .callReservation(owner, {
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "connection",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7 },
+        app: "com.example.Editor",
+      })
+      .pipe(
+        Effect.provideService(Statement.CurrentTransformer, (statement) =>
+          Deferred.succeed(reading, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(statement),
+          ),
+        ),
+        Effect.forkChild,
+      );
+    yield* Deferred.await(reading);
+    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Editor"] });
+    yield* Deferred.succeed(release, undefined);
+    assert.deepInclude(yield* Fiber.join(pending), {
+      status: "refused",
+      detail: "app_not_allowed",
+    });
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect.each([true, false])(
+  "checks terminal calls for full access origin (nonPerson %s)",
+  (nonPerson) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make(`thread-terminal-${nonPerson}`);
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false, { nonPerson }));
+      for (const app of ["com.apple.Terminal", "com.googlecode.iterm2"]) {
+        const result = yield* leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "connection",
+          callId: app,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "click",
+          args: { pid: 42, window_id: 7 },
+          app,
+        });
+        assert.equal(result.status, nonPerson ? "refused" : "admitted");
+        if (result.status === "refused") assert.equal(result.detail, "app_not_allowed");
+      }
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect.each(["replacement", "approval after Stop"] as const)(
   "a suspended full access read cannot revoke a newer %s",
   (transition) =>
@@ -424,4 +555,33 @@ it.effect(
       assert.isAbove(yield* PubSub.remaining(signals), 0);
       yield* leases.stopAll;
     }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "permits a verified ordinary batch but rejects a terminal batch for a remote origin",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-remote-batch");
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(
+        yield* leases.everyAppControl(owner, false, { nonPerson: true }),
+      );
+      for (const app of ["com.example.Editor", "com.apple.Terminal"]) {
+        const result = yield* leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "connection",
+          callId: app,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "run_steps",
+          args: { app_scope: { apps: [app], delivery: "background" }, steps: [] },
+          safetyApps: [app],
+        });
+        assert.equal(result.status, app === "com.apple.Terminal" ? "refused" : "admitted");
+        if (result.status === "refused") assert.equal(result.detail, "app_not_allowed");
+      }
+    }).pipe(Effect.provide(everyAppLayer)),
 );

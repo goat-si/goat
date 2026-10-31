@@ -13,6 +13,7 @@ import type * as DateTime from "effect/DateTime";
 export interface ComputerUseControl {
   readonly controlId: string;
   readonly threadId: ThreadId;
+  readonly nonPersonFullAccess?: boolean;
   readonly expiresAt: DateTime.Utc;
   /** The grant an unattended control lives on; interactive controls have none. */
   readonly handoffId?: TurnItemId;
@@ -119,6 +120,7 @@ export type ComputerUseControlState =
       readonly shared?: true;
       readonly idle?: true;
       readonly idleEpoch?: number;
+      readonly identityEpoch?: number;
       readonly foreground?: ReadonlyArray<ComputerUseForegroundGrant>;
     }
   | { readonly _tag: "paused"; readonly reason: ComputerUsePauseReason }

@@ -50,6 +50,7 @@ import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThr
 import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
+import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -169,6 +170,9 @@ export const leaseUpdates = (input: {
                 expiresAt: DateTime.formatIso(state.expiresAt),
                 ...(state.apps === undefined ? {} : { apps: state.apps }),
                 ...(state.idleEpoch === undefined ? {} : { idleEpoch: state.idleEpoch }),
+                ...(state.identityEpoch === undefined
+                  ? {}
+                  : { identityEpoch: state.identityEpoch }),
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
@@ -397,14 +401,27 @@ const callLayer = HttpRouter.add(
     if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     // Unreadable settings keep the default: the person's pointer stays still.
-    const movePointer = yield* ServerSettings.ServerSettingsService.pipe(
+    const settings = yield* ServerSettings.ServerSettingsService.pipe(
       Effect.flatMap((settings) => settings.getSettings),
-      Effect.map((settings) => settings.cuaMovePointer),
-      Effect.orElseSucceed(() => "never" as const),
+      Effect.option,
     );
+    if (Option.isNone(settings)) return HttpServerResponse.empty({ status: 503 });
+    if (call.value.action === "reserve") {
+      const control = yield* leases.currentControl(threadId);
+      const nonPerson =
+        Option.isSome(control) &&
+        control.value.controlId === call.value.controlId &&
+        control.value.nonPersonFullAccess === true;
+      const app = deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson);
+      if (app !== undefined)
+        return HttpServerResponse.text(
+          encodeAdmission({ status: "refused", detail: "app_not_allowed", app }),
+          { contentType: "application/json", headers: { "cache-control": "no-store" } },
+        );
+    }
     if (
       call.value.action === "reserve" &&
-      movePointer !== "allowed" &&
+      settings.value.cuaMovePointer !== "allowed" &&
       movesPersonPointer(call.value)
     )
       return HttpServerResponse.text(

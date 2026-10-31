@@ -10,7 +10,9 @@ import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import * as TestClock from "effect/testing/TestClock";
 
-import { active, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, CONTROL, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 const identity = (sequence: number, generation = 1) => ({
   environmentId: EnvironmentId.make("environment"),

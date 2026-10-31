@@ -129,6 +129,19 @@ const EXCLUDED_BUNDLE_IDS = new Set([
   // Every released GOAT channel and its helper: any of them can show this host's approval cards.
   ...Object.values(DESKTOP_CHANNEL_APP_IDS).flatMap((id) => [id, computerUseHelperBundleId(id)]),
   "com.apple.keychainaccess",
+  "com.apple.systempreferences",
+  "com.apple.loginwindow",
+  "com.apple.securityagent",
+  "com.apple.coreauthd",
+  // macOS: LocalAuthentication.framework/Support/coreautha.bundle/Contents/Info.plist.
+  "com.apple.localauthentication.uiagent",
+  "com.apple.screentimeagent",
+  // macOS: /System/Library/LaunchAgents/com.apple.ScreenTimeSettingsAgent.plist.
+  "com.apple.screentimesettingsagent",
+  // macOS: /System/Library/CoreServices/Screen Time.app/Contents/Info.plist.
+  "com.apple.screentimewidgetapplication",
+  // macOS: ScreenTimeServiceUI.framework/XPCServices/ScreenTimeViewService.xpc/Contents/Info.plist.
+  "com.apple.screentimeviewservice",
   "com.apple.passwords",
   "com.1password.1password",
   "com.agilebits.onepassword7",
@@ -144,7 +157,7 @@ const EXCLUDED_BUNDLE_IDS = new Set([
 // Names cover Windows and Linux, where an app is listed by its executable path or desktop name.
 // Any non-alphanumeric character bounds a word: snap desktop ids and Windows AUMIDs use "_".
 const EXCLUDED_NAME =
-  /(?<![\p{L}\p{N}])(1password|bitwarden|keepass(xc)?|lastpass|dashlane|nordpass|proton[ ._-]?pass|keychain access|passwords)(?![\p{L}\p{N}])/iu;
+  /(?<![\p{L}\p{N}])(1password|bitwarden|keepass(xc)?|lastpass|dashlane|nordpass|proton[ ._-]?pass|keychain access|passwords|system settings|system preferences|loginwindow|securityagent|coreauthd|screen time)(?![\p{L}\p{N}])/iu;
 /** The driver, and GOAT's helper on Windows, named by their executables. */
 const EXCLUDED_EXECUTABLE = /(^|[\\/])((cua-driver|GOAT Computer Use)\.exe|cua-driver)$/iu;
 
@@ -261,6 +274,29 @@ export function cuaRequestableApps(
     for (const id of ids) requestable.add(id);
   }
   return [...requestable].sort();
+}
+
+export function cuaRequestableCatalog(
+  apps: ReadonlyArray<CuaDriverListedApp>,
+  hostBundleIds: ReadonlyArray<string>,
+) {
+  const catalog = new Map<string, { name: string; executables: Set<string> }>();
+  for (const app of apps) {
+    const id = app.bundle_id?.trim() || app.executable?.trim() || app.name?.trim() || "";
+    if (!id || !cuaRequestableApps([app], hostBundleIds).includes(id)) continue;
+    const entry = catalog.get(id) ?? {
+      name: app.name?.trim() || id,
+      executables: new Set<string>(),
+    };
+    for (const executable of [app.executable?.trim(), app.bundle_executable?.trim()])
+      if (executable) entry.executables.add(executable);
+    catalog.set(id, entry);
+  }
+  return [...catalog].map(([id, entry]) => ({
+    id,
+    name: entry.name,
+    ...(entry.executables.size === 0 ? {} : { executables: [...entry.executables] }),
+  }));
 }
 
 /**
@@ -694,9 +730,7 @@ async function withBundleExecutables(
  * The app names an approval request may use on a host whose server runs the driver itself
  * (#1561): the same listing and identities the manifest is built from, read when asked.
  */
-export async function listCuaRequestableApplications(
-  input: CuaDriverListingInput,
-): Promise<ReadonlyArray<string>> {
+export async function listCuaRequestableApplicationListing(input: CuaDriverListingInput) {
   const { apps, host } = await listForHost(input);
   // On Linux the manifest grants only a desktop entry or an attested executable, and never this
   // process, so a name with neither, or GOAT's own, is not an app a request can be granted.
@@ -707,7 +741,16 @@ export async function listCuaRequestableApplications(
             app.pid !== process.pid && Boolean(app.bundle_id?.trim() || app.executable?.trim()),
         )
       : apps;
-  return cuaRequestableApps(grantable, host);
+  return {
+    apps: cuaRequestableApps(grantable, host),
+    catalog: cuaRequestableCatalog(grantable, host),
+  };
+}
+
+export async function listCuaRequestableApplications(
+  input: CuaDriverListingInput,
+): Promise<ReadonlyArray<string>> {
+  return (await listCuaRequestableApplicationListing(input)).apps;
 }
 
 /**

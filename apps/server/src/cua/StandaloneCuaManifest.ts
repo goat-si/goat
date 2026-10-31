@@ -1,6 +1,6 @@
 import {
   cuaDriverSessionListingEnvironment,
-  listCuaRequestableApplications,
+  listCuaRequestableApplicationListing,
   cuaDriverManifestApplications,
   missingCuaDriverApplications,
   prepareCuaDriverCapabilityManifest,
@@ -100,7 +100,7 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
             // Interrupting the request (its deadline, or the server stopping) ends the
             // listing's driver as well.
             Effect.tryPromise((signal) =>
-              listCuaRequestableApplications({
+              listCuaRequestableApplicationListing({
                 binaryPath,
                 platform,
                 environment: cuaDriverSessionListingEnvironment(environment, display, platform),
@@ -110,7 +110,7 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
             ),
           ),
           Effect.asSome,
-          Effect.orElseSucceed(() => Option.none<ReadonlyArray<string>>()),
+          Effect.orElseSucceed(() => Option.none()),
         ),
     );
 

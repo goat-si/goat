@@ -600,6 +600,7 @@ describe("server computer-use call reservations", () => {
         const entered = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         const h = yield* harness({
+          autoAppListing: true,
           reservation: (request) =>
             request.action !== "reserve"
               ? Effect.succeed({ status: "released" } as const)
@@ -687,8 +688,14 @@ describe("server computer-use call reservations", () => {
           { status: "refused", detail: "foreground_not_approved" },
         );
         // Without a scope, or with foreground delivery, it still needs foreground approval.
+        assert.deepInclude(
+          yield* f.reserve(f.b, { pid: 44, window_id: 9, steps: [] }, "run_steps"),
+          {
+            status: "refused",
+            detail: "foreground_not_approved",
+          },
+        );
         for (const args of [
-          { pid: 44, window_id: 9, steps: [] },
           {
             ...batch({ pid: 44, window_id: 9 }),
             app_scope: { ...app_scope, delivery: "foreground" },
@@ -713,8 +720,17 @@ describe("server computer-use call reservations", () => {
         assert.equal((yield* f.reserve(f.b, {}, "list_windows")).status, "admitted");
         for (const [name, args] of [
           ["type_text", { pid: 99 }],
-          ["run_steps", { steps: [{ type: "type_text", pid: 99, window_id: 8 }] }],
-          ["run_script", { pid: 99, window_id: 8, code: "dynamic" }],
+          [
+            "run_steps",
+            {
+              app_scope: { apps: ["org.example.Other"] },
+              steps: [{ type: "type_text", pid: 99, window_id: 8 }],
+            },
+          ],
+          [
+            "run_script",
+            { pid: 99, window_id: 8, code: "dynamic", app_scope: { apps: ["org.example.Other"] } },
+          ],
           ["bring_to_front", { pid: 99, window_id: 8 }],
           ["type_text", { pid: 99, window_id: 8, dispatch: "foreground" }],
           ["future_tool", { pid: 99, window_id: 8 }],
@@ -729,6 +745,9 @@ describe("server computer-use call reservations", () => {
             name,
             args,
             foregroundGrantId: focus.handoffId,
+            ...(name === "run_steps" || name === "run_script"
+              ? { safetyApps: ["org.example.Other"] }
+              : {}),
           });
           assert.deepEqual(decision, {
             status: "refused",

@@ -51,7 +51,11 @@ describe("DesktopCuaDriver", () => {
           // Sorted by name; a Windows program's executable path is its id.
           catalog: [
             { id: "com.example.Editor", name: "Editor window" },
-            { id: "C:\\Apps\\fixture.exe", name: "fixture.exe" },
+            {
+              id: "C:\\Apps\\fixture.exe",
+              name: "fixture.exe",
+              executables: ["C:\\Apps\\fixture.exe"],
+            },
           ],
         });
         yield* test.listApps([{ name: "New app" }]);
