@@ -110,8 +110,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: Contracts.ComputerUsePauseReason | undefined;
   let idle = false;
   const personStop = makePersonStopFence();
-  const fresh = "none";
-  const deny = refusal.bind(undefined, fresh);
+  const deny = refusal.bind(undefined, "none");
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
