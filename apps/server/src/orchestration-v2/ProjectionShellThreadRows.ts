@@ -1,6 +1,10 @@
 import { IDLE_COMPACTION_TEXT, type ThreadId } from "@goat/contracts";
+import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ShellSnapshotOptions } from "./ProjectionStore.ts";
+
+// One JSON parameter instead of one per id keeps large lists under SQLite's variable limit.
+const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
 
 export type ShellThreadRow = {
   readonly thread_id: string;
@@ -299,7 +303,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
               worktreePath === undefined
                 ? sql``
                 : sql` AND json_extract(t.payload_json, '$.worktreePath') = ${worktreePath}`
-            }${threadIds === undefined ? sql`` : sql` AND t.thread_id IN ${sql.in(threadIds)}`}
+            }${threadIds === undefined ? sql`` : sql` AND t.thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))`}
             ORDER BY t.updated_at ASC, t.thread_id ASC
           `;
   return { selectShellThreadRows, isIdleCompactionMessage, isIdleCompactionRun, isSilentShellRun };
