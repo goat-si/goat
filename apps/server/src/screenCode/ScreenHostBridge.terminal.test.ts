@@ -60,6 +60,15 @@ it.effect.each(["lock first", "stop first"])(
         expect(answer.error?.code).toBe("stopped_by_person");
         expect(answer.error?.safety?.retryClass).toBe("never");
       }
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Effect.succeed({ category: "confirmed", value: [] }),
+      });
+      const next = yield* bridge.handle(
+        { ...call(2), cellId: "new", method: "list_apps" },
+        { ...context(), cellId: "new" },
+      );
+      expect(next?.outcome).not.toBe("error");
     }),
 );
 

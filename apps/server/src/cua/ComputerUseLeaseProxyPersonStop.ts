@@ -39,9 +39,11 @@ const decodeTerminal = Schema.decodeUnknownOption(
 export const terminalSink = (
   sink: ReplySink,
   message: Envelope,
-  terminal: () => ComputerUseTerminalReason | undefined,
+  terminal: (() => ComputerUseTerminalReason | undefined) & { readonly release?: () => void },
   dispatched: () => boolean,
 ): ReplySink => ({
+  terminal,
+  ...(terminal.release === undefined ? {} : { release: terminal.release }),
   answer: (line, status, context) =>
     Effect.suspend(() => {
       if (message.method !== "tools/call" || message.id == null)
@@ -84,23 +86,41 @@ export const terminalSink = (
         merged.possibleCommit ? "unknown_outcome" : "not_started",
         context,
       );
-    }),
+    }).pipe(Effect.ensuring(Effect.sync(() => terminal.release?.()))),
 });
 
 export function makePersonStopFence() {
   let reason: "stopped_by_person" | "screen_locked" | undefined;
   let epoch: { reason?: "stopped_by_person" | "screen_locked" | undefined } = {};
+  // Stop and lock update every epoch captured by an unfinished call of this control.
+  const capturedEpochs = new Map<typeof epoch, number>();
   let lockConfirmed = false;
   const latch = (value: "stopped_by_person" | "screen_locked") => {
     reason = mergeTerminal({ reason }, { reason: value }).reason;
     epoch.reason = mergeTerminal({ reason: epoch.reason }, { reason: value }).reason;
+    for (const entry of capturedEpochs.keys())
+      entry.reason = mergeTerminal({ reason: entry.reason }, { reason: value }).reason;
   };
   return {
     pending: () => reason !== undefined,
     terminal: () => reason,
-    capture: () => {
+    capture: (message?: Envelope, inherited?: ReplySink["terminal"]) => {
+      if (inherited !== undefined) return inherited;
+      if (message !== undefined && (message.method !== "tools/call" || message.id == null))
+        return () => reason;
       const captured = epoch;
-      return () => captured.reason;
+      const registry = capturedEpochs;
+      registry.set(captured, (registry.get(captured) ?? 0) + 1);
+      let released = false;
+      return Object.assign(() => captured.reason, {
+        release: () => {
+          if (released) return;
+          released = true;
+          const count = registry.get(captured) ?? 0;
+          if (count > 1) registry.set(captured, count - 1);
+          else registry.delete(captured);
+        },
+      });
     },
     beginStop: () => {
       if (reason === "stopped_by_person") return false;

@@ -245,14 +245,20 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     });
 
   const receive = (context: Context, update: ComputerUseLeaseUpdate | undefined) => {
-    if (update?.state === "paused" && update.reason === "screen_locked")
+    if (update?.state === "paused" && update.reason === "screen_locked") {
+      latchOwners(context.controlId, "screen_locked");
       latchCurrent(context, "screen_locked");
-    else if (update?.state === "active" && context.terminal.reason === "screen_locked") {
+    } else if (update?.state === "active" && context.terminal.reason === "screen_locked") {
       context.terminal = {};
       controlTerminals.set(context.controlId, context.terminal);
     }
     if (context.receive === undefined) context.updates.push(update);
     else context.receive(update);
+  };
+  const latchOwners = (controlId: string, reason: ComputerUseTerminalReason) => {
+    for (const owner of owners.values())
+      if (owner.context.controlId === controlId)
+        owner.latch.reason = mergeTerminal(owner.latch, { reason }).reason;
   };
   const latchCurrent = (context: Context, reason: ComputerUseTerminalReason) => {
     context.terminal.reason = mergeTerminal(context.terminal, { reason }).reason;
@@ -264,8 +270,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const stop = (context: Context, reason: ControlStop) => {
     if (context.ended !== undefined) return;
     context.ended = reason;
-    if (reason === "stopped" || reason === "stopped_all")
+    if (reason === "stopped" || reason === "stopped_all") {
+      latchOwners(context.controlId, "stopped_by_person");
       latchCurrent(context, "stopped_by_person");
+    }
     context.ready = false;
     if (current === context) current = undefined;
     Queue.shutdownUnsafe(context.primitiveInput);
@@ -477,11 +485,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           else if (update.state === "control-ended") {
             seen.add(update.controlId);
             if (update.reason === "stopped" || update.reason === "stopped_all") {
-              for (const owner of owners.values())
-                if (owner.context.controlId === update.controlId)
-                  owner.latch.reason = mergeTerminal(owner.latch, {
-                    reason: "stopped_by_person",
-                  }).reason;
+              latchOwners(update.controlId, "stopped_by_person");
               const latch = controlTerminals.get(update.controlId) ?? {};
               if (current?.controlId !== update.controlId)
                 latch.reason = mergeTerminal(latch, { reason: "stopped_by_person" }).reason;

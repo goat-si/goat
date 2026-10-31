@@ -76,6 +76,10 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
   });
 
 export interface ReplySink {
+  readonly terminal?: (() =>
+    | import("./ComputerUseTerminal.ts").ComputerUseTerminalReason
+    | undefined) & { readonly release?: () => void };
+  readonly release?: () => void;
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],

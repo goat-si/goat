@@ -853,3 +853,41 @@ it.effect("round6 delayed reservation keeps lock through resume", () =>
     assert.include(JSON.stringify(yield* h.nextToProvider), "new generation");
   }),
 );
+
+it.effect.each(["server Stop", "physical Esc"])(
+  "unfinished admission lock then resume then %s upgrades captured terminal",
+  (kind) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const h = yield* harness({
+        personStop: true,
+        autoAppListing: true,
+        reservation: (r) =>
+          r.action === "reserve"
+            ? Deferred.await(gate).pipe(Effect.as({ status: "refused", detail: "reconnecting" }))
+            : Effect.succeed({ status: "released" }),
+      });
+      yield* h.push(active());
+      yield* h.driverStarted;
+      yield* h.applied;
+      yield* h.send(call(910, "list_apps"));
+      yield* h.nextReservation;
+      yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+      yield* h.killed;
+      yield* h.applied;
+      yield* h.push({ ...active(), interruptions: { count: 1, last: "screen_locked" } });
+      yield* h.driverStarted;
+      yield* h.applied;
+      if (kind === "server Stop") {
+        yield* h.push({ state: "ended", reason: "stopped" });
+        yield* h.applied;
+      } else {
+        yield* h.escape;
+        yield* h.escapeReported;
+        yield* h.killed;
+      }
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.nextToProvider;
+      assert.equal(answer.result?.structuredContent?.code, "stopped_by_person");
+    }),
+);

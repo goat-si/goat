@@ -654,7 +654,12 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (decoded.kind === "invalid") return yield* rawSink.answer(decoded.response);
     let message = decoded.message;
     let dispatched = false;
-    const sink = terminalSink(rawSink, message, personStop.capture(), () => dispatched);
+    const sink = terminalSink(
+      rawSink,
+      message,
+      personStop.capture(message, rawSink.terminal),
+      () => dispatched,
+    );
     // Reconnecting: nothing but a transport-safe read goes out, however far the call has got.
     const held = () =>
       Transport.heldByTransport(options.transportHeld, message.method, message.params?.name);
@@ -692,7 +697,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       handshakeAnswers.cancel(cancelled);
       const request = outstanding.get(cancelled);
       // The driver may ignore cancellation; ownership lasts until its reply or actual cutoff.
-      if (request !== undefined) request.cancelled = true;
+      if (request !== undefined) {
+        request.cancelled = true;
+        request.sink.release?.();
+      }
     }
     const key = isRequest ? JSON.stringify(id) : "";
     if (isRequest && (outstanding.has(key) || handshakeAnswers.pending(key)))

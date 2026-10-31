@@ -204,40 +204,43 @@ export const make = Effect.gen(function* () {
     changed = Deferred.makeUnsafe<void>();
     Deferred.doneUnsafe(waiting, Exit.void);
   };
+  const terminalReply = (
+    pending: Pending,
+    terminal: Control["terminal"],
+  ): ComputerUsePrimitiveReply => ({
+    ...pending.request,
+    status: pending.sent ? "unknown_outcome" : "not_started",
+    ...(terminal === undefined
+      ? {}
+      : {
+          result: resultOf(
+            JSON.parse(
+              pending.sent
+                ? cutOff(
+                    pending.request.callId,
+                    pending.request.tool,
+                    terminal === "screen_locked"
+                      ? { _tag: "pause", reason: "screen_locked" }
+                      : { _tag: "end", reason: "stopped_all" },
+                    pending.request.args,
+                  )
+                : refusal(
+                    pending.request.callId,
+                    "tools/call",
+                    terminal === "screen_locked" ? "screen_locked" : "stopped",
+                    terminal === "screen_locked"
+                      ? PAUSE_MESSAGES.screen_locked
+                      : LEASE_END_MESSAGES.stopped,
+                  ),
+            ),
+          ).result,
+        }),
+  });
   const settle = (pending: Pending, terminal?: Control["terminal"]) => {
     pending.terminal = mergeTerminal({ reason: pending.terminal }, { reason: terminal }).reason;
-    terminal = terminalReason(pending.terminal);
     return Deferred.doneUnsafe(
       pending.answer,
-      Exit.succeed({
-        ...pending.request,
-        status: pending.sent ? "unknown_outcome" : "not_started",
-        ...(terminal === undefined
-          ? {}
-          : {
-              result: resultOf(
-                JSON.parse(
-                  pending.sent
-                    ? cutOff(
-                        pending.request.callId,
-                        pending.request.tool,
-                        terminal === "screen_locked"
-                          ? { _tag: "pause", reason: "screen_locked" }
-                          : { _tag: "end", reason: "stopped_all" },
-                        pending.request.args,
-                      )
-                    : refusal(
-                        pending.request.callId,
-                        "tools/call",
-                        terminal === "screen_locked" ? "screen_locked" : "stopped",
-                        terminal === "screen_locked"
-                          ? PAUSE_MESSAGES.screen_locked
-                          : LEASE_END_MESSAGES.stopped,
-                      ),
-                ),
-              ).result,
-            }),
-      }),
+      Exit.succeed(terminalReply(pending, pending.terminal)),
     );
   };
   const cancelDelivered = (registration: Registration, pending: Pending) => {
@@ -316,11 +319,17 @@ export const make = Effect.gen(function* () {
     record.terminal = mergeTerminal({ reason: record.terminal }, { reason }).reason;
     record.epoch.reason = mergeTerminal(record.epoch, { reason }).reason;
   };
+  const latchWaiting = (
+    threadId: ThreadId,
+    controlId: string,
+    reason: ComputerUseTerminalReason,
+  ) => {
+    for (const epoch of waitingEpochs.get(waitingKey(threadId, controlId))?.keys() ?? [])
+      epoch.reason = mergeTerminal(epoch, { reason }).reason;
+  };
   const unsubscribe = leases.onAuthorityChange?.((change) => {
     if (change.terminal === undefined) return;
-    for (const epoch of waitingEpochs.get(waitingKey(change.threadId, change.controlId))?.keys() ??
-      [])
-      epoch.reason = mergeTerminal(epoch, { reason: change.terminal }).reason;
+    latchWaiting(change.threadId, change.controlId, change.terminal);
     const registered = attachments.get(change.threadId)?.registration;
     if (registered !== undefined) latch(control(registered, change.controlId), change.terminal);
     wake();
@@ -396,6 +405,7 @@ export const make = Effect.gen(function* () {
     now: number,
     deadlineMillis: number,
   ) {
+    const epoch = record.epoch;
     if (
       input.expectedConnectionGeneration !== undefined &&
       input.expectedConnectionGeneration !== binding.connectionId
@@ -461,16 +471,21 @@ export const make = Effect.gen(function* () {
       ),
       Effect.filterOrFail(
         ({ answered, at }) =>
-          terminalReason(pending.terminal) !== undefined ||
+          mergeTerminal({ reason: pending.terminal }, epoch).reason !== undefined ||
           at <= deadlineMillis ||
           answered.status === "not_started",
         deadlineFailure,
       ),
-      Effect.map(({ answered }) =>
-        input.authority === "claimBind"
-          ? { ...answered, driverGeneration: binding.generation + 1 }
-          : answered,
-      ),
+      Effect.map(({ answered }) => {
+        const reason = mergeTerminal({ reason: pending.terminal }, epoch).reason;
+        const result =
+          reason !== undefined && terminalReplyReason(answered.result) !== reason
+            ? terminalReply(pending, reason)
+            : answered;
+        return input.authority === "claimBind"
+          ? { ...result, driverGeneration: binding.generation + 1 }
+          : result;
+      }),
       Effect.ensuring(
         Effect.sync(() => {
           if (!record.pending.delete(request.requestId)) return;
@@ -678,8 +693,13 @@ export const make = Effect.gen(function* () {
           record.binding.connectionId !== input.connectionId
         )
           return false;
-        if (input.terminal !== undefined && input.driverGeneration >= record.maxAcceptedGeneration)
+        if (
+          input.terminal !== undefined &&
+          input.driverGeneration >= record.maxAcceptedGeneration
+        ) {
+          latchWaiting(input.threadId, input.controlId, input.terminal);
           latch(record, input.terminal);
+        }
         record.maxCutoffGeneration = input.driverGeneration;
         if (record.binding !== undefined && record.binding.generation <= input.driverGeneration)
           clear(registered, record);
@@ -833,7 +853,10 @@ export const make = Effect.gen(function* () {
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
           const replyTerminal = terminalReplyReason(input.reply.result);
-          if (replyTerminal !== undefined) latch(record, replyTerminal);
+          if (replyTerminal !== undefined) {
+            latchWaiting(input.threadId, input.reply.controlId, replyTerminal);
+            latch(record, replyTerminal);
+          }
           if (replyTerminal !== undefined && replyTerminal === record.terminal) {
             pending.terminal = mergeTerminal(
               { reason: pending.terminal },

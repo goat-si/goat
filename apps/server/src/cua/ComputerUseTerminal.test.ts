@@ -33,3 +33,23 @@ it("the proxy fence never downgrades a person's stop to a lock", () => {
   second.confirm({ state: "paused", controlId: "control", reason: "screen_locked" });
   assert.equal(second.terminal(), "stopped_by_person");
 });
+
+it.each(["lock then resume then stop", "lock then stop", "stop then lock"])(
+  "an unfinished captured proxy epoch follows %s",
+  (order) => {
+    const fence = makePersonStopFence();
+    const previous = fence.capture();
+    if (order !== "stop then lock")
+      fence.confirm({ state: "paused", controlId: "control", reason: "screen_locked" });
+    if (order === "lock then resume then stop")
+      fence.activate(
+        { state: "active", controlId: "control", expiresAt: "2030-01-01T00:00:00Z" },
+        "screen_locked",
+        0,
+      );
+    fence.confirm({ state: "ended", reason: "stopped" });
+    if (order === "stop then lock")
+      fence.confirm({ state: "paused", controlId: "control", reason: "screen_locked" });
+    assert.equal(previous(), "stopped_by_person");
+  },
+);
