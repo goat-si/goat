@@ -40,6 +40,12 @@ const tree = [
   '  - [2] AXButton "OK"',
 ];
 
+const refOf = (observation: ScreenObservation, index: number) => {
+  const ref = observation.elements.find((each) => each.index === index)?.ref;
+  if (ref === undefined) throw new Error(`no [${index}] in the observation`);
+  return ref;
+};
+
 const bind = (host: ReturnType<typeof fixture>["host"]) =>
   host
     .bindApp(call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }), context)
@@ -69,7 +75,7 @@ it.effect("a depth read counts every child the driver returned, paired texts inc
     expect(within.indexedText).not.toContain('"OK"');
     // The depth read's numbers still act: [2] was never in the within page.
     const clicked = yield* host.invoke(
-      call("click", { elementRef: depth.elements.find((each) => each.index === 2)?.ref }, target),
+      call("click", { elementRef: refOf(depth, 2) }, target),
       context,
     );
     expect(clicked).toBeDefined();
@@ -147,10 +153,7 @@ it.effect("any input to the window ends what within can read", () =>
     const target = yield* bind(host);
     const read = (yield* host.observe(call("get_window_state", { depth: 1 }, target), context))
       .value as ScreenObservation;
-    yield* host.invoke(
-      call("click", { elementRef: read.elements.find((each) => each.index === 2)?.ref }, target),
-      context,
-    );
+    yield* host.invoke(call("click", { elementRef: refOf(read, 2) }, target), context);
     const reads = sent.filter((each) => each.tool === "get_window_state").length;
     const stale = yield* host
       .observe(
