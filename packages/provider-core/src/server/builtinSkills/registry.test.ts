@@ -458,3 +458,29 @@ describe("the goat-discipline skill loads only when a message names it", () => {
     expect(Buffer.byteLength(GOAT_DEVELOPMENT_INSTRUCTIONS)).toBeLessThan(1_100);
   });
 });
+
+it("screen-code guidance retains desktop safety without hidden driver identifiers", () => {
+  const guide = screenCodeSkillFiles()["SKILL.md"] ?? "";
+  for (const term of [
+    "list_windows",
+    "get_window_state",
+    "get_accessibility_tree",
+    "element_token",
+    "verify_state",
+    "run_steps",
+    'since: "latest"',
+  ]) {
+    expect(guide).not.toContain(term);
+  }
+  for (const rule of [
+    "computer_use.request",
+    "foreground: true",
+    "medical, legal, or financial",
+    "VPN passwords",
+    "macOS",
+    "Windows",
+    "Wayland",
+  ]) {
+    expect(guide).toContain(rule);
+  }
+});
