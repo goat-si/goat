@@ -370,14 +370,17 @@ export const make = Effect.gen(function* () {
             : { _tag: "ended" as const, reason: current.ended };
         const record = registered?.controls.get(current.controlId);
         if (
-          record !== undefined &&
           state._tag === "ended" &&
           "reason" in state &&
           (state.reason === "stopped" || state.reason === "stopped_all")
-        )
-          latch(record, "stopped_by_person");
-        if (record !== undefined && state._tag === "paused" && state.reason === "screen_locked")
-          latch(record, "screen_locked");
+        ) {
+          latchWaiting(threadId, current.controlId, "stopped_by_person");
+          if (record !== undefined) latch(record, "stopped_by_person");
+        }
+        if (state._tag === "paused" && state.reason === "screen_locked") {
+          latchWaiting(threadId, current.controlId, "screen_locked");
+          if (record !== undefined) latch(record, "screen_locked");
+        }
         if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         // A proxy still starting registers as a thread proxy, so its attachment waits for it.
         if (registered?.kind !== "control" && keepsRegistration(state)) {

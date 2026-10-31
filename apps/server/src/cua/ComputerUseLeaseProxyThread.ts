@@ -403,6 +403,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         }),
         onDriverCutoff: (driver) => {
           if (driver.terminal !== undefined) {
+            if (generations.get(context.controlId) === driver.generation)
+              latchOwners(context.controlId, driver.terminal);
             const latch = context.driverTerminals.get(driver.generation);
             if (latch === context.terminal) latchCurrent(context, driver.terminal);
             else if (latch !== undefined)
