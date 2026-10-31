@@ -29,11 +29,7 @@ import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
 import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
 import { typeManifestRefusal } from "./ComputerUseManifestRefusal.ts";
-import {
-  makeProxyRelease,
-  makeProxyReleaseLater,
-  reserveProxyCall,
-} from "./ComputerUseLeaseProxyAdmission.ts";
+import * as Admission from "./ComputerUseLeaseProxyAdmission.ts";
 import { makeLeaseProxyLifecycle, type Running } from "./ComputerUseLeaseProxyLifecycle.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
@@ -254,8 +250,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
   // completed: the driver answered it, so its connection's earlier calls ended too (D17).
-  const release = makeProxyRelease(options);
-  const releaseLater = makeProxyReleaseLater(options, scope);
+  const release = Admission.makeProxyRelease(options);
+  const releaseLater = Admission.makeProxyReleaseLater(options, scope);
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
@@ -874,7 +870,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     let reservationId: string | undefined;
     let permissionDeadline = Infinity;
     if (isRequest && message?.method === "tools/call") {
-      const admission = yield* reserveProxyCall(options, {
+      const admission = yield* Admission.reserveProxyCall(options, {
         id,
         message,
         connectionId: current.connectionId,
