@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - Playwright waits run outside the Effect runtime.
 /**
  * Waits until a type or select target can take input, within one deadline on the request's
  * clock (performance.now), so nothing is sent after the caller has been answered.
