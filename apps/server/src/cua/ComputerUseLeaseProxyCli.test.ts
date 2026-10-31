@@ -375,7 +375,11 @@ describe("primitive report sequencer", () => {
       Effect.gen(function* () {
         const posts = yield* Queue.unbounded<{
           readonly url: string;
-          readonly body: { readonly registrationId: string; readonly connectionId: string };
+          readonly body: {
+            readonly registrationId: string;
+            readonly connectionId: string;
+            readonly terminal?: string;
+          };
         }>();
         let releaseFirst: () => void = () => undefined;
         const firstHeld = new Promise<void>((resolve) => {
@@ -408,9 +412,12 @@ describe("primitive report sequencer", () => {
           controlId: "A",
           connectionId: "driver:0",
           driverGeneration: 0,
+          terminal: "stopped_by_person",
         });
         releaseFirst();
-        assert.include((yield* Queue.take(posts)).url, "primitive-control-cutoff");
+        const cutoff = yield* Queue.take(posts);
+        assert.include(cutoff.url, "primitive-control-cutoff");
+        assert.equal(cutoff.body.terminal, "stopped_by_person");
         yield* reporter.rebind("registration:2");
         // Another control's driver is the only live one; nothing of A's may go first.
         yield* reporter.enqueue({
