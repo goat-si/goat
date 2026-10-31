@@ -91,7 +91,7 @@ it.effect(
 
 it.effect("actual trigger expressions and runtime usage queries use complete lookup keys", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 111 });
+    yield* runMigrations({ toMigrationInclusive: 85 });
     const sql = yield* SqlClient.SqlClient;
     const store = yield* Store.MemoryStore;
     const explain = (query: string, params: ReadonlyArray<unknown> = []) =>

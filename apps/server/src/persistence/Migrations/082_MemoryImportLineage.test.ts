@@ -148,6 +148,7 @@ it.effect.each(["event", "compact", "hubReceipt"] as const)(
         );
       }
       yield* runMigrations({ toMigrationInclusive: 82 });
+      // The runtime store exercised below requires later memory schema.
       yield* runMigrations({ toMigrationInclusive: 111 });
       // A structurally valid staged page isolates the lineage guard from ordinary
       // missing-page refusal. Without the guard publication really advances the floor.
