@@ -32,6 +32,7 @@ import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+import { channelEdgeSites } from "./ComputerUseTerminal.channelMatrix.testkit.ts";
 import {
   replaceWithTerminal,
   terminalReplyState,
@@ -689,6 +690,7 @@ export const preDispatchSites: ReadonlyArray<{
   readonly implicitReason?: ComputerUseTerminalReason;
   readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
 }> = [
+  ...channelEdgeSites,
   { name: "ComputerUseLeaseProxy.heldProof", undispatched: true, run: heldProof },
   { name: "ComputerUseLeaseProxy.unconfirmedProof", undispatched: true, run: unconfirmedProof },
   { name: "ComputerUseLeaseProxy.replacedAdmission", undispatched: true, run: replacedAdmission },
