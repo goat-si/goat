@@ -382,17 +382,23 @@ const __target = (binding, note, owner, extraProps = {}) => {
       try { const { elements: _elements, ...value } = remember(await call(tab ? 'observe' : 'get_accessibility_tree', arg)); return value; }
       catch (raw) { if (!tab && arg.after === undefined) seen.observation = undefined; throw __error(raw); }
     }
-    __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query']);
+    __only('observe options', arg, tab ? ['diff', 'screenshot', 'interactiveOnly', 'fullPage', 'scope'] : ['diff', 'screenshot', 'interactiveOnly', 'after', 'query', 'depth', 'within']);
+    if (!tab && [arg.after, arg.query, arg.depth, arg.within].filter((each) => each !== undefined).length > 1)
+      throw new ScreenError('invalid_argument', 'Pass one of after, query, depth or within; nothing was sent.', true);
+    if (!tab && arg.within !== undefined && !seen.observation)
+      throw new ScreenError('stale_reference', 'within reads part of the latest observe(); call observe() or observe({depth}) first.', true);
     // The host drops a tab's screenshot points on every read.
     if (tab) retire();
     if (!tab && arg.query !== undefined) __only('observe query', arg.query, ['role', 'name', 'text', 'id']);
     const diff = arg.diff !== false && seen.observation !== undefined;
-    const page = !tab && arg.after !== undefined;
+    const page = !tab && (arg.after !== undefined || arg.within !== undefined);
     const base = diff ? { mode: 'diff', baseObservationId: seen.observation.observationId } : {};
     const options = tab
       ? { ...base, ...(arg.screenshot ? { screenshot: true } : {}), ...(arg.interactiveOnly ? { interactiveOnly: true } : {}), ...(arg.fullPage ? { fullPage: true } : {}), ...(arg.scope ? { scope: arg.scope } : {}) }
+      : arg.within !== undefined ? { within: arg.within, withinBase: seen.observation.observationId }
       : page ? { after: arg.after, ...(seen.observation ? { baseObservationId: seen.observation.observationId } : {}) }
       : arg.query ? { mode: 'query', query: arg.query }
+      : arg.depth !== undefined ? { depth: arg.depth }
       : { ...base, ...(arg.interactiveOnly ? { interactiveOnly: true } : {}) };
     const previous = seen.observation;
     let observation;

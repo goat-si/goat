@@ -113,6 +113,14 @@ export interface BoundWindow {
   rows?: ReadonlyArray<DesktopRow>;
   /** Those rows when a whole, uncut read gave them and no call has gone to the window since. */
   fullRows?: TreeBaseline;
+  /** The latest whole read's raw tree, for observe({within}); any input to the process ends it. */
+  lastTree?: {
+    readonly base: string;
+    readonly state: Record<string, unknown>;
+    readonly cut: boolean;
+  };
+  /** Pages observe({within}) showed of the read behind observationId; their numbers act like its own. */
+  withinPages?: { readonly base: string; readonly ids: Set<string> };
   boundWindows?: ReadonlyArray<WindowEntry> | undefined;
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
@@ -321,6 +329,7 @@ export const createDesktopTargetHost = (deps: {
     delete bound.structuralDiff;
     delete bound.lastReadCut;
     delete bound.pages;
+    delete bound.lastTree;
     delete bound.elementsByToken;
     bound.screenshots?.clear();
     delete bound.latestScreenshot;
@@ -344,7 +353,10 @@ export const createDesktopTargetHost = (deps: {
       surfaceGeneration: element.surfaceGeneration,
     };
     const page =
-      bound.pages?.base === bound.observationId && bound.pages?.ids.has(ref.observationId);
+      (bound.pages?.base === bound.observationId && bound.pages?.ids.has(ref.observationId)) ||
+      (bound.withinPages !== undefined &&
+        bound.withinPages.base === bound.observationId &&
+        bound.withinPages.ids.has(ref.observationId));
     return ref.targetId === bound.ref.id &&
       (ref.observationId === bound.observationId || page === true) &&
       ref.surfaceGeneration === bound.epoch
@@ -614,7 +626,10 @@ export const createDesktopTargetHost = (deps: {
   ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
     if (call.method === "launch_app" && !call.targetRef) {
       // The process a launch reaches is known only after it, so no earlier read compares.
-      for (const each of targets.values()) delete each.fullRows;
+      for (const each of targets.values()) {
+        delete each.fullRows;
+        delete each.lastTree;
+      }
       return yield* launch(call, callArgs(call.args), context);
     }
     const bound = resolve(call, context);
@@ -622,7 +637,11 @@ export const createDesktopTargetHost = (deps: {
     // Any call here may change this process's windows, so only an input right after a read of its
     // own window compares with it; another binding's input on the process voids that read too.
     const baseline = bound.fullRows;
-    for (const each of targets.values()) if (each.pid === bound.pid) delete each.fullRows;
+    for (const each of targets.values())
+      if (each.pid === bound.pid) {
+        delete each.fullRows;
+        delete each.lastTree;
+      }
     if (call.method === "select_text")
       return yield* selectText(bound, callArgs(call.args), call, context);
     const withInputEvidence = (

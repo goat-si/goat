@@ -383,7 +383,7 @@ export const shownTree = (markdown: string, elements?: ReadonlyArray<Record<stri
   );
 
 /** The listed elements' index, role, label and value, for checking tree lines against them. */
-const listedOf = (elements: ReadonlyArray<Record<string, unknown>>) =>
+export const listedOf = (elements: ReadonlyArray<Record<string, unknown>>) =>
   elements.flatMap((entry) => {
     const index = natural(entry.element_index);
     return index === undefined
