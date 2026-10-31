@@ -65,6 +65,7 @@ export const SETTINGS_ACCESS = {
   disabledBuiltInSkills: agent,
   cuaFullAccessAutoAdmit: person(GRANTS_AGENTS),
   cuaMovePointer: person(GRANTS_AGENTS),
+  cuaAllowedApps: person(GRANTS_AGENTS),
   deviceOnboardingCompleted: agent,
   deviceHosts: person("It adds machines this server connects to over SSH."),
   easDeviceHosts: person(HOLDS_SECRETS),

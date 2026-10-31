@@ -30,32 +30,6 @@ import { makeSession } from "./ServerBrowserTestFixtures.ts";
 
 // One fake Chromium context per test; its page refuses every locator, so input never lands.
 const contexts: Array<ReturnType<typeof makeContext>> = [];
-const privacy = vi.hoisted((): { setters: Array<(on: boolean) => void> } => ({ setters: [] }));
-// Tells a test when the browser took a call, which starts that call's deadline.
-const calls = vi.hoisted((): { received: ((timeoutMs: number) => void) | undefined } => ({
-  received: undefined,
-}));
-
-vi.mock("./CaptureLock.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./CaptureLock.ts")>();
-  return {
-    ...actual,
-    answerCall: <A>(
-      request: Parameters<typeof actual.answerCall>[0],
-      call: (deadlineMs: number) => Promise<A>,
-    ) => {
-      calls.received?.(request.timeoutMs);
-      return actual.answerCall(request, call);
-    },
-  };
-});
-
-vi.mock("./PreviewPrivateMode.ts", () => ({
-  watchPrivateMode: async (_page: unknown, onChange: (on: boolean) => void) => {
-    privacy.setters.push(onChange);
-  },
-}));
-
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
   ServerBrowserContexts: class {
@@ -84,6 +58,8 @@ function makeContext() {
     off: (name: string, callback: (...args: unknown[]) => void) => events.off(name, callback),
     setDefaultTimeout: vi.fn(),
     setDefaultNavigationTimeout: vi.fn(),
+    exposeBinding: async () => {},
+    addInitScript: async () => {},
     context: () => context,
     mainFrame: () => page,
     frames: () => [page],

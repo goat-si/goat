@@ -1813,7 +1813,7 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     ),
     providerInstanceId: Schema.optional(Schema.String),
     environmentVariable: Schema.optional(Schema.String),
-    /** Why computer use cannot run on this host, written for users. */
+    /** Why a setting cannot be applied, written for users. */
     reason: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
@@ -1827,6 +1827,7 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
     if (this.code === "computer_use_unavailable" || this.code === "computer_use_install_failed") {
       return this.reason ?? "Computer use cannot run on this host.";
     }
+    if (this.operation === "normalize" && this.reason !== undefined) return this.reason;
     const provider =
       this.providerInstanceId === undefined ? "" : ` for provider ${this.providerInstanceId}`;
     const variable =

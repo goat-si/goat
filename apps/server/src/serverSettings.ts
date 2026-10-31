@@ -39,6 +39,7 @@ import {
   withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
+import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -176,6 +177,30 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
   };
 };
 
+const cleanAllowedApps = (settings: ServerSettings): ServerSettings => {
+  const seen = new Set<string>();
+  return {
+    ...settings,
+    cuaAllowedApps: settings.cuaAllowedApps.filter((app) => {
+      const key = cuaAppKey(app);
+      if (isExcludedCuaApplication(app) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }),
+  };
+};
+
+const rejectProtectedAllowedApps = (settings: ServerSettings) =>
+  settings.cuaAllowedApps.some(isExcludedCuaApplication)
+    ? Effect.fail(
+        new ServerSettingsError({
+          settingsPath: "<memory>",
+          operation: "normalize",
+          reason: "A protected app cannot be always allowed.",
+        }),
+      )
+    : Effect.void;
+
 const normalizeServerSettings = (
   settings: ServerSettings,
 ): Effect.Effect<ServerSettings, ServerSettingsError> =>
@@ -184,6 +209,7 @@ const normalizeServerSettings = (
     memoryHubProvenance: settings.memoryHubProvenance ?? null,
   }).pipe(
     Effect.flatMap(decodeServerSettings),
+    Effect.map(cleanAllowedApps),
     Effect.map(foldProviderInstanceEnabledFlags),
     Effect.map((next) => ({ ...next, defaultTheme: normalizeThemePreference(next.defaultTheme) })),
     Effect.map((next) => withIdleCompaction(next, globalIdleCompaction(next))),
@@ -932,6 +958,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
         Effect.gen(function* () {
           const current = yield* Ref.get(currentSettingsRef);
           const next = yield* update(current);
+          yield* rejectProtectedAllowedApps(next);
           return yield* checkpointAdmission.tryCommit(
             current,
             next,
@@ -1552,10 +1579,10 @@ const make = Effect.gen(function* () {
       } else {
         const { _memoryHubTransition: marker, ...publicSettings } = decoded.value;
         yield* Ref.set(hubMarkerRef, marker ?? null);
-        settings = {
+        settings = cleanAllowedApps({
           ...publicSettings,
           defaultTheme: normalizeThemePreference(decoded.value.defaultTheme),
-        };
+        });
       }
     }
     // Settings saved by a server that kept the mode in `compactIdleThreads` move
@@ -1886,6 +1913,7 @@ const make = Effect.gen(function* () {
         });
       }
       const updated = yield* update(current);
+      yield* rejectProtectedAllowedApps(updated);
       if (Option.isSome(routeState)) yield* routeState.value.validate(current, updated);
       if (CodexRoute.instanceFingerprint(current) === CodexRoute.instanceFingerprint(updated))
         return yield* connectAccess.commit(

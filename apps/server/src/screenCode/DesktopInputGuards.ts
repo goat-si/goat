@@ -8,7 +8,7 @@ import type { ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 import { fail } from "./DesktopDriverReplies.ts";
 import type { Placed, Rect } from "./DesktopFrames.ts";
-import { parseTree } from "./DesktopTreeText.ts";
+import { parseTree, titledIndexes } from "./DesktopTreeText.ts";
 
 interface DragEndpointGuard {
   readonly elementToken?: string;
@@ -26,6 +26,7 @@ export interface GuardElement {
   readonly nonValueLabel: string;
   readonly description: string;
   readonly placeholder: string;
+  readonly subrole: string;
   readonly identifier: string;
   readonly editable: boolean;
   /** A text field in a list or table that has keyboard focus: the item's name is being edited. */
@@ -362,8 +363,20 @@ export const inspectTreeElements = (
     readonly driverToken?: string;
   }>,
   markdown?: string,
+  /** The driver's own tree text, never GOAT's rebuilt one, so a title shown there is real. */
+  driverTree?: string,
 ): ReadonlyMap<string, GuardElement> => {
   const nestedInTable = tableNestedIndexes(markdown);
+  const titled = titledIndexes(
+    driverTree ?? "",
+    entries.flatMap((entry) => {
+      const index = natural(entry.element_index);
+      const label = string(entry.label);
+      return index === undefined || label === undefined
+        ? []
+        : [{ index, role: string(entry.role) ?? "", label }];
+    }),
+  );
   const byIndex = new Map<number, Record<string, unknown>>();
   for (const entry of entries) {
     const index = natural(entry.element_index);
@@ -402,9 +415,12 @@ export const inspectTreeElements = (
     const rawValue = typeof entry.value === "string" ? entry.value : undefined;
     const rawValueDesc = string(entry.value_description);
     // cua-driver's element_entry falls back label = title ?? description ?? value ?? identifier;
-    // when label equals value or value_description and no separate title is given, rawLabel may
-    // come from the field's value, so exclude it from search-field identity.
-    const explicitTitle = string(entry.title);
+    // when label equals value or value_description and no title shows it, rawLabel may come from
+    // the field's value, so exclude it from search-field identity.
+    const elementIndex = natural(entry.element_index);
+    const explicitTitle =
+      string(entry.title) ??
+      (elementIndex !== undefined && titled.has(elementIndex) ? rawLabel : undefined);
     const nonValueLabel =
       explicitTitle ??
       ((rawValue !== undefined && rawLabel === rawValue) ||
@@ -424,6 +440,7 @@ export const inspectTreeElements = (
       nonValueLabel,
       description: string(entry.description) ?? "",
       placeholder: string(entry.placeholder) ?? "",
+      subrole: string(entry.subrole) ?? "",
       identifier,
       editable,
       editingCell,
@@ -452,11 +469,15 @@ const isPasteMenuItem = (element: GuardElement | undefined) =>
   bareRole(element.role) === "menuitem" &&
   (isPasteLabel(element.name) || isPasteLabel(element.rawLabel));
 
-const isNonComposer = (element: GuardElement | undefined): boolean => {
+/**
+ * A field where Enter searches: a search field by role or subrole, or a single-line text field
+ * a search word names. Anything else, a multi-line AXTextArea included, is treated as a composer.
+ */
+const isSearchField = (element: GuardElement | undefined): boolean => {
   if (element === undefined) return false;
   const bare = bareRole(element.role);
-  if (bare === "searchfield") return true;
-  if (bare !== "textfield" && bare !== "textarea") return false;
+  if (bare === "searchfield" || bareRole(element.subrole) === "searchfield") return true;
+  if (bare !== "textfield") return false;
   // Never match against the element's current value or tree-text fallback, since a user or agent
   // message inside an unlabeled composer can contain the word "search".
   const combined = [
@@ -518,7 +539,7 @@ const sendPolicy = (input: {
     )
       return send ? "allow" : "refuse_send";
   }
-  if (method === "press_key" && elementToken !== undefined && isEnter && !isNonComposer(element))
+  if (method === "press_key" && elementToken !== undefined && isEnter && !isSearchField(element))
     return send ? "allow" : "refuse_send";
   if (method === "type_text" && elementToken !== undefined && hasControlCharacter(args.text))
     return send ? "allow" : "refuse_send";

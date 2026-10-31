@@ -20,6 +20,7 @@ import * as ServerBrowser from "./ServerBrowser.ts";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as PreviewSessions from "./PreviewSessions.ts";
+import { BrowserOriginGrants } from "./BrowserOriginGrantsLayer.ts";
 import { blockedSession, browserSession, desktopSession } from "./PreviewSessions.ts";
 
 const base = { environmentId: EnvironmentId.make("env"), host: "mac", platform: "mac" } as const;
@@ -314,6 +315,9 @@ describe("preview sessions", () => {
     const layer = PreviewSessions.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(BrowserOriginGrants)({
+            stop: () => Effect.sync(() => void stopped.push("claims")),
+          }),
           Layer.mock(ServerBrowser.ServerBrowser)({
             // A hung renderer: reading a tab's title never finishes.
             sessions: Effect.never,
@@ -322,13 +326,14 @@ describe("preview sessions", () => {
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             release: () => Effect.void,
             foregroundApprovalEpoch: Effect.die("unused"),
-            stopAll: Effect.sync(() => (stopped.push("desktop"), [])),
             grants: Effect.succeed([]),
             // The live picture service listens for control changes from the start.
             subscribe: PubSub.unbounded<void>().pipe(Effect.flatMap(PubSub.subscribe)),
             proxy: undefined,
           }),
-          Layer.mock(Handoffs.Handoffs)({}),
+          Layer.mock(Handoffs.Handoffs)({
+            stopComputerUseSessions: () => Effect.sync(() => (stopped.push("desktop"), [])),
+          }),
           Layer.mock(ServerEnvironment.ServerEnvironment)({}),
         ),
       ),
@@ -337,7 +342,7 @@ describe("preview sessions", () => {
       const sessions = yield* PreviewSessions.PreviewSessions;
       const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
       expect(result).toEqual({ applied: true });
-      expect(stopped).toEqual(["browser", "desktop"]);
+      expect(stopped).toEqual(["browser", "claims", "desktop"]);
     }).pipe(Effect.provide(layer));
   });
 
@@ -348,7 +353,6 @@ describe("preview sessions", () => {
           Layer.mock(ServerBrowser.ServerBrowser)({ stopAllAgents: Effect.void }),
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             release: () => Effect.void,
-            stopAll: Effect.succeed([]),
             grants: Effect.succeed([
               {
                 threadId,
@@ -361,6 +365,7 @@ describe("preview sessions", () => {
           }),
           // The grant cannot be ended, so its thread could take the screen again next turn.
           Layer.mock(Handoffs.Handoffs)({
+            stopComputerUseSessions: () => Effect.succeed([]),
             respond: () => Effect.fail(new HandoffError({ reason: "unavailable" })),
           }),
           Layer.mock(ServerEnvironment.ServerEnvironment)({}),
@@ -386,7 +391,6 @@ describe("preview sessions", () => {
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             release: () => Effect.void,
             sessions: Effect.succeed([{ control, state: active }]),
-            stop: (thread) => Effect.sync(() => (stopped.push(thread), true)),
             grants: Effect.succeed([
               { threadId, handoffId: TurnItemId.make("handoff:own"), expiresAt: control.expiresAt },
               {
@@ -399,6 +403,8 @@ describe("preview sessions", () => {
             proxy: undefined,
           }),
           Layer.mock(Handoffs.Handoffs)({
+            stopComputerUseSessions: (thread) =>
+              Effect.sync(() => (thread === undefined ? [] : (stopped.push(thread), [thread]))),
             respond: (input) =>
               Effect.sync(() => void ended.push(`${input.handoffId}:${input.action}`)).pipe(
                 Effect.as({} as never),

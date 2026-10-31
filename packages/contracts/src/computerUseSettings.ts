@@ -27,6 +27,7 @@ export const CuaSettingsFields = {
    * keyboard or background clicks. "allowed" lets full access foreground calls move it.
    */
   cuaMovePointer: CuaMovePointer.pipe(Schema.withDecodingDefault(Effect.succeed("never" as const))),
+  cuaAllowedApps: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 };
 
 /** Computer use fields of `ServerSettingsPatch`. */
@@ -35,4 +36,5 @@ export const CuaSettingsPatchFields = {
   disabledBuiltInSkills: Schema.optionalKey(Schema.Array(Schema.String)),
   cuaFullAccessAutoAdmit: Schema.optionalKey(Schema.Boolean),
   cuaMovePointer: Schema.optionalKey(CuaMovePointer),
+  cuaAllowedApps: Schema.optionalKey(Schema.Array(Schema.String)),
 };

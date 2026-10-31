@@ -39,6 +39,7 @@ export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
   readonly cuaMovePointer?: "never" | "allowed";
+  readonly cuaAllowedApps?: ReadonlyArray<string>;
 }
 
 interface StatusLine {

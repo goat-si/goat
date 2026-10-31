@@ -19,6 +19,11 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [WS_METHODS.browserClaimsClaim]: "browserClaims",
+  [WS_METHODS.browserClaimsAnswer]: "browserClaims",
+  [WS_METHODS.browserClaimsRevoke]: "browserClaims",
+  [WS_METHODS.browserClaimsEnd]: "browserClaims",
+  [WS_METHODS.browserClaimsList]: "browserClaims",
   [WS_METHODS.hubNodesList]: "hubNodes",
   [WS_METHODS.hubNodesSubscribe]: "hubNodes",
   [WS_METHODS.hubNodesAdd]: "hubNodes",
@@ -62,6 +67,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.computerUseStatusChanges]: "server",
   [WS_METHODS.computerUseStop]: "server",
   [WS_METHODS.computerUseStopAll]: "server",
+  [WS_METHODS.computerUseRemoveAllowedApp]: "server",
   [WS_METHODS.computerUseResume]: "server",
   [WS_METHODS.computerUseApps]: "server",
   [WS_METHODS.previewSessionsSubscribe]: "server",

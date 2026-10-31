@@ -118,6 +118,8 @@ import { MemoryToolkit } from "./toolkits/memory/tools.ts";
 import { MemoryAdministrationToolkit } from "./toolkits/memoryAdministration/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
+import { BrowserClaimToolkit } from "./toolkits/preview/browserClaims/tools.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -160,6 +162,7 @@ export const toolkits = {
   memoryAdministration: MemoryAdministrationToolkit,
   orchestrator: OrchestratorToolkit,
   preview: PreviewToolkit,
+  browserClaims: BrowserClaimToolkit,
   previewControls: PreviewControlsToolkit,
   project: ProjectToolkit,
   provider: ProviderToolkit,
@@ -177,6 +180,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
+  Layer.mock(BrowserOriginGrants)({}),
   Layer.mock(AgentWorkspace.AgentWorkspaceMcpService)({}),
   Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,
@@ -198,7 +202,10 @@ const inertDependencies = Layer.mergeAll(
     proxy: undefined,
     foregroundApprovalEpoch: Effect.succeed(0),
   }),
-  Layer.mock(Handoffs.Handoffs)({}),
+  Layer.mock(Handoffs.Handoffs)({
+    withComputerUseToggle: (_enabled, update) => update,
+    withComputerUseSettings: (_patch, update) => update,
+  }),
   ServerConfig.layerTest("/tmp/agent-surface-catalog", "/tmp/agent-surface-catalog").pipe(
     Layer.provide(Path.layer),
     Layer.provide(FileSystem.layerNoop({ makeDirectory: () => Effect.void })),

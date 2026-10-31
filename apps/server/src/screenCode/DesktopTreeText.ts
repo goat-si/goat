@@ -144,6 +144,34 @@ export const unmarkUnverified = (markdown: string, entries: ReadonlyArray<Listed
 };
 
 /**
+ * Indexes whose one line in the driver's own tree text opens with their label as a quoted title.
+ * The driver writes a value only after ` = ` and escapes line breaks, so a value can neither make
+ * its element look titled nor start a line; GOAT's rebuilt tree for a filtered read never counts.
+ */
+export const titledIndexes = (
+  driverTree: string,
+  entries: ReadonlyArray<Listed>,
+): ReadonlySet<number> => {
+  const lines = new Map<number, string[]>();
+  for (const line of driverTree.split("\n")) {
+    const marker = /^ *- \[(\d+)\] /.exec(line);
+    if (marker?.[1] === undefined) continue;
+    const index = Number(marker[1]);
+    lines.set(index, [...(lines.get(index) ?? []), line.trimStart()]);
+  }
+  const titled = new Set<number>();
+  for (const { index, role, label } of entries) {
+    const own = lines.get(index);
+    if (label === undefined || label === "" || own?.length !== 1) continue;
+    const head = `- [${index}] ${role} "${label}"`;
+    const line = own[0] ?? "";
+    if (line.startsWith(head) && (line.length === head.length || line[head.length] === " "))
+      titled.add(index);
+  }
+  return titled;
+};
+
+/**
  * Whether some string in the read spans lines: a listed label or value with a line break, a line
  * that is not a tree line, or one with an unpaired quote. Text lines are then not trusted to name.
  */

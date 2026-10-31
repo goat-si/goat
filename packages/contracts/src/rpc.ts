@@ -113,6 +113,7 @@ import {
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
+import { BROWSER_CLAIMS_WS_METHODS, BrowserClaimsRpcs } from "./browserClaimsRpc.ts";
 import { NOTES_WS_METHODS, NotesRpcs } from "./notesRpc.ts";
 import { ChannelRpcs } from "./channelRpc.ts";
 import { DECISION_WS_METHODS, DecisionRpcs } from "./decisionRpc.ts";
@@ -514,6 +515,7 @@ import {
 
 export const WS_METHODS = {
   ...MEMORY_WS_METHODS,
+  ...BROWSER_CLAIMS_WS_METHODS,
 
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -625,6 +627,7 @@ export const WS_METHODS = {
   computerUseStatusChanges: "computerUse.statusChanges",
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
+  computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
   computerUseResume: "computerUse.resume",
   computerUseApps: "computerUse.apps",
   previewSessionsSubscribe: "previewSessions.subscribe",
@@ -842,6 +845,12 @@ const WsComputerUseStopAllRpc = Rpc.make(WS_METHODS.computerUseStopAll, {
   payload: Schema.Struct({}),
   success: ComputerUseStopAllResult,
   error: EnvironmentAuthorizationError,
+});
+
+const WsComputerUseRemoveAllowedAppRpc = Rpc.make(WS_METHODS.computerUseRemoveAllowedApp, {
+  payload: Schema.Struct({ app: Schema.String }),
+  success: Schema.Struct({}),
+  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
 /** Hands the screen back to agents after a person's input or takeover paused them. */
@@ -2482,6 +2491,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsComputerUseStatusChangesRpc,
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
+  WsComputerUseRemoveAllowedAppRpc,
   WsComputerUseResumeRpc,
   WsComputerUseAppsRpc,
   WsPreviewSessionsSubscribeRpc,
@@ -2757,9 +2767,11 @@ export const WsChannelRpcGroup = ChannelRpcs.middleware(RpcScopeAuthorization);
 export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
 
 export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
+export const WsBrowserClaimsRpcGroup = BrowserClaimsRpcs.middleware(RpcScopeAuthorization);
 export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsNotesRpcGroup)
-  .merge(WsDecisionRpcGroup);
+  .merge(WsDecisionRpcGroup)
+  .merge(WsBrowserClaimsRpcGroup);
 
 export {
   WsMemoryProjectBindingGetRpc,

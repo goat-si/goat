@@ -106,6 +106,7 @@ export function dispatchTabExtra(
   method: string,
   arg: Record<string, unknown>,
   invalidatePoints: () => void,
+  invalidateTarget: () => void,
   invoke: (
     operation: "logs" | "fillSecret" | "dialog" | "evaluate" | "upload",
     input: unknown,
@@ -114,19 +115,28 @@ export function dispatchTabExtra(
   upload?: { locator: string | undefined; documentGeneration: number | undefined },
 ) {
   if (method === "tab_logs") return readTabLogs(arg, (input) => invoke("logs", input));
+  const inputResult = <A, E>(effect: Effect.Effect<A, E>) =>
+    effect.pipe(
+      Effect.tapError(() => Effect.sync(invalidateTarget)),
+      Effect.map((result) => ({
+        ...result,
+        outcome: { dispatch: "confirmed", effect: "unknown" } as const,
+      })),
+    );
   if (method === "tab_upload") {
     if (!upload) return undefined;
     invalidatePoints();
-    return uploadTab(arg, upload.locator, (input) =>
-      invoke("upload", input, upload.documentGeneration),
+    return inputResult(
+      uploadTab(arg, upload.locator, (input) => invoke("upload", input, upload.documentGeneration)),
     );
   }
   if (method === "tab_fill_secret" || method === "tab_dialog" || method === "tab_evaluate") {
     invalidatePoints();
     if (method === "tab_fill_secret")
-      return fillTabSecret(arg, (input) => invoke("fillSecret", input));
-    if (method === "tab_dialog") return answerDialog(arg, (input) => invoke("dialog", input));
-    return evaluateTab(arg, (input) => invoke("evaluate", input));
+      return inputResult(fillTabSecret(arg, (input) => invoke("fillSecret", input)));
+    if (method === "tab_dialog")
+      return inputResult(answerDialog(arg, (input) => invoke("dialog", input)));
+    return inputResult(evaluateTab(arg, (input) => invoke("evaluate", input)));
   }
   return undefined;
 }

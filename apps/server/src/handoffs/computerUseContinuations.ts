@@ -35,12 +35,19 @@ export interface ComputerUseAnswer {
 
 type E = HandoffError;
 
+export const expiredAt = (handoff: Handoff, now: DateTime.Utc) =>
+  handoff.expiresAt !== null &&
+  DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now);
+
 const logged = (message: string, handoffId: string) =>
   Effect.catchCause((cause: unknown) => Effect.logWarning(message, { handoffId, cause }));
 
 export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseContinuations")(
   function* (deps: {
     readonly lock: Semaphore.Semaphore;
+    readonly serializeAdmission: <A, E2, R>(
+      effect: Effect.Effect<A, E2, R>,
+    ) => Effect.Effect<A, E2, R>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
     readonly expire: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
     readonly cancelAsAgent: (input: HandoffReadInput) => Effect.Effect<Handoff, E>;
@@ -53,7 +60,8 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
     const owners = new Map<string, number>();
     // Answers a failed call recorded and gave back; their record no longer stops a wake.
     const givenBack = new Set<string>();
-    const locked = deps.lock.withPermits(1);
+    const locked = <A, E2, R>(effect: Effect.Effect<A, E2, R>) =>
+      deps.serializeAdmission(deps.lock.withPermits(1)(effect));
     const consumed = (id: string) =>
       deps.recordKind(id).pipe(Effect.map((kind) => kind === CONSUMED.kind));
     /** False when a person's Stop is already on record: that record stays. */
@@ -113,11 +121,7 @@ export const makeComputerUseContinuations = Effect.fn("Handoffs.computerUseConti
             Effect.gen(function* () {
               let handoff = yield* deps.read(input);
               const now = yield* DateTime.now;
-              if (
-                isHandoffPending(handoff.state) &&
-                handoff.expiresAt !== null &&
-                DateTime.toEpochMillis(handoff.expiresAt) <= DateTime.toEpochMillis(now)
-              )
+              if (isHandoffPending(handoff.state) && expiredAt(handoff, now))
                 handoff = yield* deps.expire(input);
               if (!isHandoffPending(handoff.state)) return { done: yield* finish(handoff) };
               if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(input.until)) {

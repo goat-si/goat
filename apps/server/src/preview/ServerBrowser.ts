@@ -1737,7 +1737,6 @@ const make = Effect.gen(function* () {
     // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
-      ServerBrowserScreen.assertScreenExpectation(tab, request);
       const channel = tabActionGate(
         tab,
         request,
