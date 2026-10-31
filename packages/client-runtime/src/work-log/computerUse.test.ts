@@ -22,19 +22,36 @@ const call = (toolName: string | null, input: unknown) =>
   ({ type: "dynamic_tool", toolName, input }) as unknown as OrchestrationV2TurnItem;
 
 describe("hasComputerUseHistory", () => {
-  it("recognizes computer and browser input without matching unrelated tools", () => {
-    expect(hasComputerUseHistory(call(null, {}))).toBe(false);
-    for (const name of [
-      "cua-driver.click",
-      "mcp__goat__goat_screen_run",
-      "goat.preview_click",
-      "goat.preview.click",
-    ]) {
-      expect(hasComputerUseHistory(call(name, {})), name).toBe(true);
-    }
-    for (const name of ["mcp__weather__click", "goat.preview_snapshot", "goat.other"]) {
-      expect(hasComputerUseHistory(call(name, {})), name).toBe(false);
-    }
+  it.each([
+    ["cua-driver.click", {}, true],
+    ["mcp__cua-driver__get_window_state", {}, true],
+    ["cua_repl.js", {}, true],
+    ["goat_screen_run", {}, true],
+    ["goat.screen.run", {}, true],
+    ["mcp__goat__screen_run", {}, true],
+    ["mcp__goat__goat_screen_run", {}, true],
+    ["goat-thread_1_goat_screen_run", {}, true],
+    ["goat.preview_click", {}, true],
+    ["goat.preview.click", {}, true],
+    ["mcp__goat__goat_preview_upload", {}, true],
+    ["goat_preview_back", {}, true],
+    ["goat_preview_forward", {}, true],
+    ["goat_preview_reload", {}, true],
+    ["goat_preview_scroll_collect", {}, true],
+    ["goat.preview_snapshot", {}, true],
+    ["goat_preview_future_action", {}, true],
+    ["goat_call", { path: "preview.upload" }, true],
+    ["mcp__goat__goat_call", { path: "preview.scroll_collect" }, true],
+    ["goat.goat_call", { path: "screen.run" }, true],
+    ["goat_call", { path: "surface.screen_run" }, true],
+    ["goat_call", { path: "goat_screen_run" }, true],
+    ["goat_call", { name: "goat_preview_back" }, true],
+    ["goat_call", { resource: "preview", verb: "upload" }, true],
+    ["mcp__weather__preview_click", {}, false],
+    ["goat_call", { path: "thread.read" }, false],
+    [null, {}, false],
+  ])("recognizes history availability for %s", (name, input, expected) => {
+    expect(hasComputerUseHistory(call(name, input))).toBe(expected);
   });
 });
 
