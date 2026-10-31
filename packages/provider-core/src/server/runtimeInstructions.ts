@@ -27,8 +27,10 @@ export function buildRuntimeInstructions(runtime: {
   readonly reasoningEffort?: string | undefined;
   /** True when this turn carries the computer use skill (see `resolveBuiltInSkills`). */
   readonly computerUse?: boolean | undefined;
-  /** The turn's MCP session: narrows `computerUse` and, absent `screenCode`, decides the screen guide. */
-  readonly skills?: Pick<McpProviderSessionConfig, "builtInSkills"> | undefined;
+  /** The turn's MCP session: narrows `computerUse`, decides the screen guide absent `screenCode`, and names its file. */
+  readonly skills?:
+    | Pick<McpProviderSessionConfig, "builtInSkills" | "screenCodeSkillPath">
+    | undefined;
   readonly screenCode?: boolean | undefined;
   readonly screenCodeSkillPath?: string | undefined;
   /** Cursor and ACP resend this block on later turns under the 300-byte budget. */
@@ -49,6 +51,7 @@ export function buildRuntimeInstructions(runtime: {
   const screenCode = screenCodeRuntimeInstructions({
     ...runtime,
     screenCode: runtime.screenCode ?? carriesScreenCodeSkill(runtime.skills),
+    screenCodeSkillPath: runtime.screenCodeSkillPath ?? runtime.skills?.screenCodeSkillPath,
   });
   return `<runtime_info>You run in GOAT through the ${harness} harness${modelInfo}${effortInfo}; say so only if asked. Markdown can embed images and videos by absolute file path.</runtime_info>${computerUse}${screenCode}`;
 }

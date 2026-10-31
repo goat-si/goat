@@ -192,7 +192,9 @@ import {
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
 import { codexTurnSkills } from "./CodexTurnSkills.ts";
+import type { CodexTurnStartInput } from "./CodexTurnStartInput.ts";
 import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
+
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
@@ -762,26 +764,7 @@ function codexRuntimeModeTurnDefaults(runtimeMode: RuntimeMode): {
 }
 
 export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTurnStartParams")(
-  function* (input: {
-    readonly nativeThreadId: string;
-    readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
-    readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
-    readonly modelSelection: ModelSelection;
-    readonly hasGoatMcp?: boolean;
-    readonly browserToolsAvailable?: boolean;
-    readonly deviceToolsAvailable?: boolean;
-    /** The managed `cua-driver` MCP server is attached to this thread. */
-    readonly computerUse?: boolean;
-    readonly screenCode?: boolean;
-    readonly screenCodeSkillPath?: string | undefined;
-    readonly computerUseDeferred?: boolean;
-    /** ChatGPT token sharing does not accept service tiers. */
-    readonly omitServiceTier?: boolean;
-    readonly memoryContext?: ProviderAdapter.ProviderAdapterV2TurnInput["memoryContext"];
-    readonly clearMemoryContext?: boolean;
-    /** What the thread's MCP Apps want the agent to know (`ui/update-model-context`). */
-    readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
-  }) {
+  function* (input: CodexTurnStartInput) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
       input.runtimePolicy.approvalPolicy === undefined
@@ -950,6 +933,7 @@ const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
     turn.status === "cancelled");
 
 type CodexThreadGoal = CodexSchema.V2ThreadGoalUpdatedNotification["goal"];
+
 const CODEX_GOAL_STATUSES = {
   active: "active",
   paused: "paused",

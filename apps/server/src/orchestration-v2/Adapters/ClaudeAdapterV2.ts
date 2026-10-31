@@ -1445,6 +1445,7 @@ function parseClaudeInteger(text: string): number {
   }
   return Number.parseInt(value, 10);
 }
+
 export function makeClaudeQueryOptions(input: {
   readonly modelSelection: ModelSelection;
   readonly nativeThreadId: string;
@@ -1458,7 +1459,6 @@ export function makeClaudeQueryOptions(input: {
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
   readonly computerUseSkill?: boolean;
   readonly screenCodeSkill?: boolean;
-  readonly screenCodeSkillPath?: string | undefined;
   readonly tools?: ClaudeAgentSdkQueryTools;
   readonly allowedTools?: ReadonlyArray<string>;
   readonly disallowedTools?: ReadonlyArray<string>;
