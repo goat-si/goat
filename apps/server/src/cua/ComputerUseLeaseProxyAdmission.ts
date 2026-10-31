@@ -21,6 +21,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     readonly callId: string;
     readonly interruptions: number;
     readonly idleEpoch: number;
+    readonly claimPid?: number | undefined;
     readonly foreground: ReadonlyArray<ComputerUseForegroundGrant>;
     /** The apps the proxy knows by pid, the ones its control may act on, and their labels. */
     readonly scope: {
@@ -38,7 +39,7 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
     ? input.foreground.find((grant) => grant.expiresAtMillis > now)
     : undefined;
   const { listed, apps } = input.scope;
-  const pid = targetPid(args);
+  const pid = input.claimPid ?? targetPid(args);
   const known = callApp(name, args, listed) ?? (pid === undefined ? undefined : listed.get(pid));
   const app = known === undefined ? undefined : grantedAppId(known, apps);
   const appLabel = input.scope.labels?.forCall(args);

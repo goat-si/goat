@@ -633,8 +633,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       ...(options.placement === undefined ? {} : { placement: options.placement }),
       end,
     },
-    refusal: (id, message, listApps, claimApproved) => ({
-      claimApproved,
+    refusal: (id, message, listApps, claimPid) => ({
+      claimPid,
       id,
       message,
       finished: () => finished,
@@ -774,7 +774,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           return yield* sink.answer(refusal(id, message.method, "wrong_display", WRONG_DISPLAY));
         if (needsProof) yield* proveDisplay(primitiveAllowed);
       }
-      const refused = yield* refuseCall(id, message, primitiveAllowed, selectedClaim !== undefined);
+      const refused = yield* refuseCall(id, message, primitiveAllowed, selectedClaim?.pid);
       if (held()) return yield* sink.answer(notSent(id));
       if (refused !== undefined) return yield* sink.answer(refused);
       if (admitted !== undefined && lifecycle.current !== admitted)
@@ -881,6 +881,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         callId: String(ownRequests++),
         interruptions: interruptionsSeen ?? 0,
         idleEpoch: idleEpochSeen ?? 0,
+        claimPid: selectedClaim?.pid,
         foreground,
         scope: { listed, apps, labels },
       });

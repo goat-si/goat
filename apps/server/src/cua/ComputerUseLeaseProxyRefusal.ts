@@ -79,7 +79,7 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
 interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
-  readonly claimApproved?: boolean;
+  readonly claimPid?: number | undefined;
   readonly finished: () => LeaseEnd | undefined;
   readonly paused: () => "human_input" | "takeover" | "private" | undefined;
   readonly idle: () => boolean;
@@ -124,8 +124,9 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   const judge = () =>
     scopeVerdict({
       name: input.message.params?.name,
-      args: input.message.params?.arguments,
-      apps: input.apps(),
+      args:
+        input.claimPid === undefined ? input.message.params?.arguments : { pid: input.claimPid },
+      apps: input.claimPid === undefined ? input.apps() : undefined,
       appOf: (pid) => input.listed.get(pid),
       bundleIds: input.host.bundleIds,
     });

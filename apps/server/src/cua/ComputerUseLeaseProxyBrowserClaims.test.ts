@@ -1,3 +1,4 @@
+import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   manifestApplied,
@@ -9,7 +10,10 @@ import {
 import { assert, it as effectIt } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
-import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("browser claim capability", () => {
   it("requires origin_scope on the driver's get_browser_state schema", () => {
@@ -540,6 +544,40 @@ effectIt.effect("an app-restricted claim generation change fences a held page ca
     yield* h.applied;
     yield* Deferred.succeed(gate, undefined);
     assert.equal((yield* h.nextToProvider).id, 1);
+    assert.equal(yield* h.driverQueued, 0);
+  }),
+);
+
+effectIt.effect("a browser claim cannot override the organization app denylist", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({
+      reservation: (request) =>
+        Effect.sync(() => {
+          if (request.action !== "reserve") return { status: "released" } as const;
+          const app = deniedCallApp(request, ["com.apple.calculator"]);
+          return app === undefined
+            ? ({ status: "admitted", reservationId: null } as const)
+            : ({ status: "refused", detail: "app_not_allowed", app } as const);
+        }),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 1,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(3, "browser_click", { tab_id: "tab-1" }));
+    assert.include(JSON.stringify(yield* h.nextToProvider), "app_not_allowed");
     assert.equal(yield* h.driverQueued, 0);
   }),
 );

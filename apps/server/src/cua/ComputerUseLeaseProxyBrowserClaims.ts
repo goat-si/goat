@@ -203,6 +203,7 @@ export interface SelectedClaim {
   readonly claimId: string;
   readonly claimGeneration: number;
   readonly origins: string;
+  readonly pid: number | undefined;
   readonly binding?: PendingBrowserBind;
 }
 
@@ -242,6 +243,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
           claimId: binding.claimId,
           claimGeneration: 0,
           origins: JSON.stringify([binding.origin]),
+          pid: binding.pid,
           binding,
         },
       };
@@ -275,6 +277,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
         claimId: browser.claimId,
         claimGeneration: browser.claimGeneration,
         origins: JSON.stringify(browser.args.origin_scope),
+        pid: claims.find((claim) => claim.claimId === browser.claimId)?.pid,
       };
       line = replaceCallArguments(line, browser.args);
       message = { ...message, params: { ...message.params, arguments: browser.args } };
