@@ -758,7 +758,6 @@ export const click = async (
   const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
 };
-
 export const type = async (
   page: Page,
   input: PreviewAutomationTypeInput,
@@ -766,6 +765,8 @@ export const type = async (
   readiness: Readiness = {},
 ) => {
   const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for typing.");
   const locator = targetLocator(page, input);
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
@@ -777,50 +778,52 @@ export const type = async (
     gate.signal?.throwIfAborted();
     const focused =
       handle !== null &&
-      (await handle.evaluate((element, clear) => {
-        // Like the desktop host: an enabled text control or contenteditable
-        // that actually takes focus. Anything else would swallow the text or
-        // send it to whichever field had focus before.
-        const control = element as unknown as {
-          readonly type?: string;
-          readonly disabled?: boolean;
-          readonly readOnly?: boolean;
-          readonly isContentEditable?: boolean;
-          readonly focus?: () => void;
-        };
-        // A native range takes a value, not keystrokes; setRange sets it after the gate.
-        if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
-          return "range";
-        const nonText = [
-          "button",
-          "checkbox",
-          "color",
-          "file",
-          "hidden",
-          "image",
-          "radio",
-          "range",
-          "reset",
-          "submit",
-        ];
-        const textControl =
-          element.tagName === "TEXTAREA" ||
-          (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
-        if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
-          return false;
-        }
-        control.focus?.();
-        const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
-        const active = root.activeElement;
-        const owned = active != null && (active === element || element.contains(active));
-        // Selected here, the old text is replaced by the one input sent after the gate.
-        return owned ? (textControl ? "text" : "editable") : false;
-      }, input.clear === true));
+      (await channel.call(() =>
+        handle.evaluate((element, clear) => {
+          // Like the desktop host: an enabled text control or contenteditable
+          // that actually takes focus. Anything else would swallow the text or
+          // send it to whichever field had focus before.
+          const control = element as unknown as {
+            readonly type?: string;
+            readonly disabled?: boolean;
+            readonly readOnly?: boolean;
+            readonly isContentEditable?: boolean;
+            readonly focus?: () => void;
+          };
+          // A native range takes a value, not keystrokes; setRange sets it after the gate.
+          if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
+            return "range";
+          const nonText = [
+            "button",
+            "checkbox",
+            "color",
+            "file",
+            "hidden",
+            "image",
+            "radio",
+            "range",
+            "reset",
+            "submit",
+          ];
+          const textControl =
+            element.tagName === "TEXTAREA" ||
+            (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
+          if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
+            return false;
+          }
+          control.focus?.();
+          const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
+          const active = root.activeElement;
+          const owned = active != null && (active === element || element.contains(active));
+          // Selected here, the old text is replaced by the one input sent after the gate.
+          return owned ? (textControl ? "text" : "editable") : false;
+        }, input.clear === true),
+      ));
     if (focused === "range" && handle) {
       remaining(deadline);
       await gate();
       gate.signal?.throwIfAborted();
-      return await setRange(handle, input.text);
+      return await channel.call(() => setRange(handle, input.text));
     }
     if (focused !== "text" && focused !== "editable") {
       throw new ServerBrowserOperationError(
@@ -831,17 +834,19 @@ export const type = async (
     if (input.clear && handle) {
       await gate();
       gate.signal?.throwIfAborted();
-      await handle.evaluate((element, textControl) => {
-        if (textControl) (element as unknown as { select(): void }).select();
-        else
-          (
-            globalThis as unknown as {
-              getSelection(): { selectAllChildren(node: unknown): void } | null;
-            }
-          )
-            .getSelection()
-            ?.selectAllChildren(element);
-      }, focused === "text");
+      await channel.call(() =>
+        handle.evaluate((element, textControl) => {
+          if (textControl) (element as unknown as { select(): void }).select();
+          else
+            (
+              globalThis as unknown as {
+                getSelection(): { selectAllChildren(node: unknown): void } | null;
+              }
+            )
+              .getSelection()
+              ?.selectAllChildren(element);
+        }, focused === "text"),
+      );
     }
     remaining(deadline);
     await gate();
@@ -849,15 +854,14 @@ export const type = async (
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {
-      if (input.clear) await page.keyboard.press("Delete");
+      if (input.clear) await channel.keyboard.press("Delete");
       return;
     }
-    await page.keyboard.insertText(input.text);
+    await channel.keyboard.insertText(input.text);
   } finally {
-    void handle?.dispose().catch(constVoid);
+    if (handle && !gate.signal?.aborted) void channel.dispose(handle).catch(constVoid);
   }
 };
-
 export const hover = async (
   page: Page,
   input: PreviewAutomationHoverInput,
@@ -991,15 +995,16 @@ export const drag = async (
   await pointer(finish, "move");
   await dragBetween(page, { from: start, to: finish }, gate, deadline);
 };
-
 export const press = async (
-  page: Page,
+  _page: Page,
   input: PreviewAutomationPressInput,
   gate: DispatchGate = open,
 ) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for keyboard input.");
   await gate();
   gate.signal?.throwIfAborted();
-  await page.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
+  await channel.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
 };
 
 export const scroll = async (

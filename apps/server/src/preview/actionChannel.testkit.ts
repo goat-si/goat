@@ -33,6 +33,23 @@ export const testActionPage = {
         channel: gate?.channel ?? testActionChannel(page, {} as CDPSession, gate?.signal),
       }),
     ),
+  type: async (...[page, input, gate, readiness]: Parameters<typeof PageOperations.type>) => {
+    const channel =
+      gate?.channel ??
+      testActionChannel(page, await page.context().newCDPSession(page), gate?.signal);
+    return PageOperations.type(
+      page,
+      input,
+      Object.assign(gate ?? (() => {}), { channel }),
+      readiness,
+    );
+  },
+  press: async (...[page, input, gate]: Parameters<typeof PageOperations.press>) => {
+    const channel =
+      gate?.channel ??
+      testActionChannel(page, await page.context().newCDPSession(page), gate?.signal);
+    return PageOperations.press(page, input, Object.assign(gate ?? (() => {}), { channel }));
+  },
   hover: async (...[page, input, pointer, gate]: Parameters<typeof PageOperations.hover>) => {
     const channel =
       gate?.channel ??

@@ -75,6 +75,16 @@ export const makeActionChannel = ({
         return page.mouse.wheel(...args);
       },
     },
+    keyboard: {
+      press: (...args: Parameters<Page["keyboard"]["press"]>) => {
+        check();
+        return page.keyboard.press(...args);
+      },
+      insertText: (...args: Parameters<Page["keyboard"]["insertText"]>) => {
+        check();
+        return page.keyboard.insertText(...args);
+      },
+    },
     evaluate: (
       handle: ElementHandle | Frame,
       fn: string | ((...args: never[]) => unknown),

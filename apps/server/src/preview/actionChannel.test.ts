@@ -35,6 +35,8 @@ it.effect("an aborted action refuses every command before it reaches the browser
     expect(() => channel.mouse.up()).toThrow();
     expect(() => channel.mouse.move(1, 2)).toThrow();
     expect(() => channel.mouse.wheel(1, 2)).toThrow();
+    expect(() => channel.keyboard.press("a")).toThrow();
+    expect(() => channel.keyboard.insertText("a")).toThrow();
     expect(() => channel.evaluate(element, () => 1, undefined)).toThrow();
     expect(() => channel.setInputFiles(element, [])).toThrow();
     expect(calls).not.toHaveBeenCalled();

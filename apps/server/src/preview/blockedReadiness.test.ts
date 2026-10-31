@@ -11,7 +11,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import { makeBlockedTabFence } from "./blockedTabFence.ts";
 import { inputFence } from "./PreviewInputFence.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 import { waitUntilWritable } from "./actionReadiness.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
