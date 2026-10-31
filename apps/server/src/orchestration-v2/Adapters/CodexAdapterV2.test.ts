@@ -26,6 +26,7 @@ import {
   type ProviderApprovalDecision,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderSetupError,
   ProviderThreadId,
   ProviderTurnId,
   RunAttemptId,
@@ -77,6 +78,8 @@ import * as Orchestrator from "../Orchestrator.ts";
 import * as ProviderReplayHarness from "../testkit/ProviderReplayHarness.ts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import type * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
+import * as ModelManifest from "../../provider/ModelManifest.ts";
+import { resolveProviderCompatibility } from "../../provider/providerCompatibility.ts";
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
 import { buildCodexDevelopmentContext } from "../../provider/CodexDeveloperInstructions.ts";
 import {
@@ -219,6 +222,7 @@ describe("CodexAdapterV2 goatclaw subagent limits", () => {
       assert.deepEqual(limits(3, version).config, { "agents.max_threads": 3 });
   });
 });
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 describe("CodexAdapterV2 context usage", () => {
   it("uses the current context rather than cumulative processed tokens", () => {
@@ -644,6 +648,7 @@ describe("CodexAdapterV2 session initialize", () => {
     transcript: CodexReplay.CodexAppServerReplayTranscript,
     beforeEmitInbound?: CodexReplay.CodexAppServerReplayDriver["beforeEmitInbound"],
     ownerThreadId?: ThreadId,
+    compatibility?: CodexAdapterV2.CodexAdapterV2Options["compatibility"],
   ) =>
     Effect.gen(function* () {
       const driver = yield* CodexReplay.makeReplayDriver(
@@ -657,6 +662,7 @@ describe("CodexAdapterV2 session initialize", () => {
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
         environment: {},
+        ...(compatibility === undefined ? {} : { compatibility }),
         clientFactory: {
           open: (openInput) =>
             Effect.sync(() => {
@@ -806,6 +812,50 @@ describe("CodexAdapterV2 session initialize", () => {
       const providerThread = yield* session.ensureThread("thread-initialize-retry");
       assert.equal(providerThread.nativeThreadRef?.nativeId, "initialize-retry");
       assert.equal(session.initializeRequests(), 2);
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("refuses to open a session on a Codex version marked broken", () =>
+    Effect.gen(function* () {
+      const [initialize] = replayPreamble("broken-version");
+      const failure = yield* openReplaySession(
+        makeCodexReplayTranscript({
+          scenario: "broken-version",
+          entries: [
+            initialize!,
+            {
+              type: "emit_inbound",
+              label: "initialize",
+              frame: {
+                id: 1,
+                result: {
+                  userAgent: "T3 Code/0.144.3 (Mac OS 15.5.0; x86_64) unknown (T3 Code; 0.1.5)",
+                  codexHome: "/tmp/codex-home",
+                  platformFamily: "unix",
+                  platformOs: "macos",
+                },
+              },
+            },
+          ],
+        }),
+        undefined,
+        undefined,
+        (version) =>
+          Effect.succeed(
+            resolveProviderCompatibility(
+              ModelManifest.BUNDLED_MODEL_MANIFEST.compatibility,
+              CodexAdapterV2.CODEX_DRIVER_KIND,
+              version,
+            ),
+          ),
+      ).pipe(Effect.flip);
+
+      assert.instanceOf(failure, ProviderAdapter.ProviderAdapterOpenSessionError);
+      assert.instanceOf(failure.cause, ProviderSetupError);
+      assert.equal(
+        failure.cause.message,
+        "Codex 0.144.3 does not work with this GOAT release. Update Codex to >=0.159.0, then retry.",
+      );
     }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
   );
 
@@ -3662,7 +3712,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     answers: ReadonlyArray<{
       readonly id: string;
       readonly text: string;
-      readonly phase?: "commentary" | "final_answer" | null;
+      readonly phase?: "commentary" | "partial_answer" | "final_answer" | null;
       readonly omitPhase?: boolean;
       readonly streamed?: boolean;
       readonly completionDelayMs?: number;
@@ -3756,6 +3806,238 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       ],
     });
   };
+
+  it.effect.each([false, true])(
+    "preserves a final answer that repeats a preceding partial answer (streamed: %s)",
+    (streamed) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const transcript = finalAnswerTranscript("codex-partial-then-final", [
+            { id: "partial", text: "CODEX_RECOVERY_OK", phase: "partial_answer", streamed },
+            { id: "final", text: "CODEX_RECOVERY_OK", phase: "final_answer", streamed },
+          ]);
+          const harness = yield* makeCodexReplayHarness(transcript);
+          const now = yield* DateTime.now;
+          yield* harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make("attempt-codex-partial-then-final"),
+              text: "Reply with the requested recovery marker.",
+            }),
+          );
+          yield* harness.firstTerminal;
+          assert.deepEqual(
+            assistantMessages(harness.events).map((event) => event.message.text),
+            ["CODEX_RECOVERY_OK", "CODEX_RECOVERY_OK"],
+          );
+        }).pipe(Effect.provide(layerAdapterTest)),
+      ),
+  );
+
+  it.effect.each([
+    {
+      name: "a text reply gains each saved image once",
+      reply: "Done.",
+      images: [
+        { savedPath: "/tmp/a.png" },
+        { savedPath: "/tmp/a.png" },
+        { savedPath: "/tmp/failed.png", status: "failed" },
+        {
+          savedPath: "/tmp/limited.png",
+          failure: { type: "usageLimitExceeded", limitId: "image-generation" },
+        },
+        { savedPath: null },
+      ],
+      expected: "Done.\n\n![Generated image](</tmp/a.png>)",
+    },
+    {
+      name: "an image-only result becomes the reply",
+      reply: null,
+      images: [{ savedPath: "/tmp/a.png" }],
+      expected: "![Generated image](</tmp/a.png>)",
+    },
+  ])("projects generated images: $name", ({ reply, images, expected }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const imageDir = yield* fileSystem.makeTempDirectoryScoped();
+      yield* fileSystem.writeFileString(`${imageDir}/a.png`, "fixture");
+      const scenario = "codex-generated-images";
+      const result = "aW1hZ2UtYnl0ZXMtbXVzdC1uZXZlci1yZWFjaC1jbGllbnRz";
+      const base = finalAnswerTranscript(
+        scenario,
+        reply === null ? [] : [{ id: "answer", text: reply }],
+      );
+      const harness = yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({
+          scenario,
+          entries: [
+            ...base.entries.slice(0, -1),
+            ...images.map((image, index) => ({
+              type: "emit_inbound" as const,
+              frame: {
+                method: "item/completed",
+                params: {
+                  threadId: `native-${scenario}-thread`,
+                  turnId: `native-${scenario}-turn`,
+                  item: {
+                    type: "imageGeneration",
+                    id: `image-${index}`,
+                    status: "completed",
+                    result: image.savedPath === null ? "" : result,
+                    ...image,
+                    savedPath: image.savedPath?.replace("/tmp", imageDir) ?? null,
+                  },
+                },
+              },
+            })),
+            ...base.entries.slice(-1),
+          ],
+        }),
+      );
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("attempt-generated-images"),
+          text: "Reply with the requested recovery marker.",
+        }),
+      );
+      yield* harness.firstTerminal;
+
+      const messages = assistantMessages(harness.events);
+      assert.strictEqual(messages.at(-1)?.message.text, expected.replaceAll("/tmp", imageDir));
+      assert.strictEqual(messages.at(-1)?.message.streaming, false);
+      assert.strictEqual(new Set(messages.map(({ message }) => message.id)).size, 1);
+      // Image bytes stay with Codex; clients load the saved file.
+      assert.notInclude(encodeUnknownJson(harness.events), result);
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect.each(["complete", "stop"] as const)(
+    "retains generating images after settlement until %s",
+    (outcome) =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const imageDir = yield* fileSystem.makeTempDirectoryScoped();
+        for (const name of ["first", "second"]) {
+          yield* fileSystem.writeFileString(`${imageDir}/${name}.png`, "fixture");
+        }
+        const scenario = "codex-retained-image";
+        const base = finalAnswerTranscript(scenario, [{ id: "answer", text: "Done." }]);
+        const completions = {
+          first: yield* Deferred.make<void>(),
+          second: yield* Deferred.make<void>(),
+        };
+        const projected = yield* Deferred.make<void>();
+        const drained = yield* Deferred.make<void>();
+        const firstText = `Done.\n\n![Generated image](<${imageDir}/first.png>)`;
+        const imageEvent = (image: "first" | "second", phase: "started" | "completed") => ({
+          type: "emit_inbound" as const,
+          label: `${image}-${phase}`,
+          frame: {
+            method: `item/${phase}`,
+            params: {
+              threadId: `native-${scenario}-thread`,
+              turnId: `native-${scenario}-turn`,
+              item: {
+                type: "imageGeneration",
+                id: image,
+                status: phase === "started" ? "inProgress" : "completed",
+                result: "",
+                ...(phase === "completed" ? { savedPath: `${imageDir}/${image}.png` } : {}),
+              },
+            },
+          },
+        });
+        const harness = yield* makeCodexReplayHarness(
+          makeCodexReplayTranscript({
+            scenario,
+            entries: [
+              ...base.entries.slice(0, -2),
+              imageEvent("first", "started"),
+              imageEvent("second", "started"),
+              ...base.entries.slice(-2),
+              imageEvent("first", "completed"),
+              imageEvent("second", "completed"),
+            ],
+          }),
+          (event) =>
+            event.type === "message.updated" && event.message.text === firstText
+              ? Deferred.succeed(projected, undefined)
+              : event.type === "background_work.updated" && !event.pending
+                ? Deferred.succeed(drained, undefined)
+                : Effect.void,
+          undefined,
+          undefined,
+          (entry) =>
+            entry.label === "first-completed"
+              ? Deferred.await(completions.first)
+              : entry.label === "second-completed"
+                ? Deferred.await(completions.second)
+                : Effect.void,
+        );
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-retained-image"),
+            text: "Reply with the requested recovery marker.",
+          }),
+        );
+        yield* harness.firstTerminal;
+        const pending = Effect.all([
+          harness.runtime.hasPendingBackgroundWorkForThread!(harness.providerThread),
+          harness.hasPendingBackgroundWork,
+        ]);
+        assert.deepEqual(yield* pending, [true, true]);
+        assert.strictEqual(assistantMessages(harness.events).at(-1)?.message.text, "Done.");
+        const cleared = () =>
+          harness.events.some((e) => e.type === "background_work.updated" && !e.pending);
+
+        if (outcome === "complete") {
+          yield* Deferred.succeed(completions.first, undefined);
+          yield* Deferred.await(projected);
+          // The second image is still generating, so the first must not release the turn.
+          assert.deepEqual(yield* pending, [true, true]);
+          assert.isFalse(cleared());
+          yield* Deferred.succeed(completions.second, undefined);
+        } else {
+          yield* harness.runtime.interruptTurn({
+            providerThread: harness.providerThread,
+            providerTurnId: harness.terminalEvents()[0]!.providerTurnId,
+            requestRuntimeRestart: true,
+          });
+        }
+        yield* Deferred.await(drained);
+        assert.deepEqual(yield* pending, [false, false]);
+        assert.lengthOf(harness.terminalEvents(), 1);
+        // Run ingestion follows these updates, so they must bracket the terminal and the images.
+        const indexOf = (predicate: (event: ProviderAdapter.ProviderAdapterV2Event) => boolean) =>
+          harness.events.findIndex(predicate);
+        const started = indexOf((e) => e.type === "background_work.updated" && e.pending);
+        const terminal = indexOf((e) => e.type === "turn.terminal");
+        const finished = indexOf((e) => e.type === "background_work.updated" && !e.pending);
+        assert.isAtLeast(started, 0);
+        assert.isAbove(terminal, started);
+        assert.isAbove(finished, terminal);
+        if (outcome === "complete") {
+          const messages = assistantMessages(harness.events);
+          const projectedBoth = indexOf(
+            (e) =>
+              e.type === "message.updated" &&
+              e.message.text === `${firstText}\n\n![Generated image](<${imageDir}/second.png>)`,
+          );
+          assert.isAbove(projectedBoth, terminal);
+          assert.isAbove(finished, projectedBoth);
+          assert.strictEqual(messages.at(-1)?.message.id, messages[0]?.message.id);
+          assert.strictEqual(messages.at(-1)?.message.streaming, false);
+        }
+      }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
 
   it.effect("suppresses a trailing empty final answer after a non-empty final answer", () =>
     Effect.scoped(
