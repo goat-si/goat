@@ -1,7 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Screenshot and region IDs are opaque UUIDs.
 /**
  * Desktop pointer coordinate resolution: converts macOS points and drag endpoints to window_points
- * with window_basis, and refuses point or unaddressed-scroll actions on Linux and Windows.
+ * with window_basis. On Linux and Windows only a click or right-click takes points: screenshot
+ * pixels sent with the driver's basis id for that capture, which the driver checks at dispatch.
  */
 import * as NodeCrypto from "node:crypto";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -23,6 +24,10 @@ export interface ScreenshotBasis {
   readonly pixelHeight: number;
   readonly scale: number;
   readonly captureId?: string;
+  /** The driver's window basis id for these pixels, sent with a point click off macOS. */
+  readonly pointBasis?: string;
+  /** Why the capture has no usable basis: the driver's reason, or GOAT's when it does not fit. */
+  readonly pointBasisMissing?: string;
 }
 
 const POINTER_METHODS: ReadonlySet<string> = new Set([
@@ -39,7 +44,23 @@ const MOVED_WINDOW =
   "The window moved or resized since it was read; observe again and use the new { window: [x, y] } window points (or [x, y] pixels from a new screenshot).";
 const MOVED_DRAG = "The window moved since it was read; observe it again.";
 const UNSUPPORTED_NON_MAC_POINTS =
-  "On Linux and Windows, point coordinates and unaddressed scrolls are unavailable because the driver lacks actuator-boundary window-basis validation; pass an element number from observe().";
+  "On Linux and Windows only click and right-click take points, as [x, y] pixels of a screenshot whose window position the driver proved; pass an element number from observe() for this action.";
+const NON_MAC_WINDOW_POINTS =
+  "On Linux and Windows { window: [x, y] } points are unavailable; click [x, y] pixels of a screenshot, or pass an element number from observe().";
+const NO_SCREENSHOT =
+  "That screenshot is gone; take a new screenshot and click its [x, y] pixels. Nothing was sent.";
+/** Basis reasons a new screenshot cannot fix: the driver cannot prove where this window's pixels sit. */
+const UNPROVABLE_BASIS: ReadonlySet<string> = new Set(["none", "no_proven_origin"]);
+const noBasis = (reason: string): ScreenRunError =>
+  UNPROVABLE_BASIS.has(reason)
+    ? fail(
+        "unsupported",
+        "This computer's driver did not prove where the window was when it took that screenshot, so its pixels cannot be clicked; pass an element number from observe(). Nothing was sent.",
+      )
+    : fail(
+        "stale_reference",
+        `That screenshot's window position cannot be checked (${reason}); take a new screenshot and click its [x, y] pixels. Nothing was sent.`,
+      );
 
 const object = (value: unknown): Record<string, unknown> | undefined =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -62,6 +83,50 @@ const formatPixelOutOfBounds = (
 
 const formatWindowPointOutOfBounds = (wx: number, wy: number, basis: Rect): string =>
   `Window point (${wx.toFixed(1)}, ${wy.toFixed(1)}) pt is outside the ${Math.round(basis.w)}×${Math.round(basis.h)} pt window. Nothing was sent.`;
+
+/**
+ * A click or right-click at screenshot pixels off macOS: the pixels go unchanged with the basis id
+ * of the capture they count in, and the driver refuses them unsent if the window moved since.
+ */
+const clickAtBasis = (
+  args: Record<string, unknown>,
+  forwarded: Record<string, unknown>,
+  state: PointResolutionState,
+):
+  | { readonly ok: true; readonly needs: "points" }
+  | { readonly ok: false; readonly error: ScreenRunError } => {
+  delete forwarded.coordinate_space;
+  delete forwarded.window_basis;
+  delete forwarded.capture_id;
+  if (args.coordinate_space !== undefined || args.window_basis !== undefined)
+    return { ok: false, error: fail("unsupported", NON_MAC_WINDOW_POINTS) };
+  const extra = ["from_x", "from_y", "to_x", "to_y"].some((key) => args[key] !== undefined);
+  const px = args.x;
+  const py = args.y;
+  if (extra || !finite(px) || !finite(py))
+    return {
+      ok: false,
+      error: fail("invalid_argument", "Point coordinates must be finite numbers."),
+    };
+  if (state.pointsStale === "restart")
+    return { ok: false, error: fail("stale_reference", RESTARTED_POINTS) };
+  const regionId = string(args.regionId);
+  const shot = regionId !== undefined ? state.screenshots?.get(regionId) : state.latestScreenshot;
+  if (!shot || shot.pixelWidth <= 0 || shot.pixelHeight <= 0)
+    return { ok: false, error: fail("stale_reference", NO_SCREENSHOT) };
+  if (shot.pointBasis === undefined)
+    return { ok: false, error: noBasis(shot.pointBasisMissing ?? "none") };
+  if (px < 0 || py < 0 || px >= shot.pixelWidth || py >= shot.pixelHeight)
+    return {
+      ok: false,
+      error: fail(
+        "invalid_argument",
+        `Screenshot pixel (${fmtNum(px)}, ${fmtNum(py)}) is outside the ${shot.pixelWidth}×${shot.pixelHeight} px screenshot. Nothing was sent.`,
+      ),
+    };
+  forwarded.snapshot_id = shot.pointBasis;
+  return { ok: true, needs: "points" };
+};
 
 export interface PointResolutionState {
   readonly platform?: NodeJS.Platform;
@@ -330,6 +395,7 @@ export const applyDesktopPointerArgs = (
   if (!hasPointExtras) return { ok: true, needs: "nothing" };
 
   if (!isMac) {
+    if (method === "click" || method === "right_click") return clickAtBasis(args, forwarded, state);
     delete forwarded.coordinate_space;
     delete forwarded.window_basis;
     return { ok: false, error: fail("unsupported", UNSUPPORTED_NON_MAC_POINTS) };
@@ -516,6 +582,28 @@ export const treeWindowBasis = (
   return windowBounds;
 };
 
+/**
+ * The driver's window basis for a capture, accepted only when it counts the delivered image's
+ * pixels for the bound window; otherwise why there is none.
+ */
+const pointBasisOf = (
+  state: Record<string, unknown>,
+  width: number,
+  height: number,
+  window: { readonly pid: number; readonly windowId: number } | undefined,
+): { readonly pointBasis: string } | { readonly pointBasisMissing: string } => {
+  const basis = object(state.window_basis);
+  if (basis === undefined)
+    return { pointBasisMissing: string(state.basis_unavailable_reason) ?? "none" };
+  const id = string(basis.snapshot_id);
+  if (id === undefined) return { pointBasisMissing: "none" };
+  if (basis.capture_width !== width || basis.capture_height !== height)
+    return { pointBasisMissing: "capture_size_mismatch" };
+  if (window !== undefined && (basis.pid !== window.pid || basis.window_id !== window.windowId))
+    return { pointBasisMissing: "other_window" };
+  return { pointBasis: id };
+};
+
 /** Builds screenshot metadata, image payload and window-point basis from a driver capture reply. */
 export const buildScreenshotCapture = (input: {
   readonly callId: number;
@@ -525,6 +613,8 @@ export const buildScreenshotCapture = (input: {
   readonly imagePart: ComputerUsePrimitiveReply["image"];
   readonly width: number | undefined;
   readonly height: number | undefined;
+  /** The bound window; a driver basis for another window is not used. */
+  readonly window?: { readonly pid: number; readonly windowId: number };
 }):
   | {
       readonly metadata: ScreenImageMetadata;
@@ -532,7 +622,7 @@ export const buildScreenshotCapture = (input: {
       readonly shotBasis: ScreenshotBasis;
     }
   | undefined => {
-  const { callId, targetId, observationId, state, imagePart, width, height } = input;
+  const { callId, targetId, observationId, state, imagePart, width, height, window } = input;
   if (!imagePart || !width || !height || imagePart.width !== width || imagePart.height !== height)
     return undefined;
   const bounds = object(state.window_bounds);
@@ -586,6 +676,7 @@ export const buildScreenshotCapture = (input: {
     pixelHeight: height,
     scale: metadata.scale,
     ...(captureId === undefined ? {} : { captureId }),
+    ...pointBasisOf(state, width, height, window),
   };
   return {
     metadata,

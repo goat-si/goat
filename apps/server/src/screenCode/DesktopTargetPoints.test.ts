@@ -632,7 +632,7 @@ it.effect(
 );
 
 it.effect(
-  "Linux and Windows refuse point-targeted and conflicting mixed-target actions until actuator-boundary window-basis validation exists on those platforms, while element-targeted click and scroll pass schema validation",
+  "Linux and Windows refuse point-targeted and conflicting mixed-target actions when the driver proves no window basis, while element-targeted click and scroll pass schema validation",
   () =>
     Effect.gen(function* () {
       const ELEMENT_SCROLL_KEYS = new Set([
@@ -704,11 +704,11 @@ it.effect(
           expect(refused).toMatchObject({ code: "invalid_argument", effectStarted: false });
         }
 
-        // All point-targeted and unaddressed scroll actions are refused before dispatch on Linux and Windows.
+        // Without a driver window basis, every point-targeted and unaddressed scroll action is
+        // refused before dispatch on Linux and Windows.
         for (const unsupportedCall of [
           call("click", { x: 20, y: 16, regionId }, ref),
           call("click", { x: 20, y: 16 }, ref),
-          call("click", { x: "20", y: "16" }, ref),
           call("click", { x: 10, y: 10, coordinate_space: "window_points" }, ref),
           call("right_click", { x: 10, y: 10, regionId }, ref),
           call("scroll", { x: 10, y: 10, regionId, direction: "down", amount: 3 }, ref),
@@ -730,6 +730,10 @@ it.effect(
           expect(refused.nextStep).not.toContain("capture_id");
           expect(refused.nextStep).toContain("observe()");
         }
+        const malformed = yield* host
+          .invoke(call("click", { x: "20", y: "16" }, ref), context)
+          .pipe(Effect.flip);
+        expect(malformed).toMatchObject({ code: "invalid_argument", effectStarted: false });
         expect(platFix.sent.slice(before)).toEqual([]);
       }
 
