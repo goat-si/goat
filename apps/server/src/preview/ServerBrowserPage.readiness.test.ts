@@ -1,5 +1,5 @@
 import { chromium, type Locator, type Page } from "playwright-core";
-import { expect, it, vi } from "vite-plus/test";
+import { expect, it } from "vite-plus/test";
 import { requireMatch } from "./actionReadiness.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
@@ -270,24 +270,21 @@ it("answers a timeout, not a missing target, when the deadline ends before the p
     }
   }));
 
-it("leaves no grace timer behind when the target appears before the page loads", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    const attached = Promise.withResolvers<void>();
-    const loaded = Promise.withResolvers<void>();
-    const target = {
-      count: async () => 0,
-      first: () => ({ waitFor: () => attached.promise }),
-      page: () => ({ waitForLoadState: () => loaded.promise }),
-    };
-    const matching = requireMatch(target as unknown as Locator, 5_000);
-    attached.resolve();
-    await matching;
-    loaded.resolve();
-    await loaded.promise;
-    await Promise.resolve();
-    expect(vi.getTimerCount()).toBe(0);
-  } finally {
-    vi.useRealTimers();
-  }
+it("leaves none of its waits running once the target appears before the page loads", async () => {
+  let running = 0;
+  const track = <A>(work: Promise<A>) => {
+    running++;
+    return work.finally(() => running--);
+  };
+  const neverLoads = new Promise<void>(() => {});
+  const target = {
+    count: async () => 0,
+    first: () => ({ waitFor: () => track(Promise.resolve()) }),
+    page: () => ({
+      waitForLoadState: () => track(neverLoads),
+      evaluate: () => track(Promise.resolve(false)),
+    }),
+  };
+  await requireMatch(target as unknown as Locator, 5_000);
+  expect(running).toBe(0);
 });

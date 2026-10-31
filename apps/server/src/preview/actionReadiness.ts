@@ -1,4 +1,3 @@
-// @effect-diagnostics globalTimers:off - Playwright waits run outside the Effect runtime.
 /**
  * Waits until a type or select target can take input, within one deadline on the request's
  * clock (performance.now), so nothing is sent after the caller has been answered.
@@ -34,6 +33,8 @@ const expired = () =>
 
 /** How long a selector may match nothing on a loaded page before an action refuses it. */
 const NO_MATCH_GRACE_MS = 2_000;
+/** How long one look for a missing target lasts while its page is still loading. */
+const LOADING_SLICE_MS = 500;
 
 /**
  * Refuses a target that still matches nothing a short grace after its page loaded, rather than
@@ -41,40 +42,37 @@ const NO_MATCH_GRACE_MS = 2_000;
  */
 export const requireMatch = async (target: Locator, timeoutMs: number) => {
   const ends = performance.now() + timeoutMs;
-  const left = () => Math.max(1, Math.floor(ends - performance.now()));
-  // A target already there needs no wait. After a miss it may still appear: the wait for it runs
-  // to the deadline, and the 2 s grace starts only once the page has loaded.
   if ((await target.count()) > 0) return;
-  // The deadline passing first stays the wait's own timeout; only a spent grace is a miss.
-  const attached = target
-    .first()
-    .waitFor({ state: "attached", timeout: left() })
-    .then(() => "found" as const);
-  void attached.catch(() => undefined);
-  let settled = false;
-  let grace: ReturnType<typeof setTimeout> | undefined;
-  const graceOver = target
-    .page()
-    .waitForLoadState("load", { timeout: left() })
-    .then(
-      () =>
-        new Promise<"missed">((resolve) => {
-          if (!settled) grace = setTimeout(() => resolve("missed"), NO_MATCH_GRACE_MS);
-        }),
-      // A page that never loads leaves the answer to the wait for the target.
-      () => new Promise<never>(() => {}),
-    );
-  const outcome = await Promise.race([attached, graceOver]).finally(() => {
-    settled = true;
-    clearTimeout(grace);
-  });
-  // The wait for the target, left running after a miss, ends by the deadline on its own.
-  if (outcome === "missed")
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationInvalidSelectorError",
-      "No element matches the selector, so no input was sent.",
-      { noMatch: true },
-    );
+  // Each wait is awaited whole, so none outlives the call: while the page loads the target is
+  // looked for in short slices, and once it has loaded, for what is left of the grace.
+  for (let graceLeft = NO_MATCH_GRACE_MS; ;) {
+    const left = Math.floor(ends - performance.now());
+    const loaded = await target
+      .page()
+      .evaluate("document.readyState === 'complete'")
+      .catch(() => false);
+    const slice = Math.max(1, Math.min(left, loaded ? graceLeft : LOADING_SLICE_MS));
+    const started = performance.now();
+    const found = await target
+      .first()
+      .waitFor({ state: "attached", timeout: slice })
+      .then(
+        () => true,
+        (cause: unknown) => {
+          // The deadline passing first stays the wait's own timeout; only a spent grace is a miss.
+          if (!isTimeout(cause) || performance.now() >= ends) throw cause;
+          return false;
+        },
+      );
+    if (found) return;
+    if (loaded) graceLeft -= performance.now() - started;
+    if (graceLeft <= 0)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationInvalidSelectorError",
+        "No element matches the selector, so no input was sent.",
+        { noMatch: true },
+      );
+  }
 };
 
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */
