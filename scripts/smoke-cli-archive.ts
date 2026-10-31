@@ -123,11 +123,13 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
   }
   const contentDir = path.join(scratch, root);
   const executable = path.join(contentDir, platform === "win32" ? "goat.exe" : "goat");
+  const bundledLibatomic = path.join(contentDir, "lib/libatomic.so.1");
   for (const required of [
     executable,
     path.join(contentDir, "client/index.html"),
     path.join(contentDir, RUNTIME_MANIFEST_ARCHIVE_ENTRY),
     path.join(contentDir, "screen-code/quickjs.wasm"),
+    ...(platform === "linux" ? [bundledLibatomic, `${bundledLibatomic}.LICENSE`] : []),
   ]) {
     if (!(yield* fs.exists(required))) {
       return yield* new CliArchiveSmokeError({
@@ -187,6 +189,22 @@ const smokeCliArchive = Effect.fn("smokeCliArchive")(function* (input: {
       step: "running the screen child",
       detail: `exit ${String(childSmoke.status)}: ${childSmoke.stderr?.slice(0, 200) ?? ""}`,
     });
+  }
+
+  // The runner has libatomic installed; fresh Ubuntu servers do not.
+  if (platform === "linux") {
+    const ldd = yield* spawner.string(ChildProcess.make("ldd", [executable]));
+    // Older glibc prints the path as given, newer prints it resolved; compare both resolved.
+    const loaded = /libatomic\.so\.1 => (\/.*) \(0x[0-9a-f]+\)/.exec(ldd)?.[1];
+    if (
+      loaded === undefined ||
+      (yield* fs.realPath(loaded)) !== (yield* fs.realPath(bundledLibatomic))
+    ) {
+      return yield* new CliArchiveSmokeError({
+        step: "checking that t3 loads the bundled libatomic",
+        detail: ldd,
+      });
+    }
   }
 
   const version = yield* runExecutable(executable, ["--version"], contentDir);
