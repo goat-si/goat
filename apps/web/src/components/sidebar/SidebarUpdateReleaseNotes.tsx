@@ -52,7 +52,7 @@ export function SidebarUpdateReleaseNotes({
   readonly state: DesktopUpdateState;
   readonly tooltip: string;
 }) {
-  if (state.channel !== "nightly" || state.releaseNotes.length === 0) {
+  if (state.releaseNotes.length === 0) {
     return <>{tooltip}</>;
   }
 
@@ -67,9 +67,10 @@ export function SidebarUpdateReleaseNotes({
           const releaseUrl = getDesktopUpdateReleaseUrl(releaseNote.version);
           const omittedItemCount = Math.max(0, releaseNote.totalItems - releaseNote.items.length);
           const linkLabel =
-            omittedItemCount === 0
+            releaseNote.stats ??
+            (omittedItemCount === 0
               ? "View release on GitHub"
-              : `${omittedItemCount} more ${omittedItemCount === 1 ? "change" : "changes"} on GitHub`;
+              : `${omittedItemCount} more ${omittedItemCount === 1 ? "change" : "changes"} on GitHub`);
 
           return (
             <div key={releaseNote.version}>
@@ -78,6 +79,11 @@ export function SidebarUpdateReleaseNotes({
                 <h3 className="text-foreground text-xs leading-4 font-semibold">
                   {index === 0 ? "What's changed" : `Changes in ${releaseNote.version}`}
                 </h3>
+                {releaseNote.intro ? (
+                  <p className="mt-2 break-words text-xs leading-5 text-popover-foreground/90">
+                    {releaseNote.intro}
+                  </p>
+                ) : null}
                 <ul className="mt-2 space-y-1.5 pl-4 text-xs leading-5 text-popover-foreground/90">
                   {keyReleaseNoteItems(releaseNote.items).map(({ item, key }) => (
                     <li className="list-disc break-words" key={key}>
