@@ -65,6 +65,7 @@ import {
   type ScreenHostContext,
   type ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
+import { screenActionSafety } from "./ScreenActionOutcome.ts";
 import type { ScreenObservations } from "./ScreenObservations.ts";
 import type { BoundWindow } from "./DesktopTargetHost.ts";
 
@@ -203,6 +204,12 @@ export interface DesktopObserveDeps {
   readonly setEpoch: (epoch: number) => void;
 }
 
+const readReceipt = (call: ScreenHostCall, incomplete: boolean) => ({
+  category: incomplete ? ("unverifiable" as const) : ("confirmed" as const),
+  safety: screenActionSafety(call, incomplete ? "partial" : "completed", true),
+  evidence: [incomplete ? "read:cut" : "read:completed"],
+});
+
 /** The next part of a read its budget cut, from the elements it already holds: no driver call. */
 const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
   deps: DesktopObserveDeps,
@@ -235,7 +242,7 @@ const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
   });
   return {
     value: withObserveTiming(res.observation, timing, rawBudget),
-    category: "unverifiable" as const,
+    ...readReceipt(call, res.observation.truncated),
   };
 });
 
@@ -346,7 +353,7 @@ const observeWithin = Effect.fn("DesktopObserveLatency.within")(function* (
   });
   return {
     value: withObserveTiming(observation, timing, rawBudget),
-    category: "unverifiable" as const,
+    ...readReceipt(call, observation.truncated),
   };
 });
 
@@ -876,7 +883,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
           timing,
           rawBudget,
         ),
-        category: "unverifiable",
+        ...readReceipt(call, observation.truncated || raw.cut || filtered),
       };
     }
   }
@@ -927,6 +934,6 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     value: withScreenshotTiming(metadata, timing, context.limits.returnBytes),
     image,
     imageMetadata: metadata,
-    category: "unverifiable",
+    ...readReceipt(call, false),
   };
 });

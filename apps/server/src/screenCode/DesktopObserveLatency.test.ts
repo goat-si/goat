@@ -80,6 +80,18 @@ const bind = (host: ReturnType<typeof timedHost>["host"]) =>
 
 type Timed = { ms?: number; phases?: Record<string, number> };
 
+it.effect("complete desktop reads are confirmed without a possible commit", () =>
+  Effect.gen(function* () {
+    const { host } = timedHost({ get_window_state: goat2WindowState });
+    const ref = yield* bind(host);
+    const result = yield* host.observe(call("get_window_state", {}, ref), context);
+    expect(result).toMatchObject({
+      category: "confirmed",
+      safety: { code: "read_completed", possibleCommit: false },
+    });
+  }),
+);
+
 it.effect(
   "observe and screenshot carry their host time, with the driver call as driverMs, and match the wire contract",
   () =>
@@ -381,8 +393,9 @@ it.effect("observe({after}) times a page of the held read with no driver or pars
     const { host, sent } = timedHost({ get_window_state: big });
     const ref = yield* bind(host);
     const small = { ...context, limits: { ...context.limits, treeBytes: 4096 } };
-    const first = (yield* host.observe(call("get_window_state", {}, ref), small))
-      .value as ScreenObservation;
+    const firstResult = yield* host.observe(call("get_window_state", {}, ref), small);
+    expect(firstResult.safety?.code).toBe("read_indeterminate");
+    const first = firstResult.value as ScreenObservation;
     const detail = first.omitted?.find((item) => item.kind === "budget")?.detail ?? "";
     const after = Number(/observe\(\{after:(\d+)\}\)/.exec(detail)?.[1]);
     expect(Number.isSafeInteger(after)).toBe(true);
