@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
+import { batchNeedsListing, narrowBatch } from "./ComputerUseBatchIdentity.ts";
 import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { BATCH_SCOPE_UNSUPPORTED } from "./ComputerUseLeaseProxyBatch.ts";
@@ -276,4 +276,26 @@ it("refuses alias scopes when the host cannot express bundle identities", () => 
     false,
   );
   assert.include("refused" in result ? result.refused : "", "app_not_allowed");
+});
+
+it("refreshes display names and narrows every matching app to a bundle id", () => {
+  const line = call(1, "run_steps", { app_scope: scope(["Editor"]), steps: [] });
+  const message = parse(line) ?? {};
+  const listed = new Map([
+    [42, { id: "com.example.First", bundleId: "com.example.First", name: "Editor" }],
+    [99, { id: "com.example.Second", bundleId: "com.example.Second", name: "Editor" }],
+  ]);
+  assert.isTrue(batchNeedsListing(message, listed));
+  const result = narrowBatch(1, line, message, listed, true);
+  assert.isFalse("refused" in result);
+  if (!("refused" in result))
+    assert.deepEqual(
+      JSON.parse(result.line),
+      JSON.parse(
+        call(1, "run_steps", {
+          app_scope: scope(["com.example.First", "com.example.Second"], "background"),
+          steps: [],
+        }),
+      ),
+    );
 });
