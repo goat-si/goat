@@ -6,7 +6,10 @@ export const staleTargets = (
   targets: Map<string, BoundWindow>,
   observations: ScreenObservations,
 ) => {
-  const dropped = new Map<string, { bundleId?: string; windowId: number; reason: string }>();
+  const dropped = new Map<
+    string,
+    { bundleId: string | undefined; windowId: number; reason: string }
+  >();
   const dropTarget = (targetId: string, reason: string) => {
     const bound = targets.get(targetId);
     if (bound) {

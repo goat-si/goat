@@ -1,3 +1,4 @@
+import { replyTargetId } from "./ScreenHostReplyTarget.ts";
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -135,20 +136,6 @@ const WAIT_REPLY_RESERVE_MS = 100;
 const key = (runId: string, turnId: string, cellId: string) =>
   `${runId}\u0000${turnId}\u0000${cellId}`;
 
-/** The target a bind_app reply (a ref) or a tab reply ({targetRef}) hands back. */
-const replyTargetId = (value: unknown): string | undefined => {
-  const reply = typeof value === "object" && value !== null ? value : undefined;
-  const ref = reply && "targetRef" in reply ? reply.targetRef : reply;
-  return typeof ref === "object" &&
-    ref !== null &&
-    "id" in ref &&
-    typeof ref.id === "string" &&
-    "kind" in ref &&
-    (ref.kind === "app" || ref.kind === "tab")
-    ? ref.id
-    : undefined;
-};
-
 export { observationReplyBudget } from "./ScreenObservationBudget.ts";
 
 export class ScreenHostBridge {
@@ -170,12 +157,16 @@ export class ScreenHostBridge {
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
+  private readonly staleTargetStep:
+    | ((targetId: string, reason?: string) => string | undefined)
+    | undefined;
 
   constructor(
     cursorPhases?: ScreenCursorPhases,
-    private readonly staleTargetStep?: (targetId: string, reason?: string) => string | undefined,
+    staleTargetStep?: (targetId: string, reason?: string) => string | undefined,
   ) {
     this.cursorPhases = cursorPhases;
+    this.staleTargetStep = staleTargetStep;
   }
 
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
