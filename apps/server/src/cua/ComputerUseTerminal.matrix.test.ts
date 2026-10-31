@@ -441,21 +441,21 @@ const completion: Driver = (input) =>
     return replaceWithTerminal(outcome.failure);
   });
 const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
-  { name: "replaceWithTerminal", run: sync((input) => merged(input)) },
+  { name: "ComputerUseTerminal.replaceWithTerminal", run: sync((input) => merged(input)) },
   {
-    name: "terminalFailure",
+    name: "ComputerUseTerminal.terminalFailure",
     run: sync((input) =>
       replaceWithTerminal(terminalFailure(merged(input), "list_apps", {}, false) ?? "none"),
     ),
   },
   {
-    name: "refusal",
+    name: "ComputerUseLeaseResponses.refusal",
     run: sync((input) =>
       outputState(refusal(merged(input), 1, "tools/call", "wrong_display", "wrong display")),
     ),
   },
   {
-    name: "cutOff",
+    name: "ComputerUseLeaseResponses.cutOff",
     run: sync((input) =>
       outputState(
         cutOff(
@@ -469,19 +469,19 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
     ),
   },
   {
-    name: "terminalReplacement",
+    name: "ComputerUseLeaseResponses.terminalReplacement",
     run: sync((input) =>
       outputState(terminalReplacement(1, "list_apps", {}, merged(input), false)),
     ),
   },
   {
-    name: "offScreenAnswer",
+    name: "ComputerUseLeaseResponses.offScreenAnswer",
     run: sync((input) =>
       outputState(offScreenAnswer(1, "tools/call", "list_apps", "unknown", {}, merged(input))),
     ),
   },
   {
-    name: "finalTerminalLine",
+    name: "ComputerUseLeaseProxyPersonStop.finalTerminalLine",
     run: sync((input) =>
       outputState(
         finalTerminalLine(
@@ -493,16 +493,16 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
       ),
     ),
   },
-  { name: "terminalSink", run: proxy },
+  { name: "ComputerUseLeaseProxyPersonStop.terminalSink", run: proxy },
   { name: "ComputerUseLeaseProxy.interrupt", run: interruptedProxy },
   { name: "ComputerUseLeaseProxyThread.output", run: threadProxy },
   { name: "ComputerUseLeaseProxyOptions.retainedTerminal", run: received },
   { name: "ComputerUseLeaseProxy.offScreenForRequest", run: offScreen },
   { name: "ComputerUseLeaseProxyBrowserClaims.refuseReply", run: claims },
-  { name: "bounded primitive reply", run: compact },
-  { name: "primitive reply settlement", run: channel },
+  { name: "ComputerUseLeaseProxyOptions.primitiveReplySink", run: compact },
+  { name: "ComputerUsePrimitiveChannel.replyAndSettle", run: channel },
   {
-    name: "desktop driver reply",
+    name: "DesktopDriverReplies.driverError",
     run: sync((input) => {
       const reason = sourceState(input).reason;
       if (reason === undefined) throw new Error("Expected a terminal reason.");
@@ -522,13 +522,13 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
     }),
   },
   {
-    name: "cellFailureBase",
+    name: "ScreenActionOutcome.cellFailureBase",
     run: sync((input) =>
       replaceWithTerminal(cellFailureBase(sourceState(input).reason, errorOf(input)) ?? "none"),
     ),
   },
   {
-    name: "callTerminalError",
+    name: "ScreenActionOutcome.callTerminalError",
     run: sync((input) =>
       replaceWithTerminal(
         callTerminalError(errorOf(input), sourceState(input).reason, call, false) ?? "none",
@@ -536,7 +536,7 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
     ),
   },
   {
-    name: "finalScreenReply",
+    name: "ScreenActionOutcome.finalScreenReply",
     run: sync((input) =>
       replaceWithTerminal(
         finalScreenReply(
@@ -555,22 +555,22 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
       ),
     ),
   },
-  { name: "bridge closed result", run: bridge },
+  { name: "ScreenHostBridge.closedResult", run: bridge },
   {
-    name: "cellTerminalError",
+    name: "ScreenActionOutcome.cellTerminalError",
     run: sync((input) =>
       replaceWithTerminal(cellTerminalError(errorOf(input), [], sourceState(input).reason)),
     ),
   },
   {
-    name: "completionCellError",
+    name: "ScreenActionOutcome.completionCellError",
     run: sync((input) =>
       replaceWithTerminal(
         completionCellError(errorOf(input), [], sourceState(input).reason) ?? "none",
       ),
     ),
   },
-  { name: "finishCellResponse", run: completion },
+  { name: "ScreenCellAuthority.finishCellResponse", run: completion },
 ];
 const orders: ReadonlyArray<{
   readonly name: string;
