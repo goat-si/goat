@@ -38,7 +38,7 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import * as SiteNotes from "../preview/SiteNotes.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
-import type { CellWindowsOutcome } from "./DesktopWindows.ts";
+import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollection.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import { cellResultSafety, cellTerminalError, latchCellTerminal } from "./ScreenActionOutcome.ts";
@@ -587,17 +587,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         limits: cellLimits,
         ...(input.bindingHints ? { bindingHints: input.bindingHints } : {}),
       };
-      const collectCellWindows = (
-        skipEndRead: boolean,
-      ): Effect.Effect<CellWindowsOutcome, ScreenRunError> => {
-        const finish = options.desktopHost?.finishCell;
-        return finish
-          ? finish(cellContext, {
-              skipEndRead,
-              cellDeadlineMillis: cellDeadlineMillis ?? startedAt + cellLimits.cellWallMs,
-            })
-          : Effect.succeed({});
-      };
+      const collectCellWindows = (skipEndRead: boolean) =>
+        collectWindows(
+          options.desktopHost,
+          cellContext,
+          cellDeadlineMillis ?? startedAt + cellLimits.cellWallMs,
+          skipEndRead,
+        );
       return yield* running
         .runCell(
           {

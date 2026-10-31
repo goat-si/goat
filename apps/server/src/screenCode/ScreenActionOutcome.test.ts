@@ -1,7 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import type { ScreenRunResult } from "@goat/contracts";
 
-import { cellResultSafety, screenActionSafety } from "./ScreenActionOutcome.ts";
+import { cellResultSafety, cellTerminalError, screenActionSafety } from "./ScreenActionOutcome.ts";
 
 const result = (receipts: ScreenRunResult["journal"][number]["receipt"][]): ScreenRunResult => ({
   runId: "r",
@@ -15,6 +15,19 @@ const result = (receipts: ScreenRunResult["journal"][number]["receipt"][]): Scre
   availability: [],
   imageMetadata: [],
   images: [],
+});
+
+it("a terminal result after successful input keeps the input and forbids retry", () => {
+  const error = cellTerminalError(
+    { code: "stopped", effectStarted: false, nextStep: "stopped" },
+    [receipt("click", true)],
+    "stopped_by_person",
+  );
+  expect(error).toMatchObject({
+    code: "stopped_by_person",
+    effectStarted: true,
+    safety: { possibleCommit: true, retryClass: "never" },
+  });
 });
 const receipt = (method: "click" | "observe" | "tab_status" | "read_page", committed: boolean) => ({
   callId: 1,
