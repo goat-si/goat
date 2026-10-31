@@ -612,6 +612,7 @@ describe("proxy execution ownership", () => {
           reservation: (request) =>
             request.action === "reserve"
               ? recordAdmittedCall(history, threadId, request, "ticket:cancelled").pipe(
+                  Effect.orDie,
                   Effect.as<ComputerUseCallAdmission>({
                     status: "admitted",
                     reservationId: "ticket:cancelled",
