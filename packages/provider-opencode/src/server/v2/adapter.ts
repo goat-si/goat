@@ -1,5 +1,4 @@
 import * as NodeURL from "node:url";
-
 import {
   AbsolutePath,
   Agent,
@@ -3152,6 +3151,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
           skills: mcpSession,
+          screenCodeSkillPath: mcpSession?.screenCodeSkillPath,
           computerUse: state.cua !== undefined,
         }),
         goatOrchestrationSystemPrompt(mcpAvailable, mcpSession?.browserToolsAvailable),

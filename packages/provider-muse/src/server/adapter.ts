@@ -36,7 +36,6 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -92,11 +91,9 @@ import {
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import { museItemStatus, museToolPresentation } from "./itemPresentation.ts";
 import { museNativeRef as nativeRef, registerMuseProviderThread } from "./threadRegistration.ts";
-
 const MUSE_PROVIDER = ProviderDriverKind.make("muse");
 const isOpenSessionError = Schema.is(ProviderAdapter.ProviderAdapterOpenSessionError);
 const isProtocolError = Schema.is(ProviderAdapter.ProviderAdapterProtocolError);
-
 const MuseProviderCapabilitiesV2 = {
   runtimePolicy: { enforcement: "native" },
   sessions: {
@@ -2046,6 +2043,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 `Muse returned an unsupported compaction status: ${result.status}`,
               );
           } else {
+            const mcpSession = yield* mcpSessions.read(turnInput.threadId);
             const result = yield* request(
               "turn/start",
               {
@@ -2056,6 +2054,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                       harness: "Muse Code",
                       model: session.model ?? undefined,
                       reasoningEffort: effort,
+                      skills: mcpSession,
+                      screenCodeSkillPath: mcpSession?.screenCodeSkillPath,
                     })}\n\n${RuntimeInstructions.GOAT_PULL_REQUEST_INSTRUCTIONS}`,
                   },
                   ...parts,
