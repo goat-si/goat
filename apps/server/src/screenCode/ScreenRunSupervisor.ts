@@ -371,7 +371,8 @@ export function createScreenRunSupervisor(deps: {
                 void deps
                   .runCallback(deps.hostBridge.handle(call, identity.context), callAbort.signal)
                   .then(
-                    (reply) => {
+                    (prepared) => {
+                      const reply = deps.hostBridge.finalizeReply(prepared, call, identity.context);
                       if (reply?.outcome === "error" && reply.error)
                         hostErrors.set(call.callId, reply.error);
                       if (reply && !session.closed && session.active?.cellId === cellId)

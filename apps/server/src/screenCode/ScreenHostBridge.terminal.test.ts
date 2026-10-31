@@ -140,3 +140,20 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
       }
     }),
 );
+
+it.effect("the outbound fence catches a cutoff after the host reply was prepared", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () => Effect.succeed({ category: "confirmed", value: [] }),
+    });
+    const input = { ...call(1), method: "list_apps" } satisfies ScreenHostCall;
+    const answer = yield* bridge.handle(input, context());
+    bridge.cutCellNow("r", "t", "c", "stopped_by_person");
+    const final = bridge.finalizeReply(answer, input, context());
+    expect(final?.outcome).toBe("error");
+    expect(final?.error?.code).toBe("stopped_by_person");
+    expect(final?.error?.safety?.retryClass).toBe("never");
+  }),
+);

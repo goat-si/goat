@@ -786,9 +786,16 @@ export class ScreenHostBridge {
     const reply = yield* this.handleOnce(raw, context);
     const call = decodeOptionScreenHostCall(raw);
     if (Option.isNone(call)) return reply;
-    const state = this.cell(context);
-    return finalScreenReply(reply, call.value, state.cutoffReason, state.journal);
+    return this.finalizeReply(reply, call.value, context);
   });
+  finalizeReply(
+    reply: ScreenHostReply | undefined,
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+  ) {
+    const state = this.cell(context);
+    return finalScreenReply(reply, call, state.cutoffReason, state.journal);
+  }
   takeCellImages = Effect.fn("ScreenHostBridge.takeCellImages")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -820,7 +827,6 @@ export class ScreenHostBridge {
     if (!facts) this.cellFacts.set(id, (facts = { targets: [], keys: new Map() }));
     return facts;
   }
-
   private noteCellTarget(
     context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">,
     targetId: string,
@@ -828,7 +834,6 @@ export class ScreenHostBridge {
     const { targets } = this.factsOf(context);
     if (!targets.includes(targetId) && targets.length < 64) targets.push(targetId);
   }
-
   /** What a finished cell acted on, in first-use order, and its key labels, even after a cut. */
   takeCellFacts(runId: string, turnId: string, cellId: string) {
     const id = key(runId, turnId, cellId);
@@ -885,7 +890,6 @@ export class ScreenHostBridge {
   ) {
     this.discardCellNow(runId, turnId, cellId);
   });
-
   discardCellNow(runId: string, turnId: string, cellId: string): void {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
@@ -902,7 +906,6 @@ export class ScreenHostBridge {
     if (closed.size >= 4096) this.fencedTurns.add(turn);
     else closed.add(cellId);
   }
-
   markUnawaitedNow(
     runId: string,
     turnId: string,
@@ -937,7 +940,6 @@ export class ScreenHostBridge {
   ) {
     this.invalidateTargetNow(runId, turnId, targetId, reason);
   });
-
   invalidateTargetNow(runId: string, turnId: string, targetId: string, reason?: string): void {
     const turn = `${runId}\u0000${turnId}`;
     let invalid = this.invalidTargets.get(turn);
