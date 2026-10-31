@@ -156,6 +156,37 @@ export async function runScreenChild(
     return bytes.length <= 1024 ? value : new TextDecoder().decode(bytes.slice(0, 1021));
   };
   const emit = (frame: unknown) => output.write(`${JSON.stringify(frame)}\n`);
+  // A refusal names its limit, as the host's do, so a cell can tell waiting from a broken call.
+  const refusal = (code: string, message: string, limit?: { name: string; maximum: number }) =>
+    JSON.stringify({
+      code,
+      message: `${message}; nothing was sent.`,
+      effectStarted: false,
+      ...(limit === undefined ? {} : { limit }),
+    });
+  const refusalOf = (method: string, argsJson: string, calls: number, places: boolean) =>
+    !admitted
+      ? refusal("stopped", "The cell has ended")
+      : !methods.includes(method as (typeof methods)[number])
+        ? refusal("unsupported", `screen.${method.slice(0, 80)} is not a screen call`)
+        : calls > currentLimits.callsPerCell
+          ? refusal(
+              "call_limit",
+              `callsPerCell limit ${currentLimits.callsPerCell}: continue in a new cell`,
+              { name: "callsPerCell", maximum: currentLimits.callsPerCell },
+            )
+          : places
+            ? refusal(
+                "pending_limit",
+                `pendingCalls limit ${currentLimits.pendingCalls}: await a running screen call before starting another`,
+                { name: "pendingCalls", maximum: currentLimits.pendingCalls },
+              )
+            : screenBytes(argsJson) > currentLimits.argBytes
+              ? refusal("refused", `argBytes limit ${currentLimits.argBytes}`, {
+                  name: "argBytes",
+                  maximum: currentLimits.argBytes,
+                })
+              : undefined;
   const initialize = () => {
     const host = vm.newFunction("__host", (methodHandle, argsHandle) => {
       const promise = vm.newPromise();
@@ -177,14 +208,15 @@ export async function runScreenChild(
         batch?.size === group.size &&
         typeof batch.index === "number" &&
         group.first + batch.index === nextCallId + 1;
-      if (
-        !admitted ||
-        !methods.includes(method as (typeof methods)[number]) ||
-        ++callCount > currentLimits.callsPerCell ||
-        (!member && pendingPlaces >= currentLimits.pendingCalls) ||
-        screenBytes(argsJson) > currentLimits.argBytes
-      ) {
-        const error = vm.newString("screen call refused");
+      const known = admitted && methods.includes(method as (typeof methods)[number]);
+      const refused = refusalOf(
+        method,
+        argsJson,
+        known ? ++callCount : callCount,
+        !member && pendingPlaces >= currentLimits.pendingCalls,
+      );
+      if (refused !== undefined) {
+        const error = vm.newString(refused);
         promise.reject(error);
         error.dispose();
         return promise.handle;
@@ -225,20 +257,24 @@ export async function runScreenChild(
         list = undefined;
       }
       const calls: ReadonlyArray<unknown> = Array.isArray(list) ? list : [];
-      const fits =
-        admitted &&
-        calls.length >= 2 &&
-        calls.length <= MAX_BATCH_CALLS &&
-        callCount + calls.length <= currentLimits.callsPerCell &&
-        pendingPlaces < currentLimits.pendingCalls &&
-        calls.every(
-          (entry) =>
-            Array.isArray(entry) &&
-            methods.includes(entry[0] as (typeof methods)[number]) &&
-            typeof entry[1] === "string" &&
-            screenBytes(entry[1]) <= currentLimits.argBytes,
-        );
-      if (!fits) return vm.false;
+      const entries = calls.filter(
+        (entry): entry is [string, string] =>
+          Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "string",
+      );
+      const refused =
+        entries.length !== calls.length || calls.length < 2 || calls.length > MAX_BATCH_CALLS
+          ? refusal("invalid_argument", "The batch group is malformed")
+          : entries
+              .map(([method, json]) =>
+                refusalOf(
+                  method,
+                  json,
+                  callCount + calls.length,
+                  pendingPlaces >= currentLimits.pendingCalls,
+                ),
+              )
+              .find((each) => each !== undefined);
+      if (refused !== undefined) return vm.newString(refused);
       group = { first: nextCallId + 1, size: calls.length, place: { remaining: calls.length } };
       pendingPlaces++;
       return vm.true;

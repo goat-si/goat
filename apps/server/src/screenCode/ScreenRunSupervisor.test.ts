@@ -456,6 +456,32 @@ it.live("a later cell may lower its call limit without losing values", () =>
   }),
 );
 
+it.live("a call over the pendingCalls limit is refused unsent, naming the limit", () =>
+  Effect.gen(function* () {
+    const asset = yield* resolveScreenRuntimeAsset("dev");
+    const limits = screenRunLimits({ cellWallMs: 5000 });
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () => Effect.never,
+    });
+    const supervisor = fixtureSupervisor({ asset, limits, hostBridge: bridge });
+    const result = yield* supervisor.runCell(
+      { runId: "r", turnId: "t", context: context("pending", limits) },
+      `const calls = Array.from({ length: 5 }, () => screen.list_apps());
+       try { await calls[4]; return "admitted"; }
+       catch (error) { return [error.code, error.message, error.nothingSent]; }`,
+      false,
+    );
+    expect(result.value).toEqual([
+      "pending_limit",
+      expect.stringContaining("pendingCalls limit 4"),
+      true,
+    ]);
+    yield* Effect.sync(supervisor.dispose);
+  }),
+);
+
 it.live("resetValues clears prior computation values", () =>
   Effect.gen(function* () {
     const asset = yield* resolveScreenRuntimeAsset("dev");
