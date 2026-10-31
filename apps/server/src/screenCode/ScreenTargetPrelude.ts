@@ -82,10 +82,20 @@ const __flush = () => {
     group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
   }
 };
-// A used handle has already become its ref, so one still inside outgoing arguments would reach no element.
-const __carriesHandle = (value, depth = 0) =>
-  depth < 8 && value !== null && typeof value === 'object' &&
-  (Object.hasOwn(value, 'elementHandle') || (Array.isArray(value) ? value : Object.values(value)).some((each) => __carriesHandle(each, depth + 1)));
+// A used handle has already become its ref, so one anywhere in outgoing arguments, own or inherited, would reach no element.
+const __carriesHandle = (root) => {
+  const seen = new Set();
+  const pending = [root];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === null || typeof value !== 'object' || seen.has(value)) continue;
+    // Arguments too large to check are refused rather than sent unchecked.
+    if (seen.size >= 10000 || 'elementHandle' in value) return true;
+    seen.add(value);
+    for (const each of Array.isArray(value) ? value : Object.values(value)) pending.push(each);
+  }
+  return false;
+};
 const __refuseHandles = (value) => {
   if (__carriesHandle(value))
     throw new ScreenError('stale_reference', 'Pass an element handle as the target argument itself; nothing was sent.', true);
@@ -626,7 +636,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     const method = surface[key];
     if (typeof method !== 'function') continue;
     surface[key] = (...args) => {
-      if (args.some((arg) => arg !== null && typeof arg === 'object' && !__handles.has(arg) && Object.hasOwn(arg, 'elementHandle')))
+      if (args.some((arg) => arg !== null && typeof arg === 'object' && !__handles.has(arg) && 'elementHandle' in arg))
         throw new ScreenError('stale_reference', 'This element handle is a copy; take obs.ref(n) from a current observation in this cell.', true);
       return method(...args);
     };

@@ -192,18 +192,16 @@ it.live("a handle nested in any outgoing call is refused before it reaches the h
           () => app.pressKey({ key: 'a', target: held }),
           () => screen.press_key({ ...held, key: 'a', targetRef: app.targetRef }),
           () => app.click({ window: [1, 1] }).then(() => app.pressKey({ key: 'a', nested: [held] })),
+          () => { let deep = held; for (let i = 0; i < 12; i++) deep = { deep }; return app.pressKey({ key: 'a', deep }); },
+          () => { const copy = Object.create(held); copy.key = 'a'; return app.pressKey(copy); },
+          () => { const copy = Object.create(held); copy.key = 'a'; copy.targetRef = app.targetRef; return screen.press_key(copy); },
         ])
           try { await send(); outcome.push('sent'); } catch (e) { outcome.push([e.code, e.nothingSent]); }
         return outcome;`,
     });
     expect(result).toMatchObject({
       status: "completed",
-      value: [
-        ["stale_reference", true],
-        ["stale_reference", true],
-        ["stale_reference", true],
-        ["stale_reference", true],
-      ],
+      value: Array.from({ length: 7 }, () => ["stale_reference", true]),
     });
     expect(sent.filter((entry) => entry.tool === "press_key")).toHaveLength(0);
   }).pipe(
