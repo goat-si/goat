@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as Environment from "../environment/ServerEnvironment.ts";
+import * as SecretStore from "../auth/ServerSecretStore.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import {
   durableHandoffs,
@@ -118,6 +119,7 @@ export const withRequests = <A, E, R>(
     request: ReturnType<typeof requestWithHandoffs>;
     handoffs: Handoffs.Handoffs["Service"];
     leases: ComputerUseLeases.ComputerUseLeases["Service"];
+    store: SecretStore.ServerSecretStore["Service"];
   }) => Effect.Effect<A, E, R>,
   beforeCompletion?: (
     leases: ComputerUseLeases.ComputerUseLeases["Service"],
@@ -157,7 +159,7 @@ export const withRequests = <A, E, R>(
       current: true,
     };
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    const { start } = yield* durableHandoffs(
+    const { start, store } = yield* durableHandoffs(
       {
         ...orchestrator,
         dispatch: (command) =>
@@ -178,6 +180,7 @@ export const withRequests = <A, E, R>(
       request: requestWithHandoffs(handoffs),
       handoffs,
       leases,
+      store,
     });
   }).pipe(
     Effect.provide(

@@ -1,4 +1,4 @@
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import { CommandId, MessageId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -6,16 +6,23 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+import * as SecretStore from "../auth/ServerSecretStore.ts";
+import { storeName } from "../handoffs/handoffDigest.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import { sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
 
 it.effect.each([
-  { expired: false, title: "preserves newer named-app consent" },
-  { expired: true, title: "retires newer named-app consent when the card expires" },
-])("opening an older pending card $title", ({ expired }) =>
+  { expired: false, failRemoval: false, title: "preserves newer named-app consent" },
+  {
+    expired: true,
+    failRemoval: false,
+    title: "retires newer named-app consent when the card expires",
+  },
+  { expired: true, failRemoval: true, title: "retires consent if expired payload removal fails" },
+])("opening an older pending card $title", ({ expired, failRemoval }) =>
   withHarness(({ orchestrator }) =>
-    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases, store }) =>
       Effect.gen(function* () {
         const prior = yield* request({ apps: ["com.example.Other"] });
         if (prior.kind !== "needs_human") return assert.fail("expected prior approval");
@@ -46,9 +53,21 @@ it.effect.each([
         const address = { threadId, handoffId: pending.handoff.handoffId };
         if (expired) {
           yield* TestClock.adjust("21 minutes");
+          const remove = store.remove;
+          using spy = vi
+            .spyOn(store, "remove")
+            .mockImplementation((name) =>
+              failRemoval && name === storeName(address.handoffId)
+                ? Effect.fail(
+                    new SecretStore.SecretStoreRemoveError({ resource: name, cause: "test" }),
+                  )
+                : remove(name),
+            );
           const error = yield* handoffs.open(address, sessionId).pipe(Effect.flip);
           if (error._tag !== "HandoffError") return assert.fail("expected handoff error");
-          assert.equal(error.reason, "expired");
+          assert.equal(error.reason, failRemoval ? "unavailable" : "expired");
+          if (failRemoval) assert.equal(spy.mock.calls.length, 1);
+          assert.equal((yield* handoffs.read(address)).state, "expired");
           assert.equal((yield* leases.state(threadId, automatic.handoff.handoffId))._tag, "ended");
           assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
         } else {

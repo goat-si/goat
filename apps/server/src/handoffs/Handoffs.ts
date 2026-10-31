@@ -332,6 +332,7 @@ const make = Effect.gen(function* () {
     actor: Handoff["actor"],
     keepPrivate = false,
     computerUseScope?: "session" | "always",
+    onResolved?: Effect.Effect<void, HandoffError>,
   ) {
     yield* threads
       .dispatch({
@@ -348,6 +349,7 @@ const make = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(unavailable));
     const handoff = yield* read(input);
+    if (onResolved && !isHandoffPending(handoff.state)) yield* onResolved;
     // Completed payloads retain continuation arguments until the next rollout consumes them.
     if (
       !keepPrivate &&
@@ -479,16 +481,15 @@ const make = Effect.gen(function* () {
       // Record the end before the transition so the wake reactor sees it.
       if (endsApproved)
         yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
+      const retire = standing.end(input.threadId, input.handoffId, false);
       const result = yield* transition(
         input,
         input.action,
         { type: "client", label },
-        // A resolved grant's payload is already settled: it may record how it ended.
         isGrant && !isHandoffPending(record.state),
         input.computerUseScope,
+        pendingGrant && input.action === "opened" ? retire : undefined,
       );
-      if (pendingGrant && input.action === "opened" && result.state === "expired")
-        yield* standing.end(input.threadId, input.handoffId, false);
       yield* standing.record(input, result);
       if (
         foregroundEpoch !== undefined &&
