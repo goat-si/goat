@@ -9,7 +9,6 @@ import {
   type ScreenRunError,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -31,6 +30,7 @@ import {
   primitiveReplySink,
   rememberDriverReply,
   retainedTerminal,
+  offScreenForRequest,
   type OutstandingCall,
 } from "./ComputerUseLeaseProxyOptions.ts";
 import {
@@ -51,6 +51,7 @@ import { finishCellResponse, makeCellAuthority } from "../screenCode/ScreenCellA
 import { driverError } from "../screenCode/DesktopDriverReplies.ts";
 import { driverOutcomeSafety } from "./ComputerUseDriverOutcome.ts";
 import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
+import { makeProxyBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -250,6 +251,43 @@ const received: Driver = (input) =>
       ),
     );
   });
+const claims: Driver = (input) =>
+  Effect.gen(function* () {
+    let line = "";
+    const request: OutstandingCall = {
+      id: 1,
+      method: "tools/call",
+      tool: "list_apps",
+      connectionId: "g",
+      received: merged(input),
+      sink: {
+        answer: (value) =>
+          Effect.sync(() => {
+            line = value;
+          }),
+      },
+    };
+    yield* makeProxyBrowserClaims().refuseReply(
+      request,
+      "1",
+      new Map([["1", request]]),
+      () => false,
+      () => Effect.void,
+    );
+    return outputState(line);
+  });
+const offScreen: Driver = (input) =>
+  Effect.sync(() => {
+    const request: OutstandingCall = {
+      id: 1,
+      method: "tools/call",
+      tool: "list_apps",
+      connectionId: "g",
+      received: merged(input),
+      sink: { answer: () => Effect.void },
+    };
+    return outputState(offScreenForRequest(request, "unknown"));
+  });
 const bridge: Driver = (input) =>
   Effect.gen(function* () {
     const host = new ScreenHostBridge();
@@ -363,13 +401,16 @@ const sites: ReadonlyArray<{ readonly name: string; readonly run: Driver }> = [
     ),
   },
   { name: "terminalSink", run: proxy },
-  { name: "received proxy cutoff", run: received },
+  { name: "ComputerUseLeaseProxy.interrupt", run: received },
+  { name: "ComputerUseLeaseProxy.offScreenForRequest", run: offScreen },
+  { name: "ComputerUseLeaseProxyBrowserClaims.refuseReply", run: claims },
   { name: "bounded primitive reply", run: compact },
   { name: "primitive reply settlement", run: channel },
   {
     name: "desktop driver reply",
     run: sync((input) => {
       const reason = sourceState(input).reason;
+      if (reason === undefined) throw new Error("Expected a terminal reason.");
       const reply: ComputerUsePrimitiveReply = {
         ...request,
         status: "unknown_outcome",
