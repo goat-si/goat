@@ -411,3 +411,19 @@ it("only a typed screen-locked refusal pauses the session", () => {
   );
   assert.isFalse(driverScreenLocked(JSON.parse(reply({ code: "other" }))));
 });
+
+it("retains terminal safety when an RPC error and result carry different details", () => {
+  const safety = driverOutcomeSafety("list_apps", {
+    status: "unknown_outcome",
+    error: { code: -32000, data: { code: "other" } },
+    result: {
+      isError: true,
+      structuredContent: {
+        code: "stopped_by_person",
+        safety: { retryClass: "never", possibleCommit: true },
+      },
+    },
+  });
+  assert.equal(safety.retryClass, "never");
+  assert.isTrue(safety.possibleCommit);
+});
