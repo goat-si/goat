@@ -1,5 +1,12 @@
-import type { CDPSession, ElementHandle, Frame, Page } from "playwright-core";
+import type { CDPSession, ElementHandle, Frame, JSHandle, Page } from "playwright-core";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
+
+const readOperation = Symbol("action-channel-read");
+type ReadOperation<T> = { readonly [readOperation]: () => T };
+// Only wrap operations that read state without mutating the page or sending input.
+export const readOnly = <T>(operation: () => T): ReadOperation<T> => ({
+  [readOperation]: operation,
+});
 
 type Point = {
   readonly x: number;
@@ -35,6 +42,8 @@ export const makeActionChannel = ({
       return Reflect.apply(session.send, session, args);
     }) as CDPSession["send"];
   return {
+    read: <T>(operation: ReadOperation<T>): T => operation[readOperation](),
+    release: (handle: JSHandle) => handle.dispose(),
     call: <T>(operation: () => T): T => {
       check();
       return operation();

@@ -1,8 +1,8 @@
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import type { CDPSession, ElementHandle, Page } from "playwright-core";
+import type { CDPSession, ElementHandle, JSHandle, Page } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
-import { makeActionChannel } from "./actionChannel.ts";
+import { makeActionChannel, readOnly } from "./actionChannel.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 it.effect("an aborted action refuses every command before it reaches the browser", () =>
@@ -123,5 +123,29 @@ it.effect("the explicit release bypass resets the pressed button after a cut", (
         },
       ],
     ]);
+  }),
+);
+
+it.effect("a cut permits a pure read and handle release while refusing mutation", () =>
+  Effect.gen(function* () {
+    const controller = yield* Effect.sync(() => new AbortController());
+    const disposed = vi.fn(async () => {});
+    const send = vi.fn(async () => ({}));
+    const channel = makeActionChannel({
+      page: { mouse: {} } as unknown as Page,
+      cdp: { send } as unknown as CDPSession,
+      signal: controller.signal,
+      controlGeneration: () => {},
+      isFenced: () => false,
+      blockedFrame: () => false,
+    });
+    controller.abort(new BrowserControlInterrupted("blocked", "blocked_url"));
+    expect(channel.read(readOnly(() => 42))).toBe(42);
+    yield* Effect.promise(() => channel.release({ dispose: disposed } as unknown as JSHandle));
+    expect(disposed).toHaveBeenCalledOnce();
+    expect(() =>
+      channel.send("Runtime.evaluate", { expression: "document.body.remove()" }),
+    ).toThrow();
+    expect(send).not.toHaveBeenCalled();
   }),
 );
