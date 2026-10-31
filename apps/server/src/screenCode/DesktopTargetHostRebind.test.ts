@@ -63,3 +63,24 @@ it.effect("after a driver replacement an element number is refused with the obse
     expect(sentSince(before)).toEqual([]);
   }),
 );
+
+it.effect("rebinding a window in the same turn preserves its target and observations", () =>
+  Effect.gen(function* () {
+    const { host } = fixture();
+    const first = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    yield* host.observe(call("get_window_state", {}, first.value as ScreenTargetRef), context);
+    const again = yield* host.bindApp(
+      call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+      context,
+    );
+    expect(again.value).toEqual(first.value);
+    const after = yield* host.observe(
+      call("get_window_state", {}, first.value as ScreenTargetRef),
+      context,
+    );
+    expect(after.value).toMatchObject({ indexedText: "Apply" });
+  }),
+);

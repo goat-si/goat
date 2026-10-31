@@ -189,8 +189,8 @@ export interface WindowBinding {
 }
 
 /**
- * Binds a window the driver listed under connectionGeneration, replacing this turn's earlier
- * binding of it. Only what the driver reported names the app on its row: the call's bundle id
+ * Binds a window the driver listed under connectionGeneration. Only what the driver reported
+ * names the app on its row: the call's bundle id
  * found the window, so it may pick the icon, but the driver's app filter also matches names.
  */
 export const makeBindWindow =
@@ -211,6 +211,12 @@ export const makeBindWindow =
         previous.ref.runId === context.runId &&
         previous.ref.turnId === context.turnId
       ) {
+        if (
+          previous.connectionGeneration === input.connectionGeneration &&
+          previous.controlId === input.controlId &&
+          previous.ref.environmentId === context.environmentId
+        )
+          return previous.ref;
         lastClickedTableCell ??= previous.lastClickedTableCell;
         deps.evict(id);
         deps.targets.delete(id);
