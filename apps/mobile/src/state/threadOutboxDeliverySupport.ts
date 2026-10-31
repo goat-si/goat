@@ -232,6 +232,7 @@ export function isQueuedMessagePayloadCurrent(
 export async function completeQueuedMessageDelivery(
   queuedMessage: QueuedThreadMessage,
   deliveryRevision: number,
+  sequence: number | undefined,
 ): Promise<"removed" | "edited" | "failed"> {
   clearThreadComposerError(
     scopedThreadKey(queuedMessage.environmentId, queuedMessage.threadId),
@@ -248,7 +249,9 @@ export async function completeQueuedMessageDelivery(
     if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
       return "edited";
     }
-    retainAcknowledgedThreadMessage(queuedMessage);
+    retainAcknowledgedThreadMessage(
+      sequence === undefined ? queuedMessage : { ...queuedMessage, sequence },
+    );
     const removed = await removeThreadOutboxMessage(
       queuedMessage,
       deliveryRevision,

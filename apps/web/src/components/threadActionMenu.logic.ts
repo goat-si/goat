@@ -3,6 +3,7 @@ import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
   | "continue-on-ssh"
+  | "find"
   | "new-thread-on-branch"
   | "promote"
   | "filter-by-project"
@@ -71,6 +72,7 @@ export interface ThreadActionMenuState {
   readonly canOperate: boolean;
   /** The active chat owns the SSH host dialog. */
   readonly canOpenSshHandoff?: boolean | undefined;
+  readonly canFind?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
     readonly label: string;
@@ -112,6 +114,7 @@ const GLOBAL_AGENT_HIDDEN_ACTIONS: ReadonlySet<ThreadActionMenuId> = new Set([
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
     "continue-on-ssh", // The dialog uses sshWorkspaceLaunch.permissionAtom.
+    "find",
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -136,6 +139,9 @@ export function buildThreadActionMenuItems(
             icon: "arrow-up-from-line",
           },
         ]
+      : []),
+    ...(state.canFind
+      ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
       : []),
     ...(state.branch
       ? [

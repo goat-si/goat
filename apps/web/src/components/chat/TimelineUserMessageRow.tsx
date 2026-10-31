@@ -352,11 +352,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       : sender.kind === "remote" && sender.connected
         ? { threadId: sender.threadId, environmentId: sender.environmentId }
         : null;
-  const resolvedContext = resolveUserMessageContext(
-    userMessage.standingInstructions !== null || userMessage.attribution === "guest"
-      ? { ...row.message, text: userMessage.text }
-      : row.message,
-  );
+  const resolvedContext = resolveUserMessageContext({ ...row.message, text: userMessage.text });
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const revertTurnCount = row.revertTurnCount;
   const chippedAttachmentIds = new Set(

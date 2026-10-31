@@ -2850,6 +2850,11 @@ export default function ChatView(props: ChatViewProps) {
   const threadFindEnabled =
     isServerThread && serverConfig?.threadFind === true && !paintOnlyDisplayedTimeline;
   const isThreadFindActive = useThreadFindOpen(activeThreadRef, threadFindEnabled);
+  const openThreadFindStable = useStableCallback((threadRef: ScopedThreadRef) => {
+    if (threadFindEnabled && scopedThreadKey(threadRef) === activeThreadKey) {
+      openThreadFind(activeThreadKey);
+    }
+  });
 
   useChatShortcuts({
     enabled: activeThreadId !== null && !backgroundThread,
@@ -3490,6 +3495,7 @@ export default function ChatView(props: ChatViewProps) {
               onOpenScopedThread={onOpenScopedThread}
               rightPanelOpen={inlineRightPanelOwnsTitleBar}
               onNewThreadInProject={handleNewThreadInActiveProjectStable}
+              {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
               {...(sideChatAvailable
                 ? {
                     onToggleSideChat: toggleSideChat,

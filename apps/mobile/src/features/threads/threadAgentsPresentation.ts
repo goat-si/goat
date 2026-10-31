@@ -1,3 +1,4 @@
+import { REASONING_EFFORT_OPTION_IDS } from "@goat/client-runtime/state/thread-execution";
 import {
   formatSubagentDisplayTitle,
   resolveSubagentMetadata,
@@ -137,8 +138,6 @@ export function nextWorkflowSelection(
   );
 }
 
-const EFFORT_OPTION_IDS = new Set(["reasoningEffort", "effort", "reasoning", "variant"]);
-
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
@@ -156,7 +155,7 @@ export function workflowMemberMetadata(
   const effortChoice = provider?.models
     .find((candidate) => candidate.slug === slug)
     ?.capabilities?.optionDescriptors?.flatMap((descriptor) =>
-      descriptor.type === "select" && EFFORT_OPTION_IDS.has(descriptor.id)
+      descriptor.type === "select" && REASONING_EFFORT_OPTION_IDS.includes(descriptor.id)
         ? descriptor.options
         : [],
     )
