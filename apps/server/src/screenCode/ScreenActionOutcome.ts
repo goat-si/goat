@@ -60,6 +60,28 @@ export const screenFailureSafety = (call: ScreenHostCall, error: ScreenRunError)
     error.code === "not_run" || error.code === "user_interacting" ? "reobserve" : "terminal",
   );
 
+export const callTerminalError = (
+  error: ScreenRunError,
+  cutoff: string | undefined,
+  call: ScreenHostCall,
+  dispatched: boolean,
+) => {
+  const reason =
+    error.code === "stopped_by_person" || error.code === "screen_locked" ? error.code : undefined;
+  const cellReason =
+    cutoff === "stopped_by_person" || cutoff === "screen_locked" ? cutoff : undefined;
+  const merged = mergeTerminal(
+    { reason, possibleCommit: error.effectStarted || error.safety?.possibleCommit },
+    { reason: cellReason },
+  );
+  return terminalFailure(
+    merged.reason,
+    merged.possibleCommit ? "click" : isScreenRead(call.method) ? "list_apps" : call.method,
+    call.args,
+    dispatched || merged.possibleCommit,
+  );
+};
+
 // What a refused call says of itself; true of that call only, never of the cell around it.
 const UNSENT = /(?:[,;]|\s+and)\s*(?:so\s+)?nothing was sent(?=[.;,]|$)|\s*\bNothing was sent\./gi;
 

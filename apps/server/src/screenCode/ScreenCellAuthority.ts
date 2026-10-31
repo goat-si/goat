@@ -2,6 +2,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { ThreadId } from "@goat/contracts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
+import type { ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
+import type { ScreenHostBridge } from "./ScreenHostBridge.ts";
+import { latchCellTerminal } from "./ScreenActionOutcome.ts";
 
 export const makeCellAuthority = (leases: ComputerUseLeases["Service"] | undefined) => {
   const cells = new Map<string, { cellId: string; controlId?: string }>();
@@ -27,4 +30,16 @@ export const makeCellAuthority = (leases: ComputerUseLeases["Service"] | undefin
     },
     delete: (id: string) => cells.delete(id),
   };
+};
+
+export const watchCellTerminals = (
+  bridge: ScreenHostBridge,
+  cells: ReturnType<typeof makeCellAuthority>,
+) => {
+  const terminals = new Map<string, ComputerUseTerminalReason>();
+  bridge.setTerminalObserver((context, reason) => {
+    const id = `${context.runId}\u0000${context.turnId}`;
+    if (cells.get(id) === context.cellId) latchCellTerminal(terminals, id, reason);
+  });
+  return terminals;
 };

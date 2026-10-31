@@ -26,6 +26,73 @@ const invocation = {
   },
 };
 
+it.live("screen.run preserves dispatcher Stop when a lock cuts its cell", () =>
+  Effect.gen(function* () {
+    let notify: Parameters<
+      NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+    >[0] = () => {};
+    const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () =>
+            Effect.succeedSome({
+              threadId: ThreadId.make("thread"),
+              controlId: "A",
+              expiresAt: DateTime.makeUnsafe(60000),
+            }),
+          onAuthorityChange: (listener) => {
+            notify = listener;
+            return () => {};
+          },
+          releaseForeground: () => Effect.succeed(false),
+        }),
+      ),
+    );
+    const service = yield* ScreenRunService.pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          leases,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          dispatcher: {
+            availability: () => Effect.succeed([{ kind: "app", available: true }]),
+            dispatch: () =>
+              Effect.suspend(() => {
+                notify({
+                  kind: "pause",
+                  threadId: ThreadId.make("thread"),
+                  controlId: "A",
+                  terminal: "screen_locked",
+                });
+                return Effect.fail<ScreenRunError>({
+                  code: "stopped_by_person",
+                  effectStarted: true,
+                  nextStep: "Do not retry this turn.",
+                });
+              }),
+          },
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+    const answer = yield* service
+      .runCell({
+        runId: "run",
+        turnId: "turn",
+        threadId: "thread",
+        environmentId: "env",
+        invocation,
+        source: "return await screen.list_apps();",
+      })
+      .pipe(Effect.result);
+    expect(answer._tag).toBe("Failure");
+    if (answer._tag === "Failure") expect(answer.failure.code).toBe("stopped_by_person");
+  }),
+);
+
 it.live("a late Stop for an old control does not fence a newer control's unfinished cell", () =>
   Effect.gen(function* () {
     const firstEntered = yield* Deferred.make<void, string>();

@@ -37,6 +37,33 @@ const call = (callId: number): ScreenHostCall => ({
   deadlineMillis: 60000,
 });
 
+it.effect.each(["screen_locked", "stopped_by_person"])(
+  "a dispatcher terminal reply dominates a cell %s fence",
+  (cut) =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.suspend(() => {
+            bridge.cutCellNow("r", "t", "c", cut);
+            return Effect.fail({
+              code: cut === "screen_locked" ? "stopped_by_person" : "screen_locked",
+              effectStarted: true,
+              nextStep: "Do not retry this turn.",
+            });
+          }),
+      });
+      const answer = yield* bridge.handle({ ...call(1), method: "launch_app" }, context());
+      expect(answer?.outcome).toBe("error");
+      if (answer?.outcome === "error") {
+        expect(answer.error?.code).toBe("stopped_by_person");
+        expect(answer.error?.safety?.retryClass).toBe("never");
+        expect(answer.error?.safety?.possibleCommit).toBe(true);
+      }
+    }),
+);
+
 it.effect.each(["lock first", "stop first", "lock then next cell then stop"])(
   "a cell fence keeps person Stop over a lock: %s",
   (order) =>

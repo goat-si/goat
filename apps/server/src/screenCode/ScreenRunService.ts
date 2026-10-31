@@ -38,7 +38,7 @@ import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import * as SiteNotes from "../preview/SiteNotes.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollection.ts";
-import { makeCellAuthority } from "./ScreenCellAuthority.ts";
+import { makeCellAuthority, watchCellTerminals } from "./ScreenCellAuthority.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
@@ -394,7 +394,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
   const activeCells = makeCellAuthority(options.leases);
-  const cellTerminals = new Map<string, ComputerUseTerminalReason>();
+  const cellTerminals = watchCellTerminals(bridge, activeCells);
   const cleanupJournal = new Map<string, ScreenJournalEntry[]>();
   const turnKey = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
   const recordCleanupFailure = (runId: string, turnId: string, tabId?: string) => {

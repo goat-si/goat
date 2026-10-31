@@ -30,7 +30,12 @@ import {
   terminalFailure,
   type ComputerUseTerminalReason,
 } from "../cua/ComputerUseTerminal.ts";
-import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
+import {
+  callTerminalError,
+  isScreenRead,
+  screenActionSafety,
+  screenFailureSafety,
+} from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
@@ -133,6 +138,10 @@ export class ScreenHostBridge {
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
+  private terminalObserver?: (
+    context: ScreenHostContext,
+    reason: ComputerUseTerminalReason,
+  ) => void;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
 
   constructor(cursorPhases?: ScreenCursorPhases) {
@@ -141,6 +150,12 @@ export class ScreenHostBridge {
 
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
     this.dispatcher = dispatcher;
+  }
+
+  setTerminalObserver(
+    observer: (context: ScreenHostContext, reason: ComputerUseTerminalReason) => void,
+  ): void {
+    this.terminalObserver = observer;
   }
 
   availability = Effect.fn("ScreenHostBridge.availability")(function* (
@@ -396,6 +411,8 @@ export class ScreenHostBridge {
       ...(holderThreadId === undefined ? {} : { holderThreadId }),
     });
     const failCell = (error: ScreenRunError) => {
+      if (error.code === "stopped_by_person" || error.code === "screen_locked")
+        this.terminalObserver?.(context, error.code);
       const safety = screenFailureSafety(call, error);
       ownFailure = { ...error, safety, effectStarted: safety.possibleCommit };
       settle(
@@ -611,14 +628,7 @@ export class ScreenHostBridge {
     );
     if (ownFailure) {
       if (callDispatched && !ownFailure.effectStarted) state.effectsStarted--;
-      const terminal = terminalFailure(
-        state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
-          ? state.cutoffReason
-          : undefined,
-        isScreenRead(call.method) ? "list_apps" : call.method,
-        call.args,
-        callDispatched,
-      );
+      const terminal = callTerminalError(ownFailure, state.cutoffReason, call, callDispatched);
       return refused(call, { ...ownFailure, ...terminal, callId: call.callId });
     }
     if (state.closed) {
