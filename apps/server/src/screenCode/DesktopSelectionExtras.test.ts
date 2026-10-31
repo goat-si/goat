@@ -174,6 +174,20 @@ it.live("a missing macOS grant stays permission_denied with the driver's words",
   }),
 );
 
+it.live.each(["stopped_by_person", "screen_locked"] as const)(
+  "selection preserves a terminal %s after dispatch",
+  (code) =>
+    Effect.gen(function* () {
+      const { result } = yield* run(
+        new UnknownOutcome({ code, effect: "unverifiable" }, "The operation stopped."),
+        "app.selectText(1, 'world')",
+      );
+      expect(result.value).toMatchObject({
+        caught: { code, nothingSent: false, possibleCommit: true },
+      });
+    }),
+);
+
 it.live("an answer that may have changed the selection is never called unsupported", () =>
   Effect.gen(function* () {
     for (const structured of [

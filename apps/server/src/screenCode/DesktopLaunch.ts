@@ -309,7 +309,10 @@ export const makeLaunch = (deps: {
       ...error,
       effectStarted: true,
       safety,
-      nextStep,
+      nextStep:
+        error.code === "stopped_by_person" || error.code === "screen_locked"
+          ? error.nextStep
+          : nextStep,
     });
     const pid = positive(value.pid);
     const label = string(value.name) ?? name ?? bundleId ?? path ?? "The app";
