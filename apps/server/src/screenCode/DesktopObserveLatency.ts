@@ -680,7 +680,12 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       isDiff && !numbersChanged && bound.rows
         ? retainPairingTitles(bound.rows, tree.shown, rows)
         : tree.shown;
-    bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows, tree.markdown);
+    bound.elementsByToken = inspectTreeElements(
+      tree.elements,
+      tree.rows,
+      tree.markdown,
+      typeof state.tree_markdown === "string" ? state.tree_markdown : undefined,
+    );
     const basis = treeWindowBasis(bound.frames, nextBounds);
     if (basis === undefined) delete bound.framesBasis;
     else bound.framesBasis = basis;

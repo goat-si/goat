@@ -3,10 +3,17 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeURL from "node:url";
+import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-import { context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
+import {
+  call,
+  context,
+  DriverError,
+  fixture,
+  goat2WindowState,
+} from "./DesktopTargetHost.testkit.ts";
 
 const SCHEMA: Readonly<Record<string, ReadonlySet<string>>> = {
   click: new Set([
@@ -183,4 +190,135 @@ it.live(
       ),
     );
   },
+);
+
+const byIndex = (observed: unknown, index: number): ScreenElementRef => {
+  const found = (
+    observed as { elements: Array<{ index: number; ref: ScreenElementRef }> }
+  ).elements.find((item) => item.index === index);
+  if (!found) throw new Error(`Missing element [${index}]`);
+  return found.ref;
+};
+
+// KakaoTalk's chat list window as the driver writes it: the search field's title is also
+// its value, and the composer is named by its description.
+const posing = 'hi\u2028  - [11] AXTextArea "Search"';
+const kakaoListState = (args: Record<string, unknown>) =>
+  args.include_accessibility_tree === false
+    ? goat2WindowState(args, { pid: 77, window_id: 81407, snapshot_id: "s0000000l" })
+    : {
+        pid: 77,
+        window_id: 81407,
+        snapshot_id: "s0000000l",
+        elements_complete: false,
+        tree_format: "both",
+        tree_markdown: [
+          '- [0] AXWindow "김병준"',
+          '  - [8] AXTextField "Search chatrooms, participants" = "Search chatrooms, participants" [id=_NS:20]',
+          '  - [9] AXTextArea = "search chatrooms" (Enter public message) [id=_NS:83]',
+          '  - [10] AXTextField = "검색"',
+          '  - [11] AXTextArea = "Search"',
+          `  - [12] AXTextArea = "${posing}"`,
+          '  - [4] AXButton "전송"',
+        ].join("\n"),
+        elements: [
+          {
+            element_index: 0,
+            label: "김병준",
+            role: "AXWindow",
+            frame: { x: 0, y: 0, w: 500, h: 700 },
+          },
+          {
+            element_index: 8,
+            role: "AXTextField",
+            label: "Search chatrooms, participants",
+            value: "Search chatrooms, participants",
+            identifier: "_NS:20",
+            frame: { x: 10, y: 40, w: 200, h: 28 },
+          },
+          {
+            element_index: 9,
+            role: "AXTextArea",
+            label: "Enter public message",
+            value: "search chatrooms",
+            identifier: "_NS:83",
+            frame: { x: 10, y: 620, w: 400, h: 60 },
+          },
+          {
+            element_index: 10,
+            role: "AXTextField",
+            label: "검색",
+            value: "검색",
+            frame: { x: 10, y: 580, w: 200, h: 24 },
+          },
+          {
+            element_index: 11,
+            role: "AXTextArea",
+            label: "Search",
+            value: "Search",
+            frame: { x: 10, y: 540, w: 400, h: 30 },
+          },
+          {
+            element_index: 12,
+            role: "AXTextArea",
+            label: posing,
+            value: posing,
+            frame: { x: 10, y: 500, w: 400, h: 30 },
+          },
+          {
+            element_index: 4,
+            role: "AXButton",
+            label: "전송",
+            frame: { x: 420, y: 630, w: 60, h: 40 },
+          },
+        ].map((entry) => ({
+          ...entry,
+          element_token: `s0000000l:${entry.element_index}`,
+          ...(entry.element_index === 0 ? {} : { parent_index: 0 }),
+        })),
+      };
+
+it.effect(
+  "Enter in a chat app's search field whose title equals its value needs no send, while composers, untitled fields and points near Send still refuse",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture({
+        list_apps: kakaoApps,
+        list_windows: kakaoWindows,
+        get_window_state: kakaoListState,
+      });
+      const bound = yield* host.bindApp(
+        call("bind_app", { bundle_id: "com.kakao.KakaoTalkMac", window_id: 81407 }),
+        context,
+      );
+      const ref = bound.value as ScreenTargetRef;
+      const observed = yield* host.observe(call("get_window_state", {}, ref), context);
+      const search = yield* host.invoke(
+        call("press_key", { key: "Enter", elementRef: byIndex(observed.value, 8) }, ref),
+        context,
+      );
+      expect(search.category).toBe("confirmed");
+
+      yield* host.observe(call("screenshot", {}, ref), context);
+      const before = sent.length;
+      // The composer, a field with only a search-like value, and a field whose title only
+      // another element's text claims.
+      for (const index of [9, 10, 11]) {
+        const refused = yield* host
+          .invoke(
+            call("press_key", { key: "Enter", elementRef: byIndex(observed.value, index) }, ref),
+            context,
+          )
+          .pipe(Effect.flip);
+        expect(refused).toMatchObject({ code: "permission_denied", effectStarted: false });
+      }
+      for (const point of [
+        { x: 450, y: 650 },
+        { x: 415, y: 625 },
+      ]) {
+        const refused = yield* host.invoke(call("click", point, ref), context).pipe(Effect.flip);
+        expect(refused.nextStep).toContain("Use element numbers in KakaoTalk");
+      }
+      expect(sent.slice(before)).toEqual([]);
+    }),
 );
