@@ -42,7 +42,7 @@ import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
 import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
-import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
+import { makeProxyCallScope } from "./ComputerUseLeaseProxyPointBasis.ts";
 import {
   makeProxyBrowserClaims,
   type SelectedClaim,
@@ -148,7 +148,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
-  const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current, claims.report);
+  const batches = makeProxyCallScope(handshakeAnswers, () => lifecycle.current, claims.report);
   const listed = new Map<number, ListedApp>();
   const labels = makeAppLabels();
   const sessions = new Set<string>();

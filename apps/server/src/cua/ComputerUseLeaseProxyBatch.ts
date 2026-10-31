@@ -26,12 +26,12 @@ const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =
     ? (value as Readonly<Record<string, unknown>>)
     : undefined;
 
-/** Whether a tools/list result gives the tool an `app_scope` input. */
-const acceptsAppScope = (toolList: unknown, name: string): boolean => {
+/** Whether a tools/list result gives the tool the named input. */
+export const acceptsInput = (toolList: unknown, name: string, input: string): boolean => {
   const listed = record(toolList)?.tools;
   if (!Array.isArray(listed)) return false;
   const tool = listed.map(record).find((entry) => entry?.name === name);
-  return record(record(record(tool?.inputSchema)?.properties)?.app_scope) !== undefined;
+  return record(record(record(tool?.inputSchema)?.properties)?.[input]) !== undefined;
 };
 
 export const makeProxyBatchScope = (
@@ -61,6 +61,14 @@ export const makeProxyBatchScope = (
     if (method === "tools/list" && message.result !== undefined)
       rememberList(child, message.result);
   };
+  /** The child's own tool list, asked for once; undefined while it has given none. */
+  const toolsOf = Effect.fn("ComputerUseLeaseProxy.childTools")(function* (child: Running) {
+    if (!listed.has(child)) {
+      const tools = yield* handshake.listTools(child.driver.send);
+      if (tools !== undefined) rememberList(child, tools);
+    }
+    return listed.get(child);
+  });
   /** The call as the driver should get it, or the proxy's refusal (notSent while it has no child). */
   const scope = Effect.fn("ComputerUseLeaseProxy.scopeBatch")(function* (
     id: JsonRpcId,
@@ -82,12 +90,11 @@ export const makeProxyBatchScope = (
     // Only a batch that names a scope waits for the child's tool list; one GOAT would scope gets
     // the scope once this child has listed it, and is refused as before until then.
     if (named && !listed.has(child)) {
-      const tools = yield* handshake.listTools(child.driver.send);
-      if (tools !== undefined) rememberList(child, tools);
+      yield* toolsOf(child);
       // The answer speaks for the child that gave it only.
       if (current() !== child) return { refused: notSent() };
     }
-    if (!acceptsAppScope(listed.get(child), name))
+    if (!acceptsInput(listed.get(child), name, "app_scope"))
       return named
         ? { refused: refusal(id, message.method, "outside_manifest", BATCH_SCOPE_UNSUPPORTED) }
         : unchanged;
@@ -110,14 +117,11 @@ export const makeProxyBatchScope = (
   const browserSupported = Effect.fn("ComputerUseLeaseProxy.browserSupported")(function* () {
     const child = current();
     if (child === undefined) return false;
-    if (!listed.has(child)) {
-      const tools = yield* handshake.listTools(child.driver.send);
-      if (tools !== undefined) rememberList(child, tools);
-    }
-    return current() === child && supportsBrowserClaims(listed.get(child));
+    const tools = yield* toolsOf(child);
+    return current() === child && supportsBrowserClaims(tools);
   });
   const grant = (apps: ReadonlyArray<string> | undefined) => {
     grantApps = apps;
   };
-  return { scope, remember, grant, browserSupported };
+  return { scope, remember, grant, toolsOf, browserSupported };
 };
