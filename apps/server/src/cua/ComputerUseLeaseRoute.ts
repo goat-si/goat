@@ -437,101 +437,104 @@ const streamLayer = HttpRouter.add(
   }),
 );
 
-const callLayer = HttpRouter.add(
-  "POST",
-  `${COMPUTER_USE_LEASE_ROUTE}/calls`,
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const threadId = yield* threadOf;
-    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
-    const call = yield* request.text.pipe(Effect.flatMap(decodeReservation), Effect.option);
-    if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
-    const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    // Unreadable settings keep the default: the person's pointer stays still.
-    const settings = yield* ServerSettings.ServerSettingsService.pipe(
-      Effect.flatMap((settings) => settings.getSettings),
-      Effect.option,
-    );
-    if (Option.isNone(settings)) return HttpServerResponse.empty({ status: 503 });
-    let deniedApp: string | undefined;
-    if (call.value.action === "reserve") {
-      const control = yield* leases.currentControl(threadId);
-      const nonPerson =
-        Option.isSome(control) &&
-        control.value.controlId === call.value.controlId &&
-        control.value.nonPersonFullAccess === true;
-      deniedApp = deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson);
-    }
-    const pointerLocked =
-      call.value.action === "reserve" &&
-      settings.value.cuaMovePointer !== "allowed" &&
-      movesPersonPointer(call.value);
-    let outsideManifest = false;
-    if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
-      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
-      const snapshot = Option.isSome(grants)
-        ? yield* grants.value.snapshotFor(threadId)
-        : { claims: [], bindings: [] };
-      outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
-    }
-    const result = yield* Effect.gen(function* () {
-      const result: ComputerUseCallAdmission =
-        deniedApp !== undefined
-          ? { status: "refused", detail: "app_not_allowed", app: deniedApp }
-          : pointerLocked
-            ? { status: "refused", detail: "pointer_locked" }
-            : outsideManifest
-              ? { status: "refused", detail: "outside_manifest" }
-              : yield* leases.callReservation(threadId, call.value);
-      if (call.value.action === "reserve" && result.status === "refused") {
-        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
-        if (Option.isNone(sql))
-          yield* Effect.logWarning("Computer use history storage unavailable");
-        else {
-          const history = yield* makeComputerUseHistory.pipe(
-            Effect.provideService(SqlClient.SqlClient, sql.value),
-          );
-          yield* scheduleHistory(
-            refusalHistoryKey(
-              threadId,
-              call.value.controlId,
-              call.value.connectionId,
-              call.value.callId,
-            ),
-            recordAdmittedCall(history, threadId, call.value, { refusalCode: result.detail }),
-          );
-        }
+const makeCallLayer = (serverScope: Scope.Scope) =>
+  HttpRouter.add(
+    "POST",
+    `${COMPUTER_USE_LEASE_ROUTE}/calls`,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const threadId = yield* threadOf;
+      if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+      const call = yield* request.text.pipe(Effect.flatMap(decodeReservation), Effect.option);
+      if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      // Unreadable settings keep the default: the person's pointer stays still.
+      const settings = yield* ServerSettings.ServerSettingsService.pipe(
+        Effect.flatMap((settings) => settings.getSettings),
+        Effect.option,
+      );
+      if (Option.isNone(settings)) return HttpServerResponse.empty({ status: 503 });
+      let deniedApp: string | undefined;
+      if (call.value.action === "reserve") {
+        const control = yield* leases.currentControl(threadId);
+        const nonPerson =
+          Option.isSome(control) &&
+          control.value.controlId === call.value.controlId &&
+          control.value.nonPersonFullAccess === true;
+        deniedApp = deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson);
       }
-      if (
+      const pointerLocked =
         call.value.action === "reserve" &&
-        result.status === "admitted" &&
-        result.reservationId !== null
-      ) {
-        const reservationId = result.reservationId;
-        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
-        if (Option.isNone(sql))
-          yield* Effect.logWarning("Computer use history storage unavailable");
-        else {
-          const history = yield* makeComputerUseHistory.pipe(
-            Effect.provideService(SqlClient.SqlClient, sql.value),
-          );
-          yield* registerHistoryTicket(reservationId, threadId, call.value.controlId);
-          yield* scheduleHistory(
-            reservationId,
-            recordAdmittedCall(history, threadId, call.value, { reservationId }),
-          );
-        }
+        settings.value.cuaMovePointer !== "allowed" &&
+        movesPersonPointer(call.value);
+      let outsideManifest = false;
+      if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
+        const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+        const snapshot = Option.isSome(grants)
+          ? yield* grants.value.snapshotFor(threadId)
+          : { claims: [], bindings: [] };
+        outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
       }
-      return result;
-    }).pipe(Effect.uninterruptible, Effect.option);
-    // The session is still accepted; GOAT could not read the authority that judges the call.
-    if (Option.isNone(result)) return HttpServerResponse.empty({ status: 503 });
-    return HttpServerResponse.text(encodeAdmission(result.value), {
-      contentType: "application/json",
-      headers: { "cache-control": "no-store" },
-    });
-  }),
-);
+      const result = yield* Effect.gen(function* () {
+        const result: ComputerUseCallAdmission =
+          deniedApp !== undefined
+            ? { status: "refused", detail: "app_not_allowed", app: deniedApp }
+            : pointerLocked
+              ? { status: "refused", detail: "pointer_locked" }
+              : outsideManifest
+                ? { status: "refused", detail: "outside_manifest" }
+                : yield* leases.callReservation(threadId, call.value);
+        if (call.value.action === "reserve" && result.status === "refused") {
+          const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+          if (Option.isNone(sql))
+            yield* Effect.logWarning("Computer use history storage unavailable");
+          else {
+            const history = yield* makeComputerUseHistory.pipe(
+              Effect.provideService(SqlClient.SqlClient, sql.value),
+            );
+            yield* scheduleHistory(
+              refusalHistoryKey(
+                threadId,
+                call.value.controlId,
+                call.value.connectionId,
+                call.value.callId,
+              ),
+              recordAdmittedCall(history, threadId, call.value, { refusalCode: result.detail }),
+              serverScope,
+            );
+          }
+        }
+        if (
+          call.value.action === "reserve" &&
+          result.status === "admitted" &&
+          result.reservationId !== null
+        ) {
+          const reservationId = result.reservationId;
+          const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+          if (Option.isNone(sql))
+            yield* Effect.logWarning("Computer use history storage unavailable");
+          else {
+            const history = yield* makeComputerUseHistory.pipe(
+              Effect.provideService(SqlClient.SqlClient, sql.value),
+            );
+            yield* registerHistoryTicket(reservationId, threadId, call.value.controlId);
+            yield* scheduleHistory(
+              reservationId,
+              recordAdmittedCall(history, threadId, call.value, { reservationId }),
+              serverScope,
+            );
+          }
+        }
+        return result;
+      }).pipe(Effect.uninterruptible, Effect.option);
+      // The session is still accepted; GOAT could not read the authority that judges the call.
+      if (Option.isNone(result)) return HttpServerResponse.empty({ status: 503 });
+      return HttpServerResponse.text(encodeAdmission(result.value), {
+        contentType: "application/json",
+        headers: { "cache-control": "no-store" },
+      });
+    }),
+  );
 
 const primitiveReplyLayer = HttpRouter.add(
   "POST",
@@ -625,7 +628,7 @@ export const layer = Layer.unwrap(
     return Layer.mergeAll(
       streamLayer,
       makeReportLayer(serverScope),
-      callLayer,
+      makeCallLayer(serverScope),
       primitiveReplyLayer,
       controlReadyLayer,
       controlCutoffLayer,
