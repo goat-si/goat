@@ -57,7 +57,11 @@ it("classifies the action outcome and drops text when the field is unknown", () 
 it.effect("reports one sent click and does not report a read", () =>
   Effect.gen(function* () {
     const reports = yield* Queue.unbounded<ComputerUseLeaseCallOutcome>();
-    const h = yield* harness({ onCallOutcome: (report) => Queue.offer(reports, report) });
+    const h = yield* harness({
+      autoAppListing: true,
+      autoListedApps: [{ pid: 4, bundle_id: "fixture.app", name: "Fixture" }],
+      onCallOutcome: (report) => Queue.offer(reports, report),
+    });
     yield* h.push(active());
     yield* h.send(call(7, "list_apps"));
     yield* h.nextToDriver;
@@ -98,6 +102,7 @@ it.effect("reports a server admission refusal without dispatch", () =>
   Effect.gen(function* () {
     const reports = yield* Queue.unbounded<ComputerUseLeaseCallOutcome>();
     const h = yield* harness({
+      autoAppListing: true,
       onCallOutcome: (report) => Queue.offer(reports, report),
       reservation: () => Effect.succeed({ status: "refused", detail: "target_busy" }),
     });
@@ -112,7 +117,10 @@ it.effect("reports a server admission refusal without dispatch", () =>
 it.effect("records the outcome of a cancelled call after the driver answers", () =>
   Effect.gen(function* () {
     const reports = yield* Queue.unbounded<ComputerUseLeaseCallOutcome>();
-    const h = yield* harness({ onCallOutcome: (report) => Queue.offer(reports, report) });
+    const h = yield* harness({
+      autoAppListing: true,
+      onCallOutcome: (report) => Queue.offer(reports, report),
+    });
     yield* h.push(active());
     yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
     yield* h.nextToDriver;
