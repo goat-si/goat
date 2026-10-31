@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import { CommandId, EventId, EnvironmentId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Threads from "../orchestration-v2/ThreadManagementService.ts";
 import * as RuntimeLayer from "../orchestration-v2/runtimeLayer.ts";
 import * as EventSink from "../orchestration-v2/EventSink.ts";
@@ -22,7 +23,8 @@ import type { McpInvocationScope } from "./McpInvocationContext.ts";
 it.effect(
   "roundtrips policies through real MCP schedule services, preserves future values and rejects read-only writes",
   () => {
-    const harness = makeHarness();
+    const prepared = Deferred.makeUnsafe<void>();
+    const harness = makeHarness({ prepared });
     const dependencies = Layer.mergeAll(
       harness.layer,
       NodeCrypto.layer,
@@ -103,6 +105,8 @@ it.effect(
         workspaceStrategy: { type: "root" },
       });
       const fired = yield* scheduler.runNow({ id: current.id });
+      // Workspace preparation releases the run in the background; fail it only after that.
+      yield* Deferred.await(prepared);
       const threads = yield* Threads.ThreadManagementService;
       const sink = yield* EventSink.EventSinkV2;
       const run = (yield* threads.getThreadProjection(fired.threadId!)).runs[0]!;
