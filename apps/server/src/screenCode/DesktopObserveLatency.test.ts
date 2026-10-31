@@ -284,9 +284,11 @@ it.effect(
           .value as ScreenObservation;
         const rendered = observations.outputs.at(-1);
         const budget = observationReplyBudget(read, limits);
-        expect(observations.inputs.at(-1)?.limits.treeBytes).toBe(budget);
+        expect(observations.inputs.at(-1)?.limits.treeBytes).toBe(
+          budget - Buffer.byteLength(JSON.stringify("s1")) - 12,
+        );
         const { ms, phases, ...plain } = value;
-        expect(plain).toEqual(rendered);
+        expect(plain).toEqual({ ...rendered, snapshot: "s1" });
         expect(Buffer.byteLength(JSON.stringify(value))).toBeLessThanOrEqual(budget);
         if (ms === undefined) {
           expect(phases).toBeUndefined();

@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off - Driver replies are bounded by the primitive channel.
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -96,7 +97,7 @@ export interface BoundWindow {
   readonly pid: number;
   windowId: number;
   readonly appId: string;
-  /** The bundle id list_apps gave the app; a run_steps app_scope names the app by it. */
+  /** The bundle id list_apps gave the app, used for input admission. */
   readonly bundleId?: string;
   readonly controlId: string;
   epoch: number;
@@ -111,6 +112,10 @@ export interface BoundWindow {
   boundInCellId?: string | undefined;
   /** The driver snapshot behind observationId; a screenshot that keeps it keeps the tree's refs. */
   snapshotId?: string;
+  diffBaseline?: boolean;
+  fullObservationId?: string;
+  structuralDiff?: boolean;
+  lastReadCut?: boolean;
   /** Input went to the window, or a new driver replaced the one that took its latest screenshot. */
   pointsStale?: "input" | "restart";
   /** Input ran without a post-input 60 ms settle sleep; the next screenshot settles first. */
@@ -305,12 +310,24 @@ export const createDesktopTargetHost = (deps: {
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
+    delete bound.diffBaseline;
+    delete bound.fullObservationId;
+    delete bound.structuralDiff;
+    delete bound.lastReadCut;
     delete bound.pages;
     delete bound.elementsByToken;
     bound.screenshots?.clear();
     delete bound.latestScreenshot;
     bound.pointsStale = "restart";
-    return yield* request(tool, args, call, context, bound.connectionGeneration, cursor);
+    const { since: _since, ...freshArgs } = args;
+    return yield* request(
+      tool,
+      tool === "get_window_state" ? freshArgs : args,
+      call,
+      context,
+      bound.connectionGeneration,
+      cursor,
+    );
   });
   /** The driver token behind an element ref of the bound window's latest observation. */
   const tokenOf = (element: Record<string, unknown>, bound: BoundWindow) => {
@@ -601,7 +618,12 @@ export const createDesktopTargetHost = (deps: {
         const driven = (at: number) => void (bound.inputDrivenAt = at);
         // A batch member reads nothing around itself unless it asks to verify; one that opens or
         // closes a window goes through the single-call path, which keeps it unverifiable.
-        if (inBatch && !verify && windowIntentOf(tool, forwarded, acted) === undefined)
+        if (
+          inBatch &&
+          !verify &&
+          bound.sheetTrigger === undefined &&
+          windowIntentOf(tool, forwarded, acted) === undefined
+        )
           return runInput.pipe(
             Effect.tap(() => Effect.map(Clock.currentTimeMillis, driven)),
             Effect.map((result) => withoutUnprovenClose(tool, result)),
@@ -775,20 +797,47 @@ export const createDesktopTargetHost = (deps: {
       args.verify === true,
     );
   });
+  const withWindow = (
+    call: ScreenHostCall,
+    operation: Effect.Effect<ScreenHostDispatchResult, ScreenRunError>,
+  ) =>
+    Effect.suspend(() => {
+      const before = call.targetRef && targets.get(call.targetRef.id);
+      const window = before && `${before.pid}:${before.windowId}`;
+      const baseline = before?.observationId;
+      return operation.pipe(
+        Effect.map((result) => {
+          const after = call.targetRef && targets.get(call.targetRef.id);
+          return window !== undefined && after && window === `${after.pid}:${after.windowId}`
+            ? {
+                ...result,
+                observedWindow: window,
+                ...(baseline === undefined ? {} : { observedBaseline: baseline }),
+              }
+            : result;
+        }),
+      );
+    });
   const dispatch: DesktopTargetHost["dispatch"] = (call, context) =>
-    call.method === "tab_status" || call.method === "read_page"
-      ? Effect.fail(fail("unsupported"))
-      : call.method === "list_menu_bar_extras"
-        ? menuBarExtras(call, callArgs(call.args), context)
-        : call.method === "bind_app"
-          ? bindApp(call, context)
-          : call.method === "list_apps" || call.method === "list_windows"
-            ? discover(call, context)
-            : ["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
-                  call.method,
-                )
-              ? observe(call, context)
-              : invoke(call, context);
+    withWindow(
+      call,
+      call.method === "tab_status" || call.method === "read_page"
+        ? Effect.fail(fail("unsupported"))
+        : call.method === "list_menu_bar_extras"
+          ? menuBarExtras(call, callArgs(call.args), context)
+          : call.method === "bind_app"
+            ? bindApp(call, context)
+            : call.method === "list_apps" || call.method === "list_windows"
+              ? discover(call, context)
+              : [
+                    "get_window_state",
+                    "get_accessibility_tree",
+                    "verify_state",
+                    "screenshot",
+                  ].includes(call.method)
+                ? observe(call, context)
+                : invoke(call, context),
+    );
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
@@ -804,8 +853,8 @@ export const createDesktopTargetHost = (deps: {
     if (refused !== undefined) return refused;
     const first = calls[0];
     const firstBound = first && resolve(first, context);
-    if (first && firstBound)
-      yield* seedBatchBaseline({
+    if (first && firstBound) {
+      const baseline = yield* seedBatchBaseline({
         send,
         calls,
         context,
@@ -814,14 +863,16 @@ export const createDesktopTargetHost = (deps: {
         boundInCellId: firstBound.boundInCellId,
         boundWindows: firstBound.boundWindows,
         tracker: trackerFor(context, firstBound.connectionGeneration),
-      });
+      }).pipe(Effect.result);
+      if (baseline._tag === "Failure") return [Exit.fail(baseline.failure)];
+    }
     return yield* dispatchInTurn(
       calls,
       (each, index) =>
         Effect.suspend(() => {
           markDispatched(index);
           return INPUT_METHODS.has(each.method)
-            ? invoke(each, context, true)
+            ? withWindow(each, invoke(each, context, true))
             : dispatch(each, context);
         }),
       BATCH_FAILED_CATEGORIES,

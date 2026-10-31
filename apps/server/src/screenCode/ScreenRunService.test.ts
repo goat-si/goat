@@ -750,7 +750,7 @@ it.live(
         const ready = await app.waitFor({role: 'AXButton', name: 'Apply'});
         let missing;
         try { await app.click(99); } catch (error) { missing = {name: error.name, code: error.code, nothingSent: error.nothingSent}; }
-        return {pageText: page.text, clicks, dragged, fields, pointRefusal, tabNote: tab.note !== undefined, elements: tree.elements, applied, menu, ready: ready.met, missing};
+        return {pageText: page.text, clicks, dragged, fields, pointRefusal, tabNote: tab.note !== undefined, treeText: tree.text, hasElements: 'elements' in tree, applied, menu, ready: ready.met, missing};
       `,
         });
         expect(result.status).toBe("completed");
@@ -759,7 +759,7 @@ it.live(
         expect(result.value).toMatchObject({
           pageText: '- button "Add Element" [0]\n- link "Home" [1]',
           clicks: ["unverifiable", "unverifiable", "unverifiable", "unverifiable"],
-          tabNote: true,
+          tabNote: false,
           // An app point needs a current screenshot; nothing goes to the driver without one.
           pointRefusal: { code: "invalid_argument", nothingSent: true },
           dragged: "unverifiable",
@@ -785,20 +785,10 @@ it.live(
         expect(drags).toEqual([
           expect.objectContaining({ source: "aria-ref=e1", target: "aria-ref=e2" }),
         ]);
-        // DSH-11: the driver's actions, state, geometry (in window points), range and parent reach the cell.
-        expect((result.value as { elements: unknown[] }).elements).toEqual([
-          expect.objectContaining({ index: 0, role: "AXWindow", name: "Document" }),
-          expect.objectContaining({
-            index: 1,
-            name: "Apply",
-            actions: ["press"],
-            enabled: true,
-            selected: false,
-            frame: { x: 10, y: 20, width: 80, height: 24 },
-            parent: 0,
-          }),
-          expect.objectContaining({ index: 2, text: "40", range: { min: 0, max: 100 }, parent: 0 }),
-        ]);
+        expect(result.value).toMatchObject({
+          hasElements: false,
+          treeText: expect.stringContaining("Apply"),
+        });
         expect(
           desktop.sent
             .map((sent) => sent.tool)

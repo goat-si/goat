@@ -154,7 +154,7 @@ it.live(
           "await app.screenshot(); " +
           "await app.click([10, 10]); " +
           "const hiddenWait = await app.waitFor({window: 'hidden'}, 0); " +
-          "return { genMoved, oldPointCode, badAction, buttons: obs.elements.length, hiddenMet: hiddenWait.met };",
+          "return { genMoved, oldPointCode, badAction, buttons: [...obs.text.matchAll(/\\[\\d+\\]/g)].length, hiddenMet: hiddenWait.met };",
       );
       expect(res.value).toMatchObject({
         genMoved: true,
@@ -479,7 +479,7 @@ it.live(
     return Effect.gen(function* () {
       const cell1 = yield* runCell(
         "globalThis.savedApp = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); " +
-          "await savedApp.observe(); const c = await savedApp.click('Apply', {verify: true}); return c.result.windows;",
+          "await savedApp.observe(); const c = await savedApp.click('Apply', {verify: true}); return c.result.debug.value.windows;",
       );
       expect(
         (cell1.value as { opened?: Array<{ window_id: number }> })?.opened?.map((w) => w.window_id),
@@ -554,7 +554,7 @@ it.live(
       failParent = false;
       const recovered = yield* runCell(
         "const obs = await sheetApp.observe(); " +
-          "return { winAfter: sheetApp.windowId, note: sheetApp.note, scope: obs.scope, count: obs.elements.length };",
+          "return { winAfter: sheetApp.windowId, note: sheetApp.note, scope: obs.scope, count: [...obs.text.matchAll(/\\[\\d+\\]/g)].length };",
       );
       expect(recovered.value).toEqual({
         winAfter: 72907,

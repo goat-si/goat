@@ -201,3 +201,16 @@ it.live("a cell that fails on a host refusal names its cell in the error and its
     }),
   ),
 );
+
+it.live("a held tab key is refused before clicking its target or pressing the key", () =>
+  withScreen(() =>
+    Effect.gen(function* () {
+      const result = yield* (yield* ScreenRunService).runCell({
+        ...request,
+        source: `${bind} try { await tab.press('Enter', 'button', {holdMs: 10}); } catch(e) { return [e.code, e.nothingSent, e.nextStep]; }`,
+      });
+      expect(result.value).toEqual(["unsupported", true, expect.stringContaining("app")]);
+      expect(result.journal.map((entry) => entry.receipt.method)).toEqual(["select_tab"]);
+    }),
+  ),
+);

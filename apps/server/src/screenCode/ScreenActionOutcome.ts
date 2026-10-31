@@ -47,8 +47,7 @@ export const screenFailureSafety = (call: ScreenHostCall, error: ScreenRunError)
     call,
     error.effectStarted ? "indeterminate" : "refused",
     error.effectStarted,
-    // An earlier call stopped the cell: observe again and issue a fresh call.
-    error.code === "not_run" ? "reobserve" : "terminal",
+    error.code === "not_run" || error.code === "user_interacting" ? "reobserve" : "terminal",
   );
 
 // What a refused call says of itself; true of that call only, never of the cell around it.

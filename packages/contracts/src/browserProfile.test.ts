@@ -1,4 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Schema from "effect/Schema";
+import { BrowserImportInput } from "./browserImport.ts";
 
 import {
   BUILT_IN_BROWSER_PROFILES,
@@ -19,6 +21,34 @@ describe("resolveBrowserProfiles", () => {
     ]);
 
     expect(resolved).toEqual([...BUILT_IN_BROWSER_PROFILES, work]);
+  });
+
+  it("retains the default profile's import link without changing its identity", () => {
+    const importSource = { sourceId: "chrome" as const, sourceProfileDirectory: "Default" };
+    expect(
+      resolveBrowserProfiles([
+        { id: DEFAULT_BROWSER_PROFILE_ID, name: "Other", kind: "persistent", importSource },
+      ])[0],
+    ).toEqual({
+      ...BUILT_IN_BROWSER_PROFILES[0],
+      importSource,
+    });
+  });
+});
+
+describe("browser import origin contract", () => {
+  it("accepts canonical HTTP origins and rejects paths and non-HTTP schemes", () => {
+    const decode = Schema.decodeUnknownSync(BrowserImportInput);
+    const base = {
+      sourceId: "chrome",
+      sourceProfileDirectory: "Default",
+      targetProfileId: "default",
+    };
+    expect(decode({ ...base, origins: ["https://example.com:8443"] }).origins).toEqual([
+      "https://example.com:8443",
+    ]);
+    expect(() => decode({ ...base, origins: ["https://example.com/path"] })).toThrow();
+    expect(() => decode({ ...base, origins: ["file:///tmp/example"] })).toThrow();
   });
 });
 

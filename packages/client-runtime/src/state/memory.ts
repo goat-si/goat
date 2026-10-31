@@ -281,6 +281,11 @@ export function createMemoryEnvironmentAtoms<R, E>(
           supportsMemoryProtocol(config.environment.capabilities) &&
           ((tag !== WS_METHODS.memoryHubDiagnostics && tag !== WS_METHODS.memoryHubReconcile) ||
             config.environment.capabilities.memory?.hubDiagnostics === true) &&
+          ((tag !== WS_METHODS.siteNotesList &&
+            tag !== WS_METHODS.siteNotesWrite &&
+            tag !== WS_METHODS.siteNotesDelete &&
+            tag !== WS_METHODS.siteNotesRestoreSeed) ||
+            config.environment.capabilities.memory?.siteNotes === true) &&
           (tag !== WS_METHODS.memoryImportProvider ||
             config.environment.capabilities.memory?.importProvider === true)
         );
@@ -472,6 +477,10 @@ export function createMemoryEnvironmentAtoms<R, E>(
       ledger.dispose();
     },
     exposureAtom,
+    siteNotesList: command(WS_METHODS.siteNotesList),
+    siteNotesWrite: command(WS_METHODS.siteNotesWrite),
+    siteNotesDelete: command(WS_METHODS.siteNotesDelete),
+    siteNotesRestoreSeed: command(WS_METHODS.siteNotesRestoreSeed),
     list: bodyQuery(WS_METHODS.memoryList),
     search: bodyQuery(WS_METHODS.memorySearch),
     read: bodyQuery(WS_METHODS.memoryRead),
