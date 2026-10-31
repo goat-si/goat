@@ -1,4 +1,6 @@
 import * as Layer from "effect/Layer";
+import * as Effect from "effect/Effect";
+import * as BrowserClaimBind from "../preview/BrowserClaimBind.ts";
 
 import * as ComputerUsePrimitiveChannel from "../cua/ComputerUsePrimitiveChannel.ts";
 import * as ScreenCursorPublisher from "../cua/ScreenCursorPublisher.ts";
@@ -18,9 +20,18 @@ export const withScreenCode = <A, E, R>(serverBrowser: Layer.Layer<A, E, R>) =>
   );
 
 const primitives = ComputerUsePrimitiveChannel.layer;
+const bindInstaller = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const channel = yield* ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel;
+    const service = yield* BrowserClaimBind.BrowserClaimBind;
+    const bind = yield* BrowserClaimBind.makeBrowserClaimBind(channel);
+    const windowTitle = yield* BrowserClaimBind.makeBrowserClaimWindow(channel);
+    if (service.install) yield* service.install(bind, windowTitle);
+  }),
+).pipe(Layer.provide(primitives), Layer.provide(BrowserClaimBind.layer));
 
 export const provideScreenPrimitives = <A, E, R>(application: Layer.Layer<A, E, R>) =>
-  application.pipe(Layer.provideMerge(primitives));
+  application.pipe(Layer.provideMerge(Layer.merge(primitives, bindInstaller)));
 
 export const provideScreenPrimitivesAfter =
   <I, IE, IR>(infrastructure: Layer.Layer<I, IE, IR>) =>

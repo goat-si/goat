@@ -5,9 +5,12 @@ import {
   missingCuaDriverApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
+  publishCuaDriverBrowserManifest,
 } from "@goat/shared/cuaDriverManifest";
 import { cuaDriverListingEnvironment } from "@goat/shared/cuaDriverRelease";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import type { DesktopCuaDriverDependencies } from "./DesktopCuaDriver.ts";
 import { withResolvedWindowsPaths } from "./windowsHostPaths.ts";
@@ -62,3 +65,78 @@ export const refreshDesktopManifest = Effect.fn("desktop.cua.refreshManifest")(f
     });
   return stillMissing.length < missing.length;
 });
+
+export const makeBrowserManifestRequestHandler = (input: {
+  readonly path: () => string | undefined;
+  readonly publish: (
+    path: string,
+    union: import("@goat/shared/cuaDriverManifest").CuaBrowserResources,
+  ) => Effect.Effect<string, Error>;
+}) =>
+  Effect.fn("desktop.cua.publishBrowserManifest")(function* (message: {
+    readonly request: {
+      readonly requestId: string;
+      readonly union: import("@goat/shared/cuaDriverManifest").CuaBrowserResources;
+    };
+    readonly reply: (value: {
+      readonly requestId: string;
+      readonly sha256?: string;
+    }) => Effect.Effect<void>;
+  }) {
+    const path = input.path();
+    if (!path) return yield* message.reply({ requestId: message.request.requestId });
+    const result = yield* input.publish(path, message.request.union).pipe(Effect.option);
+    yield* message.reply({
+      requestId: message.request.requestId,
+      ...(result._tag === "Some" ? { sha256: result.value } : {}),
+    });
+  });
+
+class BrowserManifestPublishError extends Schema.TaggedError<BrowserManifestPublishError>()(
+  "BrowserManifestPublishError",
+  { cause: Schema.Defect() },
+) {}
+
+export const listenBrowserManifestRequests = (
+  requests:
+    | NonNullable<
+        import("../telemetry/DesktopTelemetryPublisher.ts").DesktopTelemetryPublisher["Service"]["cuaManifestRequests"]
+      >
+    | undefined,
+  path: () => string | undefined,
+  mutex: import("effect/Semaphore").Semaphore,
+) =>
+  Stream.runForEach(requests ?? Stream.empty, (message) =>
+    mutex.withPermits(1)(
+      Effect.suspend(() =>
+        !message.isCurrent()
+          ? Effect.void
+          : makeBrowserManifestRequestHandler({
+              path,
+              publish: (name, union) =>
+                Effect.tryPromise({
+                  try: () => publishCuaDriverBrowserManifest(name, union),
+                  catch: (cause) => new BrowserManifestPublishError({ cause }),
+                }).pipe(
+                  Effect.tapError((cause) =>
+                    Effect.logWarning("Could not publish browser manifest", { cause }),
+                  ),
+                ),
+            })({
+              request: message.request,
+              reply: ({ requestId, sha256 }) =>
+                message.reply(
+                  sha256 === undefined
+                    ? { version: 1, type: "cuaManifestReport", requestId, status: "unavailable" }
+                    : {
+                        version: 1,
+                        type: "cuaManifestReport",
+                        requestId,
+                        status: "written",
+                        sha256,
+                      },
+                ),
+            }),
+      ),
+    ),
+  ).pipe(Effect.forkScoped);

@@ -15,6 +15,7 @@ import {
   DesktopCuaReadinessReport,
 } from "./cua.ts";
 import { DesktopUpdateStateSchema } from "./ipc.ts";
+import { DesktopCuaManifestRequest, DesktopCuaManifestReport } from "./desktopCuaManifest.ts";
 
 export const RESOURCE_MONITOR_PROTOCOL_VERSION = 3 as const;
 
@@ -313,6 +314,7 @@ export const DesktopHostTelemetryMessage = Schema.Union([
   DesktopUpdateStatusReport,
   DesktopCuaDriverReport,
   DesktopCuaAppsReport,
+  DesktopCuaManifestReport,
   DesktopCuaHumanInputReport,
   DesktopCuaPrivateModeReport,
   DesktopCuaReadinessReport,
@@ -366,6 +368,7 @@ export const DesktopTelemetryControlMessage = Schema.Union([
   DesktopTelemetryCancelDesktopUpdate,
   DesktopCuaDriverRequest,
   DesktopCuaAppsRequest,
+  DesktopCuaManifestRequest,
   DesktopCuaWatch,
   DesktopCuaFrames,
 ]);

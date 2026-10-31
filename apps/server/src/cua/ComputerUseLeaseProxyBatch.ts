@@ -7,6 +7,10 @@
  */
 import * as Effect from "effect/Effect";
 
+import {
+  supportsBrowserClaims,
+  type BrowserClaimReport,
+} from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { isBatchTool, MAX_BATCH_SCOPE_APPS } from "./ComputerUseBatchScope.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import type { Running } from "./ComputerUseLeaseProxyLifecycle.ts";
@@ -36,21 +40,32 @@ export const makeProxyBatchScope = (
     readonly remember: (method: string, message: Envelope) => void;
   },
   current: () => Running | undefined,
+  report?: (value: BrowserClaimReport) => void,
 ) => {
   /** The apps the control's grant names, as it spells them; undefined for the whole screen. */
   let grantApps: ReadonlyArray<string> | undefined;
   /** Each child's own tool list, once it gave one: to the provider's tools/list or a probe. */
   const listed = new WeakMap<Running, unknown>();
+  let lastCapability: boolean | undefined;
+  const rememberList = (child: Running, tools: unknown) => {
+    listed.set(child, tools);
+    const browserClaimsSupported = supportsBrowserClaims(tools);
+    if (lastCapability !== browserClaimsSupported) {
+      lastCapability = browserClaimsSupported;
+      report?.({ browserClaimsSupported });
+    }
+  };
   /** A handshake answer from a child, kept for the handshake and, for tools/list, for that child. */
   const remember = (child: Running, method: string, message: Envelope) => {
     handshake.remember(method, message);
-    if (method === "tools/list" && message.result !== undefined) listed.set(child, message.result);
+    if (method === "tools/list" && message.result !== undefined)
+      rememberList(child, message.result);
   };
   /** The child's own tool list, asked for once; undefined while it has given none. */
   const toolsOf = Effect.fn("ComputerUseLeaseProxy.childTools")(function* (child: Running) {
     if (!listed.has(child)) {
       const tools = yield* handshake.listTools(child.driver.send);
-      if (tools !== undefined) listed.set(child, tools);
+      if (tools !== undefined) rememberList(child, tools);
     }
     return listed.get(child);
   });
@@ -99,8 +114,14 @@ export const makeProxyBatchScope = (
       } as Envelope,
     };
   });
+  const browserSupported = Effect.fn("ComputerUseLeaseProxy.browserSupported")(function* () {
+    const child = current();
+    if (child === undefined) return false;
+    const tools = yield* toolsOf(child);
+    return current() === child && supportsBrowserClaims(tools);
+  });
   const grant = (apps: ReadonlyArray<string> | undefined) => {
     grantApps = apps;
   };
-  return { scope, remember, grant, toolsOf };
+  return { scope, remember, grant, toolsOf, browserSupported };
 };

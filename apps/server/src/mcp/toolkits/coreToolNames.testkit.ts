@@ -1,4 +1,5 @@
 import { OrchestratorToolkit } from "./orchestrator/tools.ts";
+import { BrowserClaimToolkit } from "./preview/browserClaims/tools.ts";
 import { PreviewToolkit } from "./preview/tools.ts";
 import { WorktreeToolkit } from "./worktree/tools.ts";
 import { ThreadLifecycleToolkit } from "./threadLifecycle/tools.ts";
@@ -28,6 +29,8 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_attachment_pending_list",
   "goat_attachment_prepare_upload",
   "goat_background_wait",
+  "goat_browser_claim_list",
+  "goat_browser_claim_request",
   "goat_browser_site_note_read",
   "goat_browser_site_note_write",
   "goat_cloud_holders",
@@ -202,6 +205,7 @@ export const CORE_GOAT_TOOL_NAMES = [
 export const PUBLISHED_TOOLKITS = [
   OrchestratorToolkit,
   PreviewToolkit,
+  BrowserClaimToolkit,
   WorktreeToolkit,
   ThreadToolkit,
   ThreadLifecycleToolkit,

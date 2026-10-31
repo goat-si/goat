@@ -5,12 +5,20 @@ import {
   missingCuaDriverApplications,
   prepareCuaDriverCapabilityManifest,
   writeCuaDriverCapabilityManifest,
+  publishCuaDriverBrowserManifest,
+  type CuaBrowserResources,
 } from "@goat/shared/cuaDriverManifest";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+class BrowserManifestWriteError extends Schema.TaggedError<BrowserManifestWriteError>()(
+  "BrowserManifestWriteError",
+  { cause: Schema.Defect() },
+) {}
 import type * as CuaDisplay from "./CuaDisplayCapability.ts";
 
 /** The caller holds the host mutex across the file update and any required restart. */
@@ -106,5 +114,11 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
         ),
     );
 
-  return { prepare, refresh, requestListing };
+  const publish = Effect.fn("StandaloneCuaManifest.publishBrowser")((union: CuaBrowserResources) =>
+    Effect.tryPromise({
+      try: () => publishCuaDriverBrowserManifest(manifestPath, union),
+      catch: (cause) => new BrowserManifestWriteError({ cause }),
+    }),
+  );
+  return { prepare, refresh, requestListing, publish };
 });

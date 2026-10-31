@@ -67,8 +67,9 @@ const makeProxyPointBasis = (
 export const makeProxyCallScope = (
   handshake: Parameters<typeof makeProxyBatchScope>[0],
   current: () => Running | undefined,
+  report?: Parameters<typeof makeProxyBatchScope>[2],
 ) => {
-  const batches = makeProxyBatchScope(handshake, current);
+  const batches = makeProxyBatchScope(handshake, current, report);
   const pointBasis = makeProxyPointBasis(batches.toolsOf, current);
   const scope = Effect.fn("ComputerUseLeaseProxy.scopeCall")(function* (
     id: JsonRpcId,

@@ -20,6 +20,7 @@ import * as ServerBrowser from "./ServerBrowser.ts";
 import { describe, expect, it } from "vite-plus/test";
 
 import * as PreviewSessions from "./PreviewSessions.ts";
+import { BrowserOriginGrants } from "./BrowserOriginGrantsLayer.ts";
 import { blockedSession, browserSession, desktopSession } from "./PreviewSessions.ts";
 
 const base = { environmentId: EnvironmentId.make("env"), host: "mac", platform: "mac" } as const;
@@ -314,6 +315,9 @@ describe("preview sessions", () => {
     const layer = PreviewSessions.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(BrowserOriginGrants)({
+            stop: () => Effect.sync(() => void stopped.push("claims")),
+          }),
           Layer.mock(ServerBrowser.ServerBrowser)({
             // A hung renderer: reading a tab's title never finishes.
             sessions: Effect.never,
@@ -338,7 +342,7 @@ describe("preview sessions", () => {
       const sessions = yield* PreviewSessions.PreviewSessions;
       const result = yield* sessions.control({ control: "stopAll" }, AuthSessionId.make("session"));
       expect(result).toEqual({ applied: true });
-      expect(stopped).toEqual(["browser", "desktop"]);
+      expect(stopped).toEqual(["browser", "claims", "desktop"]);
     }).pipe(Effect.provide(layer));
   });
 

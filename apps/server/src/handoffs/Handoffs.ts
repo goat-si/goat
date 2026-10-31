@@ -40,6 +40,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { itemHandoff } from "../orchestration-v2/handoffState.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { ThreadArchiveGate } from "../orchestration-v2/ThreadArchiveGate.ts";
 import { canResolveHumanStep, sessionResolver } from "./HumanStepAuthority.ts";
@@ -54,56 +55,18 @@ import { SshProgressBinding } from "./sshProgressBinding.ts";
 export { SshProgressBinding } from "./sshProgressBinding.ts";
 
 import {
-  PROVIDER_CONTINUATION_PATHS,
   isProviderContinuationPath,
   type ProviderContinuationPath,
 } from "./providerContinuationPaths.ts";
+import {
+  decodePrivatePayload,
+  encodePrivatePayload,
+  type PrivatePayload,
+} from "./handoffPrivatePayload.ts";
 export {
   isProviderContinuationPath,
   type ProviderContinuationPath,
 } from "./providerContinuationPaths.ts";
-const ContinuationPayload = Schema.Struct({
-  version: Schema.Literal(1),
-  kind: Schema.Literal("continuation"),
-  human: HandoffHuman,
-  args: Schema.Record(Schema.String, Schema.Unknown),
-  approvedBySessionId: Schema.optional(AuthSessionId),
-  sshProgress: Schema.optional(SshProgressBinding),
-  namespace: Schema.optional(Schema.Literals(PROVIDER_CONTINUATION_PATHS)),
-  /** What an approved provider change has done so far; its owning service decodes it. */
-  progress: Schema.optional(Schema.Unknown),
-});
-const PrivatePayload = Schema.fromJsonString(
-  Schema.Union([
-    ContinuationPayload,
-    Schema.Struct({
-      version: Schema.Literal(1),
-      kind: Schema.Literal("progress_only"),
-      sshProgress: SshProgressBinding,
-      retainUntil: Schema.Number,
-    }),
-    // A finished provider change keeps what it did, apart from the arguments it ran with.
-    Schema.Struct({
-      version: Schema.Literal(1),
-      kind: Schema.Literal("provider_outcome"),
-      namespace: Schema.Literals(PROVIDER_CONTINUATION_PATHS),
-      progress: Schema.Unknown,
-      retainUntil: Schema.Number,
-    }),
-    // Legacy non-SSH payloads remain readable, but are never resumed as SSH work.
-    Schema.Struct({
-      version: Schema.optional(Schema.Literal(0)),
-      kind: Schema.optional(Schema.Literal("legacy")),
-      human: HandoffHuman,
-      args: Schema.Record(Schema.String, Schema.Unknown),
-    }),
-    // A person ended this computer use grant after approving it; the sweep drops it with the rest.
-    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_ended") }),
-    Schema.Struct({ version: Schema.Literal(1), kind: Schema.Literal("computer_use_consumed") }),
-  ]),
-);
-const encodePrivatePayload = Schema.encodeEffect(PrivatePayload);
-const decodePrivatePayload = Schema.decodeUnknownEffect(PrivatePayload);
 const decodeHandoff = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.toCodecJson(Handoff)),
 );
@@ -271,6 +234,7 @@ const make = Effect.gen(function* () {
   const environment = yield* Effect.serviceOption(Environment.ServerEnvironment);
   const secrets = yield* SecretRequests.SecretRequests;
   const computerUseLeases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const tabClaims = yield* Effect.serviceOption(BrowserOriginGrants);
   const withAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     Option.isSome(computerUseLeases) ? computerUseLeases.value.serializeAdmission(effect) : effect;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
@@ -295,7 +259,7 @@ const make = Effect.gen(function* () {
       });
       return yield* decodePrivatePayload(plain).pipe(Effect.mapError(unavailable));
     });
-  const savePrivate = (id: string, payload: typeof PrivatePayload.Type, replace = false) =>
+  const savePrivate = (id: string, payload: PrivatePayload, replace = false) =>
     Effect.gen(function* () {
       const plain = yield* encodePrivatePayload(payload).pipe(Effect.mapError(unavailable));
       const encrypted = yield* Effect.try({
@@ -499,6 +463,7 @@ const make = Effect.gen(function* () {
         Option.isSome(computerUseLeases)
       )
         yield* computerUseLeases.value.approveForeground(result, foregroundEpoch);
+      if (endsApproved && Option.isSome(tabClaims)) yield* tabClaims.value.stop(input.threadId);
       if (isGrant && Option.isSome(computerUseLeases)) yield* computerUseLeases.value.changed;
       if (isGrant) yield* continuations.answered(input.handoffId);
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });

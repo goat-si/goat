@@ -670,3 +670,41 @@ describe("ComputerUsePrimitiveChannel while a control is replaced", () => {
     }),
   );
 });
+
+it.effect("only forwards claimBind authority when supplied as a host request field", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture();
+    assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+    const hostCall = yield* f.channel
+      .request({
+        threadId,
+        runId: "run:bind",
+        turnId: "turn:bind",
+        callId: 1,
+        deadlineMillis: 30_000,
+        tool: "get_browser_state",
+        authority: "claimBind",
+        args: { pid: 123, window_id: 4, mode: "bind", origin_scope: ["https://example.test"] },
+      })
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    const host = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+    assert.equal(host.authority, "claimBind");
+    yield* f.channel.cancel("run:bind", "turn:bind");
+    yield* Fiber.join(hostCall);
+    const agentCall = yield* f.channel
+      .request({
+        threadId,
+        runId: "run:cell",
+        turnId: "turn:cell",
+        callId: 2,
+        deadlineMillis: 30_000,
+        tool: "get_browser_state",
+        args: { authority: "claimBind", pid: 123, window_id: 4 },
+      })
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    const agent = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+    assert.isUndefined(agent.authority);
+    yield* f.channel.cancel("run:cell", "turn:cell");
+    yield* Fiber.join(agentCall);
+  }),
+);

@@ -46,6 +46,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as DesktopFrames from "./DesktopFrames.ts";
 import * as PreviewHandoffs from "./PreviewHandoffs.ts";
+import { BrowserOriginGrants } from "./BrowserOriginGrantsLayer.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
 import type { ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
@@ -243,6 +244,7 @@ export const desktopSession = (
 const make = Effect.gen(function* () {
   const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const claims = yield* Effect.serviceOption(BrowserOriginGrants);
   const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
   type ScreenChange = Parameters<ScreenRunService.ScreenRunService["Service"]["controlChanged"]>[0];
   const fenceScreen = (
@@ -329,7 +331,7 @@ const make = Effect.gen(function* () {
       yield* fenceScreen({});
       // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
       if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
-      const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId);
+      const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId, claims);
       yield* cleanupScreen({ kind: "stopAll" });
       // A grant left alive lets its thread take the screen again on its next turn.
       return failed === 0
@@ -382,7 +384,7 @@ const make = Effect.gen(function* () {
       yield* leases.value.resume;
     } else {
       const threadId = ThreadId.make(live.control.threadId);
-      const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId);
+      const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId, claims);
       if (cutoff) yield* cleanupScreen(cutoff);
       // A grant left alive keeps the thread's apps from every other thread until it ends.
       if (failed > 0) return { applied: false, reason: "not_allowed" } as const;

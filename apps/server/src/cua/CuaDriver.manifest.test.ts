@@ -171,3 +171,33 @@ it.layer(ServerSettings.layerTest({ enableCua: true }))("standalone manifest ref
       ),
   );
 });
+
+it.layer(ServerSettings.layerTest({ enableCua: true }))("browser manifest publication", (it) => {
+  it.effect("publishes through the running driver without restarting it", () =>
+    Effect.gen(function* () {
+      let stopped = 0;
+      const exited = yield* Deferred.make<void>();
+      const expected = "a".repeat(64);
+      const service = yield* CuaDriver.make(
+        () =>
+          Effect.succeed({
+            start: Effect.succeed({ command: "/driver", args: [], environment: [] }),
+            stop: Effect.sync(() => {
+              stopped++;
+            }),
+            waitForExit: Deferred.await(exited),
+          }),
+        Effect.succeed({ capability: "available", reason: "test", environment: [] }),
+        { publishBrowserManifest: () => Effect.succeed(expected) },
+      );
+      yield* service.acquire;
+      if (!service.publishBrowserManifest) return expect.fail("publisher unavailable");
+      const sha = yield* service.publishBrowserManifest({
+        existingProfiles: [{ pid: 12, windowId: 34 }],
+        origins: ["https://example.test"],
+      });
+      expect(sha).toBe(expected);
+      expect(stopped).toBe(0);
+    }).pipe(Effect.scoped),
+  );
+});
