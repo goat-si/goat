@@ -11,4 +11,5 @@ export const codexTurnSkills = (
     cuaDriver !== undefined &&
     McpProviderSession.carriesComputerUseSkill(mcpSession),
   screenCode: McpProviderSession.carriesScreenCodeSkill(mcpSession),
+  screenCodeSkillPath: mcpSession?.screenCodeSkillPath,
 });

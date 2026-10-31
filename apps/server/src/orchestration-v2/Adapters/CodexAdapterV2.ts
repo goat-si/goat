@@ -193,7 +193,6 @@ import {
 } from "./CodexFailureClass.ts";
 import { codexTurnSkills } from "./CodexTurnSkills.ts";
 import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
-
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
 export const CODEX_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER_KIND);
@@ -774,6 +773,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** The managed `cua-driver` MCP server is attached to this thread. */
     readonly computerUse?: boolean;
     readonly screenCode?: boolean;
+    readonly screenCodeSkillPath?: string | undefined;
     readonly computerUseDeferred?: boolean;
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
@@ -815,6 +815,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
               device: input.deviceToolsAvailable ?? false,
               computerUse: input.computerUse ?? false,
               screenCode: input.screenCode ?? false,
+              screenCodeSkillPath: input.screenCodeSkillPath,
             },
           )
         : buildCodexDevelopmentContext();
@@ -949,7 +950,6 @@ const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
     turn.status === "cancelled");
 
 type CodexThreadGoal = CodexSchema.V2ThreadGoalUpdatedNotification["goal"];
-
 const CODEX_GOAL_STATUSES = {
   active: "active",
   paused: "paused",

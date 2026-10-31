@@ -8,17 +8,20 @@ export const skillOptions = (
   browserToolsAvailable: mcpSession?.browserToolsAvailable === true,
   computerUseSkill: McpProviderSession.carriesComputerUseSkill(mcpSession),
   screenCodeSkill: McpProviderSession.carriesScreenCodeSkill(mcpSession),
+  screenCodeSkillPath: mcpSession?.screenCodeSkillPath,
 });
 
 export const runtimeInstructions = (input: {
   readonly browserToolsAvailable?: boolean | undefined;
   readonly computerUseSkill?: boolean | undefined;
   readonly screenCodeSkill?: boolean | undefined;
+  readonly screenCodeSkillPath?: string | undefined;
   readonly mcpServers?: Readonly<Record<string, unknown>> | undefined;
 }) =>
   buildRuntimeInstructions({
     harness: "Claude Code",
     screenCode: input.screenCodeSkill === true,
+    screenCodeSkillPath: input.screenCodeSkillPath,
     computerUse:
       input.computerUseSkill !== false &&
       input.mcpServers?.[McpProviderSession.CUA_MCP_SERVER_NAME] !== undefined &&

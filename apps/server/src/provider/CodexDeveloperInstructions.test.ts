@@ -57,7 +57,16 @@ describe("buildCodexAdditionalContext", () => {
   it("a browser-only attachment gives Codex the screen-code guide", () => {
     const context = buildCodexAdditionalContext(
       { model: "gpt-5.3-codex" },
-      { browser: true, device: false, screenCode: true },
+      {
+        browser: true,
+        device: false,
+        screenCode: true,
+        screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
+      },
+    );
+    NodeAssert.match(
+      context.goat_code_runtime_screen_code_01?.value ?? "",
+      /Read the screen-code skill at \/state\/skills\/screen-code\/SKILL.md/,
     );
     NodeAssert.match(context.goat_code_runtime_screen_code_01?.value ?? "", /goat_screen_run/);
     NodeAssert.equal(context.goat_code_runtime_computer_use_01, undefined);
