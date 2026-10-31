@@ -71,6 +71,14 @@ export const previewTargetFailure = (
       detail: error.fetchFailure,
       nextStep: FETCH_NEXT_STEP[error.fetchFailure],
     };
+  if (operation === "fetch")
+    return {
+      code: "downstream_failure",
+      effectStarted: false,
+      message,
+      nextStep:
+        "The fetch changed nothing in the tab. Check the URL, or open it with tab.goto(url) and tab.read().",
+    };
   return {
     code: effectStarted ? "unknown_outcome" : "downstream_failure",
     effectStarted,
