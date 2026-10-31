@@ -45,11 +45,11 @@ describe("learnApps", () => {
     learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid }, listed, false);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
   });
-  it("allows reads but refuses unidentified full-access input", () => {
+  it("resolves content reads and refuses unidentified full-access input", () => {
     const common = { apps: undefined, appOf: () => undefined, bundleIds: true };
     assert.deepEqual(
       scopeVerdict({ ...common, name: "get_window_state", args: { pid: 42, window_id: 1 } }),
-      { _tag: "allow" },
+      { _tag: "resolve", pid: 42 },
     );
     assert.deepInclude(scopeVerdict({ ...common, name: "press_key", args: { key: "return" } }), {
       _tag: "refuse",

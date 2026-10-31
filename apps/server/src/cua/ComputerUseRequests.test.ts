@@ -51,6 +51,35 @@ it.effect("an organization denial refuses before approval", () =>
   ),
 );
 
+it.effect("refuses a denied bundle requested by its executable path before approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaDeniedApps: ["com.example.Blocked"],
+          });
+          assert.deepInclude(yield* request({ apps: ["c:/shared/host.exe"] }), {
+            kind: "refused",
+            code: "app_not_allowed",
+          });
+          const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+          assert.isFalse(records.turnItems.some((item) => item.type === "human_handoff"));
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "person",
+      undefined,
+      [{ id: "com.example.Blocked", name: "Blocked", executable: "C:\\Shared\\host.exe" }],
+    ),
+  ),
+);
+
 it.effect("an organization-denied bundle is refused when requested by display name", () =>
   withHarness(({ orchestrator }) =>
     withRequests(

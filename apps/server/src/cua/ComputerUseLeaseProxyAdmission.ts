@@ -45,19 +45,19 @@ export const reserveProxyCall = Effect.fn("ComputerUseLeaseProxy.reserveCall")(f
   const batch = batchAppScope(name, args);
   const scopeApps =
     batch?.apps.flatMap((wanted) => {
-      const entry = [...listed.values()].find(
+      const entries = [...listed.values()].filter(
         (app) =>
           (!options.bundleIds || app.bundleId !== undefined) &&
           [app.id, app.name, app.executable].some(
             (value) => value !== undefined && cuaAppKey(value) === cuaAppKey(wanted),
           ),
       );
-      return entry === undefined
-        ? []
-        : [entry.id, entry.name, entry.executable].filter(
-            (value): value is string =>
-              value !== undefined && value.length > 0 && value.length <= 500,
-          );
+      return entries.flatMap((entry) =>
+        [entry.id, entry.name, entry.executable].filter(
+          (value): value is string =>
+            value !== undefined && value.length > 0 && value.length <= 500,
+        ),
+      );
     }) ?? [];
   const identities = [
     ...new Set([

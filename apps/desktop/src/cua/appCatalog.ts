@@ -39,7 +39,7 @@ export function makeAppCatalog(readIcons: AppIconReader) {
       if (!id || !requestable.has(id) || entries.has(id)) continue;
       entries.set(id, {
         name: app.name?.trim() || id,
-        executable: app.executable?.trim() || undefined,
+        executable: app.executable?.trim() || app.bundle_executable?.trim() || undefined,
       });
     }
     const sorted = [...entries]
@@ -50,9 +50,14 @@ export function makeAppCatalog(readIcons: AppIconReader) {
       const read = await readIcons(unread).catch(() => new Map<string, string>());
       for (const app of unread) icons.set(app.id, read.get(app.id));
     }
-    return sorted.map(({ id, name }) => {
+    return sorted.map(({ id, name, executable }) => {
       const icon = icons.get(id);
-      return icon === undefined ? { id, name } : { id, name, icon };
+      return {
+        id,
+        name,
+        ...(executable === undefined ? {} : { executable }),
+        ...(icon === undefined ? {} : { icon }),
+      };
     });
   };
 }

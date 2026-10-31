@@ -16,7 +16,6 @@ import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManif
 import { backgroundBatch, batchAppScope } from "./ComputerUseBatchScope.ts";
 import { foreground } from "./ComputerUseCallReservations.ts";
 import { movesPointer } from "./computerUseTarget.ts";
-import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 
 /** Reads and session bookkeeping that touch no app's contents or input. */
 const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
@@ -182,7 +181,6 @@ export function scopeVerdict(input: {
   );
   if (protectedApp !== undefined)
     return { _tag: "refuse", reason: "app_not_allowed", app: protectedApp };
-  if (approved === undefined && isReadOnlyCall(input.name, input.args)) return { _tag: "allow" };
   if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name)) {
     const denied = batchAppScope(input.name, input.args)?.apps.find(isExcludedCuaApplication);
     if (denied !== undefined) return { _tag: "refuse", reason: "app_not_allowed", app: denied };
@@ -242,7 +240,7 @@ export function scopeVerdict(input: {
   if (pid === undefined)
     return {
       _tag: "refuse",
-      reason: isReadOnlyCall(name, input.args) ? "desktop_not_approved" : "app_not_allowed",
+      reason: "app_not_allowed",
     };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };

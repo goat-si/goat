@@ -94,7 +94,10 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       (app) =>
         denied.has(cuaAppKey(app)) ||
         catalog.some(
-          (entry) => cuaAppKey(entry.name) === cuaAppKey(app) && denied.has(cuaAppKey(entry.id)),
+          (entry) =>
+            (cuaAppKey(entry.name) === cuaAppKey(app) ||
+              (entry.executable !== undefined && cuaAppKey(entry.executable) === cuaAppKey(app))) &&
+            denied.has(cuaAppKey(entry.id)),
         ),
     );
     if (blocked.length > 0)
@@ -153,7 +156,10 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       (app) =>
         isExcludedCuaApplication(app) ||
         catalog.some(
-          (entry) => cuaAppKey(entry.name) === cuaAppKey(app) && isExcludedCuaApplication(entry.id),
+          (entry) =>
+            (cuaAppKey(entry.name) === cuaAppKey(app) ||
+              (entry.executable !== undefined && cuaAppKey(entry.executable) === cuaAppKey(app))) &&
+            isExcludedCuaApplication(entry.id),
         ),
     );
     if (excluded.length > 0)
