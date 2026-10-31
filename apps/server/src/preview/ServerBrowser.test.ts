@@ -17,6 +17,8 @@ import {
   type PreviewAutomationStatus,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -927,8 +929,9 @@ it.live.each([
     Effect.scoped(
       Effect.gen(function* () {
         const { browser, broker, tabId } = yield* ready;
+        const reportProfiles = yield* browser.profileReporter;
         for (const recordingFrameRate of reports) {
-          yield* browser.reportProfiles({
+          yield* reportProfiles({
             profiles: [],
             defaultProfileId: "default",
             ...(recordingFrameRate === undefined ? {} : { recordingFrameRate }),
@@ -2021,7 +2024,8 @@ it.live(
         const browser = yield* ServerBrowser.ServerBrowser;
         const broker = yield* Broker.PreviewAutomationBroker;
         yield* Effect.yieldNow;
-        yield* browser.reportProfiles({
+        const reportProfiles = yield* browser.profileReporter;
+        yield* reportProfiles({
           profiles: [{ id: "profile-work", name: "Work", kind: "persistent" }],
           defaultProfileId: "profile-work",
         });
@@ -2064,4 +2068,53 @@ it.live(
         });
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.live("profiles reported by one client survive another client's report", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { browser, broker } = yield* ready;
+      contextRequests.length = 0;
+      const work = { id: "profile-work", name: "Work", kind: "persistent" } as const;
+      const shared = { id: "profile-shared", name: "Shared", kind: "persistent" } as const;
+      // Profile tabs open in the GOAT desktop app, which these tests stand in for.
+      const openWork = () =>
+        Effect.sync(() => (desktopRendersNext = true)).pipe(
+          Effect.andThen(
+            broker.invoke<PreviewAutomationStatus>({
+              scope,
+              operation: "open",
+              input: { reuseExistingTab: false, show: false, profileId: work.id },
+            }),
+          ),
+        );
+      const reportFromA = yield* browser.profileReporter;
+      const clientB = yield* Scope.make();
+      const reportFromB = yield* browser.profileReporter.pipe(
+        Effect.provideService(Scope.Scope, clientB),
+      );
+      yield* reportFromA({ profiles: [work, shared], defaultProfileId: work.id });
+      yield* reportFromB({ profiles: [shared], defaultProfileId: shared.id });
+      expect(yield* openWork()).toMatchObject({
+        session: { mode: "profile", profileId: work.id, store: "desktop" },
+        defaultProfileId: shared.id,
+        profiles: [
+          { id: "default", name: "Default" },
+          { id: "incognito", name: "Incognito", incognito: true },
+          { id: work.id, name: work.name },
+          { id: shared.id, name: shared.name },
+        ],
+      });
+      expect(contextRequests).toEqual([]);
+      yield* Scope.close(clientB, Exit.void);
+      expect(yield* openWork()).toMatchObject({ defaultProfileId: work.id });
+      yield* reportFromA({ profiles: [shared], defaultProfileId: shared.id });
+      const removed = yield* openWork().pipe(Effect.flip);
+      expect(removed).toMatchObject({
+        _tag: "PreviewAutomationExecutionError",
+        reason:
+          'No browser profile is named "profile-work". Use one of: Default (id default), Incognito (id incognito), Shared (id profile-shared).',
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
 );

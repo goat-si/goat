@@ -48,7 +48,7 @@ import { newMessageId } from "~/lib/utils";
 import { buildThreadRouteParams } from "../../threadRoutes";
 import { composerDraftHasUserContent, useComposerDraftStore } from "../../composerDraftStore";
 import { useEnvironmentScope } from "~/state/session";
-import { threadEnvironment } from "../../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { vcsEnvironment } from "../../state/vcs";
 import { useChildThreadInputs, readThreadShell, waitForThreadShell } from "../../state/entities";
 import { environmentShell } from "../../state/shell";
@@ -64,9 +64,17 @@ import {
   backgroundWorkBannerItem,
   childInputBannerItem,
   goalBannerItem,
+  runStopBannerItem,
 } from "./ThreadActivityBanners";
+import { useForceStopThread } from "./useForceStopThread";
+import { useAtomValue } from "@effect/atom-react";
+import type { RunStopPresentation } from "@goat/client-runtime/state/thread-execution";
+import { Atom } from "effect/reactivity";
 import type { useLocalDispatchState } from "./useLocalDispatchState";
 const RELATED_THREAD_SHELL_WAIT_MS = 1_000;
+const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
+  Atom.withLabel("web-thread-run-stop:empty"),
+);
 
 type PendingThreadRequests = ReturnType<typeof usePendingThreadRequests>;
 type LocalDispatchState = ReturnType<typeof useLocalDispatchState>;
@@ -540,6 +548,22 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         })
       : null;
 
+  const forceStop = useForceStopThread(environmentId);
+  const anyRunStop = useAtomValue(
+    activeThreadRef ? environmentThreadDetails.runStopAtom(activeThreadRef) : NO_RUN_STOP_ATOM,
+  );
+  // A background Stop matters only while that work is still pending.
+  const runStop = anyRunStop?.background && activeBackgroundTasks.length === 0 ? null : anyRunStop;
+  const runStopBanner =
+    activeThread && runStop !== null
+      ? runStopBannerItem({
+          threadId: activeThread.id,
+          stop: runStop,
+          canForceStop: forceStop.canForceStop,
+          forceStopping: forceStop.stoppingThreadId === activeThread.id,
+          onForceStop: () => void forceStop.forceStopThread(activeThread.id, runStop.runId),
+        })
+      : null;
   const backgroundWorkBanner = activeThread
     ? backgroundWorkBannerItem({
         threadId: activeThread.id,
@@ -622,9 +646,9 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
     shortcuts,
     acknowledgeActiveThreadWoke,
     activeBranchMismatchKey,
-    backgroundWorkBanner,
-    childInputBanner,
-    goalBanner,
+    activityBanners: [runStopBanner, childInputBanner, goalBanner, backgroundWorkBanner].filter(
+      (item) => item !== null,
+    ),
     handleSwitchCheckoutToThread,
     handleSwitchCheckoutToThreadStable,
     isRestoringThreadBranch,

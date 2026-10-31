@@ -344,6 +344,7 @@ it.effect.each([
             {},
             yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
+            () => Effect.void,
           ).pipe(Layer.provide(services)),
         ),
       );

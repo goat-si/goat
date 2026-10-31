@@ -182,6 +182,8 @@ export interface ServerBrowserViewer {
   readonly input: (message: unknown) => Effect.Effect<void>;
 }
 
+export type ProfileReporter = (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+
 export class ServerBrowser extends Context.Service<
   ServerBrowser,
   {
@@ -216,7 +218,7 @@ export class ServerBrowser extends Context.Service<
 
     readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
 
-    readonly reportProfiles: (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+    readonly profileReporter: Effect.Effect<ProfileReporter, never, Scope.Scope>;
 
     /** Every tab with its control state, for the preview session list. */
     readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
@@ -1265,11 +1267,20 @@ const make = Effect.gen(function* () {
   // last report outlives the client, which lets agents record while no client is connected.
   let recordingFrameRate = DEFAULT_BROWSER_RECORDING_FRAME_RATE;
 
-  const reportProfiles: ServerBrowser["Service"]["reportProfiles"] = (input) =>
-    Effect.sync(() => {
-      if (input.recordingFrameRate !== undefined) recordingFrameRate = input.recordingFrameRate;
-      profiles.report(input);
-    });
+  const profileReporter: ServerBrowser["Service"]["profileReporter"] = Effect.acquireRelease(
+    Effect.sync(() => profiles.connect()),
+    (client) => Effect.sync(() => profiles.disconnect(client)),
+  ).pipe(
+    Effect.map(
+      (client): ProfileReporter =>
+        (input) =>
+          Effect.sync(() => {
+            if (input.recordingFrameRate !== undefined)
+              recordingFrameRate = input.recordingFrameRate;
+            profiles.report(client, input);
+          }),
+    ),
+  );
 
   /** A new agent tab in exactly the requested session, closing idle tabs first. */
   const openSessionTab = (
@@ -2584,7 +2595,7 @@ const make = Effect.gen(function* () {
   return ServerBrowser.of({
     attachViewer,
     clearProfile,
-    reportProfiles,
+    profileReporter,
     openDownload,
     answerFileChooser,
     sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),

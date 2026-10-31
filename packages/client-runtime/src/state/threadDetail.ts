@@ -14,6 +14,7 @@ import {
   type ThreadQueueWorkflowState,
 } from "./threadWorkflows.ts";
 import { deriveThreadTurnSubagents, type ThreadTurnSubagents } from "./threadSubagents.ts";
+import { presentRunStop, type RunStopPresentation } from "./threadExecution.ts";
 import {
   deriveThreadCheckpointSummaries,
   type ThreadCheckpointSummary,
@@ -340,6 +341,37 @@ export function createEnvironmentThreadDetailAtoms<E>(
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-queue:${key}`));
   });
+  const runStopAtomFamily = Atom.family((key: string) => {
+    let previous: Pick<
+      OrchestrationV2ThreadProjection,
+      "runs" | "turnItems" | "providerThreads"
+    > | null = null;
+    let stop: RunStopPresentation | null = null;
+    return Atom.make((get) => {
+      const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
+      if (projection === null) {
+        previous = null;
+        stop = null;
+      } else if (
+        projection.runs !== previous?.runs ||
+        projection.turnItems !== previous?.turnItems ||
+        projection.providerThreads !== previous?.providerThreads
+      ) {
+        const { runs, turnItems, providerThreads } = projection;
+        previous = { runs, turnItems, providerThreads };
+        const next = presentRunStop(previous);
+        if (
+          next?.state !== stop?.state ||
+          next?.runId !== stop?.runId ||
+          next?.requestedAt !== stop?.requestedAt ||
+          next?.background !== stop?.background ||
+          next?.cloud !== stop?.cloud
+        )
+          stop = next;
+      }
+      return stop;
+    }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-run-stop:${key}`));
+  });
   const queuedCountAtomFamily = Atom.family((key: string) => {
     let previous: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null = null;
     let count = 0;
@@ -481,6 +513,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     pendingRequestsAtom: (ref: ScopedThreadRef) => pendingRequestsAtomFamily(threadKey(ref)),
     queueWorkflowAtom: (ref: ScopedThreadRef) => queueWorkflowAtomFamily(threadKey(ref)),
     queuedCountAtom: (ref: ScopedThreadRef) => queuedCountAtomFamily(threadKey(ref)),
+    runStopAtom: (ref: ScopedThreadRef) => runStopAtomFamily(threadKey(ref)),
     turnSubagentsAtom: (ref: ScopedThreadRef) => turnSubagentsAtomFamily(threadKey(ref)),
     checkpointSummariesAtom: (ref: ScopedThreadRef) =>
       checkpointSummariesAtomFamily(threadKey(ref)),

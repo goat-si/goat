@@ -94,7 +94,7 @@ it.effect.each([
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: (input) =>
@@ -173,7 +173,7 @@ it.effect("sends replies ahead of stale frames and only the newest frame after a
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),
@@ -248,7 +248,7 @@ it.effect.each([
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => {
@@ -293,7 +293,7 @@ it.effect("serves a tab's download only to an authorized session", () =>
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: (input) =>
         Effect.sync(() => {
           requests.push(input);
@@ -345,7 +345,7 @@ it.effect("passes uploaded files to the page's open picker and needs operate sco
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: (input) =>
         Effect.sync(() => {
@@ -418,7 +418,7 @@ it.effect.each([
       sessionChanges: Stream.empty,
       controlSession: () => Effect.succeed(false),
       stopAllAgents: Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.fail(new ServerBrowser.ServerBrowserLaunchError({ cause: error })),

@@ -183,6 +183,7 @@ const threadsLayer = (
       settleThread: unused,
       interruptThread: unused,
       stopWorkflow: unused,
+      forceStopThread: unused,
       stopDelegatedTasks: unused,
       getThreadEventSequence: unused,
       recoverDelegatedTask: unused,
