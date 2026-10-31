@@ -61,6 +61,7 @@ import { makeProxyBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts"
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
+import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -547,6 +548,26 @@ const admissionRefusal = (scope: boolean): Driver =>
     assert.include(admitted.refused, scope ? "app_not_approved" : "screen_shared");
     return finalFresh(admitted.refused, input);
   });
+const batchRefusal = (kind: "unverifiable" | "tooMany" | "invalidLine"): Driver =>
+  sync((input) => {
+    const listed = new Map(
+      Array.from({ length: kind === "tooMany" ? 33 : 1 }, (_, index) => [
+        index + 1,
+        { id: "alias", name: "alias", bundleId: `bundle.${index}` },
+      ]),
+    );
+    const message = proxyMessage("run_steps", { app_scope: { apps: ["alias"] }, steps: [] });
+    const outcome = narrowBatch(
+      1,
+      kind === "invalidLine" ? "[]" : JSON.stringify(message),
+      message,
+      listed,
+      kind !== "unverifiable",
+    );
+    if (!("refused" in outcome)) throw new Error("expected batch refusal");
+    assert.include(outcome.refused, kind === "tooMany" ? "too many" : "cannot be verified");
+    return finalFresh(outcome.refused, input);
+  });
 const proxyRefusal =
   (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>, detail: string): Driver =>
   (input) =>
@@ -569,6 +590,17 @@ const sites: ReadonlyArray<{
   readonly run: Driver;
   readonly undispatched?: boolean;
 }> = [
+  {
+    name: "ComputerUseBatchIdentity.unverifiable",
+    undispatched: true,
+    run: batchRefusal("unverifiable"),
+  },
+  { name: "ComputerUseBatchIdentity.tooMany", undispatched: true, run: batchRefusal("tooMany") },
+  {
+    name: "ComputerUseBatchIdentity.invalidLine",
+    undispatched: true,
+    run: batchRefusal("invalidLine"),
+  },
   {
     name: "ComputerUseLeaseCallPermissions.admission",
     undispatched: true,
