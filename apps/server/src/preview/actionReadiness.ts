@@ -33,6 +33,8 @@ const expired = () =>
 
 /** How long a selector may match nothing on a loaded page before an action refuses it. */
 const NO_MATCH_GRACE_MS = 2_000;
+/** How long one look for a missing target lasts while its page is still loading. */
+const LOADING_SLICE_MS = 500;
 
 /**
  * Refuses a target that still matches nothing a short grace after its page loaded, rather than
@@ -40,26 +42,40 @@ const NO_MATCH_GRACE_MS = 2_000;
  */
 export const requireMatch = async (target: Locator, timeoutMs: number) => {
   const ends = performance.now() + timeoutMs;
-  const left = () => Math.max(1, Math.floor(ends - performance.now()));
-  // A target already there needs no wait; only a miss waits for the page to finish loading.
   if ((await target.count()) > 0) return;
-  await target.page().waitForLoadState("load", { timeout: left() });
-  const found = await target
-    .first()
-    .waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, left()) })
-    .then(
-      () => true,
-      (cause: unknown) => {
-        if (isTimeout(cause)) return false;
-        throw cause;
-      },
-    );
-  if (!found)
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationInvalidSelectorError",
-      "No element matches the selector, so no input was sent.",
-      { noMatch: true },
-    );
+  // Each wait is awaited whole, so none outlives the call: while the page loads the target is
+  // looked for in short slices, and once it has loaded, for what is left of the grace. The load
+  // state comes from Playwright's lifecycle tracking, which a stuck page script cannot hold up.
+  for (let graceLeft = NO_MATCH_GRACE_MS; ;) {
+    const loaded = await target
+      .page()
+      .waitForLoadState("load", { timeout: 1 })
+      .then(
+        () => true,
+        () => false,
+      );
+    const slice = Math.min(remaining(ends), loaded ? Math.max(1, graceLeft) : LOADING_SLICE_MS);
+    const started = performance.now();
+    const found = await target
+      .first()
+      .waitFor({ state: "attached", timeout: slice })
+      .then(
+        () => true,
+        (cause: unknown) => {
+          // The deadline passing first stays the wait's own timeout; only a spent grace is a miss.
+          if (!isTimeout(cause) || performance.now() >= ends) throw cause;
+          return false;
+        },
+      );
+    if (found) return;
+    if (loaded) graceLeft -= performance.now() - started;
+    if (graceLeft <= 0)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationInvalidSelectorError",
+        "No element matches the selector, so no input was sent.",
+        { noMatch: true },
+      );
+  }
 };
 
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */
