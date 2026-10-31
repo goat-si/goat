@@ -139,7 +139,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       given === undefined &&
       terminal === undefined &&
       transport === "reconnecting" &&
-      !personStopped
+      latch?.reason === undefined
     )
       return answerReconnecting(id, method);
     const reason =

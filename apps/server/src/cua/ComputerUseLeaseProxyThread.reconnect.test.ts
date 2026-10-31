@@ -265,6 +265,22 @@ it.effect("round7 screen lock stays terminal after reconnect window expires", ()
     assert.equal(answer.result?.structuredContent?.code, "screen_locked");
   }),
 );
+
+it.effect("a known lock survives a second reconnect after transport loss", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.push({ state: "transport_lost" });
+    yield* h.push({ state: "reconnecting" });
+    yield* h.send(work(974));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
 it.effect("round7 new control does not inherit predecessor stop while native closure waits", () =>
   Effect.gen(function* () {
     const killGate = yield* Deferred.make<void>();
