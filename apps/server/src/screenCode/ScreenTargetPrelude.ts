@@ -199,6 +199,9 @@ const __target = (binding, note, owner, extraProps = {}) => {
   };
   const checkEmptyTarget = (target) => {
     if (target !== null && typeof target === 'object' && __handles.has(target)) return;
+    // A copied handle (JSON, spread, screen.values) loses its binding; refusing it keeps it from passing as options.
+    if (target !== null && typeof target === 'object' && 'elementHandle' in target)
+      throw new ScreenError('stale_reference', 'This element handle is a copy; take obs.ref(n) from a current observation in this cell.', true);
     if (target === undefined || target === null ||
         (typeof target === 'number' && !Number.isFinite(target)) ||
         (typeof target === 'object' && !Array.isArray(target) &&
@@ -360,7 +363,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     Object.defineProperty(shown, 'ref', { value: (index) => {
       const found = observation.elements.find((item) => item.index === index);
       if (!found) throw new ScreenError('stale_reference', 'No [' + index + '] in this observation.', true);
-      const handle = Object.freeze({});
+      const handle = Object.freeze({ elementHandle: observation.observationId + ':' + index });
       __handles.set(handle, Object.freeze({ ...found.ref }));
       return handle;
     }});
@@ -461,7 +464,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
       // An object naming no element is the options, so a misspelt key is refused rather than aimed at.
       const targetIsSendOpts =
         target !== null && typeof target === 'object' && !Array.isArray(target) && !__winPt(target) &&
-        !('name' in target) && !('role' in target) && !('id' in target) && !__legacy(target) && !__handles.has(target);
+        !('name' in target) && !('role' in target) && !('id' in target) && !('elementHandle' in target) && !__legacy(target);
       const actualTarget = targetIsSendOpts ? undefined : target;
       const actualOpts = __only('press options', targetIsSendOpts ? target : options, ['send', 'verify', 'holdMs']);
       if (actualOpts.holdMs !== undefined && (!Number.isInteger(actualOpts.holdMs) || actualOpts.holdMs < 0 || actualOpts.holdMs > 30000))

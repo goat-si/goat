@@ -10,7 +10,7 @@ const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_V
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Never resend an input. Stop from the person ends the cell at once.`;
 
-const COMMON = `type ElementHandle = { readonly __elementHandle: unique symbol };
+const COMMON = `type ElementHandle = { readonly elementHandle: string }; // a copy is refused
 type Target = ElementHandle | number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
