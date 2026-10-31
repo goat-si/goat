@@ -393,6 +393,44 @@ it.effect("selector rejection reports that input did not start", () =>
   }),
 );
 
+it.effect("a selector that matches nothing is a missing target and nothing was sent", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    yield* fixture.dispatch("claim_tab");
+    fixture.state.failure = new PreviewAutomationInvalidSelectorError({
+      ...actionErrorContext,
+      operation: "type",
+      noMatch: true,
+    });
+    const failed = yield* fixture.dispatch("type_text", { selector: "input[name=q]", text: "a" });
+    expect(failed?.error).toMatchObject({ code: "target_missing", effectStarted: false });
+    expect(failed?.error?.nextStep).toContain("observe");
+  }),
+);
+
+it.effect(
+  "a failed fetch is a read that started nothing and says whether CORS, CSP, DNS or the network refused it",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* browserFixture();
+      for (const fetchFailure of ["cors", "csp", "dns", "network"] as const) {
+        fixture.state.failure = new PreviewAutomationExecutionError({
+          ...actionErrorContext,
+          operation: "fetch",
+          reason: "Fetching https://news.example/ failed: Failed to fetch",
+          fetchFailure,
+        });
+        const failed = yield* fixture.dispatch("fetch_tab", { url: "https://news.example/" });
+        expect(failed?.error).toMatchObject({
+          code: "downstream_failure",
+          effectStarted: false,
+          detail: fetchFailure,
+        });
+        expect(failed?.error?.nextStep).not.toContain("before deciding whether to retry");
+      }
+    }),
+);
+
 it.effect("a failed observation cannot authorize input on a changed origin", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();

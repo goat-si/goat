@@ -1,6 +1,6 @@
 // @effect-diagnostics globalDate:off - Playwright waits run outside the Effect runtime.
 import type { Page } from "playwright-core";
-import { abortable } from "./actionReadiness.ts";
+import { abortable, actionCall } from "./actionReadiness.ts";
 
 import {
   DEFAULT_TIMEOUT_MS,
@@ -8,6 +8,7 @@ import {
   type PointerReporter,
   targetLocator,
 } from "./ServerBrowserPage.ts";
+import { requireMatch } from "./actionReadiness.ts";
 
 type TargetInput = {
   readonly locator?: string | undefined;
@@ -34,10 +35,15 @@ export const pointBefore = async <Input extends TargetInput>(
       ends - Date.now(),
       gate.deadline === undefined ? Infinity : gate.deadline - performance.now(),
     );
+  // A target that matches nothing is refused here, before the pointer waits out its whole budget.
+  if (left() > 0) await requireMatch(locator, left(), gate.channel ? gate : undefined);
   const box =
     left() > 0
       ? await abortable(
-          () => locator.boundingBox({ timeout: Math.max(1, left()) }).catch(() => null),
+          () =>
+            actionCall(gate.channel ? gate : undefined, () =>
+              locator.boundingBox({ timeout: Math.max(1, left()) }),
+            ).catch(() => null),
           gate.signal,
         )
       : null;

@@ -62,6 +62,43 @@ const expired = () =>
     beforeInput,
   );
 
+/** How long a selector may match nothing on a loaded page before an action refuses it. */
+const NO_MATCH_GRACE_MS = 2_000;
+
+/**
+ * Refuses a target that still matches nothing a short grace after its page loaded, rather than
+ * spending the whole wait on it; a target that exists but is not ready yet keeps the full wait.
+ */
+export const requireMatch = async (target: Locator, timeoutMs: number, gate?: ReadinessGate) => {
+  const ends = performance.now() + timeoutMs;
+  const left = () => Math.max(1, Math.floor(ends - performance.now()));
+  // A target already there needs no wait; only a miss waits for the page to finish loading.
+  if ((await abortable(() => actionCall(gate, () => target.count()), gate?.signal)) > 0) return;
+  await abortable(
+    () => actionCall(gate, () => target.page().waitForLoadState("load", { timeout: left() })),
+    gate?.signal,
+  );
+  const found = await abortable(
+    () =>
+      actionCall(gate, () =>
+        target.first().waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, left()) }),
+      ),
+    gate?.signal,
+  ).then(
+    () => true,
+    (cause: unknown) => {
+      if (isTimeout(cause)) return false;
+      throw cause;
+    },
+  );
+  if (!found)
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationInvalidSelectorError",
+      "No element matches the selector, so no input was sent.",
+      { noMatch: true },
+    );
+};
+
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */
 export const actionDeadline = (timeoutMs: number, requestDeadline: number | undefined) =>
   Math.min(requestDeadline ?? Number.POSITIVE_INFINITY, performance.now() + timeoutMs);
@@ -164,14 +201,18 @@ export const revealFramesOf = async (
   }
 };
 
-/** The element a locator names now, held for the rest of the action. */
+/** The element a locator names after its bounded no-match check. */
 export const acquireTarget = async (
   target: Locator,
   timeout: number,
   signal?: AbortSignal,
   gate?: ReadinessGate,
 ) => {
-  const pending = actionCall(gate, () => target.elementHandle({ timeout }));
+  const ends = performance.now() + timeout;
+  await requireMatch(target, timeout, gate);
+  const pending = actionCall(gate, () =>
+    target.elementHandle({ timeout: Math.max(1, Math.floor(ends - performance.now())) }),
+  );
   let handle: ElementHandle | null;
   try {
     handle = await abortable(() => pending, signal);

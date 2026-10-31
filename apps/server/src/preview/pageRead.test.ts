@@ -258,6 +258,71 @@ it("refuses a changed secret even when its new value appeared in page text durin
     expect(await page.evaluate("window.activeReadObservers")).toBe(0);
   }));
 
+it("reads again instead of refusing when a frame comes or goes during the read, as rotating ads do", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Portal news</main>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    await page.evaluate(
+      "(() => { const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); })()",
+    );
+    const result = await reading;
+    expect(result.text).toContain("Portal news");
+    expect(await page.evaluate("window.activeReadObservers")).toBe(0);
+  }));
+
+it("still refuses a secret that disappeared during a read whose frames also changed", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Public</main><input type=password value=frame-retry-secret>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    await page.evaluate(
+      "(() => { document.querySelector('input').remove(); document.querySelector('main').textContent = 'frame-retry-secret'; const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); })()",
+    );
+    const outcome = await reading.then(
+      (value) => JSON.stringify(value),
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
+  }));
+
+it("refuses a secret that changed and was echoed while frames moved, even if its old value stays", () =>
+  fixture(async (page, read) => {
+    await page.setContent("<main>Public</main><input type=password value=fictional-first-secret>");
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    // The default value keeps the first secret; the live value moves on twice.
+    await page.evaluate(
+      "(() => { const input = document.querySelector('input'); input.value = 'fictional-intermediate-secret'; document.querySelector('main').textContent = 'fictional-intermediate-secret'; const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); input.value = 'fictional-last-secret'; })()",
+    );
+    const outcome = await reading.then(
+      (value) => JSON.stringify(value),
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
+  }));
+
+it("refuses secrets that swapped places after one was echoed while frames moved", () =>
+  fixture(async (page, read) => {
+    await page.setContent(
+      "<main>Public</main><input id=one type=password><input id=two type=password><script>one.value = 'fictional-swap-a'; two.value = 'fictional-swap-c';</script>",
+    );
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    await page.evaluate(
+      "(() => { one.value = 'fictional-intermediate-secret'; document.querySelector('main').textContent = 'fictional-intermediate-secret'; one.value = 'fictional-swap-c'; two.value = 'fictional-swap-a'; const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); })()",
+    );
+    const outcome = await reading.then(
+      (value) => JSON.stringify(value),
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
+  }));
+
 it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
     let started = () => {};
