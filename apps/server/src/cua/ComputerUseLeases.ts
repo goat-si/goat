@@ -309,6 +309,7 @@ export class ComputerUseLeases extends Context.Service<
         readonly kind: "stop" | "credentialRevoked" | "pause" | "private";
         readonly threadId: ThreadId;
         readonly controlId: string;
+        readonly terminal?: "stopped_by_person" | "screen_locked";
       }) => void,
     ) => () => void;
     /** How this server starts its own lease proxy subcommand. */
@@ -349,12 +350,14 @@ const make = Effect.gen(function* () {
       kind: "stop" | "credentialRevoked" | "pause" | "private";
       threadId: ThreadId;
       controlId: string;
+      terminal?: "stopped_by_person" | "screen_locked";
     }) => void
   >();
   const notifyAuthority = (change: {
     kind: "stop" | "credentialRevoked" | "pause" | "private";
     threadId: ThreadId;
     controlId: string;
+    terminal?: "stopped_by_person" | "screen_locked";
   }) => {
     for (const listener of authorityListeners) listener(change);
   };
@@ -589,6 +592,9 @@ const make = Effect.gen(function* () {
       kind: reason === "revoked" ? "credentialRevoked" : "stop",
       threadId,
       controlId: record.controlId,
+      ...(reason === "stopped" || reason === "stopped_all"
+        ? { terminal: "stopped_by_person" }
+        : {}),
     });
     // A pause belongs to the agents it held; with none left the next one starts unpaused.
     if (![...controls.values()].some((other) => other.ended === undefined)) paused = undefined;
@@ -640,6 +646,7 @@ const make = Effect.gen(function* () {
             kind: reason === "private" ? "private" : "pause",
             threadId: record.threadId,
             controlId: record.controlId,
+            ...(reason === "screen_locked" ? { terminal: "screen_locked" } : {}),
           });
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));

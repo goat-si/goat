@@ -47,7 +47,11 @@ type ThreadProxyOptions<EU, ED> = Omit<
   ) => Effect.Effect<void>;
   readonly onControlDriverCutoff?: (
     controlId: string,
-    current: { readonly connectionId: string; readonly generation: number },
+    current: {
+      readonly connectionId: string;
+      readonly generation: number;
+      readonly terminal?: "stopped_by_person" | "screen_locked";
+    },
   ) => Effect.Effect<void>;
   /** Runs after the supervisor has routed an update, without waiting for native teardown. */
   readonly onThreadUpdate?: (

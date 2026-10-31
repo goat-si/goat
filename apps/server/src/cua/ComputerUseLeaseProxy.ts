@@ -1,12 +1,4 @@
-/**
- * The stdio MCP server every thread's provider runs instead of the raw `cua-driver mcp`. It
- * forwards only while the control is live. Lease updates cut off pending calls even when the
- * agent sends nothing: Stop, pause, expiry and lost connection kill the child transport and
- * settle outstanding requests. Resume starts a fresh child. Driver transport closure stops
- * nested work that MCP cancellation alone does not stop (ADR-0022). Calls are never replayed.
- *
- * @module ComputerUseLeaseProxy
- */
+/** The lease proxy cuts off outstanding calls and closes the driver when control ends. */
 // JSON-RPC lines pass through unchanged; only the fields the proxy acts on are read.
 // @effect-diagnostics preferSchemaOverJson:off
 import {
@@ -84,6 +76,7 @@ import {
   forwardPersonStop,
   isTerminalStop,
   makePersonStopFence,
+  terminalForInterruption,
 } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { startLeaseUpdates } from "./ComputerUseLeaseProxyUpdates.ts";
 import {
@@ -195,6 +188,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.onDriverCutoff({
         connectionId: current.connectionId,
         generation: current.generation,
+        ...terminalForInterruption(cause),
       });
     const pending =
       current === undefined

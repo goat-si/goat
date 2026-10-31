@@ -117,6 +117,7 @@ type DriverReport = {
   readonly controlId: string;
   readonly connectionId: string;
   readonly driverGeneration: number;
+  readonly terminal?: "stopped_by_person" | "screen_locked";
 };
 type ReportIdentity = Omit<DriverReport, "kind" | "controlId">;
 type PendingReports = { readonly cutoff?: ReportIdentity; readonly ready?: ReportIdentity };
@@ -164,6 +165,7 @@ export const makePrimitiveReporter = Effect.fn("ComputerUseLeaseProxyCli.reporte
         const identity = {
           connectionId: report.connectionId,
           driverGeneration: report.driverGeneration,
+          ...(report.terminal === undefined ? {} : { terminal: report.terminal }),
         };
         if (report.kind === "cutoff") {
           const cutoff =
@@ -838,12 +840,14 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
                 onDriverCutoff: (current: {
                   readonly connectionId: string;
                   readonly generation: number;
+                  readonly terminal?: "stopped_by_person" | "screen_locked";
                 }) =>
                   reporter.enqueue({
                     kind: "cutoff",
                     controlId: launch.controlId,
                     connectionId: current.connectionId,
                     driverGeneration: current.generation,
+                    ...(current.terminal === undefined ? {} : { terminal: current.terminal }),
                   }),
               }),
         })
@@ -866,13 +870,18 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
                   }),
                 onControlDriverCutoff: (
                   controlId: string,
-                  current: { readonly connectionId: string; readonly generation: number },
+                  current: {
+                    readonly connectionId: string;
+                    readonly generation: number;
+                    readonly terminal?: "stopped_by_person" | "screen_locked";
+                  },
                 ) =>
                   reporter.enqueue({
                     kind: "cutoff",
                     controlId,
                     connectionId: current.connectionId,
                     driverGeneration: current.generation,
+                    ...(current.terminal === undefined ? {} : { terminal: current.terminal }),
                   }),
               }),
         });

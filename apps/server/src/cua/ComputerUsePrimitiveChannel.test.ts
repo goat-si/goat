@@ -133,6 +133,32 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("a terminal driver cutoff settles before a delayed stop report", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      const waiter = yield* f.request().pipe(Effect.forkChild);
+      yield* Stream.runHead(f.registered.requests);
+      assert.isTrue(
+        yield* f.channel.reportControlCutoff({ ...f.report(1), terminal: "stopped_by_person" }),
+      );
+      const answer = yield* Fiber.join(waiter);
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
+      assert.include(JSON.stringify(answer), '"retryClass":"never"');
+    }),
+  );
+  it.effect("a stop settles an in-flight call with its terminal person reason", () =>
+    Effect.gen(function* () {
+      const f = yield* turnFixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(authority, 1)));
+      const waiter = yield* f.request().pipe(Effect.forkChild);
+      yield* Stream.runHead(f.registration.requests);
+      yield* f.setState({ _tag: "ended", reason: "stopped_all" });
+      const answer = yield* Fiber.join(waiter);
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
+      assert.include(JSON.stringify(answer), '"retryClass":"never"');
+    }),
+  );
   it.effect("cancel after delivery emits a proxy marker for the admitted request", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

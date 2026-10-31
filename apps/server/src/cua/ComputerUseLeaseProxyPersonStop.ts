@@ -4,7 +4,11 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { driverScreenLocked } from "./ComputerUseDriverOutcome.ts";
-import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
+import {
+  LEASE_END_MESSAGES,
+  PAUSE_MESSAGES,
+  type Interruption,
+} from "./ComputerUseLeaseMessages.ts";
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 
 export function makePersonStopFence() {
@@ -55,6 +59,15 @@ export function makePersonStopFence() {
 
 export const isTerminalStop = (finished: string | undefined, paused: string | undefined) =>
   finished === "stopped" || finished === "stopped_all" || paused === "screen_locked";
+
+export const terminalForInterruption = (
+  cause: Interruption,
+): { readonly terminal?: "stopped_by_person" | "screen_locked" } =>
+  cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
+    ? { terminal: "stopped_by_person" }
+    : cause._tag === "pause" && cause.reason === "screen_locked"
+      ? { terminal: "screen_locked" }
+      : {};
 
 export const forwardPersonStop = Effect.fn("ComputerUseLeaseProxy.forwardPersonStop")(
   function* (input: {

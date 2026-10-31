@@ -20,10 +20,13 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
+import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
+import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 
 /**
  * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
@@ -56,6 +59,7 @@ export const DRIVER_BIND_WAIT_MS = 10_000;
 export const PROXY_ANSWER_GRACE_MS = 1_000;
 
 interface Control {
+  terminal?: "stopped_by_person" | "screen_locked";
   maxAcceptedGeneration: number;
   maxCutoffGeneration: number;
   binding: { readonly connectionId: string; readonly generation: number } | undefined;
@@ -151,7 +155,9 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
       readonly registrationId: string;
     }) => Effect.Effect<void>;
     readonly reportControlReady: (input: Report) => Effect.Effect<boolean>;
-    readonly reportControlCutoff: (input: Report) => Effect.Effect<boolean>;
+    readonly reportControlCutoff: (
+      input: Report & { readonly terminal?: "stopped_by_person" | "screen_locked" },
+    ) => Effect.Effect<boolean>;
     readonly request: (
       input: PrimitiveChannelRequest,
     ) => Effect.Effect<
@@ -175,6 +181,12 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
 export const make = Effect.gen(function* () {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const attachments = new Map<ThreadId, Attachment>();
+  const unsubscribe = leases.onAuthorityChange?.((change) => {
+    if (change.terminal === undefined) return;
+    const record = attachments.get(change.threadId)?.registration?.controls.get(change.controlId);
+    if (record !== undefined) record.terminal ??= change.terminal;
+  });
+  if (unsubscribe !== undefined) yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
   const threadTokens = new Map<ThreadId, string>();
   // Completed and replaced whenever a binding, a registration or a control changes, so a call
   // waiting for a driver re-checks at once, including when its proxy goes away.
@@ -184,12 +196,38 @@ export const make = Effect.gen(function* () {
     changed = Deferred.makeUnsafe<void>();
     Deferred.doneUnsafe(waiting, Exit.void);
   };
-  const settle = (pending: Pending) =>
+  const resultOf = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }));
+  const settle = (pending: Pending, terminal?: Control["terminal"]) =>
     Deferred.doneUnsafe(
       pending.answer,
       Exit.succeed({
         ...pending.request,
         status: pending.sent ? "unknown_outcome" : "not_started",
+        ...(terminal === undefined
+          ? {}
+          : {
+              result: resultOf(
+                JSON.parse(
+                  pending.sent
+                    ? cutOff(
+                        pending.request.callId,
+                        pending.request.tool,
+                        terminal === "screen_locked"
+                          ? { _tag: "pause", reason: "screen_locked" }
+                          : { _tag: "end", reason: "stopped_all" },
+                        pending.request.args,
+                      )
+                    : refusal(
+                        pending.request.callId,
+                        "tools/call",
+                        terminal === "screen_locked" ? "screen_locked" : "stopped",
+                        terminal === "screen_locked"
+                          ? PAUSE_MESSAGES.screen_locked
+                          : LEASE_END_MESSAGES.stopped,
+                      ),
+                ),
+              ).result,
+            }),
       }),
     );
   const cancelDelivered = (registration: Registration, pending: Pending) => {
@@ -205,7 +243,7 @@ export const make = Effect.gen(function* () {
     for (const [id, pending] of control.pending) {
       control.pending.delete(id);
       cancelDelivered(registration, pending);
-      settle(pending);
+      settle(pending, control.terminal);
     }
   };
   const close = (attachment: Attachment) => {
@@ -218,7 +256,7 @@ export const make = Effect.gen(function* () {
       control.abandoned.clear();
       for (const pending of control.pending.values()) {
         cancelDelivered(registration, pending);
-        settle(pending);
+        settle(pending, control.terminal);
       }
       control.pending.clear();
     }
@@ -296,8 +334,16 @@ export const make = Effect.gen(function* () {
                 .controlState(threadId, current.controlId)
                 .pipe(Effect.orElseSucceed(() => ({ _tag: "ended" as const })))
             : { _tag: "ended" as const, reason: current.ended };
-        if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         const record = registered?.controls.get(current.controlId);
+        if (
+          record !== undefined &&
+          state._tag === "ended" &&
+          (state.reason === "stopped" || state.reason === "stopped_all")
+        )
+          record.terminal ??= "stopped_by_person";
+        if (record !== undefined && state._tag === "paused" && state.reason === "screen_locked")
+          record.terminal ??= "screen_locked";
+        if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         // A proxy still starting registers as a thread proxy, so its attachment waits for it.
         if (registered?.kind !== "control" && keepsRegistration(state)) {
           if (registered !== undefined && record !== undefined) clear(registered, record);
@@ -423,7 +469,7 @@ export const make = Effect.gen(function* () {
           for (const [id, pending] of record.pending) {
             record.pending.delete(id);
             cancelDelivered(kept, pending);
-            settle(pending);
+            settle(pending, record.terminal);
           }
       else if (previous !== undefined) yield* close(previous) ?? Effect.void;
       attachments.set(input.threadId, {
@@ -555,6 +601,7 @@ export const make = Effect.gen(function* () {
         )
           return false;
         clear(registered, record);
+        if (record.terminal === "screen_locked") delete record.terminal;
         record.maxAcceptedGeneration = input.driverGeneration;
         record.binding = { connectionId: input.connectionId, generation: input.driverGeneration };
         wake();
@@ -579,6 +626,7 @@ export const make = Effect.gen(function* () {
           record.binding.connectionId !== input.connectionId
         )
           return false;
+        if (input.terminal !== undefined) record.terminal ??= input.terminal;
         record.maxCutoffGeneration = input.driverGeneration;
         if (record.binding !== undefined && record.binding.generation <= input.driverGeneration)
           clear(registered, record);
@@ -681,7 +729,7 @@ export const make = Effect.gen(function* () {
               if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
                 if (value.registration) cancelDelivered(value.registration, pending);
-                settle(pending);
+                settle(pending, record.terminal);
               }
           }
       }),

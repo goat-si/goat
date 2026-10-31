@@ -372,6 +372,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onDriverCutoff?: (current: {
     readonly connectionId: string;
     readonly generation: number;
+    readonly terminal?: "stopped_by_person" | "screen_locked";
   }) => Effect.Effect<void>;
   /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
   readonly output: (
