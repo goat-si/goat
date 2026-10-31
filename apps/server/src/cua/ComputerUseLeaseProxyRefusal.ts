@@ -78,6 +78,7 @@ export const proveProxyDisplay = Effect.fn("ComputerUseLeaseProxy.proveDisplay")
 interface ProxyCallCheck {
   readonly id: JsonRpcId;
   readonly message: Envelope;
+  readonly claimApproved?: boolean;
   readonly finished: () => LeaseEnd | undefined;
   readonly paused: () => import("@goat/contracts").ComputerUsePauseReason | undefined;
   readonly idle: () => boolean;
@@ -99,14 +100,16 @@ interface ProxyCallCheck {
 export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (
   input: ProxyCallCheck,
 ) {
-  const judge = () =>
-    scopeVerdict({
-      name: input.message.params?.name,
-      args: input.message.params?.arguments,
-      apps: input.apps(),
-      appOf: (pid) => input.listed.get(pid),
-      bundleIds: input.host.bundleIds,
-    });
+  const judge = (): ScopeVerdict =>
+    input.claimApproved === true
+      ? { _tag: "allow" }
+      : scopeVerdict({
+          name: input.message.params?.name,
+          args: input.message.params?.arguments,
+          apps: input.apps(),
+          appOf: (pid) => input.listed.get(pid),
+          bundleIds: input.host.bundleIds,
+        });
   // A pid allowed only by the binary it ran when last listed may run another one of the same name
   // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
   // only a listing taken for this call confirms it.

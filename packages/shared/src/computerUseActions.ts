@@ -281,6 +281,7 @@ export const PRE_DISPATCH_CODES: ReadonlySet<string> = new Set([
 
 const REFUSAL_CODES: Readonly<Record<string, ComputerUseRefusalReason>> = {
   stale_element_token: "staleElement",
+  stale_basis: "staleElement",
   point_outside_window: "staleElement",
   stale_geometry: "staleElement",
   px_frame_mismatch: "staleElement",

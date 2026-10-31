@@ -161,6 +161,8 @@ import { HtmlPreviewTool, HtmlPreviewToolkit, HtmlRenderToolkit } from "./toolki
 import * as OrchestratorHandlers from "./toolkits/orchestrator/handlers.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import * as PreviewHandlers from "./toolkits/preview/handlers.ts";
+import { BrowserClaimToolkit } from "./toolkits/preview/browserClaims/tools.ts";
+import * as BrowserClaimHandlers from "./toolkits/preview/browserClaims/handlers.ts";
 import * as ScreenHandlers from "./toolkits/screen/handlers.ts";
 import { screenRunTool } from "./toolkits/screen/mcpTool.ts";
 import { credentialRefusalMessage, GENERIC_REFUSAL, refusedToolCallId } from "./mcpAuthResponse.ts";
@@ -1001,6 +1003,7 @@ export const catalogRegistrations = {
   decision: toolkitRegistration(DecisionToolkit, DecisionHandlers.layer),
   htmlRender: toolkitRegistration(HtmlRenderToolkit, HtmlHandlers.layerRender),
   htmlPreview: imageToolRegistration(registerHtmlPreview(), HtmlHandlers.layerPreview),
+  browserClaims: toolkitRegistration(BrowserClaimToolkit, BrowserClaimHandlers.layer),
   previewStandard: toolkitRegistration(PreviewStandardToolkit, PreviewHandlers.layerStandard),
   previewSnapshot: imageToolRegistration(registerPreviewSnapshot(), PreviewHandlers.layerSnapshot),
   orchestrator: toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer),
@@ -1225,6 +1228,7 @@ export const layer = Layer.mergeAll(
     Layer.provide(AgentWorkspaceAccess.layer),
     Layer.provide(AgentWorkspaceAudit.layer),
   ),
+  catalogRegistrations.browserClaims,
   layerPreviewToolkit,
   layerOrchestratorToolkit,
   layerThreadToolkit,

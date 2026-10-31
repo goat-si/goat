@@ -22,7 +22,7 @@ export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(func
   readonly fences: ReturnType<typeof makeLeaseFences>;
   readonly apps: () => ReadonlySet<string> | undefined;
   readonly foreground: () => ReadonlyArray<ComputerUseForegroundGrant>;
-  readonly shared: (value: boolean) => void;
+  readonly shared: (update: Extract<ComputerUseLeaseUpdate, { state: "active" }>) => void;
   readonly deadline: (value: number) => void;
   readonly confirm: (update: ComputerUseLeaseUpdate | undefined) => void;
   readonly lock: <A, Err>(effect: Effect.Effect<A, Err>) => Effect.Effect<A, Err>;
@@ -85,8 +85,7 @@ export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(func
       update?.state === "cursor-state"
     )
       return;
-    if (update?.state === "active" && update.controlId === input.controlId)
-      input.shared(update.shared === true);
+    if (update?.state === "active" && update.controlId === input.controlId) input.shared(update);
     const expiry = update !== undefined && "expiresAt" in update ? update.expiresAt : undefined;
     const at = expiry === undefined ? undefined : DateTime.make(expiry);
     if (at !== undefined && Option.isSome(at)) input.deadline(DateTime.toEpochMillis(at.value));

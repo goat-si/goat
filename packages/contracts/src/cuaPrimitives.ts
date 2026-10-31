@@ -60,6 +60,8 @@ export const ComputerUsePrimitiveRequest = Schema.Struct({
     Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
   ),
   tool: primitiveId,
+  authority: Schema.optionalKey(Schema.Literal("claimBind")),
+  bindingVersion: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   args: primitiveJson,
   /**
    * The agent cursor this call draws, never sent to the driver: the host-owned owner (sequence 0,

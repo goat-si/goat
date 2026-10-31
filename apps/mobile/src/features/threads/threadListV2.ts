@@ -38,6 +38,9 @@ import type { EnvironmentId, ProjectId, SnoozePresetSetting } from "@goat/contra
 import { isSideChatThread } from "@goat/contracts";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
+import type { ThreadListV2FoldedUnseen, ThreadListV2Item } from "./threadListV2Types";
+
+export type { ThreadListV2FoldedUnseen, ThreadListV2Item } from "./threadListV2Types";
 
 import {
   applyPendingThreadOrder,
@@ -52,7 +55,6 @@ import {
   threadListV2PriorityRank,
   threadListV2Settled,
   threadListV2Snoozed,
-  type LaunchLift,
   type LaunchSubagentRow,
   type ThreadListV2LaunchGroupState,
   type ThreadListV2LaunchMarker,
@@ -259,25 +261,6 @@ export function getThreadListV2OrderedSection(input: {
       ? reconcilePendingThreadOrder(input.pendingOrder, ordered)
       : null;
   return applyPendingThreadOrder(ordered, input.section, pending);
-}
-
-export interface ThreadListV2Item {
-  readonly thread: EnvironmentThreadShell;
-  readonly variant: "card" | "slim";
-  readonly snoozed: boolean;
-  readonly pinned: boolean;
-  readonly wokeAt: string | null;
-  readonly isLast: boolean;
-  /** Launch nesting: 0 for a top-level row. */
-  readonly depth?: number;
-  /** The most urgent state folded under this row, which its card carries. */
-  readonly lift?: LaunchLift | null;
-}
-
-/** An unread thread folded under a Priority row; Priority's read actions read it with the row. */
-export interface ThreadListV2FoldedUnseen {
-  readonly rowKey: string;
-  readonly thread: EnvironmentThreadShell;
 }
 
 export interface ThreadListV2Layout {

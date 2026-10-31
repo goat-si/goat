@@ -2,6 +2,8 @@ import {
   DesktopHostTelemetryMessage,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
   type DesktopCuaAppsReport,
+  type DesktopCuaManifestReport,
+  type DesktopCuaManifestRequest,
   type DesktopCuaDriverRequest,
   type DesktopCuaDriverReport,
   type DesktopCuaFrame,
@@ -81,6 +83,11 @@ export class DesktopTelemetryPublisher extends Context.Service<
       readonly publish: (report: DesktopCuaAppsReport) => Effect.Effect<void>;
     }>;
     readonly cuaRequests: Stream.Stream<DesktopCuaDriverRequest>;
+    readonly cuaManifestRequests?: Stream.Stream<{
+      readonly request: DesktopCuaManifestRequest;
+      readonly isCurrent: () => boolean;
+      readonly reply: (report: DesktopCuaManifestReport) => Effect.Effect<void>;
+    }>;
     /**
      * Whether agents control this host, as this host's own server last said: the current value,
      * then each change. Losing that server reads as false.
@@ -222,6 +229,11 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const updateCancellationQueue = yield* Queue.unbounded<DesktopTelemetryCancelDesktopUpdate>();
   const cuaAppsRequestWake = yield* Queue.sliding<void>(1);
   const cuaRequestQueue = yield* Queue.unbounded<DesktopCuaDriverRequest>();
+  const cuaManifestQueue = yield* Queue.unbounded<{
+    readonly request: DesktopCuaManifestRequest;
+    readonly isCurrent: () => boolean;
+    readonly reply: (report: DesktopCuaManifestReport) => Effect.Effect<void>;
+  }>();
   const latestCuaReadiness = yield* Ref.make(Option.none<DesktopCuaReadinessReport>());
   // Readiness is state: a connection that falls behind needs only the newest report.
   const cuaReadinessChanges = yield* PubSub.sliding<DesktopCuaReadinessReport>(1);
@@ -230,7 +242,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     DesktopCuaPrivateModeReport | DesktopCuaHumanInputReport
   >();
   interface CuaSource {
-    readonly reports: PubSub.PubSub<DesktopCuaDriverReport | DesktopCuaAppsReport>;
+    readonly reports: PubSub.PubSub<
+      DesktopCuaDriverReport | DesktopCuaAppsReport | DesktopCuaManifestReport
+    >;
     readonly appRequestIds: Set<string>;
     requestId?: string;
     /** The newest cuaWatch seq from this connection; an older one arrived late. */
@@ -446,6 +460,21 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           }
           return Queue.offer(cuaAppsRequestWake, undefined).pipe(Effect.asVoid);
         });
+      case "cuaManifestRequest":
+        return Effect.suspend(() => {
+          const source = cuaSource;
+          if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !source) return Effect.void;
+          return Queue.offer(cuaManifestQueue, {
+            request: message,
+            isCurrent: () => cuaSource === source,
+            reply: (report) =>
+              Effect.suspend(() =>
+                cuaSource === source
+                  ? PubSub.publish(source.reports, report).pipe(Effect.asVoid)
+                  : Effect.void,
+              ),
+          }).pipe(Effect.asVoid);
+        });
       case "cuaDriverRequest":
         return Effect.suspend(() => {
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !cuaSource) return Effect.void;
@@ -570,7 +599,9 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
     if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID) return encoded;
     return Stream.unwrap(
       Effect.gen(function* () {
-        const reports = yield* PubSub.unbounded<DesktopCuaDriverReport | DesktopCuaAppsReport>();
+        const reports = yield* PubSub.unbounded<
+          DesktopCuaDriverReport | DesktopCuaAppsReport | DesktopCuaManifestReport
+        >();
         const source: CuaSource = { reports, appRequestIds: new Set() };
         yield* Effect.acquireRelease(
           Effect.gen(function* () {
@@ -647,6 +678,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
       };
     }),
     cuaRequests: Stream.fromQueue(cuaRequestQueue),
+    cuaManifestRequests: Stream.fromQueue(cuaManifestQueue),
     cuaWatch: Stream.unwrap(
       Effect.gen(function* () {
         const subscription = yield* PubSub.subscribe(cuaWatchChanges);

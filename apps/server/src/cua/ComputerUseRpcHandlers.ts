@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
@@ -66,7 +67,9 @@ export const stopAllComputerUse = Effect.fn("ComputerUse.stopAll")(function* (
   leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>,
   handoffs: Handoffs.Handoffs["Service"],
   sessionId: AuthSessionId,
+  claims: Option.Option<BrowserOriginGrants["Service"]> = Option.none(),
 ) {
+  if (Option.isSome(claims)) yield* claims.value.stop();
   if (Option.isNone(leases)) return { stopped: 0, failed: 0 };
   const stopped = new Set(yield* handoffs.stopComputerUseSessions());
   const { ended, failed } = yield* endGrants(leases.value, handoffs, sessionId, () => true);
@@ -84,7 +87,9 @@ export const stopComputerUse = Effect.fn("ComputerUse.stop")(function* (
   handoffs: Handoffs.Handoffs["Service"],
   sessionId: AuthSessionId,
   threadId: ThreadId,
+  claims: Option.Option<BrowserOriginGrants["Service"]> = Option.none(),
 ) {
+  if (Option.isSome(claims)) yield* claims.value.stop(threadId);
   if (Option.isNone(leases)) return { stopped: false, failed: 0 };
   const stopped = (yield* handoffs.stopComputerUseSessions(threadId)).length > 0;
   const { ended, failed } = yield* endGrants(
@@ -117,6 +122,7 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const handoffs = yield* Handoffs.Handoffs;
+  const claims = yield* Effect.serviceOption(BrowserOriginGrants);
   const receiver = yield* Effect.serviceOption(DesktopTelemetryReceiver.DesktopTelemetryReceiver);
   const connections = yield* Effect.serviceOption(
     ComputerUseAgentConnections.ComputerUseAgentConnections,
@@ -136,12 +142,12 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
               ComputerUseAgentConnections.withAgentConnections,
             ),
     [WS_METHODS.computerUseStop]: (input: { readonly threadId: ThreadId }) =>
-      stopComputerUse(leases, handoffs, sessionId, input.threadId).pipe(
+      stopComputerUse(leases, handoffs, sessionId, input.threadId, claims).pipe(
         Effect.orDie,
         Effect.map(({ stopped }) => ({ stopped })),
       ),
     [WS_METHODS.computerUseStopAll]: (_input: {}) =>
-      stopAllComputerUse(leases, handoffs, sessionId).pipe(
+      stopAllComputerUse(leases, handoffs, sessionId, claims).pipe(
         Effect.orDie,
         Effect.map(({ stopped }) => ({ stopped })),
       ),

@@ -1,4 +1,4 @@
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
 import { CommandId, MessageId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -6,9 +6,83 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
+import * as SecretStore from "../auth/ServerSecretStore.ts";
+import { storeName } from "../handoffs/handoffDigest.ts";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import { sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
+
+it.effect.each([
+  { expired: false, failRemoval: false, title: "preserves newer named-app consent" },
+  {
+    expired: true,
+    failRemoval: false,
+    title: "retires newer named-app consent when the card expires",
+  },
+  { expired: true, failRemoval: true, title: "retires consent if expired payload removal fails" },
+])("opening an older pending card $title", ({ expired, failRemoval }) =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases, store }) =>
+      Effect.gen(function* () {
+        const prior = yield* request({ apps: ["com.example.Other"] });
+        if (prior.kind !== "needs_human") return assert.fail("expected prior approval");
+        yield* handoffs.respond(
+          { threadId, handoffId: prior.handoff.handoffId, action: "completed" },
+          sessionId,
+        );
+        const pending = yield* request({ apps: ["com.example.Editor"] });
+        if (pending.kind !== "needs_human") return assert.fail("expected pending card");
+        if (expired) yield* TestClock.adjust("10 minutes");
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("open-card-named"),
+          threadId,
+          messageId: MessageId.make("message:open-card-named"),
+          text: "Use com.example.Editor",
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        const records = yield* orchestrator.getThreadRecords(threadId, ["turnItems"]);
+        const automatic = records.turnItems.find(
+          (item) => item.type === "human_handoff" && item.handoff.computerUseScope === "standing",
+        );
+        if (automatic?.type !== "human_handoff") return assert.fail("expected automatic grant");
+        const address = { threadId, handoffId: pending.handoff.handoffId };
+        if (expired) {
+          yield* TestClock.adjust("21 minutes");
+          const remove = store.remove;
+          using spy = vi
+            .spyOn(store, "remove")
+            .mockImplementation((name) =>
+              failRemoval && name === storeName(address.handoffId)
+                ? Effect.fail(
+                    new SecretStore.SecretStoreRemoveError({ resource: name, cause: "test" }),
+                  )
+                : remove(name),
+            );
+          const error = yield* handoffs.open(address, sessionId).pipe(Effect.flip);
+          if (error._tag !== "HandoffError") return assert.fail("expected handoff error");
+          assert.equal(error.reason, failRemoval ? "unavailable" : "expired");
+          if (failRemoval) assert.equal(spy.mock.calls.length, 1);
+          assert.equal((yield* handoffs.read(address)).state, "expired");
+          assert.equal((yield* leases.state(threadId, automatic.handoff.handoffId))._tag, "ended");
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        } else {
+          const opened = yield* handoffs.open(address, sessionId);
+          assert.equal(opened.handoff.state, "opened");
+          assert.notEqual(
+            (yield* leases.state(threadId, automatic.handoff.handoffId))._tag,
+            "ended",
+          );
+          assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "available");
+        }
+      }),
+    ),
+  ),
+);
 
 it.effect("a later automatic grant cannot outlive Stop of its earlier naming consent", () =>
   withHarness(({ orchestrator }) =>

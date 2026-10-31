@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/22";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/23";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
@@ -13,7 +13,8 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
-// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page; Linux and Windows app actions use element numbers from observe().
+// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page.
+// Linux and Windows apps take points only in click: [x, y] pixels of a screenshot whose window position the driver proved (otherwise unsupported, nothing sent). They stay usable after input until the window moves, resizes or changes scale (stale_reference: take a new screenshot); other app actions there use element numbers from observe().
 type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"; note?: string; warnings?: string[]; result?: { debug: { value?: unknown; evidence: string[] } } };
 // suspected_noop: input was sent but its effect was not seen; observe before retrying, never blindly resend.
 // warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
