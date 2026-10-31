@@ -727,7 +727,7 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
       Effect.provide(
         Layer.mock(Round6Leases.ComputerUseLeases)({
           proxy: undefined,
-          onAuthorityChange: undefined,
+          onAuthorityChange: () => () => undefined,
           currentControl: () => Effect.succeedSome({ controlId: CONTROL, threadId, expiresAt }),
           controlState: () =>
             Effect.succeed({
