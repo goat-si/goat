@@ -836,7 +836,6 @@ export class ScreenHostBridge {
     this.cellFacts.delete(id);
     return facts;
   }
-
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -877,7 +876,6 @@ export class ScreenHostBridge {
     this.endCellTargets(runId, turnId, cellId, reason);
     state?.cutoff.abort();
   }
-
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -930,7 +928,6 @@ export class ScreenHostBridge {
       };
     }
   }
-
   invalidateTarget = Effect.fn("ScreenHostBridge.invalidateTarget")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -957,7 +954,6 @@ export class ScreenHostBridge {
         reason === "takeover" ? "takeover" : reason === "private" ? "private" : "ended",
       );
   }
-
   finishTurn = Effect.fn("ScreenHostBridge.finishTurn")(function* (
     this: ScreenHostBridge,
     runId: string,
