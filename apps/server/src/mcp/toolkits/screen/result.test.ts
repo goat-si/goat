@@ -18,43 +18,17 @@ const image = {
 };
 
 describe("screen run MCP result", () => {
-  it("returns retained image blocks and a bytes-free summary", () => {
-    const result = screenRunMcpResult({
-      runId: "run-1",
-      turnId: "turn-1",
-      cellId: "cell-1",
-      status: "completed",
-      console: [],
-      journal: [],
-      truncated: [],
-      availability: [{ kind: "tab", available: true }],
-      imageMetadata: [image],
-      images: [{ ...image, bytes }],
-    });
-    expect(result.isError).toBe(false);
-    expect(result.content.filter((block) => block.type === "image")).toHaveLength(1);
-    expect(result.content.find((block) => block.type === "image")).toMatchObject({
-      mimeType: "image/png",
-    });
-    const summary = JSON.stringify(result.structuredContent);
-    expect(summary).not.toContain(bytes);
-    expect(summary).not.toContain('"bytes"');
-    expect(JSON.stringify(result.content.find((block) => block.type === "text"))).not.toContain(
-      bytes,
-    );
-  });
-
   it.each([
-    { app: true, tab: false },
-    { app: false, tab: true },
-    { app: true, tab: true },
+    { hasApi: false, hasImage: false },
+    { hasApi: true, hasImage: false },
+    { hasApi: false, hasImage: true },
+    { hasApi: true, hasImage: true },
   ])(
-    "a result carrying the cell API for %o is delivered with its API, summary and image",
-    (surfaces) => {
-      const api = screenTargetApi(surfaces);
-      // The bundle must fit the result's api field (SCREEN_TARGET_API_MAX_CHARS).
+    "preserves the complete summary and images for $hasApi API and $hasImage image",
+    ({ hasApi, hasImage }) => {
+      const api = screenTargetApi({ app: true, tab: true });
       expect(api.length).toBeLessThanOrEqual(16 * 1024);
-      const result = screenRunMcpResult({
+      const input = {
         runId: "run-1",
         turnId: "turn-1",
         cellId: "cell-1",
@@ -62,21 +36,22 @@ describe("screen run MCP result", () => {
         console: [],
         journal: [],
         truncated: [],
-        availability: [
-          { kind: "app", available: surfaces.app },
-          { kind: "tab", available: surfaces.tab },
-        ],
-        imageMetadata: [image],
-        images: [{ ...image, bytes }],
-        api,
-        contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
-      });
+        availability: [{ kind: "tab", available: true }],
+        imageMetadata: hasImage ? [image] : [],
+        images: hasImage ? [{ ...image, bytes }] : [],
+        ...(hasApi ? { api, contractVersion: SCREEN_TARGET_CONTRACT_VERSION } : {}),
+      };
+      const result = screenRunMcpResult(input);
+      const { images: _images, ...summary } = input;
       expect(result.isError).toBe(false);
-      expect(result.structuredContent).toMatchObject({
-        contractVersion: SCREEN_TARGET_CONTRACT_VERSION,
-      });
-      expect(result.content[0]).toMatchObject({ type: "text", text: api });
-      expect(result.content.filter((block) => block.type === "image")).toHaveLength(1);
+      expect(result.structuredContent).toEqual(hasApi || hasImage ? undefined : summary);
+      const texts = result.content.filter((block) => block.type === "text");
+      expect(texts).toHaveLength(1);
+      expect(JSON.parse(texts[0]!.text)).toEqual(summary);
+      expect(JSON.stringify(texts)).not.toContain(bytes);
+      expect(result.content.filter((block) => block.type === "image")).toHaveLength(
+        hasImage ? 1 : 0,
+      );
     },
   );
 });

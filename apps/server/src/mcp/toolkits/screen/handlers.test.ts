@@ -90,6 +90,7 @@ it.effect(
   "direct MCP and goat_call forward screen images and refuse a bad title before the cell runs, while an outside read-only client is denied",
   () => {
     const calls: ScreenRunService.ScreenRunInput[] = [];
+    let currentResult = result;
     const scope: McpInvocationContext.McpThreadInvocationScope = {
       environmentId: EnvironmentId.make("environment-one"),
       requestNamespace: "screen-test",
@@ -130,7 +131,7 @@ it.effect(
           runCell: (input) =>
             Effect.sync(() => {
               calls.push(input);
-              return result;
+              return currentResult;
             }),
         }),
       ),
@@ -175,8 +176,38 @@ it.effect(
       expect(forwarded.content.filter((part) => part.type === "image")).toEqual(
         response.content.filter((part) => part.type === "image"),
       );
-      expect(JSON.stringify(response.structuredContent)).not.toContain(bytes);
-      expect(JSON.stringify(forwarded.structuredContent)).not.toContain(bytes);
+      expect(response.structuredContent).toBeUndefined();
+      expect(forwarded.structuredContent).toBeUndefined();
+      for (const hasApi of [false, true])
+        for (const hasImage of [false, true]) {
+          currentResult = {
+            ...result,
+            imageMetadata: hasImage ? [image] : [],
+            images: hasImage ? [{ ...image, bytes }] : [],
+            ...(hasApi ? { api: "screen API" } : {}),
+          };
+          const called = yield* server
+            .callTool({
+              name: "goat_call",
+              arguments: { path: "surface.screen_run", args: { code: "return 1" } },
+            })
+            .pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+              Effect.provideService(McpSchema.McpServerClient, client),
+            );
+          const texts = called.content.filter((part) => part.type === "text");
+          expect(texts).toHaveLength(1);
+          const envelope = JSON.parse(texts[0]!.text);
+          expect(envelope).toMatchObject({
+            status: "ok",
+            value: { status: "completed", journal: [] },
+          });
+          expect(envelope.value.api).toBe(hasApi ? "screen API" : undefined);
+          expect(called.content.filter((part) => part.type === "image")).toHaveLength(
+            hasImage ? 1 : 0,
+          );
+          if (hasImage) expect(called.structuredContent).toBeUndefined();
+        }
       const outside: McpInvocationContext.McpInvocationScope = {
         ...scope,
         thread: undefined,
@@ -192,7 +223,7 @@ it.effect(
           Effect.provideService(McpSchema.McpServerClient, client),
         );
       expect(denied.isError).toBe(true);
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(6);
       const withTitle = (name: string, title: string) =>
         server
           .callTool(
@@ -208,7 +239,7 @@ it.effect(
             Effect.provideService(McpSchema.McpServerClient, client),
           );
       expect((yield* withTitle("goat_screen_run", "Docs: read the page")).isError).toBe(false);
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(7);
       // goat_call reports a refusal in its own {status: "error"} envelope.
       const refused = (response: McpSchema.CallToolResult) =>
         response.isError === true ||
@@ -216,7 +247,7 @@ it.effect(
       for (const name of ["goat_screen_run", "goat_call"])
         for (const title of ["   ", "two\u2028lines", "x".repeat(81)])
           expect(refused(yield* withTitle(name, title))).toBe(true);
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(7);
     }).pipe(Effect.provide(layer));
   },
 );
