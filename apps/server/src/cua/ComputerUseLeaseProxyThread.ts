@@ -25,7 +25,8 @@ import {
 import { watchLeaseProxyDeadlines } from "./ComputerUseLeaseProxyDeadline.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
 import { makeLeaseProxyHandshake } from "./ComputerUseLeaseProxyHandshake.ts";
-import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import { primitiveReplySink, type LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+import { terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
 
@@ -94,6 +95,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   let transport: "connected" | "reconnecting" | "lost" = "connected";
   let sequence = 0;
   const seen = new Set<string>();
+  const stoppedControls = new Set<string>();
   /** The newest driver generation per control, so a control started again never reuses one. */
   const generations = new Map<string, number>();
   const handshake: Array<string> = [];
@@ -184,6 +186,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const stop = (context: Context, reason: ControlStop) => {
     if (context.ended !== undefined) return;
     context.ended = reason;
+    if (reason === "stopped" || reason === "stopped_all") stoppedControls.add(context.controlId);
     context.ready = false;
     if (current === context) current = undefined;
     Queue.shutdownUnsafe(context.primitiveInput);
@@ -367,6 +370,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           if (update.state === "ended") finishNow(update.reason);
           else if (update.state === "control-ended") {
             seen.add(update.controlId);
+            if (update.reason === "stopped" || update.reason === "stopped_all")
+              stoppedControls.add(update.controlId);
             if (current?.controlId === update.controlId) stop(current, update.reason);
             else if (current === undefined) waiting = update.reason;
           } else if (update.state === "waiting") {
@@ -408,7 +413,22 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             ))
           )
             return;
-          yield* options.primitiveReply?.({ ...request, status: "not_started" }) ?? Effect.void;
+          const reason = stoppedControls.has(request.controlId) ? "stopped_by_person" : undefined;
+          if (reason === undefined) {
+            yield* options.primitiveReply?.({ ...request, status: "not_started" }) ?? Effect.void;
+            options.onPrimitiveSettled?.(request.requestId);
+            return;
+          }
+          const sink = terminalSink(
+            primitiveReplySink(request, options.primitiveReply),
+            { id: request.callId, method: "tools/call", params: { name: request.tool } },
+            () => reason,
+            () => false,
+          );
+          yield* sink.answer(
+            refusal(request.callId, "tools/call", "invalid_target", WAITING),
+            "not_started",
+          );
           options.onPrimitiveSettled?.(request.requestId);
         }),
       ),

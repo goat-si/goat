@@ -5,7 +5,28 @@ import * as TestClock from "effect/testing/TestClock";
 import type { ScreenHostCall, ScreenObservation, ScreenTargetRef } from "@goat/contracts";
 import { call, context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
 import { createDesktopTargetHost } from "./DesktopTargetHost.ts";
-import { withInputTiming } from "./DesktopWindows.ts";
+import { CellWindowTracker, withInputTiming } from "./DesktopWindows.ts";
+import { finishCellTracker } from "./DesktopEvidence.ts";
+import { terminalFailure } from "../cua/ComputerUseTerminal.ts";
+
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "end-of-cell read keeps terminal %s",
+  (reason) =>
+    Effect.gen(function* () {
+      const tracker = new CellWindowTracker();
+      tracker.recordBefore(42, undefined);
+      const failure = terminalFailure(reason, "list_windows", {});
+      if (failure === undefined) return yield* Effect.die("missing terminal failure");
+      const result = yield* finishCellTracker(
+        { tracker, connectionGeneration: "driver:one" },
+        context,
+        { cellDeadlineMillis: 10000 },
+        () => Effect.fail(failure),
+      ).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") expect(result.failure.code).toBe(reason);
+    }),
+);
 
 const at = (deadlineMillis: number, each: ScreenHostCall): ScreenHostCall => ({
   ...each,

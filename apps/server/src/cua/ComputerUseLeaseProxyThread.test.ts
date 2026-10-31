@@ -182,7 +182,9 @@ describe("thread lease proxy", () => {
         const second = yield* h.driverStarted;
         assert.equal(second.controlId, "B");
         yield* h.sendPrimitive(primitive("A", first.connectionId, "request:old-control"));
-        assert.equal((yield* h.primitiveReply).status, "not_started");
+        const old = yield* h.primitiveReply;
+        assert.equal(old.status, "not_started");
+        assert.include(JSON.stringify(old), '"code":"stopped_by_person"');
         yield* h.sendPrimitive(primitive("B", second.connectionId, "request:new-control"));
         const newForward = JSON.parse(yield* Queue.take(b.sent)) as { id: string };
         assert.match(newForward.id, /^goat:primitive:/);

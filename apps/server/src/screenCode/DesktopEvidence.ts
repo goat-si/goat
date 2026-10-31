@@ -509,7 +509,7 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
   context: ScreenHostContext,
   options: { readonly skipEndRead?: boolean; readonly cellDeadlineMillis?: number } | undefined,
   send: SendFn,
-): Effect.fn.Return<CellWindowsOutcome> {
+): Effect.fn.Return<CellWindowsOutcome, ScreenRunError> {
   if (!entry) return {};
   if (options?.skipEndRead === true) return entry.tracker.finish();
   const endByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
@@ -536,12 +536,18 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
       },
       context,
       entry.connectionGeneration,
-    ).pipe(Effect.timeoutOption(remain), Effect.option);
-    const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
-    endByPid.set(
-      pid,
-      reply && !driverError(reply) ? parseWindowList(driverValue(reply), pid) : undefined,
+    ).pipe(
+      Effect.timeoutOption(remain),
+      Effect.catchIf(
+        (error) => error.code !== "stopped_by_person" && error.code !== "screen_locked",
+        () => Effect.succeedNone,
+      ),
     );
+    const reply = Option.getOrUndefined(sent);
+    const error = reply === undefined ? undefined : driverError(reply);
+    if (error?.code === "stopped_by_person" || error?.code === "screen_locked")
+      return yield* Effect.fail(error);
+    endByPid.set(pid, reply && !error ? parseWindowList(driverValue(reply), pid) : undefined);
   }
   return entry.tracker.finish(endByPid);
 });

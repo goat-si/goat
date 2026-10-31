@@ -639,7 +639,14 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           ),
           Effect.flatMap((result) =>
             Effect.flatMap(
-              collectCellWindows(result.status === "deadline" || result.status === "stopped"),
+              collectCellWindows(result.status === "deadline" || result.status === "stopped").pipe(
+                Effect.mapError((error) =>
+                  cellErrorSafety(
+                    error,
+                    result.journal.map((entry) => entry.receipt),
+                  ),
+                ),
+              ),
               (cellWindows) => {
                 const notices = cleanupJournal.get(id) ?? [];
                 cleanupJournal.delete(id);
