@@ -33,8 +33,9 @@ export const fixture = Effect.fn("reservations.fixture")(function* () {
     connectionId = "driver:1",
     interruptions = 0,
     foregroundGrantId?: import("@goat/contracts").TurnItemId,
-  ) =>
-    leases.callReservation(owner, {
+  ) => {
+    const batch = batchAppScope(name, args);
+    return leases.callReservation(owner, {
       action: "reserve",
       controlId: owner === a ? first.controlId : second.controlId,
       connectionId,
@@ -43,11 +44,10 @@ export const fixture = Effect.fn("reservations.fixture")(function* () {
       idleEpoch: 0,
       name,
       args,
-      ...(batchAppScope(name, args) === undefined
-        ? {}
-        : { safetyApps: batchAppScope(name, args)?.apps }),
+      ...(batch === undefined ? {} : { safetyApps: batch.apps }),
       ...(foregroundGrantId === undefined ? {} : { foregroundGrantId }),
     });
+  };
   const release = (
     owner: typeof a,
     reservationId: string,
