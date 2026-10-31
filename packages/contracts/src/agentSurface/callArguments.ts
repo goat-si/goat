@@ -92,7 +92,9 @@ export const surfaceArguments = (tool: string, payload: unknown): SurfaceArgumen
 export const goatCallTarget = (
   input: unknown,
 ): { readonly path?: unknown; readonly args?: unknown } => {
-  const folded = surfaceArguments(CALL, input);
+  const payload =
+    isRecord(input) && input.server === "goat" && input.tool === CALL ? input.arguments : input;
+  const folded = surfaceArguments(CALL, payload);
   return folded.ok && isRecord(folded.payload)
     ? { path: folded.payload.path, args: folded.payload.args }
     : {};

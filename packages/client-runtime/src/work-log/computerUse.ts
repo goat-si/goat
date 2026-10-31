@@ -237,7 +237,12 @@ export function hasComputerUseHistory(item: OrchestrationV2TurnItem | undefined)
       path.startsWith("preview.") || path.startsWith("screen.") || path === "surface.screen_run"
     );
   }
-  if (tool?.startsWith("preview_") || tool?.startsWith("goat_preview_")) return true;
+  if (
+    tool === "goat_screen_run" ||
+    tool?.startsWith("preview_") ||
+    tool?.startsWith("goat_preview_")
+  )
+    return true;
   return /^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ])|goat-\S+_)?(?:(?:goat_)?screen[._]run|(?:goat_)?preview[._].+)$/u.test(
     name,
   );
