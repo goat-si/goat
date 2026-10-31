@@ -5,7 +5,7 @@ import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread
 
 import { relativeTime } from "../../lib/time";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
-import type { ThreadListV2FoldedUnseen, ThreadListV2Item } from "./threadListV2";
+import type { ThreadListV2FoldedUnseen, ThreadListV2Item } from "./threadListV2Types";
 import {
   liftedThreadListV2Status,
   threadHasUnseenCompletion,
