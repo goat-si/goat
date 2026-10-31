@@ -1,6 +1,8 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { BATCH_SCOPE_UNSUPPORTED } from "./ComputerUseLeaseProxyBatch.ts";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
@@ -262,3 +264,16 @@ it.effect("narrows an executable alias to verified bundle identities before forw
     });
   }),
 );
+
+it("refuses alias scopes when the host cannot express bundle identities", () => {
+  const executable = "C:\\Shared\\host.exe";
+  const line = call(1, "run_steps", { app_scope: scope([executable]), steps: [] });
+  const result = narrowBatch(
+    1,
+    line,
+    parse(line) ?? {},
+    new Map([[42, { id: executable, name: "Editor", executable }]]),
+    false,
+  );
+  assert.include("refused" in result ? result.refused : "", "app_not_allowed");
+});
