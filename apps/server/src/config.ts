@@ -197,14 +197,6 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
     ],
     { concurrency: "unbounded" },
   );
-  // Existing directories may predate owner-only creation permissions.
-  yield* fs
-    .chmod(derivedPaths.stateDir, 0o700)
-    .pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not restrict state directory permissions.", { cause }),
-      ),
-    );
 });
 
 const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
