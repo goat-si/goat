@@ -730,8 +730,22 @@ any missing libraries and system fonts with apt; pages that load without text
 can mean the host has no fonts. It is safe to run again. Without `sudo`, it only
 reports what it would change.
 
-The browser always runs in Chrome's sandbox. Where you cannot change the host,
-set `GOAT_SERVER_BROWSER_SANDBOX=0` for the environment to run without it.
+The browser runs in Chrome's sandbox by default. Chrome cannot start that sandbox
+as root. If your GOAT server runs as root, run it as a nonroot user to keep
+sandboxing enabled. `goat browser setup` does not fix this root restriction.
+
+If you need to run as root, or cannot enable the sandbox on your host, set
+`GOAT_SERVER_BROWSER_SANDBOX=0` in the **GOAT server's environment** and restart
+the server. This disables Chrome's sandbox. For a manual launch:
+
+```sh
+GOAT_SERVER_BROWSER_SANDBOX=0 goat serve
+```
+
+For a systemd service, add `Environment=GOAT_SERVER_BROWSER_SANDBOX=0` under
+`[Service]` in its configuration, run `sudo systemctl daemon-reload`, then restart
+your GOAT service. Setting the variable in an agent's terminal does not change the
+environment of an already running GOAT server.
 
 ## Connect an outside agent
 
