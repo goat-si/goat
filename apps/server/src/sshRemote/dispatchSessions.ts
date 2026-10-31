@@ -8,6 +8,7 @@ import {
   type MemoryTaskGrantCeiling,
   type RuntimeMode,
 } from "@goat/contracts";
+import { SSH_DISPATCH_SESSION_LABEL } from "../auth/mcpClientSubject.ts";
 import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import { targetConnectionKey } from "@goat/ssh/command";
 import { SshPairingError } from "@goat/ssh/errors";
@@ -172,7 +173,7 @@ export const makeDispatchSessions = (deps: SessionDeps) => {
           environmentId === undefined || environmentId === null
             ? manager.issueMcpClientSession(target, {
                 ...(requireReady === undefined ? {} : { requireReady }),
-                label: `GOAT SSH dispatch (${ceiling}${approvals ? ", approvals" : ""}${providersManage ? ", providers" : ""}${settingsWrite ? ", settings" : ""})`,
+                label: `${SSH_DISPATCH_SESSION_LABEL} (${ceiling}${approvals ? ", approvals" : ""}${providersManage ? ", providers" : ""}${settingsWrite ? ", settings" : ""})`,
                 ttl,
                 runtimeModeCeiling: ceiling,
                 ...(approvals ? { approvals: true } : {}),
@@ -183,7 +184,7 @@ export const makeDispatchSessions = (deps: SessionDeps) => {
             : issueExisting === undefined
               ? Effect.die("Existing session issuer disappeared")
               : issueExisting(target, environmentId, {
-                  label: `GOAT SSH dispatch (${purpose === undefined ? ceiling : "Child setup"})`,
+                  label: `${SSH_DISPATCH_SESSION_LABEL} (${purpose === undefined ? ceiling : "Child setup"})`,
                   ttl,
                   runtimeModeCeiling: ceiling,
                   ...(purpose === undefined ? {} : { childSetupPurpose: purpose }),

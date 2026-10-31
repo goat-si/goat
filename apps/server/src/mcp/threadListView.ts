@@ -13,7 +13,6 @@ import {
   type OrchestratorMcpThreadSummaryDigest,
   type ThreadId,
 } from "@goat/contracts";
-import { formatThreadLink } from "@goat/shared/threadLinks";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -23,6 +22,7 @@ import {
   normalizeThreadPullRequestKey,
   visibleThreadPullRequests,
 } from "../sourceControl/threadPullRequests.ts";
+import { threadLinkFor, type McpInvocationScope } from "./McpInvocationContext.ts";
 import { launchGraph, launcherThreadIdOf } from "./threadLaunchFold.ts";
 import { excerpt, statusFromShell, threadOrganization } from "./threadStatus.ts";
 
@@ -194,7 +194,10 @@ function threadPullRequests(
   }));
 }
 
+type LinkScope = Pick<McpInvocationScope, "environmentId" | "client">;
+
 export function listItemFromShell(
+  scope: LinkScope,
   shell: OrchestrationV2ThreadShell,
   nowMs: number,
   lineage: Pick<OrchestratorMcpThreadListItem, "foldState" | "pendingRequestCount">,
@@ -203,7 +206,7 @@ export function listItemFromShell(
     threadId: shell.id,
     projectId: shell.projectId,
     title: shell.title,
-    link: formatThreadLink(shell.id, shell.title),
+    link: threadLinkFor(scope, shell.id, shell.title),
     createdBy: shell.createdBy,
     creationSource: shell.creationSource,
     status: shell.activityRunStatus ?? shell.status,
@@ -228,6 +231,7 @@ export function listItemFromShell(
 }
 
 export function threadDetail(
+  scope: LinkScope,
   projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs" | "runtimeRequests">,
   itemCount: number,
   shell: OrchestrationV2ThreadShell,
@@ -239,7 +243,7 @@ export function threadDetail(
     threadId: projection.thread.id,
     projectId: projection.thread.projectId,
     title: projection.thread.title,
-    link: formatThreadLink(projection.thread.id, projection.thread.title),
+    link: threadLinkFor(scope, projection.thread.id, projection.thread.title),
     createdBy: projection.thread.createdBy,
     creationSource: projection.thread.creationSource,
     status: active?.status ?? latest?.status ?? "idle",

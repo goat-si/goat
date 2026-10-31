@@ -17,6 +17,7 @@ import {
   OrchestratorMcpThreadConfigureInput,
   OrchestratorMcpThreadConfigureResult,
   OrchestratorMcpThreadSearchInput,
+  OrchestratorMcpThreadSearchMatch,
   OrchestratorMcpThreadSearchResult,
   RunId,
   ScheduledTask,
@@ -217,7 +218,15 @@ const ThreadSearchTool = Tool.make(agentSurfaceRegistry["thread.search"].name, {
   ...commandTool,
   description: agentSurfaceRegistry["thread.search"].description,
   parameters: OrchestratorMcpThreadSearchInput,
-  success: OrchestratorMcpThreadSearchResult,
+  success: Schema.Struct({
+    ...OrchestratorMcpThreadSearchResult.fields,
+    matches: Schema.Array(
+      Schema.Struct({
+        ...OrchestratorMcpThreadSearchMatch.fields,
+        link: Schema.optional(Schema.String),
+      }),
+    ),
+  }),
   dependencies: [...commandTool.dependencies, ThreadSearchMcpService.ThreadSearchMcpService],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["thread.search"]));
 
@@ -228,6 +237,7 @@ const ScheduledTaskRunTool = Tool.make(agentSurfaceRegistry["schedule.run"].name
   success: Schema.Struct({
     taskId: ScheduledTaskId,
     threadId: ScheduledTask.fields.threadId,
+    link: Schema.optional(Schema.String),
     lastRunStatus: ScheduledTask.fields.lastRunStatus,
     lastRun: ScheduledTask.fields.lastRun,
     runCount: NonNegativeInt,

@@ -16,7 +16,13 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as ServerConfig from "../config.ts";
 import { makeCodexAppServerSpawnCommand } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { classifyScope, make, ownedAgentSlice, type ScopeState } from "./agentScope.ts";
+import {
+  AGENTS_TASKS_MAX_PERCENT,
+  classifyScope,
+  make,
+  ownedAgentSlice,
+  type ScopeState,
+} from "./agentScope.ts";
 
 const running: ScopeState = {
   loadState: "loaded",
@@ -241,6 +247,46 @@ describe("AgentScope service", () => {
         for (const launch of [agent, codex, terminal]) {
           expect(launch.args).toContain("--property=Delegate=yes");
         }
+      }),
+    ),
+  );
+
+  it.effect("caps agent memory and yields CPU, disk, and tasks to the server", () =>
+    withFakeSystemd(({ scope, calls }) =>
+      Effect.gen(function* () {
+        yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+        const setProperties = calls.filter(([, verb]) => verb === "set-property");
+        expect(setProperties[0]).toEqual([
+          "--user",
+          "set-property",
+          "--runtime",
+          "app-goat-agents.slice",
+          expect.stringMatching(/^MemoryHigh=\d+$/),
+          expect.stringMatching(/^MemoryMax=\d+$/),
+        ]);
+        const parents = setProperties.slice(1);
+        expect(parents.map((call) => call[3]).toSorted()).toEqual([
+          "app-goat.slice",
+          "app-t3code.slice",
+        ]);
+        for (const call of parents)
+          expect(call).toEqual(expect.arrayContaining(["CPUWeight=10", "IOWeight=10"]));
+      }),
+    ),
+  );
+
+  // regression: B11-R1-02 each family took 25% on its own, so both together could pass logind's 33%
+  it.effect("bounds the combined task cap of both agent families below the user limit", () =>
+    withFakeSystemd(({ scope, calls }) =>
+      Effect.gen(function* () {
+        yield* scope.wrap({ command: "agent", args: [], name: "t", threadId: "a" });
+        const caps = calls
+          .filter(([, verb]) => verb === "set-property")
+          .flatMap((call) => call.filter((arg) => arg.startsWith("TasksMax=")))
+          .map((arg) => Number(arg.slice("TasksMax=".length, -1)));
+        expect(caps).toHaveLength(2);
+        expect(caps.reduce((total, cap) => total + cap, 0)).toBe(AGENTS_TASKS_MAX_PERCENT);
+        expect(AGENTS_TASKS_MAX_PERCENT).toBeLessThan(33);
       }),
     ),
   );

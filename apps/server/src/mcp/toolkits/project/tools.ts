@@ -195,6 +195,8 @@ export const ThreadLaunchParameters = Schema.Struct({
 
 export const ThreadLaunchSuccess = Schema.Struct({
   threadId: ThreadId,
+  /** Markdown link to the thread; outside clients get one that opens the web app. */
+  link: Schema.optional(Schema.String),
   projectId: ProjectId,
   modelSelection: ModelSelection,
   runId: Schema.NullOr(RunId),

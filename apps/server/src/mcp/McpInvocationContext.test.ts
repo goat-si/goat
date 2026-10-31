@@ -136,3 +136,25 @@ it("leaves omitted permissions denied", () => {
     sessionGrantsScope({ authenticated: true, scopes: ["orchestration:operate"] }, "memory:read"),
   ).toBe(false);
 });
+it("gives outside clients thread links that open the web app on the origin they reached", () => {
+  const environmentId = EnvironmentId.make("environment-1");
+  const threadId = ThreadId.make("thread:a%3Ab");
+  expect(
+    McpInvocationContext.threadLinkFor({ environmentId, client: undefined }, threadId, "Fix"),
+  ).toBe("[Fix](goat-thread://v1/thread:a%3Ab)");
+  expect(
+    McpInvocationContext.threadLinkFor(
+      {
+        environmentId,
+        client: {
+          sessionId: "session-1",
+          label: "Claude Code",
+          access: "auto",
+          webOrigin: "https://box.example.ts.net",
+        },
+      },
+      threadId,
+      "Fix",
+    ),
+  ).toBe("[Fix](https://box.example.ts.net/environment-1/thread%3Aa%253Ab)");
+});

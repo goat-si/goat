@@ -34,6 +34,12 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import { runOrchestratorV2Scenario } from "./testkit/OrchestratorScenario.ts";
 import * as QuestionEscalationService from "./QuestionEscalationService.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+
+const layerNoProviderInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+  // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
+  getInstance: () => Effect.succeed(undefined),
+});
 
 export const decodeQuestion = Schema.decodeUnknownEffect(OrchestrationV2QuestionEscalation);
 export const instanceId = ProviderInstanceId.make("codex");
@@ -58,6 +64,7 @@ const layerBase = Layer.mergeAll(
 export const layerTest = Layer.mergeAll(
   layerBase,
   ProviderEventIngestor.layer.pipe(
+    Layer.provide(layerNoProviderInstances),
     Layer.provide(
       Layer.mergeAll(
         layerBase,

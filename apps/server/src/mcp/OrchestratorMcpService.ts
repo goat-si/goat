@@ -78,7 +78,6 @@ import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
-import { formatThreadLink } from "@goat/shared/threadLinks";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -140,6 +139,7 @@ import {
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
+  threadLinkFor,
 } from "./McpInvocationContext.ts";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -1713,7 +1713,7 @@ const make = Effect.gen(function* () {
       ...(cloudTask === undefined ? {} : { cloudTask }),
       taskId: task.id,
       childThreadId: task.childThreadId,
-      link: formatThreadLink(task.childThreadId, childControls.thread.title),
+      link: threadLinkFor(scope, task.childThreadId, childControls.thread.title),
       childRunId: childRun?.id ?? null,
       childNodeId: task.id,
       status,
@@ -3460,7 +3460,7 @@ const make = Effect.gen(function* () {
                 );
               return {
                 threadId,
-                link: formatThreadLink(threadId, projection.thread.title),
+                link: threadLinkFor(scope, threadId, projection.thread.title),
                 runId: run?.id ?? null,
                 status: run?.status ?? "idle",
                 title: projection.thread.title,
@@ -3542,7 +3542,7 @@ const make = Effect.gen(function* () {
         threads: yield* Effect.forEach(page, (shell) =>
           pendingRequestCountOf(shell).pipe(
             Effect.map((pendingRequestCount) =>
-              View.listItemFromShell(shell, nowMs, {
+              View.listItemFromShell(scope, shell, nowMs, {
                 foldState: foldStateOf(shell.id),
                 pendingRequestCount,
               }),
@@ -3662,6 +3662,7 @@ const make = Effect.gen(function* () {
       return {
         ...(cloudTask === undefined ? {} : { cloudTask }),
         thread: View.threadDetail(
+          scope,
           target,
           timeline.totalItems,
           shell,
@@ -3788,7 +3789,7 @@ const make = Effect.gen(function* () {
       if (admitted?.enabled) yield* permissions.complete(admissionId);
       return {
         threadId: input.threadId,
-        link: formatThreadLink(input.threadId, target.thread.title),
+        link: threadLinkFor(scope, input.threadId, target.thread.title),
         messageId,
         runId: result.run.id,
         ...(result.run.delegatedTaskId === undefined ? {} : { taskId: result.run.delegatedTaskId }),

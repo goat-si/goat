@@ -711,6 +711,31 @@ it.effect(
   },
 );
 
+// regression: B11-R1-01 an outside client's launch result carried no link it could open
+it.effect("an outside client's launch returns a link that opens the web app it reached", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const service = yield* ThreadLaunchMcp.ThreadLaunchMcpService;
+    const result = yield* service.launch(
+      {
+        ...scope,
+        requestNamespace: "client:web-link",
+        thread: undefined,
+        client: {
+          sessionId: "web-link",
+          label: "Claude Code",
+          access: "full-access",
+          webOrigin: "https://box.example.ts.net",
+        },
+      },
+      { title: "Child", projectId, modelSelection, standingInstructions: false },
+      { runtimeMode: "full-access", interactionMode: "default" },
+    );
+    const path = [scope.environmentId, result.threadId].map(encodeURIComponent).join("/");
+    expect(result.link).toContain("](https://box.example.ts.net/" + path + ")");
+  }).pipe(Effect.provide(f.layer));
+});
+
 it.effect("thread launch forwards the caller runtime ceiling despite a full-access request", () => {
   const f = fixture(false, "published-ref", undefined, "owner", {
     runtimeMode: "approval-required",

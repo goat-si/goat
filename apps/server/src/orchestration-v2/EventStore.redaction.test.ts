@@ -28,6 +28,12 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
+import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
+
+const layerNoProviderInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+  // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
+  getInstance: () => Effect.succeed(undefined),
+});
 
 const layerTestDatabase = SqlitePersistence.layerMemory;
 const layerTestStores = Layer.merge(EventStore.layer, ProjectionStore.layer).pipe(
@@ -49,7 +55,10 @@ const layerDependencies = Layer.mergeAll(
 );
 const layerTest = Layer.mergeAll(
   layerDependencies,
-  ProviderEventIngestor.layer.pipe(Layer.provide(layerDependencies)),
+  ProviderEventIngestor.layer.pipe(
+    Layer.provide(layerNoProviderInstances),
+    Layer.provide(layerDependencies),
+  ),
 );
 
 const modelSelection = {
