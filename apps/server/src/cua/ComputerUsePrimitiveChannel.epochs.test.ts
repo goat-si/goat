@@ -30,6 +30,7 @@ it.effect.each(["lock then stop", "lock then resume then stop", "stop then lock"
       const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            proxy: undefined,
             currentControl: () =>
               Effect.succeedSome({ controlId, threadId, expiresAt: DateTime.makeUnsafe(60000) }),
             controlState: () =>
@@ -144,6 +145,7 @@ it.effect("a later control does not inherit the old control's Stop", () =>
     const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
       Effect.provide(
         Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          proxy: undefined,
           currentControl: () =>
             Effect.sync(() => Option.some({ controlId: current, threadId, expiresAt })),
           controlState: () =>
