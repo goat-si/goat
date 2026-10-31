@@ -73,11 +73,9 @@ it.effect("returns an image tool's image through goat_call as an image block, no
       result.content.filter((block) => block.type === "image");
     expect(images(direct)).toHaveLength(1);
     expect(images(called)).toEqual(images(direct));
-    // The envelope keeps the value and loses only the copy that moved to the content.
-    expect(called.structuredContent).toMatchObject({ status: "ok" });
-    expect(JSON.stringify(called.structuredContent)).not.toContain(
-      Buffer.from(png).toString("base64"),
-    );
+    expect(called.structuredContent).toBeUndefined();
+    expect(called.content[0]).toMatchObject({ type: "text" });
+    expect(JSON.stringify(called.content[0])).not.toContain(Buffer.from(png).toString("base64"));
   }).pipe(
     Effect.provideService(McpInvocationContext, thread),
     Effect.provideService(McpSchema.McpServerClient, client),

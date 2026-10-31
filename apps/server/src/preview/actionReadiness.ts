@@ -6,6 +6,7 @@
  */
 import type { ElementHandle, Locator } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 export interface Readiness {
   /** Called once when the first check finds the target not ready, before waiting starts. */
@@ -64,6 +65,8 @@ const expired = () =>
 
 /** How long a selector may match nothing on a loaded page before an action refuses it. */
 const NO_MATCH_GRACE_MS = 2_000;
+/** How long one look for a missing target lasts while its page is still loading. */
+const LOADING_SLICE_MS = 500;
 
 /**
  * Refuses a target that still matches nothing a short grace after its page loaded, rather than
@@ -71,32 +74,39 @@ const NO_MATCH_GRACE_MS = 2_000;
  */
 export const requireMatch = async (target: Locator, timeoutMs: number, gate?: ReadinessGate) => {
   const ends = performance.now() + timeoutMs;
-  const left = () => Math.max(1, Math.floor(ends - performance.now()));
-  // A target already there needs no wait; only a miss waits for the page to finish loading.
   if ((await abortable(() => actionCall(gate, () => target.count()), gate?.signal)) > 0) return;
-  await abortable(
-    () => actionCall(gate, () => target.page().waitForLoadState("load", { timeout: left() })),
-    gate?.signal,
-  );
-  const found = await abortable(
-    () =>
-      actionCall(gate, () =>
-        target.first().waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, left()) }),
-      ),
-    gate?.signal,
-  ).then(
-    () => true,
-    (cause: unknown) => {
-      if (isTimeout(cause)) return false;
-      throw cause;
-    },
-  );
-  if (!found)
-    throw new ServerBrowserOperationError(
-      "PreviewAutomationInvalidSelectorError",
-      "No element matches the selector, so no input was sent.",
-      { noMatch: true },
+  for (let graceLeft = NO_MATCH_GRACE_MS; ;) {
+    const loaded = await abortable(
+      () => actionCall(gate, () => target.page().waitForLoadState("load", { timeout: 1 })),
+      gate?.signal,
+    ).then(
+      () => true,
+      (cause: unknown) => {
+        if (gate?.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+        return false;
+      },
     );
+    const slice = Math.min(remaining(ends), loaded ? Math.max(1, graceLeft) : LOADING_SLICE_MS);
+    const started = performance.now();
+    const found = await abortable(
+      () => actionCall(gate, () => target.first().waitFor({ state: "attached", timeout: slice })),
+      gate?.signal,
+    ).then(
+      () => true,
+      (cause: unknown) => {
+        if (!isTimeout(cause) || performance.now() >= ends) throw cause;
+        return false;
+      },
+    );
+    if (found) return;
+    if (loaded) graceLeft -= performance.now() - started;
+    if (graceLeft <= 0)
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationInvalidSelectorError",
+        "No element matches the selector, so no input was sent.",
+        { noMatch: true },
+      );
+  }
 };
 
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */

@@ -1,5 +1,5 @@
 import { chromium, type CDPSession, type Page } from "playwright-core";
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { pointBefore } from "./ServerBrowserPointer.ts";
@@ -130,6 +130,40 @@ it("acts on a target that already exists while the page is still loading", () =>
         waitUntil: "domcontentloaded",
       });
       await ServerBrowserPage.type(page, { selector: "input", text: "goat", timeoutMs: 6_000 });
+      expect(await page.locator("input").inputValue()).toBe("goat");
+    } finally {
+      release.resolve();
+    }
+  }));
+it("acts on a target that appears after a first miss while the page is still loading", () =>
+  fixture(async (page) => {
+    const release = Promise.withResolvers<void>();
+    await page.route("https://held.test/**", async (route) => {
+      await release.promise;
+      await route.abort();
+    });
+    try {
+      await page.setContent('<img src="https://held.test/slow.png">', {
+        waitUntil: "domcontentloaded",
+      });
+      // The page's load state is read only after the first lookup missed; the input arrives then.
+      const evaluate = page.evaluate.bind(page);
+      const waitForLoad = page.waitForLoadState.bind(page);
+      let inserted = false;
+      const insert = async () => {
+        if (inserted) return;
+        inserted = true;
+        await evaluate("document.body.append(document.createElement('input'))");
+      };
+      using _read = vi.spyOn(page, "evaluate").mockImplementation((async (...args: [string]) => {
+        await insert();
+        return evaluate(...args);
+      }) as never);
+      using _load = vi.spyOn(page, "waitForLoadState").mockImplementation(async (...args) => {
+        await insert();
+        return waitForLoad(...args);
+      });
+      await ServerBrowserPage.type(page, { selector: "input", text: "goat", timeoutMs: 3_000 });
       expect(await page.locator("input").inputValue()).toBe("goat");
     } finally {
       release.resolve();

@@ -45,13 +45,14 @@ interface Observation extends ReadTime { effect?: string; // first post-input di
   resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
   warnings?: string[]; // app driver notes and warnings, including focus restoration
+  otherWindows?: { window_id: number; title: string }[]; // apps: the app's other windows on screen, as this cell listed them
   title?: string; url?: string; image?: Shot } // image: with screenshot: true
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
   owner?: string; // tabs: agent, unclaimed or human; profile and privacy are reported when the host knows them
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app numbers from the latest full read remain valid until rows are added, removed or renumbered; then apply diffs and use the latest observation, or diff: false for the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only; tabs refuse modifiers. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); an input that opens or closes a window may list windows up to four more times. diagnostic evidence is not a verdict: only a window it proves opened or closed makes the verdict confirmed
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only; tabs refuse modifiers. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: as on click
   press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean; holdMs?: number }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first; holdMs 0..30000 needs a supporting app driver; tabs refuse it
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
@@ -82,6 +83,8 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
 // after a failed step, later group members are not run: read every result; a step went
 // unsent only when its own result says nothingSent.
+// observe() also lists the app's other windows on screen as otherWindows: [{ window_id, title }]; one an input
+// opened (a chat, a document) is read by binding it: screen.app({ bundle_id, window_id }).
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
@@ -100,7 +103,8 @@ const SCREEN_APP = `  // app() without window_id: a running app with one window 
   // last check started then may take 2 s more; no window then throws, with the app still running. Several
   // installed copies: a running one wins, else /Applications. A name shared by apps with different ids is ambiguous.
   // path: a launch_path list_apps lists (macOS) picks the copy to launch.
-  app(q: string | { bundle_id?: string; name?: string; path?: string; window_id?: number }): Promise<App>;
+  // A string is the app's name, or its bundle id when no app has that name. bundleId and windowId are the same keys.
+  app(q: string | { bundle_id?: string; bundleId?: string; name?: string; path?: string; window_id?: number; windowId?: number }): Promise<App>;
   launch(q: { bundle_id?: string; name?: string; path?: string }): Promise<{ pid: number; windows: object[] }>; // starts it, binds nothing`;
 
 const FOOTER = `// Batch decided steps in one cell and observe once at the end. A failed cell still returns its

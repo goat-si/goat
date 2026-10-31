@@ -632,6 +632,10 @@ const __app = async (rawQuery) => {
   const rows = listed.apps;
   let id = bundle;
   let copyName;
+  // A string query names an app by its name or its bundle id; one no row is named reads as an id.
+  if (id === undefined && name !== undefined && path === undefined &&
+      !rows.some((item) => item.name === name) && rows.some((item) => item.bundle_id === name))
+    id = name;
   if (path !== undefined) {
     const copy = rows.find((item) => item.launch_path === path);
     if (!copy)
