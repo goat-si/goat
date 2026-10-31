@@ -84,7 +84,8 @@ export const startLeaseUpdates = Effect.fn("ComputerUseLeaseProxy.updates")(func
       update?.state === "cursor-state"
     )
       return;
-    input.confirm(update);
+    if (update === undefined || !("controlId" in update) || update.controlId === input.controlId)
+      input.confirm(update);
     if (update?.state === "active" && update.controlId === input.controlId) input.shared(update);
     const expiry = update !== undefined && "expiresAt" in update ? update.expiresAt : undefined;
     const at = expiry === undefined ? undefined : DateTime.make(expiry);
