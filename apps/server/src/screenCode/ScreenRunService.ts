@@ -608,6 +608,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
               collectCellWindows(
                 (cause.endedBy ?? cause.code) === "wall_limit" ||
                   (cause.endedBy ?? cause.code) === "stopped",
+              ).pipe(
+                Effect.mapError((error) =>
+                  cellErrorSafety(error, cause.journal ?? cause.receipts ?? []),
+                ),
               ),
               (cellWindows) => {
                 failed = {
