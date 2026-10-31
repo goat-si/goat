@@ -54,7 +54,9 @@ import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
-type Driver = (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
+type Driver = (
+  input: Input,
+) => Effect.Effect<ComputerUseTerminalState, ScreenRunError, Scope.Scope>;
 const inputState = (input: Input) =>
   terminalReplyState(
     {
