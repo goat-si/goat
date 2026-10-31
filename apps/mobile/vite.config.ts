@@ -67,6 +67,7 @@ const reactTests = [
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/features/threads/UsageLimitRecoveryCard.test.tsx",
   "src/native/NativeHeaderToolbar.test.tsx",
+  "src/native/V5StackHeader.ios.test.tsx",
   "src/features/diagnostics/ThreadStreamsSection.test.tsx",
   "src/native/GoatComposerEditor.ios.test.tsx",
   "src/native/useRestingTopOffset.test.tsx",

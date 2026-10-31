@@ -30,6 +30,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useReduceMotionEnabled } from "../../lib/appState";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { NativeInspectorContent } from "../../native/NativeInspectorContent";
 
@@ -455,6 +456,7 @@ export function ReviewSheet(props: ReviewSheetProps) {
 }
 
 function ReviewSheetContent(props: ReviewSheetProps) {
+  const reduceMotion = useReduceMotionEnabled();
   const { nativeReviewDiffStyle } = useAppearanceCodeSurface();
   useAdaptiveWorkspacePaneRole("inspector");
   const { panes, showAuxiliaryPane } = useAdaptiveWorkspaceLayout();
@@ -523,6 +525,16 @@ function ReviewSheetContent(props: ReviewSheetProps) {
     await refreshSelectedSection();
     setIsPullRefreshing(false);
   };
+  const isRefreshing = isPullRefreshing || isSelectedSectionPending || areFilePatchesPending;
+  // A refresh that starts programmatically adds its height to the native top inset and
+  // subtracts it when it ends. If topContentInset changes in between, the inset ends up
+  // short and the content sits under the header, so the fallback ScrollView starts over.
+  const [fallbackInset, setFallbackInset] = useState(topContentInset);
+  const [fallbackScrollViewKey, setFallbackScrollViewKey] = useState(0);
+  if (fallbackInset !== topContentInset) {
+    setFallbackInset(topContentInset);
+    if (isRefreshing) setFallbackScrollViewKey((key) => key + 1);
+  }
   const reviewFileNavigatorRef = useRef<ReviewFileNavigatorHandle>(null);
   const reviewFiles = parsedDiff.kind === "files" ? parsedDiff.files : [];
   const fileVisibility = useReviewFileVisibility({
@@ -579,7 +591,9 @@ function ReviewSheetContent(props: ReviewSheetProps) {
     const nativeView = nativeReviewDiffViewRef.current;
     if (!nativeView) return;
     const result = await settlePromise(() =>
-      fileId === null ? nativeView.scrollToTop(true) : nativeView.scrollToFile(fileId, true),
+      fileId === null
+        ? nativeView.scrollToTop(!reduceMotion)
+        : nativeView.scrollToFile(fileId, !reduceMotion),
     );
     if (AsyncResult.isFailure(result)) {
       console.error("[review] Failed to navigate to diff file", squashAtomCommandFailure(result));
@@ -783,6 +797,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
             </View>
           ) : (
             <ScrollView
+              key={fallbackScrollViewKey}
               contentContainerStyle={
                 Platform.OS === "android" && (parsedDiff.kind === "empty" || !selectedSection)
                   ? { flexGrow: 1, justifyContent: "center" }
@@ -798,7 +813,7 @@ function ReviewSheetContent(props: ReviewSheetProps) {
               refreshControl={
                 // Fallback and empty states need refresh controls; only Android has an explicit refresh menu.
                 <RefreshControl
-                  refreshing={isPullRefreshing || isSelectedSectionPending || areFilePatchesPending}
+                  refreshing={isRefreshing}
                   onRefresh={() => void handlePullToRefresh()}
                 />
               }
