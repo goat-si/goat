@@ -761,7 +761,10 @@ export const make = Effect.gen(function* () {
           began ??= current.controlId;
           if (current.controlId === began && beganEpoch === undefined) {
             const registered = attachments.get(input.threadId)?.registration;
-            beganEpoch = registered === undefined ? {} : control(registered, began).epoch;
+            beganEpoch =
+              registered === undefined
+                ? replaceWithTerminal("none")
+                : control(registered, began).epoch;
             retainedKey = waitingKey(input.threadId, began);
             let waiters = waitingEpochs.get(retainedKey);
             if (waiters === undefined) {
