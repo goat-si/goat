@@ -168,7 +168,12 @@ it.each([false, true])("isolates history after switching threads, delayed=%s", a
   const env = EnvironmentId.make("environment:a");
   const a = ThreadId.make("thread:a");
   const b = ThreadId.make("thread:b");
-  const reply = Promise.withResolvers<unknown>();
+  const pending: { resolve?: (value: unknown) => void } = {};
+  const promise = new Promise<unknown>((resolve) => {
+    pending.resolve = resolve;
+  });
+  if (!pending.resolve) throw new Error("Missing resolver");
+  const reply = { promise, resolve: pending.resolve };
   const row = {
     id: 1,
     threadId: a,
