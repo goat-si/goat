@@ -38,7 +38,11 @@ import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import * as SiteNotes from "../preview/SiteNotes.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
 import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollection.ts";
-import { makeCellAuthority, watchCellTerminals } from "./ScreenCellAuthority.ts";
+import {
+  finishCellResponse,
+  makeCellAuthority,
+  watchCellTerminals,
+} from "./ScreenCellAuthority.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
@@ -733,12 +737,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           Effect.ensuring(
             options.primitiveChannel?.cancel(input.runId, input.turnId) ?? Effect.void,
           ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (activeCells.get(id) === cellId) activeCells.delete(id);
-              cellTerminals.delete(id);
-            }),
-          ),
+          finishCellResponse({ id, cellId, cells: activeCells, terminals: cellTerminals }),
         );
     }),
     cutCell: Effect.fn("ScreenRunService.cutCell")(function* (input: {

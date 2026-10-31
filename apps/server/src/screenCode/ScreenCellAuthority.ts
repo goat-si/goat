@@ -4,7 +4,11 @@ import { ThreadId } from "@goat/contracts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import type { ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostBridge } from "./ScreenHostBridge.ts";
-import { latchCellTerminal } from "./ScreenActionOutcome.ts";
+import {
+  cellTerminalError,
+  completionCellError,
+  latchCellTerminal,
+} from "./ScreenActionOutcome.ts";
 
 export const makeCellAuthority = (leases: ComputerUseLeases["Service"] | undefined) => {
   const cells = new Map<string, { cellId: string; controlId?: string }>();
@@ -43,3 +47,48 @@ export const watchCellTerminals = (
   };
   return terminals;
 };
+
+export const finishCellResponse =
+  (options: {
+    readonly id: string;
+    readonly cellId: string;
+    readonly cells: ReturnType<typeof makeCellAuthority>;
+    readonly terminals: Map<string, ComputerUseTerminalReason>;
+  }) =>
+  <R>(
+    work: Effect.Effect<
+      import("@goat/contracts").ScreenRunResult,
+      import("@goat/contracts").ScreenRunError,
+      R
+    >,
+  ) => {
+    let consumed = false;
+    const cleanup = () => {
+      if (consumed) return;
+      consumed = true;
+      if (options.cells.get(options.id) === options.cellId) options.cells.delete(options.id);
+      options.terminals.delete(options.id);
+    };
+    return work.pipe(
+      Effect.result,
+      Effect.flatMap((outcome) =>
+        Effect.suspend(() => {
+          const terminal = options.terminals.get(options.id);
+          cleanup();
+          if (outcome._tag === "Failure")
+            return Effect.fail(
+              terminal === undefined
+                ? outcome.failure
+                : cellTerminalError(outcome.failure, outcome.failure.receipts ?? [], terminal),
+            );
+          if (terminal === undefined) return Effect.succeed(outcome.success);
+          const receipts = outcome.success.journal.map((entry) => entry.receipt);
+          const error = completionCellError(outcome.success.error, receipts, terminal);
+          return error === undefined
+            ? Effect.succeed(outcome.success)
+            : Effect.fail({ ...error, cellId: options.cellId, receipts: receipts.slice(-16) });
+        }),
+      ),
+      Effect.ensuring(Effect.sync(cleanup)),
+    );
+  };
