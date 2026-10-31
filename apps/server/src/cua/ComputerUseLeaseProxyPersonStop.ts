@@ -11,7 +11,7 @@ import {
   type Interruption,
 } from "./ComputerUseLeaseMessages.ts";
 import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
-import type { ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
+import type { OutstandingCall, ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import {
   mergeTerminal,
@@ -101,26 +101,35 @@ export function makePersonStopFence() {
     for (const entry of capturedEpochs.keys())
       entry.reason = mergeTerminal({ reason: entry.reason }, { reason: value }).reason;
   };
+  const capture = (message?: Envelope, inherited?: ReplySink["terminal"]) => {
+    if (inherited !== undefined) return inherited;
+    if (message !== undefined && (message.method !== "tools/call" || message.id == null))
+      return () => reason;
+    const captured = epoch;
+    const registry = capturedEpochs;
+    registry.set(captured, (registry.get(captured) ?? 0) + 1);
+    let released = false;
+    return Object.assign(() => captured.reason, {
+      release: () => {
+        if (released) return;
+        released = true;
+        const count = registry.get(captured) ?? 0;
+        if (count > 1) registry.set(captured, count - 1);
+        else registry.delete(captured);
+      },
+    });
+  };
   return {
     pending: () => reason !== undefined,
     terminal: () => reason,
-    capture: (message?: Envelope, inherited?: ReplySink["terminal"]) => {
-      if (inherited !== undefined) return inherited;
-      if (message !== undefined && (message.method !== "tools/call" || message.id == null))
-        return () => reason;
-      const captured = epoch;
-      const registry = capturedEpochs;
-      registry.set(captured, (registry.get(captured) ?? 0) + 1);
-      let released = false;
-      return Object.assign(() => captured.reason, {
-        release: () => {
-          if (released) return;
-          released = true;
-          const count = registry.get(captured) ?? 0;
-          if (count > 1) registry.set(captured, count - 1);
-          else registry.delete(captured);
-        },
-      });
+    capture,
+    sink: (raw: ReplySink, message: Envelope, dispatched: () => boolean) =>
+      terminalSink(raw, message, capture(message, raw.terminal), dispatched),
+    cancel: (request: OutstandingCall | undefined) => {
+      if (request !== undefined) {
+        request.cancelled = true;
+        request.sink.release?.();
+      }
     },
     beginStop: () => {
       if (reason === "stopped_by_person") return false;
