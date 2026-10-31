@@ -409,12 +409,13 @@ export const make = Effect.gen(function* () {
     deadlineMillis: number,
   ) {
     const epoch = record.epoch;
+    const terminal = () => mergeTerminal({ reason: record.terminal }, epoch).reason;
     if (
       input.expectedConnectionGeneration !== undefined &&
       input.expectedConnectionGeneration !== binding.connectionId
     )
       return yield* Effect.fail(
-        terminalFailure(terminalReason(record.terminal), input.tool, input.args) ?? {
+        terminalFailure(terminal(), input.tool, input.args) ?? {
           code: "stale_reference" as const,
           effectStarted: false,
           nextStep: "Bind the desktop app again after the driver reconnects.",
@@ -443,13 +444,12 @@ export const make = Effect.gen(function* () {
     if (!offered) {
       record.pending.delete(request.requestId);
       return yield* Effect.fail(
-        terminalFailure(terminalReason(record.terminal), input.tool, input.args) ??
-          desktopNotReady("unbound"),
+        terminalFailure(terminal(), input.tool, input.args) ?? desktopNotReady("unbound"),
       );
     }
     let timedOut = false;
     const deadlineFailure = () =>
-      terminalFailure(terminalReason(record.terminal), input.tool, input.args, pending.sent) ?? {
+      terminalFailure(terminal(), input.tool, input.args, pending.sent) ?? {
         code: "deadline" as const,
         effectStarted: pending.sent,
         nextStep: pending.sent
