@@ -694,7 +694,12 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         : tree.shown;
     if (!capture && query === undefined && !interactive) bound.fullRows = bound.rows;
     else delete bound.fullRows;
-    bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows, tree.markdown);
+    bound.elementsByToken = inspectTreeElements(
+      tree.elements,
+      tree.rows,
+      tree.markdown,
+      typeof state.tree_markdown === "string" ? state.tree_markdown : undefined,
+    );
     const basis = treeWindowBasis(bound.frames, nextBounds);
     if (basis === undefined) delete bound.framesBasis;
     else bound.framesBasis = basis;
