@@ -59,12 +59,17 @@ export function resolveThreadLinkRef(
   return null;
 }
 
-export function formatThreadLink(threadId: string, label: string): string {
+/** `href` replaces the `goat-thread://` reference for readers that cannot open it. */
+export function formatThreadLink(
+  threadId: string,
+  label: string,
+  href = `${THREAD_LINK_HREF_PREFIX}${threadId}`,
+): string {
   const cleaned = label
     .replace(/[[\]\\\r\n]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return `[${cleaned || threadId}](${THREAD_LINK_HREF_PREFIX}${threadId})`;
+  return `[${cleaned || threadId}](${href})`;
 }
 
 export function hasThreadLinks(markdown: string): boolean {

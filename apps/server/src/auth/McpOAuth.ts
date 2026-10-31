@@ -15,6 +15,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
 } from "@goat/contracts";
+import { SSH_DISPATCH_SESSION_LABEL } from "./mcpClientSubject.ts";
 import { encodeOAuthScope } from "@goat/shared/oauthScope";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -583,6 +584,9 @@ export const layerMcpClientAuthenticator = Layer.effect(
                     label: client.label,
                     access: client.access,
                     approvals: client.approvals,
+                    ...(client.label.startsWith(SSH_DISPATCH_SESSION_LABEL)
+                      ? {}
+                      : { webOrigin: requestUrls(request).issuer }),
                   },
                   capabilities: new Set<McpInvocationContext.McpCapability>([
                     ...(client.grantedScopes?.some(
