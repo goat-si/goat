@@ -73,7 +73,7 @@ export { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { matchesState, stateConditions } from "./locatorState.ts";
 import { setRange } from "./rangeValue.ts";
-import { settleScroll } from "./scrollPositions.ts";
+import { scrollPositionRead, settleScroll } from "./scrollPositions.ts";
 export const toOperationError = (
   cause: unknown,
   timeoutMs?: number,
@@ -946,10 +946,15 @@ export const scroll = async (
   gate: DispatchGate = open,
 ): Promise<{ readonly settled: boolean }> => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
+  const channel = requireEvaluationChannel(gate);
   if (input.x !== undefined && input.y !== undefined) {
     await wheelAt(page, { x: input.x, y: input.y }, delta, gate, gate.deadline ?? Infinity);
     return {
-      settled: await settleScroll(page, { point: { x: input.x, y: input.y } }, gate.deadline),
+      settled: await settleScroll(
+        channel,
+        scrollPositionRead(page, { point: { x: input.x, y: input.y } }),
+        gate.deadline,
+      ),
     };
   }
   const locator = targetLocator(page, input);
@@ -958,7 +963,9 @@ export const scroll = async (
     gate.signal?.throwIfAborted();
     // Page-side code is passed as source: the server compiles without DOM types.
     await actionCall(gate, () => page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`));
-    return { settled: await settleScroll(page, undefined, gate.deadline) };
+    return {
+      settled: await settleScroll(channel, scrollPositionRead(page, undefined), gate.deadline),
+    };
   }
   const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS, gate.signal, gate);
   try {
@@ -967,7 +974,13 @@ export const scroll = async (
     await actionCall(gate, () =>
       handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
     );
-    return { settled: await settleScroll(page, { element: handle }, gate.deadline) };
+    return {
+      settled: await settleScroll(
+        channel,
+        scrollPositionRead(page, { element: handle }),
+        gate.deadline,
+      ),
+    };
   } finally {
     disposeAction(gate, handle);
   }
