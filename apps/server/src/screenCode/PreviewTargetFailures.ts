@@ -27,6 +27,7 @@ const readOnly = new Set<PreviewAutomationOperation>([
 
 const FETCH_NEXT_STEP = {
   cors: "The site does not let this page read it (CORS). Open it with tab.goto(url) and tab.read(), or fetch from a tab on that site.",
+  csp: "This page's Content-Security-Policy blocks requests there. Open it with tab.goto(url) and tab.read(), or fetch from a tab on that site.",
   dns: "The host name did not resolve. Check the URL.",
   network: "The request did not reach the site. Check the URL or the connection, then retry.",
 } as const;

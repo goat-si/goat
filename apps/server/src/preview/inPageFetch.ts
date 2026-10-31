@@ -33,7 +33,12 @@ export interface InPageFetchResult {
 }
 
 type PageOutcome =
-  | { readonly error: string; readonly timedOut: boolean; readonly reachable?: boolean }
+  | {
+      readonly error: string;
+      readonly timedOut: boolean;
+      readonly reachable?: boolean;
+      readonly policyBlocked?: boolean;
+    }
   | {
       readonly url: string;
       readonly status: number;
@@ -65,6 +70,12 @@ const bounded = (value: number | undefined, fallback: number, low: number, high:
 const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, timeoutMs, secretPattern }, held) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // The page's Content-Security-Policy refuses some addresses before any request goes out.
+  let policyBlocked = false;
+  const onViolation = (event) => {
+    try { if (new URL(event.blockedURI).origin === new URL(url).origin) policyBlocked = true; } catch {}
+  };
+  document.addEventListener("securitypolicyviolation", onViolation);
   try {
     const response = await fetch(url, {
       credentials: "same-origin",
@@ -181,17 +192,20 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
     return { ...head, kind: "html", text: text.slice(0, room), truncated: cut || text.length > room };
   } catch (error) {
     const timedOut = controller.signal.aborted;
+    // The violation event is queued as a task after the fetch rejects.
+    if (!timedOut) await new Promise((resolve) => setTimeout(resolve, 0));
     // An opaque answer to a no-cors request, without credentials, means the site answered and CORS
     // refused the read; the page's error says only "Failed to fetch" either way.
     let reachable = false;
-    if (!timedOut) {
+    if (!timedOut && !policyBlocked) {
       try {
         await fetch(url, { mode: "no-cors", credentials: "omit", cache: "no-store", signal: controller.signal });
         reachable = true;
       } catch {}
     }
-    return { error: String((error && error.message) || error), timedOut, reachable };
+    return { error: String((error && error.message) || error), timedOut, reachable, policyBlocked };
   } finally {
+    document.removeEventListener("securitypolicyviolation", onViolation);
     clearTimeout(timer);
   }
 }`;
@@ -295,8 +309,13 @@ const watchFetchFailure = (page: FetchPage, url: string) => {
   page.on("requestfailed", onFailed);
   return {
     dispose: () => page.off("requestfailed", onFailed),
-    classify: (reachable: boolean) => {
-      if (reachable)
+    classify: (outcome: { readonly reachable?: boolean; readonly policyBlocked?: boolean }) => {
+      if (outcome.policyBlocked)
+        return {
+          fetchFailure: "csp",
+          reason: "this page's Content-Security-Policy does not allow requests there",
+        } as const;
+      if (outcome.reachable)
         return {
           fetchFailure: "cors",
           reason: "the site does not allow this page to read it (CORS)",
@@ -448,7 +467,7 @@ const shapeOutcome = async (
         "PreviewAutomationTimeoutError",
         `Fetching ${url} did not finish within ${timeoutMs}ms.`,
       );
-    const known = classify(outcome.reachable === true);
+    const known = classify(outcome);
     if (known)
       throw new ServerBrowserOperationError(
         "PreviewAutomationExecutionError",

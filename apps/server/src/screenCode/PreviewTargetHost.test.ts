@@ -379,11 +379,11 @@ it.effect("a selector that matches nothing is a missing target and nothing was s
 );
 
 it.effect(
-  "a failed fetch is a read that started nothing and says whether CORS, DNS or the network refused it",
+  "a failed fetch is a read that started nothing and says whether CORS, CSP, DNS or the network refused it",
   () =>
     Effect.gen(function* () {
       const fixture = yield* browserFixture();
-      for (const fetchFailure of ["cors", "dns", "network"] as const) {
+      for (const fetchFailure of ["cors", "csp", "dns", "network"] as const) {
         fixture.state.failure = new PreviewAutomationExecutionError({
           ...actionErrorContext,
           operation: "fetch",

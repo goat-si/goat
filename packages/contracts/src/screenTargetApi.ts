@@ -68,7 +68,7 @@ const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContent
 interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<object>; // tabs you opened need no claim
   hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls; a selector matching several hovers the first
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>; close(): Promise<Done>; // close: a tab this agent opened
-  read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>; // fetch runs in the page, so CORS applies; a failure's detail is cors, dns or network
+  read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>; // fetch runs in the page, so its CORS and CSP apply; a failure's detail is cors, csp, dns or network
   fillSecret(t: Target | { selector: string }, secretRef: string): Promise<object>; // observed elements and exact observed names are focused first; any other string is a CSS selector
   upload(t: Target, files: string[]): Promise<object>;
   dialog(action: "accept" | "dismiss", promptText?: string): Promise<object>;

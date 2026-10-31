@@ -335,10 +335,13 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     expect(failure).not.toContain("ApiScopedValue456");
   });
 
-  it("says whether a failed fetch was refused by CORS, by DNS or by the network", async () => {
+  it("says whether a failed fetch was refused by CORS, the page's CSP, DNS or the network", async () => {
     // A real server: Playwright adds CORS headers to the responses it fulfills itself.
-    const server = NodeHttp.createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "text/html" });
+    const server = NodeHttp.createServer((request, response) => {
+      response.writeHead(200, {
+        "content-type": "text/html",
+        ...(request.url === "/csp" ? { "content-security-policy": "connect-src 'self'" } : {}),
+      });
       response.end("<p>local</p>");
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -373,6 +376,13 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
         message: expect.stringContaining("ERR_CONNECTION_REFUSED"),
       },
     ]);
+    await page.goto(`http://127.0.0.1:${port}/csp`);
+    await expect(
+      inPageFetch(page, control, { url: `http://localhost:${port}/data` }),
+    ).rejects.toMatchObject({
+      detail: { fetchFailure: "csp" },
+      message: expect.stringContaining("Content-Security-Policy"),
+    });
   });
 
   it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {

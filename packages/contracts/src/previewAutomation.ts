@@ -895,8 +895,8 @@ export class PreviewAutomationExecutionError extends Schema.TaggedError<PreviewA
       Schema.Literals(["no_candidate", "not_permitted", "unavailable"]),
     ),
     unloadedTab: Schema.optional(Schema.Struct({ tabId: PreviewTabId, loadError: Schema.String })),
-    /** Why a tab's fetch never got a response it could read: a CORS refusal, DNS, or the network. */
-    fetchFailure: Schema.optional(Schema.Literals(["cors", "dns", "network"])),
+    /** Why a tab's fetch got no response it could read: CORS, the page's CSP, DNS or the network. */
+    fetchFailure: Schema.optional(Schema.Literals(["cors", "csp", "dns", "network"])),
   },
 ) {
   override get message(): string {

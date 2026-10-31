@@ -252,14 +252,16 @@ const secretFailureOf = (detail: unknown): { readonly secretFailure?: SecretFail
   return isSecretFailure(value) ? { secretFailure: value } : {};
 };
 
-type FetchFailure = "cors" | "dns" | "network";
+type FetchFailure = "cors" | "csp" | "dns" | "network";
 /** The server browser names why a tab's fetch got no readable response. */
 const fetchFailureOf = (detail: unknown): { readonly fetchFailure?: FetchFailure } => {
   const value =
     typeof detail === "object" && detail !== null && "fetchFailure" in detail
       ? detail.fetchFailure
       : undefined;
-  return value === "cors" || value === "dns" || value === "network" ? { fetchFailure: value } : {};
+  return value === "cors" || value === "csp" || value === "dns" || value === "network"
+    ? { fetchFailure: value }
+    : {};
 };
 
 /** The server browser names the tab an open made whose page never connected. */
