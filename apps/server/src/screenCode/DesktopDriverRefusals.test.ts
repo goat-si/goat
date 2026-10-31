@@ -6,7 +6,56 @@ import * as NodeURL from "node:url";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-import { context, DriverError, fixture } from "./DesktopTargetHost.testkit.ts";
+import { context, DriverError, UnknownOutcome, fixture } from "./DesktopTargetHost.testkit.ts";
+
+it.live.each([
+  { code: "stopped_by_person", method: "click", tool: "click" },
+  { code: "stopped_by_person", method: "observe", tool: "get_window_state" },
+  { code: "screen_locked", method: "click", tool: "click" },
+  { code: "screen_locked", method: "observe", tool: "get_window_state" },
+])("screen.run preserves interrupted $code for $method", ({ code, method, tool }) => {
+  const { host } = fixture({
+    [tool]: new UnknownOutcome(
+      { code, ...(method === "click" ? { effect: "unverifiable" } : {}) },
+      "The person stopped this action.",
+    ),
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); try { await app.${method}(${method === "click" ? "{x: 1, y: 2}" : ""}); } catch (e) { return { code: e.code, nextStep: e.nextStep, retryClass: e.safety?.retryClass, possibleCommit: e.safety?.possibleCommit }; }`,
+    });
+    expect(result.value).toMatchObject({
+      code,
+      retryClass: "never",
+      possibleCommit: method === "click",
+      nextStep: "The person stopped this action.",
+    });
+    yield* service.finishTurn({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      reason: "test",
+    });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
 
 it.live.each([
   { code: "user_interacting", method: "click", tool: "click" },
