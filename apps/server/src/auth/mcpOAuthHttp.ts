@@ -1,11 +1,12 @@
 import {
   AuthMcpApprovalError,
-  type AuthMcpAuthorizationRequest,
+  AuthMcpAuthorizationRequest,
   AuthMcpClientAccess,
   AuthMcpWorkspaceTerminalScope,
   EnvironmentHttpApi,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import * as HttpEffect from "effect/http/HttpEffect";
@@ -34,6 +35,7 @@ const noStore = HttpEffect.appendPreResponseHandler((_request, response) =>
 );
 
 const requestUrls = Effect.map(HttpServerRequest.HttpServerRequest, McpOAuth.requestUrls);
+const decodeAuthorizationRequest = Schema.decodeEffect(AuthMcpAuthorizationRequest);
 
 /**
  * An unverified client or redirect is reported, never redirected; any other problem goes back to
@@ -90,8 +92,11 @@ export const layer = HttpApiBuilder.group(
           Effect.gen(function* () {
             const urls = yield* requestUrls;
             const url = new URL(request.url, urls.issuer);
+            const authorizationRequest = yield* decodeAuthorizationRequest(
+              Object.fromEntries(url.searchParams),
+            ).pipe(Effect.orDie);
             const authorization = yield* oauth
-              .validateAuthorization({ urls, request: Object.fromEntries(url.searchParams) })
+              .validateAuthorization({ urls, request: authorizationRequest })
               .pipe(Effect.result);
             const headers = { "cache-control": "no-store", "referrer-policy": "no-referrer" };
             if (Result.isSuccess(authorization)) {

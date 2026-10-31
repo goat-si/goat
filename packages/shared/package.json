@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./urlCredentialRedaction": {
+      "types": "./src/urlCredentialRedaction.ts",
+      "import": "./src/urlCredentialRedaction.ts"
+    },
     "./boundedProcessOutput": {
       "types": "./src/boundedProcessOutput.ts",
       "import": "./src/boundedProcessOutput.ts"

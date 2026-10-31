@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import * as Context from "effect/Context";
 import * as PlatformError from "effect/PlatformError";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -126,7 +127,9 @@ it.effect(
         yield* auth.authenticateHttpRequest(request(session.token)).pipe(Effect.result),
       ).toMatchObject({ _tag: "Failure" });
       const upgrade = HttpServerRequest.fromWeb(
-        new Request(`http://hub.test/ws?wsTicket=${encodeURIComponent(ticket.ticket)}`),
+        new Request(
+          `http://hub.test/ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
+        ),
       );
       expect(
         yield* auth.authenticateWebSocketUpgrade(upgrade, "rpc").pipe(Effect.result),
@@ -177,7 +180,9 @@ it.effect("Connect unlink and relink revoke issued hub privileges while consent 
       yield* auth.authenticateHttpRequest(request(session.token)).pipe(Effect.result),
     ).toMatchObject({ _tag: "Failure" });
     const upgrade = HttpServerRequest.fromWeb(
-      new Request(`http://hub.test/ws?wsTicket=${encodeURIComponent(ticket.ticket)}`),
+      new Request(
+        `http://hub.test/ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
+      ),
     );
     expect(
       yield* auth.authenticateWebSocketUpgrade(upgrade, "rpc").pipe(Effect.result),
@@ -891,7 +896,9 @@ it.effect("Connect hub media tickets remain bearer capabilities but cannot open 
     const verified = yield* sessions.verify(token.access_token);
     const ticket = yield* auth.issueWebSocketTicket(verified);
     const request = HttpServerRequest.fromWeb(
-      new Request(`http://hub.test/ws?wsTicket=${encodeURIComponent(ticket.ticket)}`),
+      new Request(
+        `http://hub.test/ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
+      ),
     );
     expect(
       yield* auth.authenticateWebSocketUpgrade(request, "rpc").pipe(Effect.result),

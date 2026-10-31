@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import {
+  AuthWebSocketTicketResult,
+  AuthMcpAuthorizationRequest,
+  AuthMcpTokenRequest,
   AuthMcpApprovalDecision,
   AuthMcpApprovalDetails,
   AuthEnvironmentScopes,
@@ -245,4 +249,33 @@ it("one click advertised scopes grant nothing by themselves", () => {
       "memory:write",
     ),
   ).toBe(false);
+});
+
+const ticketCodec = Schema.toCodecJson(AuthWebSocketTicketResult);
+const decodeTicket = Schema.decodeSync(ticketCodec);
+const encodeTicket = Schema.encodeSync(ticketCodec);
+const decodeAuthorization = Schema.decodeSync(AuthMcpAuthorizationRequest);
+const encodeAuthorization = Schema.encodeSync(AuthMcpAuthorizationRequest);
+const decodeToken = Schema.decodeSync(AuthMcpTokenRequest);
+const encodeToken = Schema.encodeSync(AuthMcpTokenRequest);
+
+describe("credential wire compatibility", () => {
+  it("keeps credentials redacted in memory and unchanged on the wire", () => {
+    const ticketWire = { ticket: "ticket-secret", expiresAt: "2026-10-31T12:00:00.000Z" };
+    const ticket = decodeTicket(ticketWire);
+    expect(Redacted.value(ticket.ticket)).toBe(ticketWire.ticket);
+    expect(JSON.stringify(ticket)).not.toContain(ticketWire.ticket);
+    expect(encodeTicket(ticket)).toEqual(ticketWire);
+
+    const authorizationWire = { state: "state-secret", client_id: "client" };
+    const authorization = decodeAuthorization(authorizationWire);
+    expect(JSON.stringify(authorization)).not.toContain(authorizationWire.state);
+    expect(encodeAuthorization(authorization)).toEqual(authorizationWire);
+
+    const tokenWire = { code: "code-secret", code_verifier: "verifier-secret" };
+    const token = decodeToken(tokenWire);
+    expect(JSON.stringify(token)).not.toContain(tokenWire.code);
+    expect(JSON.stringify(token)).not.toContain(tokenWire.code_verifier);
+    expect(encodeToken(token)).toEqual(tokenWire);
+  });
 });

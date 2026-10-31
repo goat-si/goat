@@ -7,6 +7,8 @@ import * as Tracer from "effect/Tracer";
 import { makeAsyncRotatingFileSink } from "./logging.ts";
 import type { TraceSink, TraceSinkOptions, TraceSinkFlushStats } from "./observability.ts";
 
+import { redactUrlCredentials } from "./urlCredentialRedaction.ts";
+
 const FLUSH_BUFFER_THRESHOLD = 256;
 
 function* chunks(
@@ -175,7 +177,7 @@ export const makeTraceSink = Effect.fn("makeTraceSink")(function* (options: Trac
       if (observed) observed.produced++;
       let text: string;
       try {
-        text = `${JSON.stringify(record)}\n`;
+        text = `${redactUrlCredentials(JSON.stringify(record))}\n`;
       } catch {
         drop("serialization", 1);
         snapshot();
