@@ -58,6 +58,7 @@ import { driverError } from "../screenCode/DesktopDriverReplies.ts";
 import { driverOutcomeSafety } from "./ComputerUseDriverOutcome.ts";
 import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
 import { makeProxyBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
+import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -476,11 +477,74 @@ const unsentResult = (kind: "shared" | "expired"): Driver =>
       "not_started",
     ),
   );
+const refusalBase: Parameters<typeof refuseProxyCall>[0] = {
+  id: 1,
+  message: { id: 1, method: "tools/call", params: { name: "list_apps" } },
+  finished: () => undefined,
+  paused: () => undefined,
+  idle: () => false,
+  apps: () => undefined,
+  listed: new Map(),
+  host: { bundleIds: false },
+  shared: () => false,
+  toFile: () => undefined,
+  tokenFirstRefuses: () => false,
+  foreground: () => [],
+  listApps: Effect.void,
+};
+const proxyRefusal =
+  (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>): Driver =>
+  (input) =>
+    Effect.gen(function* () {
+      const line = yield* refuseProxyCall({ ...refusalBase, ...overrides });
+      if (line === undefined) return yield* Effect.die("expected a proxy refusal");
+      return outputState(
+        finalTerminalLine(
+          line,
+          "not_started",
+          { id: 1, method: "tools/call", params: { name: "list_apps" } },
+          sourceState(input),
+        ).line,
+        "not_started",
+      );
+    });
 const sites: ReadonlyArray<{
   readonly name: string;
   readonly run: Driver;
   readonly undispatched?: boolean;
 }> = [
+  {
+    name: "ComputerUseLeaseProxyRefusal.finished",
+    undispatched: true,
+    run: proxyRefusal({ finished: () => "expired" }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.paused",
+    undispatched: true,
+    run: proxyRefusal({ paused: () => "screen_locked" }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.idle",
+    undispatched: true,
+    run: proxyRefusal({ idle: () => true }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.desktopCapture",
+    undispatched: true,
+    run: proxyRefusal({
+      message: { id: 1, method: "tools/call", params: { name: "get_desktop_state" } },
+    }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.toFile",
+    undispatched: true,
+    run: proxyRefusal({ toFile: () => "capture unavailable" }),
+  },
+  {
+    name: "ComputerUseLeaseProxyRefusal.tokenFirst",
+    undispatched: true,
+    run: proxyRefusal({ tokenFirstRefuses: () => true }),
+  },
   {
     name: "ComputerUseLeaseResponses.unsentCallRefusal.ending",
     undispatched: true,
