@@ -1,7 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
-  mergeTerminal,
   replaceWithTerminal,
   terminalFailure,
   terminalReplyState,
@@ -14,24 +13,18 @@ import {
 } from "./ComputerUseLeaseProxyPersonStop.ts";
 
 it("merges terminal reasons and possible input monotonically", () => {
-  assert.deepEqual(mergeTerminal({}, { reason: "screen_locked" }), {
+  assert.deepEqual(replaceWithTerminal("none", "screen_locked"), {
     reason: "screen_locked",
     possibleCommit: false,
   });
-  assert.deepEqual(
-    mergeTerminal(
-      { reason: "screen_locked", possibleCommit: true },
-      { reason: "stopped_by_person" },
-    ),
-    { reason: "stopped_by_person", possibleCommit: true },
-  );
-  assert.deepEqual(
-    mergeTerminal(
-      { reason: "stopped_by_person" },
-      { reason: "screen_locked", possibleCommit: true },
-    ),
-    { reason: "stopped_by_person", possibleCommit: true },
-  );
+  assert.deepEqual(replaceWithTerminal(true, "screen_locked", "stopped_by_person"), {
+    reason: "stopped_by_person",
+    possibleCommit: true,
+  });
+  assert.deepEqual(replaceWithTerminal(true, "stopped_by_person", "screen_locked"), {
+    reason: "stopped_by_person",
+    possibleCommit: true,
+  });
 });
 
 it("merges an already typed terminal reply without dropping possible input", () => {
@@ -42,7 +35,7 @@ it("merges an already typed terminal reply without dropping possible input", () 
       safety: { retryClass: "never", possibleCommit: true },
     },
   };
-  assert.deepEqual(mergeTerminal({ reason: "screen_locked" }, terminalReplyState(reply)), {
+  assert.deepEqual(replaceWithTerminal(terminalReplyState(reply), "screen_locked"), {
     reason: "stopped_by_person",
     possibleCommit: true,
   });

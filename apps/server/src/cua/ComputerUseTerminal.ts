@@ -13,7 +13,7 @@ import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 
 export type ComputerUseTerminalReason = "stopped_by_person" | "screen_locked";
 
-export const mergeTerminal = (
+const mergeTerminal = (
   first: {
     readonly reason?: ComputerUseTerminalReason | undefined;
     readonly possibleCommit?: boolean | undefined;
