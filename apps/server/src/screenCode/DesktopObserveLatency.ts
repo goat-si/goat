@@ -708,7 +708,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     const placed = placeInWindow(tree.shown, tree.elements, bound.frames, origin);
     const omitted = [
       ...(query
-        ? queryOmission(state, tree.shown.length, filtered, tree.rows.length)
+        ? queryOmission(state, tree.shown.length, filtered, tree.rows.length, query)
         : limit < READ_BOUNDS[0]
           ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
           : []),
@@ -794,7 +794,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
             }),
             ...(query?.role !== undefined && tree.shown.length === 0
               ? {
-                  rolesPresent: [...new Set(tree.rows.map((row) => bareRole(row.role)))]
+                  // A role is the driver's raw string; the contract bounds each item at 200.
+                  rolesPresent: [
+                    ...new Set(tree.rows.map((row) => bareRole(row.role).slice(0, 200))),
+                  ]
                     .sort()
                     .slice(0, 32),
                 }

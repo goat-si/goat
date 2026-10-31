@@ -246,6 +246,7 @@ export const queryOmission = (
   matched: number,
   filtered = false,
   covered = 0,
+  query?: DesktopQuery,
 ): NonNullable<ScreenObservation["omitted"]> => {
   if (matched > 0 && state.truncated !== true) return [];
   if (matched > 0) {
@@ -259,9 +260,14 @@ export const queryOmission = (
   }
   // A whole walk the driver finished proves the absence, so it carries no omission.
   if (state.elements_complete === true && !filtered && state.truncated !== true) return [];
-  const read = filtered
-    ? "driver filtered; lifted names are absent"
-    : "not driver filtered; names include child text";
+  // Name only the fields matchesQuery compared; a driver-filtered read never had child text.
+  const read = filtered ? "driver filtered: text under elements was not searched" : "whole read";
+  const fields = [
+    query?.role === undefined ? undefined : "role",
+    query?.name === undefined ? undefined : "name",
+    query?.text === undefined ? undefined : "name and row text",
+    query?.id === undefined ? undefined : "accessibility id",
+  ].filter((field) => field !== undefined);
   const next =
     filtered || state.truncated === true
       ? "Try observe({depth: 2}) then observe({within: n})."
@@ -269,7 +275,7 @@ export const queryOmission = (
   return [
     {
       kind: "budget",
-      detail: `No match in ${covered} elements read (${read}); compared role, name, row text, accessibility id. ${next}`,
+      detail: `No match in ${covered} elements read (${read}); compared ${fields.join(", ") || "nothing"}. ${next}`,
     },
     ...(state.truncated === true
       ? [
