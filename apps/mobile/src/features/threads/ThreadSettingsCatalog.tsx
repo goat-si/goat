@@ -22,6 +22,7 @@ import { ScreenContent } from "../../components/ui/ScreenContent";
 import { SheetHeader } from "../../components/ui/SheetHeader";
 import { Toolbar } from "../../components/ui/Toolbar";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { useReduceMotionEnabled } from "../../lib/appState";
 import type { ModelOption } from "../../lib/modelOptions";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
@@ -306,7 +307,8 @@ function ThreadSettingsCatalogList(props: { readonly onPicked: () => void }) {
   };
   const [listLoaded, setListLoaded] = useState(false);
   const reducedMotion = useReducedMotion();
-  const animationsReady = listLoaded && !reducedMotion;
+  const reduceMotionEnabled = useReduceMotionEnabled();
+  const animationsReady = listLoaded && !reducedMotion && !reduceMotionEnabled;
   const catalogItems = buildThreadSettingsCatalogItems(session);
   const hasActiveCatalogFilter =
     session.providerFilter !== null || session.searchQuery.trim().length > 0;
