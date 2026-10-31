@@ -210,3 +210,74 @@ describe("thread lease proxy across a dropped lease stream", () => {
       }),
   );
 });
+
+it.effect("round7 duplicate-id producer must not make a known lock retryable", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const h = yield* threadHarness({
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as({ status: "refused", detail: "reconnecting" }),
+            )
+          : Effect.succeed({ status: "released" }),
+    });
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.send(work(973));
+    yield* Deferred.await(entered);
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.send(work(973));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round7 reserved-id producer preserves an already known lock", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.send(call("goat-proxy:reserved-lock", "list_apps"));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round7 screen lock stays terminal after reconnect window expires", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.push({ state: "reconnecting" });
+    yield* h.push({ state: "transport_lost" });
+    yield* h.send(work(970));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round7 new control does not inherit predecessor stop while native closure waits", () =>
+  Effect.gen(function* () {
+    const killGate = yield* Deferred.make<void>();
+    const h = yield* threadHarness({ killGate });
+    yield* Effect.addFinalizer(() => Deferred.succeed(killGate, undefined));
+    yield* h.push(snapshot("A"));
+    const a = yield* h.started;
+    yield* h.applied;
+    yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+    yield* Deferred.await(a.killed);
+    yield* h.push(snapshot("B"));
+    yield* h.send(work(971));
+    const answer = yield* h.next;
+    assert.notEqual(answer.result?.structuredContent?.code, "stopped_by_person");
+  }),
+);

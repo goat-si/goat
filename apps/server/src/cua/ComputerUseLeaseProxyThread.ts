@@ -29,6 +29,7 @@ import { primitiveReplySink, type LeaseProxyOptions } from "./ComputerUseLeasePr
 import { terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
+import type { ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
 
 type Reports<EU, ED> = Pick<
   LeaseProxyOptions<EU, ED>,
@@ -76,6 +77,7 @@ interface Context {
   readonly wake: Queue.Queue<void>;
   deadline: number;
   ended?: LeaseEnd;
+  terminal: { reason?: ComputerUseTerminalReason };
   /** Cuts off the driver's screen work when the lease stream drops; set once the proxy runs. */
   dropTransport?: () => void;
 }
@@ -95,7 +97,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   let transport: "connected" | "reconnecting" | "lost" = "connected";
   let sequence = 0;
   const seen = new Set<string>();
-  const stoppedControls = new Set<string>();
+  const controlTerminals = new Map<string, { reason?: ComputerUseTerminalReason }>();
   /** The newest driver generation per control, so a control started again never reuses one. */
   const generations = new Map<string, number>();
   const handshake: Array<string> = [];
@@ -122,9 +124,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     id: JsonRpcId,
     method: string | undefined,
     given?: LeaseEnd,
+    context: Context | undefined = current ?? predecessor,
   ) => {
-    const personStopped =
-      (waiting === "stopped" || waiting === "stopped_all") && stoppedControls.size > 0;
+    const latched = context?.terminal;
+    const personStopped = latched?.reason === "stopped_by_person";
     if (
       given === undefined &&
       terminal === undefined &&
@@ -135,7 +138,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     const reason =
       given ??
       terminal ??
-      (personStopped ? waiting : transport === "lost" ? ("transport_lost" as const) : waiting);
+      (personStopped
+        ? "stopped"
+        : transport === "lost"
+          ? "transport_lost"
+          : (context?.ended ?? "reconnecting"));
     const answer = refusal(
       id,
       method,
@@ -146,13 +153,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."
           : WAITING,
     );
-    const knownStop =
-      (reason === "stopped" || reason === "stopped_all") &&
-      (given !== undefined || terminal !== undefined || personStopped);
     return terminalSink(
       { answer: (line) => options.output(line) },
       { id, ...(method === undefined ? {} : { method }) },
-      () => (knownStop ? "stopped_by_person" : undefined),
+      () => latched?.reason,
       () => false,
     ).answer(answer);
   });
@@ -199,6 +203,12 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     });
 
   const receive = (context: Context, update: ComputerUseLeaseUpdate | undefined) => {
+    if (update?.state === "paused" && update.reason === "screen_locked")
+      context.terminal.reason ??= "screen_locked";
+    else if (update?.state === "active" && context.terminal.reason === "screen_locked") {
+      context.terminal = {};
+      controlTerminals.set(context.controlId, context.terminal);
+    }
     if (context.receive === undefined) context.updates.push(update);
     else context.receive(update);
   };
@@ -206,7 +216,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const stop = (context: Context, reason: ControlStop) => {
     if (context.ended !== undefined) return;
     context.ended = reason;
-    if (reason === "stopped" || reason === "stopped_all") stoppedControls.add(context.controlId);
+    if (reason === "stopped" || reason === "stopped_all")
+      context.terminal.reason ??= "stopped_by_person";
     context.ready = false;
     if (current === context) current = undefined;
     Queue.shutdownUnsafe(context.primitiveInput);
@@ -254,7 +265,9 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       replayIds: new Set(),
       wake: yield* Queue.sliding<void>(1),
       deadline: DateTime.toEpochMillis(expiresAt.value),
+      terminal: controlTerminals.get(update.controlId) ?? {},
     };
+    controlTerminals.set(context.controlId, context.terminal);
     const connectionId = `${options.connectionId}:control:${sequence++}`;
     const reports = options.reports(context.controlId);
     receive(context, update);
@@ -297,8 +310,10 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           );
           return options.onControlDriverStarted?.(context.controlId, driver) ?? Effect.void;
         },
-        onDriverCutoff: (driver) =>
-          options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void,
+        onDriverCutoff: (driver) => {
+          if (driver.terminal !== undefined) context.terminal.reason ??= driver.terminal;
+          return options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void;
+        },
         output: (line, reply) => output(context, line, reply),
         leaseUpdates: Stream.never,
         onLeaseUpdateReceiver: (take) => {
@@ -356,7 +371,12 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             if (owner.context !== context) continue;
             owners.delete(key);
             if (!owner.cancelled)
-              yield* answerStopped(owner.id, owner.method, context.ended ?? terminal ?? "lost");
+              yield* answerStopped(
+                owner.id,
+                owner.method,
+                context.ended ?? terminal ?? "lost",
+                context,
+              );
           }
           yield* Deferred.succeed(context.closed, undefined);
         }),
@@ -390,8 +410,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           if (update.state === "ended") finishNow(update.reason);
           else if (update.state === "control-ended") {
             seen.add(update.controlId);
-            if (update.reason === "stopped" || update.reason === "stopped_all")
-              stoppedControls.add(update.controlId);
+            if (update.reason === "stopped" || update.reason === "stopped_all") {
+              const latch = controlTerminals.get(update.controlId) ?? {};
+              latch.reason ??= "stopped_by_person";
+              controlTerminals.set(update.controlId, latch);
+            }
             if (current?.controlId === update.controlId) stop(current, update.reason);
             else if (current === undefined) waiting = update.reason;
           } else if (update.state === "waiting") {
@@ -433,7 +456,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             ))
           )
             return;
-          const reason = stoppedControls.has(request.controlId) ? "stopped_by_person" : undefined;
+          const reason = controlTerminals.get(request.controlId)?.reason;
           if (reason === undefined) {
             yield* options.primitiveReply?.({ ...request, status: "not_started" }) ?? Effect.void;
             options.onPrimitiveSettled?.(request.requestId);
@@ -488,17 +511,12 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       return;
     }
     const isRequest = id !== undefined && id !== null && message?.method !== undefined;
+    const context = current ?? predecessor;
+    const latched = context?.terminal;
     const response = terminalSink(
       { answer: (answer, _status, reply) => options.output(answer, reply) },
       message,
-      () =>
-        terminal === "stopped" ||
-        terminal === "stopped_all" ||
-        (current === undefined &&
-          stoppedControls.size > 0 &&
-          (waiting === "stopped" || waiting === "stopped_all"))
-          ? "stopped_by_person"
-          : undefined,
+      () => latched?.reason,
       () => false,
     );
     if (
@@ -514,14 +532,13 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       return yield* response.answer(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
-    const context = current;
-    if (context === undefined || !context.ready || terminal !== undefined) {
+    if (context === undefined || current !== context || !context.ready || terminal !== undefined) {
       if (!isRequest) return;
       if (terminal === undefined) {
         const cached = setup.answerCached(id, message.method);
         if (cached !== undefined) return yield* cached;
       }
-      const refuse = answerStopped(id, message.method);
+      const refuse = answerStopped(id, message.method, undefined, context);
       return yield* setup.covers(message.method)
         ? setup.answer(id, message.method, line, refuse).pipe(Effect.forkIn(scope))
         : refuse;
