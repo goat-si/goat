@@ -305,3 +305,4 @@ export const layerStandard = McpToolAccess.toLayer(DeviceStandardToolkit, standa
 export const layerScreenshot = McpToolAccess.toLayer(DeviceScreenshotToolkit, {
   device_screenshot,
 });
+export { deviceScreenshotFailureText } from "./screenshotFailureText.ts";
