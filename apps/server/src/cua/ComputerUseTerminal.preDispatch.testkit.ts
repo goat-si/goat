@@ -560,7 +560,7 @@ const replacedAdmission = (input: Input) =>
     yield* h.restarted;
     yield* Deferred.succeed(gate, undefined);
     const asked = yield* h.nextToDriver;
-    assert.equal(asked.params?.name, "list_windows");
+    assert.deepInclude(asked, { params: { name: "list_windows", arguments: {} } });
     yield* h.reply(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -579,7 +579,7 @@ const unconfirmedProof = (input: Input) =>
     yield* h.push(active());
     yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
     const asked = yield* h.nextToDriver;
-    assert.equal(asked.params?.name, "list_windows");
+    assert.deepInclude(asked, { params: { name: "list_windows", arguments: {} } });
     yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: asked.id, result: { isError: true } }));
     const answer = JSON.stringify(yield* h.nextToProvider);
     assert.include(answer, "could not confirm");
