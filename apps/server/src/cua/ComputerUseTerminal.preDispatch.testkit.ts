@@ -310,7 +310,15 @@ const fencedCell = (input: Input) =>
   });
 
 const channelRefusal =
-  (kind: "retainedWaiter" | "authority" | "activeRace" | "activeRaceClosed" | "replacedRace") =>
+  (
+    kind:
+      | "retainedWaiter"
+      | "authority"
+      | "activeRace"
+      | "activeRaceClosed"
+      | "activeRaceUnregistered"
+      | "replacedRace",
+  ) =>
   (input: Input) =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("matrix:channel");
@@ -335,7 +343,10 @@ const channelRefusal =
             currentControl: () =>
               Effect.succeedSome({ threadId, controlId: currentControlId, expiresAt }),
             controlState: (_thread, controlId) => {
-              const activeRace = kind === "activeRace" || kind === "activeRaceClosed";
+              const activeRace =
+                kind === "activeRace" ||
+                kind === "activeRaceClosed" ||
+                kind === "activeRaceUnregistered";
               if (activeRace && armed) reads++;
               if (kind === "replacedRace" && controlId === "B") reads++;
               const state: ComputerUseLeases.ComputerUseControlState =
@@ -375,12 +386,16 @@ const channelRefusal =
       );
       const authority = { threadId, attachmentGeneration: "a", proxyChannelToken: "fixture" };
       yield* channel.issue({ ...authority, expiresAt: 60000 });
-      const registered = yield* channel.registerStream({
-        ...authority,
-        proxyInstanceId: "p",
-        kind: "thread",
-      });
-      if (registered.status !== "registered") return yield* Effect.die("registration failed");
+      const registered =
+        kind === "activeRaceUnregistered"
+          ? undefined
+          : yield* channel.registerStream({
+              ...authority,
+              proxyInstanceId: "p",
+              kind: "thread",
+            });
+      if (registered !== undefined && registered.status !== "registered")
+        return yield* Effect.die("registration failed");
       const reading = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const clock = yield* Clock.Clock;
@@ -413,6 +428,7 @@ const channelRefusal =
           Effect.forkChild({ startImmediately: true }),
         );
       if (kind === "replacedRace") {
+        if (registered?.status !== "registered") return yield* Effect.die("missing registration");
         currentControlId = "B";
         yield* channel.reportControlReady({
           ...authority,
@@ -430,9 +446,13 @@ const channelRefusal =
             terminal,
           });
         yield* Deferred.succeed(admissionGate, undefined);
-      } else if (kind === "activeRace" || kind === "activeRaceClosed") {
+      } else if (
+        kind === "activeRace" ||
+        kind === "activeRaceClosed" ||
+        kind === "activeRaceUnregistered"
+      ) {
         yield* Deferred.await(entered);
-        if (kind === "activeRaceClosed")
+        if (kind === "activeRaceClosed" && registered?.status === "registered")
           yield* channel.closeStream({ threadId, registrationId: registered.registrationId });
         for (const terminal of input.reasons)
           notify({
@@ -676,6 +696,11 @@ export const preDispatchSites: ReadonlyArray<{
     name: "ComputerUsePrimitiveChannel.activeRaceClosed",
     undispatched: true,
     run: channelRefusal("activeRaceClosed"),
+  },
+  {
+    name: "ComputerUsePrimitiveChannel.activeRaceUnregistered",
+    undispatched: true,
+    run: channelRefusal("activeRaceUnregistered"),
   },
   {
     name: "ComputerUsePrimitiveChannel.replacedRace",
