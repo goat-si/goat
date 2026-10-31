@@ -8,6 +8,7 @@ import {
   computerUseObservedTarget,
   computerUseResult,
   computerUseRun,
+  hasComputerUseHistory,
   computerUseRunStatus,
   computerUseCatalogApp,
   computerUseAppName,
@@ -19,6 +20,22 @@ import { toolItemForDisplay } from "./presentation.ts";
 
 const call = (toolName: string, input: unknown) =>
   ({ type: "dynamic_tool", toolName, input }) as unknown as OrchestrationV2TurnItem;
+
+describe("hasComputerUseHistory", () => {
+  it("recognizes computer and browser input without matching unrelated tools", () => {
+    for (const name of [
+      "cua-driver.click",
+      "mcp__goat__goat_screen_run",
+      "goat.preview_click",
+      "goat.preview.click",
+    ]) {
+      expect(hasComputerUseHistory(call(name, {})), name).toBe(true);
+    }
+    for (const name of ["mcp__weather__click", "goat.preview_snapshot", "goat.other"]) {
+      expect(hasComputerUseHistory(call(name, {})), name).toBe(false);
+    }
+  });
+});
 
 describe("computerUseRun", () => {
   it("recognizes cua-driver calls under every provider's naming", () => {

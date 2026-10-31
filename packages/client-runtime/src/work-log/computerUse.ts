@@ -220,6 +220,33 @@ function inputTarget(input: Record<string, unknown>, appName: string | undefined
   return window === undefined ? `Process ${pid}` : `Process ${pid}, window ${window}`;
 }
 
+const HISTORY_PREVIEW_ACTION =
+  /^(?:open|navigate|click|type|fill|fill_secret|press|scroll|hover|drag|select|evaluate|dialog)$/u;
+
+export function hasComputerUseHistory(item: OrchestrationV2TurnItem | undefined): boolean {
+  if (item?.type !== "dynamic_tool") return false;
+  if (cuaDriverToolName(item.toolName) !== undefined) return true;
+  const name = item.toolName.toLowerCase();
+  if (/^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ])|goat-\S+_)?goat_screen_run$/u.test(name))
+    return true;
+  if (name === "cua_repl.js") return true;
+  const preview = name.match(
+    /^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ])|goat-\S+_)?(?:goat_)?preview[._](.+)$/u,
+  );
+  if (preview && HISTORY_PREVIEW_ACTION.test(preview[1] ?? "")) return true;
+  if (
+    /^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ])|goat-\S+_)?goat_call$/u.test(name) &&
+    typeof item.input === "object" &&
+    item.input !== null &&
+    "path" in item.input &&
+    typeof item.input.path === "string"
+  ) {
+    const path = item.input.path.match(/^preview\.(.+)$/u);
+    return path !== null && HISTORY_PREVIEW_ACTION.test(path[1] ?? "");
+  }
+  return false;
+}
+
 export function computerUseRun(
   item: OrchestrationV2TurnItem | undefined,
 ): ComputerUseRun | undefined {
