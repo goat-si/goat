@@ -29,7 +29,7 @@ import { primitiveReplySink, type LeaseProxyOptions } from "./ComputerUseLeasePr
 import { terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
-import type { ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
+import { terminalReason, type ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
 
 type Reports<EU, ED> = Pick<
   LeaseProxyOptions<EU, ED>,
@@ -473,7 +473,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             ))
           )
             return;
-          const reason = controlTerminals.get(request.controlId)?.reason;
+          const reason = terminalReason(controlTerminals.get(request.controlId)?.reason);
           if (reason === undefined) {
             yield* options.primitiveReply?.({ ...request, status: "not_started" }) ?? Effect.void;
             options.onPrimitiveSettled?.(request.requestId);
@@ -497,7 +497,15 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
 
   const handle = Effect.fn("ComputerUseLeaseProxyThread.routeMessage")(function* (line: string) {
     const decoded = decodeProviderIngress(line);
-    if (decoded.kind === "invalid") return yield* options.output(decoded.response);
+    if (decoded.kind === "invalid") {
+      const latch = (current ?? predecessor)?.terminal;
+      return yield* terminalSink(
+        { answer: (answer) => options.output(answer) },
+        { id: null },
+        () => latch?.reason,
+        () => false,
+      ).answer(decoded.response);
+    }
     const message = decoded.message;
     if (message.method === "$/cancelRequest") {
       const params = message.params as { readonly id?: unknown } | undefined;
