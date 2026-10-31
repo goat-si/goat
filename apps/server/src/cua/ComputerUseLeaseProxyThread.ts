@@ -157,11 +157,13 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       id,
       method,
       reason,
-      terminal !== undefined || personStopped || reason === "transport_lost"
-        ? LEASE_END_MESSAGES[reason]
-        : reason === "disabled"
-          ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."
-          : WAITING,
+      reason === "reconnecting"
+        ? RECONNECTING
+        : terminal !== undefined || personStopped || reason === "transport_lost"
+          ? LEASE_END_MESSAGES[reason]
+          : reason === "disabled"
+            ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."
+            : WAITING,
     );
     return terminalSink(
       { answer: (line) => options.output(line) },
