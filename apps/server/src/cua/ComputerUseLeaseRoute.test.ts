@@ -794,9 +794,10 @@ describe("computer use lease route", () => {
         const routes = LeaseRoute.layer.pipe(
           Layer.provideMerge(
             Layer.mergeAll(
-              ServerSettings.ServerSettingsService.layerTest(
-                movePointer === undefined ? {} : { cuaMovePointer: movePointer },
-              ),
+              ServerSettings.ServerSettingsService.layerTest({
+                ...(movePointer === undefined ? {} : { cuaMovePointer: movePointer }),
+                cuaDeniedApps: ["com.example.Blocked"],
+              }),
               historyDatabase,
               Layer.mock(McpSessionRegistry.McpSessionRegistry)({
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
@@ -804,6 +805,7 @@ describe("computer use lease route", () => {
               Layer.mock(ComputerUseLeases.ComputerUseLeases)({
                 foregroundApprovalEpoch: Effect.die("unused"),
                 proxy: undefined,
+                currentControl: () => Effect.succeedNone,
                 callReservation: (_owner, call) =>
                   Effect.sync(() => {
                     received.push(call);
@@ -821,7 +823,7 @@ describe("computer use lease route", () => {
           Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
           (web) => Effect.promise(() => web.dispose()),
         );
-        const reserve = (args: object) =>
+        const reserve = (args: object, targetApp?: string) =>
           Effect.promise(() =>
             app
               .handler(
@@ -834,6 +836,7 @@ describe("computer use lease route", () => {
                     callId: "one",
                     name: "click",
                     args,
+                    ...(targetApp === undefined ? {} : { app: targetApp }),
                     interruptions: 0,
                     idleEpoch: 0,
                   }),
@@ -851,6 +854,11 @@ describe("computer use lease route", () => {
         );
         // A background click is judged by the leases as before, whatever the setting.
         assert.equal((yield* reserve({ pid: 42, window_id: 7, x: 3, y: 4 })).status, "admitted");
+        assert.deepEqual(yield* reserve({ pid: 42, window_id: 7 }, "COM.EXAMPLE.BLOCKED"), {
+          status: "refused",
+          detail: "app_not_allowed",
+          app: "COM.EXAMPLE.BLOCKED",
+        });
         assert.equal(received.length, refused ? 1 : 2);
       }).pipe(Effect.scoped),
   );
@@ -882,6 +890,7 @@ describe("computer use lease route", () => {
               Layer.mock(ComputerUseLeases.ComputerUseLeases)({
                 releaseApps: () => Effect.void,
                 streamOpened: () => Effect.void,
+                currentControl: () => Effect.succeedNone,
                 foregroundApprovalEpoch: Effect.die("unused"),
                 proxy: undefined,
                 callReservation: (owner, call) =>

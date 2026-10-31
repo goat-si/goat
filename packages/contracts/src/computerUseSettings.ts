@@ -29,6 +29,7 @@ export const CuaSettingsFields = {
    */
   cuaMovePointer: CuaMovePointer.pipe(Schema.withDecodingDefault(Effect.succeed("never" as const))),
   cuaAllowedApps: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  cuaDeniedApps: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 };
 
 /** Computer use fields of `ServerSettingsPatch`. */
@@ -39,4 +40,5 @@ export const CuaSettingsPatchFields = {
   cuaFullAccessAutoAdmit: Schema.optionalKey(Schema.Boolean),
   cuaMovePointer: Schema.optionalKey(CuaMovePointer),
   cuaAllowedApps: Schema.optionalKey(Schema.Array(Schema.String)),
+  cuaDeniedApps: Schema.optionalKey(Schema.Array(Schema.String)),
 };

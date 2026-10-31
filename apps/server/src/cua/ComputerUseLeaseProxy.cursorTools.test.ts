@@ -7,7 +7,9 @@ import * as Effect from "effect/Effect";
 
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import { CURSOR_OUTPUT_SCHEMA, helperCursorListing } from "./ComputerUseCursorTools.ts";
-import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
+import { active, call, CONTROL, harness as makeHarness } from "./ComputerUseLeaseProxy.testkit.ts";
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 import {
   initialize,
   initialized,

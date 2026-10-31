@@ -137,6 +137,13 @@ describe("browser skill", () => {
 });
 
 describe("computer use skill text", () => {
+  it("asks before sensitive data, submissions, passwords, and vague destructive work", () => {
+    const guidance = builtInSkillSections(["computer-use"], "darwin").join("\n");
+    expect(guidance).toContain("typing sensitive personal data");
+    expect(guidance).toContain("medical, legal, or financial submissions");
+    expect(guidance).toContain("entering OS or VPN passwords");
+    expect(guidance).toContain("vague destructive tasks");
+  });
   it("continues through human input while preserving takeover and private-field stops", () => {
     const guidance = builtInSkillSections(["computer-use"], "darwin").join("\n");
     expect(guidance).toContain("Keep working while the person uses their keyboard or pointer");

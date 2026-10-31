@@ -33,6 +33,22 @@ describe("a call's reservation labels its app for the timeline", () => {
       );
       assert.equal((yield* h.nextToProvider).id, 1);
       yield* h.send(call(2, "click", { pid: 42, window_id: 3, element_index: 5 }));
+      const lookup = yield* h.nextToDriver;
+      assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: lookup.id,
+          result: {
+            structuredContent: {
+              apps: [
+                { pid: 42, bundle_id: "com.apple.calculator", name: "Calculator" },
+                { pid: 77, bundle_id: "com.example.Other", name: "Other" },
+              ],
+            },
+          },
+        }),
+      );
       assert.equal((yield* h.nextToDriver).id, 2);
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
       assert.equal((yield* h.nextToProvider).id, 2);
@@ -50,8 +66,7 @@ describe("a call's reservation labels its app for the timeline", () => {
         ["list_windows", "click", "click"],
       );
       assert.deepEqual(labelOf(42), { bundleId: "com.apple.calculator", name: "Calculator" });
-      // A pid no answer named keeps no label; the timeline shows its generic row.
-      assert.isUndefined(labelOf(77));
+      assert.deepEqual(labelOf(77), { bundleId: "com.example.Other", name: "Other" });
     }),
   );
 });

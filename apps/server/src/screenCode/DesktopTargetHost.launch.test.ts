@@ -143,6 +143,23 @@ it.live("a running app's only window binds without a launch, past its menu bar i
   });
 });
 
+it.live("a bundle id passed as a string binds the running app's window without a launch", () => {
+  const { host, sent } = fixture({
+    list_apps: { apps: [running] },
+    list_windows: { windows: [document] },
+    launch_app: launched([document]),
+  });
+  return Effect.gen(function* () {
+    const result = yield* cell(
+      host,
+      "const app = await screen.app('org.example.Editor'); return {launched: app.launched, windowId: app.windowId};",
+    );
+    expect(result.value).toEqual({ launched: false, windowId: 7 });
+    expect(tools(sent)).not.toContain("launch_app");
+    expect(result.journal.map((entry) => entry.receipt.method)).not.toContain("launch_app");
+  });
+});
+
 it.live("a running app listed without its id is named, never bound or relaunched by name", () => {
   const { host, sent } = fixture({
     list_apps: {

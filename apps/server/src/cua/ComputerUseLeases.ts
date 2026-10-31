@@ -163,7 +163,7 @@ export class ComputerUseLeases extends Context.Service<
     readonly everyAppControl: (
       threadId: ThreadId,
       unattended: boolean,
-      run?: { readonly runId?: RunId },
+      run?: { readonly runId?: RunId; readonly nonPerson?: boolean },
     ) => Effect.Effect<Option.Option<ComputerUseControl>, ComputerUseLeaseError>;
     /**
      * Apps a run with every app or the whole screen named in a request. The host adds them to the
@@ -318,6 +318,7 @@ export class ComputerUseLeases extends Context.Service<
 
 interface ControlRecord extends ComputerUseControl {
   readonly idleEpoch?: number;
+  readonly identityEpoch: number;
   readonly ended?: ComputerUseControlEnd;
   /** Bumped each time a turn reuses the control, so a turn end read before it cannot end it. */
   readonly uses: number;
@@ -402,6 +403,7 @@ const make = Effect.gen(function* () {
     lease: Option.Option<ComputerUseLease>,
     everyApp: ControlRecord["everyApp"],
     runId?: RunId,
+    nonPerson = false,
   ) {
     const now = yield* DateTime.now;
     // Checked and claimed with no yield between, so two unattended turns cannot both pass.
@@ -423,8 +425,11 @@ const make = Effect.gen(function* () {
           existing.everyApp === everyApp &&
           DateTime.toEpochMillis(existing.expiresAt) > DateTime.toEpochMillis(now)
         ) {
+          const identityChanged = runId !== undefined && runId !== existing.runId;
           const reused: ControlRecord = {
             ...nextTurn(existing),
+            identityEpoch: existing.identityEpoch + (identityChanged ? 1 : 0),
+            nonPersonFullAccess: everyApp !== undefined && nonPerson,
             uses: existing.uses + 1,
             // Without a grant, a control lasts an hour from its last use; a grant keeps its own.
             ...(Option.isSome(lease) ? {} : { expiresAt: controlExpiry(now) }),
@@ -434,7 +439,9 @@ const make = Effect.gen(function* () {
           const moved =
             DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
           const notice =
-            implyFocus(reused) || existing.idle === true || moved ? changed : Effect.void;
+            implyFocus(reused) || existing.idle === true || moved || identityChanged
+              ? changed
+              : Effect.void;
           return Effect.as(notice, reused as ComputerUseControl);
         }
         const next: ControlRecord = {
@@ -443,8 +450,10 @@ const make = Effect.gen(function* () {
           expiresAt: Option.isSome(lease) ? lease.value.expiresAt : controlExpiry(now),
           ...(handoffId === undefined ? {} : { handoffId }),
           ...(everyApp === undefined ? {} : { everyApp }),
+          nonPersonFullAccess: everyApp !== undefined && nonPerson,
           ...(runId === undefined ? {} : { runId }),
           uses: 0,
+          identityEpoch: 0,
         };
         if (existing !== undefined) {
           controlOwners.set(existing.controlId, threadId);
@@ -477,15 +486,19 @@ const make = Effect.gen(function* () {
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
     unattended: boolean,
-    run?: { readonly runId?: RunId },
+    run?: { readonly runId?: RunId; readonly nonPerson?: boolean },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(yield* mint(threadId, Option.none(), "person", run?.runId));
+      return Option.fromNullishOr(
+        yield* mint(threadId, Option.none(), "person", run?.runId, run?.nonPerson),
+      );
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
-        return Option.fromNullishOr(yield* mint(threadId, Option.none(), "unattended", run?.runId));
+        return Option.fromNullishOr(
+          yield* mint(threadId, Option.none(), "unattended", run?.runId, true),
+        );
       }),
     );
   });
@@ -544,6 +557,7 @@ const make = Effect.gen(function* () {
         expiresAt: record.expiresAt,
         interruptions,
         apps: rememberScope(controls, record, apps),
+        identityEpoch: record.identityEpoch,
         wakeAt: Math.min(validUntil, DateTime.toEpochMillis(now) + recheck),
         validUntil,
         ...focusState,

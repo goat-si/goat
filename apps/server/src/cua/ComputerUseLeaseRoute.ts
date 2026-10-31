@@ -58,6 +58,7 @@ import {
   refusalHistoryKey,
   scheduleHistory,
 } from "./ComputerUseHistoryBackground.ts";
+import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
@@ -177,6 +178,9 @@ export const leaseUpdates = (input: {
                 expiresAt: DateTime.formatIso(state.expiresAt),
                 ...(state.apps === undefined ? {} : { apps: state.apps }),
                 ...(state.idleEpoch === undefined ? {} : { idleEpoch: state.idleEpoch }),
+                ...(state.identityEpoch === undefined
+                  ? {}
+                  : { identityEpoch: state.identityEpoch }),
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
@@ -434,14 +438,23 @@ export const callLayer = HttpRouter.add(
     if (Option.isNone(call)) return HttpServerResponse.empty({ status: 400 });
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     // Unreadable settings keep the default: the person's pointer stays still.
-    const movePointer = yield* ServerSettings.ServerSettingsService.pipe(
+    const settings = yield* ServerSettings.ServerSettingsService.pipe(
       Effect.flatMap((settings) => settings.getSettings),
-      Effect.map((settings) => settings.cuaMovePointer),
-      Effect.orElseSucceed(() => "never" as const),
+      Effect.option,
     );
+    if (Option.isNone(settings)) return HttpServerResponse.empty({ status: 503 });
+    let deniedApp: string | undefined;
+    if (call.value.action === "reserve") {
+      const control = yield* leases.currentControl(threadId);
+      const nonPerson =
+        Option.isSome(control) &&
+        control.value.controlId === call.value.controlId &&
+        control.value.nonPersonFullAccess === true;
+      deniedApp = deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson);
+    }
     const pointerLocked =
       call.value.action === "reserve" &&
-      movePointer !== "allowed" &&
+      settings.value.cuaMovePointer !== "allowed" &&
       movesPersonPointer(call.value);
     let outsideManifest = false;
     if (call.value.action === "reserve") {
@@ -452,11 +465,14 @@ export const callLayer = HttpRouter.add(
       outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
     }
     const result = yield* Effect.gen(function* () {
-      const result: ComputerUseCallAdmission = pointerLocked
-        ? { status: "refused", detail: "pointer_locked" }
-        : outsideManifest
-          ? { status: "refused", detail: "outside_manifest" }
-          : yield* leases.callReservation(threadId, call.value);
+      const result: ComputerUseCallAdmission =
+        deniedApp !== undefined
+          ? { status: "refused", detail: "app_not_allowed", app: deniedApp }
+          : pointerLocked
+            ? { status: "refused", detail: "pointer_locked" }
+            : outsideManifest
+              ? { status: "refused", detail: "outside_manifest" }
+              : yield* leases.callReservation(threadId, call.value);
       if (call.value.action === "reserve" && result.status === "refused") {
         const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isNone(sql))

@@ -579,6 +579,7 @@ describe("computer use lease route", () => {
         assert.lengthOf(initial.browserClaims ?? [], 1);
         const reports: Array<unknown> = [];
         const h = yield* harness({
+          autoAppListing: true,
           onBrowserClaimReport: (report) => {
             reports.push(report);
           },

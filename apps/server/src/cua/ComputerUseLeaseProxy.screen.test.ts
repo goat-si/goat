@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream";
 
 import { active as backgroundActive, foregroundActive } from "./ComputerUseLeaseProxy.testkit.ts";
 import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
 
 const call = (id: number, name: string, args: object) =>
   JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
@@ -44,7 +45,23 @@ const harness = Effect.fn(function* (onTarget?: () => Effect.Effect<boolean>) {
     leaseUpdates: Stream.fromQueue(updates),
     onLeaseUpdateApplied: () => Queue.offer(applied, undefined).pipe(Effect.asVoid),
     startDriver: Effect.succeed({
-      send: (line: string) => Queue.offer(toDriver, line).pipe(Effect.asVoid),
+      send: (line: string) => {
+        const request = parse(line);
+        return typeof request?.id === "string" && request.id.startsWith("goat-proxy:apps:")
+          ? Queue.offer(
+              fromDriver,
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: request.id,
+                result: {
+                  structuredContent: {
+                    apps: [{ pid: 4, bundle_id: "com.example.App", name: "App" }],
+                  },
+                },
+              }),
+            ).pipe(Effect.asVoid)
+          : Queue.offer(toDriver, line).pipe(Effect.asVoid);
+      },
       lines: Stream.fromQueue(fromDriver),
       kill: Queue.end(fromDriver),
       overlay: (command: ComputerUseOverlayCommand) =>
@@ -100,8 +117,8 @@ it.effect(
         const answer = yield* h.answer;
         assert.equal(answer.id, index + 1);
         assert.deepInclude(answer.result.structuredContent, {
-          refused: "targetRefused",
-          detail: "screen_shared",
+          refused: [3, 7, 8].includes(index + 1) ? "appNotAllowed" : "targetRefused",
+          detail: [3, 7, 8].includes(index + 1) ? "app_not_allowed" : "screen_shared",
         });
       }
       assert.equal(yield* h.driverQueued, 0);
@@ -124,7 +141,11 @@ it.effect(
       ];
       for (const [index, args] of overlays.entries()) {
         yield* h.send(call(index + 1, "move_cursor", args));
-        assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
+        if (index === 0)
+          assert.deepInclude((yield* h.answer).result.structuredContent, {
+            detail: "app_not_allowed",
+          });
+        else assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
       }
       for (const args of [
         { scope: "desktop", x: 5, y: 5 },
@@ -132,7 +153,7 @@ it.effect(
       ]) {
         yield* h.send(call(10, "move_cursor", args));
         const answer = yield* h.answer;
-        assert.deepInclude(answer.result.structuredContent, { detail: "foreground_not_approved" });
+        assert.deepInclude(answer.result.structuredContent, { detail: "app_not_allowed" });
       }
       assert.equal(yield* h.driverQueued, 0);
     }),
@@ -151,7 +172,11 @@ it.effect("forwards overlay cursor moves while another thread holds apps (#1501)
     for (const [index, args] of overlays.entries()) {
       yield* h.send(call(index + 1, "move_cursor", args));
       // A refusal must fail here rather than leave the test waiting for driver input.
-      assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
+      if (index < 2)
+        assert.deepInclude((yield* h.answer).result.structuredContent, {
+          detail: "app_not_allowed",
+        });
+      else assert.equal(yield* Effect.raceFirst(h.sentToDriver, h.answer), index + 1);
     }
   }),
 );

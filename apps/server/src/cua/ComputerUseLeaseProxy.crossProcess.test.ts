@@ -45,6 +45,11 @@ for await (const line of input) {
     continue;
   }
   const name = message.params?.name;
+  if (name === 'list_apps') {
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id,
+      result: { structuredContent: { apps: [{ pid: 42, bundle_id: 'com.example.App', name: 'App' }] } } }) + '\\n');
+    continue;
+  }
   if (name === 'click' && message.params?.arguments?.hold === true) {
     held.push(message);
     process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method: 'fixture/received',
