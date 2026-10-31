@@ -129,7 +129,7 @@ it.effect(
 it.effect("rejects an unreleased ceiling ledger without changing grants or its evidence", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations();
+    yield* runMigrations({ toMigrationInclusive: 111 });
     yield* insertTask;
     yield* insertDispatches;
     yield* sql`UPDATE scheduled_tasks SET memory_grant_ceiling='read'`;

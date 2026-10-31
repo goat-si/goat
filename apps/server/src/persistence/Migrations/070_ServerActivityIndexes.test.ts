@@ -40,8 +40,8 @@ it.effect("upgrades schema 61 and maintains indexed background roster flags", ()
       name: string;
     }>`SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE '%_activity_idx'`;
     assert.strictEqual(indexes.length, 6);
-    yield* runMigrations();
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    yield* runMigrations({ toMigrationInclusive: 70 });
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 70 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
@@ -61,15 +61,15 @@ it.effect(
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         assert.deepStrictEqual(
-          yield* runMigrations(),
-          migrationManifest.filter(([id]) => id > 69),
+          yield* runMigrations({ toMigrationInclusive: 122 }),
+          migrationManifest.filter(([id]) => id > 69 && id <= 122),
         );
-        assert.deepStrictEqual(yield* runMigrations(), []);
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 122 }), []);
         const recorded = yield* sql<{ migration_id: number; name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
         assert.deepStrictEqual(
           recorded.map((row) => [row.migration_id, row.name] as const),
-          migrationManifest,
+          migrationManifest.filter(([id]) => id <= 122),
         );
         const columns = yield* sql<{
           name: string;
