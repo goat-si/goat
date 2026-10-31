@@ -550,12 +550,26 @@ const replacedAdmission = (input: Input) =>
     return finalize(answer, input);
   });
 
+const unconfirmedProof = (input: Input) =>
+  Effect.gen(function* () {
+    const h = yield* harness({ elsewhere: new Set(), autoAppListing: true });
+    yield* h.push(active());
+    yield* h.send(call(1, "click", { pid: 4, window_id: 9 }));
+    const asked = yield* h.nextToDriver;
+    assert.equal(asked.params?.name, "list_windows");
+    yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: asked.id, result: { isError: true } }));
+    const answer = JSON.stringify(yield* h.nextToProvider);
+    assert.include(answer, "could not confirm");
+    return finalize(answer, input);
+  });
+
 export const preDispatchSites: ReadonlyArray<{
   readonly name: string;
   readonly undispatched: true;
   readonly implicitReason?: ComputerUseTerminalReason;
   readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
 }> = [
+  { name: "ComputerUseLeaseProxy.unconfirmedProof", undispatched: true, run: unconfirmedProof },
   { name: "ComputerUseLeaseProxy.replacedAdmission", undispatched: true, run: replacedAdmission },
   { name: "ComputerUseLeaseProxyThread.reconnecting", undispatched: true, run: reconnecting },
   { name: "ComputerUseLeaseProxy.cancelledPrimitive", undispatched: true, run: cancelledPrimitive },
