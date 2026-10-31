@@ -27,7 +27,7 @@ export const staleTargets = (
     if (!entry) return undefined;
     const why = override ?? entry.reason;
     const reason =
-      why === "permission_denied"
+      why === "permission_denied" || why === "credentialRevoked"
         ? "Permission was lost."
         : why === "turn_ended"
           ? "The target was bound in an earlier turn."

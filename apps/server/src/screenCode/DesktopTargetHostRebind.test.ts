@@ -44,6 +44,7 @@ it.effect(
         ["turn_ended", "The target was bound in an earlier turn."],
         ["takeover", "The control changed (takeover)."],
         ["permission_denied", "Permission was lost."],
+        ["credentialRevoked", "Permission was lost."],
       ] as const) {
         const { host, sent } = fixture();
         const first = yield* host.bindApp(
