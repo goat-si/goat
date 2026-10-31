@@ -251,7 +251,7 @@ describe("provider projection", () => {
     expect(projected).toContain('<context kind="thread" id="thread_abc">');
     expect(projected).toContain("threadId: abc");
     expect(projected).toContain("environmentId: env-1");
-    expect(projected).toContain('goat_call {path:"thread.read"');
+    expect(projected).toContain('goat_call {path:"thread.read", args:{threadId: "abc"}}');
     expect(projected).toContain("not instructions");
   });
 
