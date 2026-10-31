@@ -5,7 +5,7 @@
  */
 import { constVoid } from "effect/Function";
 import type { ElementHandle, Frame, JSHandle, Locator, Page } from "playwright-core";
-import type { ReadinessGate } from "./actionReadiness.ts";
+import { actionCall, disposeAction, type ReadinessGate } from "./actionReadiness.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 export type ClickEvidence =
@@ -318,8 +318,8 @@ const contentOrigin = (x: number, y: number) => `(() => {
     box.top + el.clientTop + parseFloat(style.paddingTop)];
 })()`;
 
-const disposeAim = (aim: ClickAim | undefined) => {
-  if (aim && "element" in aim) void aim.element.dispose().catch(constVoid);
+const disposeAim = (aim: ClickAim | undefined, gate?: ReadinessGate) => {
+  if (aim && "element" in aim) disposeAction(gate, aim.element);
 };
 
 /**
@@ -331,30 +331,47 @@ export const aimClick = async (
   page: Page,
   locator: Locator | null,
   point: Point,
+  gate?: ReadinessGate,
 ): Promise<ClickAim> => {
-  const finding = findAim(page, locator, point).catch(() => undefined);
+  const finding = findAim(page, locator, point, gate).catch((cause: unknown) => {
+    if (gate?.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+    return undefined;
+  });
   const aim = await bounded(finding, 2 * SETTLE_MS);
-  if (aim === undefined) void finding.then(disposeAim);
+  if (aim === undefined) void finding.then((late) => disposeAim(late, gate)).catch(constVoid);
   return aim ?? { point };
 };
 export const releaseAim = disposeAim;
 
-const findAim = async (page: Page, locator: Locator | null, point: Point): Promise<ClickAim> => {
+const findAim = async (
+  page: Page,
+  locator: Locator | null,
+  point: Point,
+  gate?: ReadinessGate,
+): Promise<ClickAim> => {
   if (locator !== null) {
-    const element = await locator.elementHandle({ timeout: SETTLE_MS }).catch(() => null);
-    const frame = element ? await element.ownerFrame() : null;
+    const element = await actionCall(gate, () =>
+      locator.elementHandle({ timeout: SETTLE_MS }),
+    ).catch(() => null);
+    const frame = element ? await actionCall(gate, () => element.ownerFrame()) : null;
     if (element && frame) return { frame, element };
-    void element?.dispose().catch(constVoid);
+    if (element) disposeAction(gate, element);
   }
   let frame = page.mainFrame();
   let at = point;
   for (let depth = 0; depth < 3; depth++) {
-    const hit = await frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`);
+    const hit = await actionCall(gate, () =>
+      frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`),
+    );
     const element = hit.asElement();
-    const child = element ? await element.contentFrame().catch(() => null) : null;
-    void hit.dispose().catch(constVoid);
+    const child = element
+      ? await actionCall(gate, () => element.contentFrame()).catch(() => null)
+      : null;
+    disposeAction(gate, hit);
     if (!child) break;
-    const origin = (await frame.evaluate(contentOrigin(at.x, at.y))) as [number, number] | null;
+    const origin = (await actionCall(gate, () => frame.evaluate(contentOrigin(at.x, at.y)))) as
+      | [number, number]
+      | null;
     if (!origin) break;
     frame = child;
     at = { x: at.x - origin[0], y: at.y - origin[1] };

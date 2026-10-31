@@ -168,7 +168,7 @@ export const setInputFiles = async (
   if (locator === null) return false;
   const channel = gate.channel;
   if (!channel) throw new Error("An action channel is required for upload.");
-  const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.signal);
+  const handle = await elementOf(locator, input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.signal, gate);
   try {
     await uploadInto(cdp, handle, input.paths, gate);
   } finally {

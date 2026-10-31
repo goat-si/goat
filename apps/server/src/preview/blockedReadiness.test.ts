@@ -4,14 +4,14 @@ import { ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { chromium, type ElementHandle } from "playwright-core";
+import { chromium, type CDPSession, type ElementHandle, type Page } from "playwright-core";
 import { expect, vi } from "vite-plus/test";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import { makeBlockedTabFence } from "./blockedTabFence.ts";
 import { inputFence } from "./PreviewInputFence.ts";
-import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
+import { testActionChannel, testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 import { waitUntilWritable } from "./actionReadiness.ts";
 import { BrowserControlInterrupted } from "./SessionControl.ts";
@@ -32,7 +32,10 @@ it.effect("a fence immediately after readiness admission prevents starting scrol
       () => {
         controller.abort(new BrowserControlInterrupted("blocked", "blocked_url"));
       },
-      { signal: controller.signal },
+      {
+        signal: controller.signal,
+        channel: testActionChannel({} as Page, {} as CDPSession, controller.signal),
+      },
     );
     const error = yield* Effect.promise(() =>
       waitUntilWritable(handle, Infinity, {}, gate).then(

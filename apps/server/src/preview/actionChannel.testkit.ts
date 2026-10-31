@@ -33,6 +33,17 @@ export const testActionPage = {
         channel: gate?.channel ?? testActionChannel(page, {} as CDPSession, gate?.signal),
       }),
     ),
+  select: async (...[page, input, gate, readiness]: Parameters<typeof PageOperations.select>) => {
+    const channel =
+      gate?.channel ??
+      testActionChannel(page, await page.context().newCDPSession(page), gate?.signal);
+    return PageOperations.select(
+      page,
+      input,
+      Object.assign(gate ?? (() => {}), { channel }),
+      readiness,
+    );
+  },
   type: async (...[page, input, gate, readiness]: Parameters<typeof PageOperations.type>) => {
     const channel =
       gate?.channel ??

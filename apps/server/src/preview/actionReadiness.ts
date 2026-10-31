@@ -16,6 +16,17 @@ export interface ReadinessGate {
   readonly signal?: AbortSignal | undefined;
   readonly channel?: import("./actionChannel.ts").ActionChannel | undefined;
 }
+export const actionCall = <A>(gate: ReadinessGate | undefined, work: () => A): A => {
+  if (!gate) return work();
+  if (!gate.channel) throw new Error("An action channel is required for browser commands.");
+  return gate.channel.call(work);
+};
+export const disposeAction = (
+  gate: ReadinessGate | undefined,
+  handle: { dispose(): Promise<void> },
+) => {
+  if (!gate?.signal?.aborted) void actionCall(gate, () => handle.dispose()).catch(() => undefined);
+};
 // Cancellation stops continuation; a browser operation already issued cannot be recalled.
 export const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {
   if (!signal) return work();
@@ -88,23 +99,26 @@ export const waitUntilWritable = async (
   gate: ReadinessGate,
 ) => {
   const ready = async () =>
-    (await handle.isVisible()) &&
-    (await handle.isEditable().catch((cause: unknown) => {
+    (await actionCall(gate, () => handle.isVisible())) &&
+    (await actionCall(gate, () => handle.isEditable()).catch((cause: unknown) => {
       throw neverWritable(cause);
     }));
   if (!(await abortable(ready, gate.signal))) {
     readiness.onWaiting?.();
     await abortable(
-      () => handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+        ),
       gate.signal,
     );
     await abortable(
       () =>
-        handle
-          .waitForElementState("editable", { timeout: remaining(deadline) })
-          .catch((cause: unknown) => {
-            throw isTimeout(cause) ? notWritable() : cause;
-          }),
+        actionCall(gate, () =>
+          handle.waitForElementState("editable", { timeout: remaining(deadline) }),
+        ).catch((cause: unknown) => {
+          throw isTimeout(cause) ? notWritable() : cause;
+        }),
       gate.signal,
     );
   }
@@ -112,7 +126,7 @@ export const waitUntilWritable = async (
   await gate();
   gate.signal?.throwIfAborted();
   await abortable(
-    () => handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
+    () => actionCall(gate, () => handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) })),
     gate.signal,
   );
 };
@@ -128,30 +142,44 @@ export const revealFramesOf = async (
 ) => {
   const chain: Array<ElementHandle> = [];
   try {
-    for (let frame = await handle.ownerFrame(); frame?.parentFrame(); frame = frame.parentFrame())
-      chain.unshift(await frame.frameElement());
+    for (
+      let frame = await actionCall(gate, () => handle.ownerFrame());
+      frame?.parentFrame();
+      frame = frame.parentFrame()
+    ) {
+      const child = frame;
+      chain.unshift(await actionCall(gate, () => child.frameElement()));
+    }
     for (const element of chain) {
       await gate?.();
       gate?.signal?.throwIfAborted();
       await abortable(
-        () => element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }),
+        () =>
+          actionCall(gate, () => element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) })),
         gate?.signal,
       );
     }
   } finally {
-    for (const element of chain) void element.dispose().catch(() => undefined);
+    for (const element of chain) disposeAction(gate, element);
   }
 };
 
 /** The element a locator names now, held for the rest of the action. */
-export const acquireTarget = async (target: Locator, timeout: number, signal?: AbortSignal) => {
-  const pending = target.elementHandle({ timeout });
+export const acquireTarget = async (
+  target: Locator,
+  timeout: number,
+  signal?: AbortSignal,
+  gate?: ReadinessGate,
+) => {
+  const pending = actionCall(gate, () => target.elementHandle({ timeout }));
   let handle: ElementHandle | null;
   try {
     handle = await abortable(() => pending, signal);
   } catch (cause) {
     void pending.then(
-      (late) => late?.dispose().catch(() => undefined),
+      (late) => {
+        if (late) disposeAction(gate, late);
+      },
       () => undefined,
     );
     throw cause;
@@ -160,8 +188,12 @@ export const acquireTarget = async (target: Locator, timeout: number, signal?: A
   return handle;
 };
 
-export const pinTarget = (target: Locator, deadline: number, signal?: AbortSignal) =>
-  acquireTarget(target, remaining(deadline), signal);
+export const pinTarget = (
+  target: Locator,
+  deadline: number,
+  signal?: AbortSignal,
+  gate?: ReadinessGate,
+) => acquireTarget(target, remaining(deadline), signal, gate);
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
 const selectable = ([element, wanted]: readonly [unknown, ReadonlyArray<string>]) => {
@@ -191,26 +223,33 @@ export const waitUntilSelectable = async (
   readiness: Readiness,
   gate: ReadinessGate,
 ) => {
-  const frame = await abortable(() => handle.ownerFrame(), gate.signal);
+  const frame = await abortable(() => actionCall(gate, () => handle.ownerFrame()), gate.signal);
   if (frame === null) throw targetChanged();
-  if (await abortable(() => frame.evaluate(selectable, [handle, values] as const), gate.signal))
+  if (
+    await abortable(
+      () => actionCall(gate, () => frame.evaluate(selectable, [handle, values] as const)),
+      gate.signal,
+    )
+  )
     return true;
   readiness.onWaiting?.();
   try {
-    const waiting = frame.waitForFunction(selectable, [handle, values] as const, {
-      timeout: remaining(deadline),
-    });
+    const waiting = actionCall(gate, () =>
+      frame.waitForFunction(selectable, [handle, values] as const, {
+        timeout: remaining(deadline),
+      }),
+    );
     let waiter;
     try {
       waiter = await abortable(() => waiting, gate.signal);
     } catch (cause) {
       void waiting.then(
-        (late) => late.dispose().catch(() => undefined),
+        (late) => disposeAction(gate, late),
         () => undefined,
       );
       throw cause;
     }
-    void waiter.dispose().catch(() => undefined);
+    disposeAction(gate, waiter);
     return true;
   } catch (cause) {
     if (isTimeout(cause)) return false;

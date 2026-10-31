@@ -1031,11 +1031,13 @@ const make = Effect.gen(function* () {
         "This file picker accepts one file.",
       );
     if (input.paths.length > 0) {
-      const element = await open.chooser.element();
+      const channel = gate.channel;
+      if (!channel) throw new Error("An action channel is required for upload.");
+      const element = await channel.call(() => open.chooser.element());
       try {
         await PreviewUpload.uploadInto(tab.cdp, element, input.paths, gate);
       } finally {
-        void element.dispose().catch(constVoid);
+        if (!gate.signal?.aborted) void channel.dispose(element).catch(constVoid);
       }
     } else await gate();
     if (tab.fileChooser === open) closeFileChooser(tab);

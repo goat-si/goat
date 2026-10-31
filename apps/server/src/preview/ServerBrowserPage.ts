@@ -9,8 +9,6 @@ import {
   type PreviewAutomationNetworkEntry,
   type PreviewAutomationPressInput,
   type PreviewAutomationScrollInput,
-  type PreviewAutomationSelectInput,
-  type PreviewAutomationSelectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationSnapshotInput,
   type PreviewAutomationTypeInput,
@@ -25,12 +23,13 @@ import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
   abortable,
+  actionCall,
+  disposeAction,
   acquireTarget,
   actionDeadline,
   pinTarget,
   remaining,
   revealFramesOf,
-  waitUntilSelectable,
   waitUntilWritable,
   type Readiness,
 } from "./actionReadiness.ts";
@@ -242,29 +241,38 @@ const settled = async (
   enabled = true,
   gate: DispatchGate = open,
 ) => {
-  const handle = await elementOf(locator, remaining(deadline), gate.signal).catch(
+  const handle = await elementOf(locator, remaining(deadline), gate.signal, gate).catch(
     (cause: unknown) => {
       throw unsentOnTimeout(cause);
     },
   );
   try {
     await abortable(
-      () => handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+        ),
       gate.signal,
     );
     if (enabled)
       await abortable(
-        () => handle.waitForElementState("enabled", { timeout: remaining(deadline) }),
+        () =>
+          actionCall(gate, () =>
+            handle.waitForElementState("enabled", { timeout: remaining(deadline) }),
+          ),
         gate.signal,
       );
     await abortable(
-      () => handle.waitForElementState("stable", { timeout: remaining(deadline) }),
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("stable", { timeout: remaining(deadline) }),
+        ),
       gate.signal,
     );
   } catch (cause) {
     throw unsentOnTimeout(cause);
   } finally {
-    void handle.dispose().catch(constVoid);
+    disposeAction(gate, handle);
   }
 };
 
@@ -290,19 +298,19 @@ const locatePoint = async (
   gate: DispatchGate,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
-  const target = await elementOf(locator, remaining(deadline), gate.signal);
+  const target = await elementOf(locator, remaining(deadline), gate.signal, gate);
   try {
     await revealFramesOf(target, deadline, gate);
   } finally {
-    void target.dispose().catch(constVoid);
+    disposeAction(gate, target);
   }
   const viewport = page.viewportSize();
-  let box = await locator.boundingBox({ timeout: remaining(deadline) });
+  let box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
   if (!inViewport(box, viewport)) {
     await gate();
     gate.signal?.throwIfAborted();
-    await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
-    box = await locator.boundingBox({ timeout: remaining(deadline) });
+    await actionCall(gate, () => locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }));
+    box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
   }
   if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
@@ -699,10 +707,10 @@ export const click = async (
     };
     page.once("dialog", onDialog);
   });
-  const aim = await aimClick(page, locator, point);
+  const aim = await aimClick(page, locator, point, gate);
   const watch = await watchClick(page, aim.frame, gate).catch((cause: unknown) => {
     page.off("dialog", onDialog);
-    releaseAim(aim);
+    releaseAim(aim, gate);
     throw cause;
   });
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
@@ -727,8 +735,10 @@ export const click = async (
     sent = true;
     if (count === 1)
       return locator === null
-        ? page.mouse.click(point.x, point.y, { button })
-        : locator.click({ button, ...dispatched(deadline) });
+        ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
+        : requireEvaluationChannel(gate).call(() =>
+            locator.click({ button, ...dispatched(deadline) }),
+          );
     return subsequentClick(gate, point, button, count);
   };
   let presses = 0;
@@ -747,13 +757,13 @@ export const click = async (
     }
   } catch (cause) {
     watch.cancel();
-    releaseAim(aim);
+    releaseAim(aim, gate);
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
   }
   if (!sent) watch.cancel();
-  const outcome = await watch.settle(dialog).finally(() => releaseAim(aim));
+  const outcome = await watch.settle(dialog).finally(() => releaseAim(aim, gate));
   // A dialog that stopped a multi-press click leaves it short of what was asked.
   const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
@@ -771,7 +781,7 @@ export const type = async (
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
   const present = locator !== null || (await target.count()) > 0;
-  const handle = present ? await pinTarget(target, deadline, gate.signal) : null;
+  const handle = present ? await pinTarget(target, deadline, gate.signal, gate) : null;
   try {
     if (handle) await waitUntilWritable(handle, deadline, readiness, gate);
     if (handle) await gate();
@@ -889,86 +899,7 @@ export const hover = async (
   await channel.call(() => locator.hover(dispatched(deadline)));
 };
 
-export const select = async (
-  page: Page,
-  input: PreviewAutomationSelectInput,
-  gate: DispatchGate = open,
-  readiness: Readiness = {},
-): Promise<PreviewAutomationSelectResult> => {
-  const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
-  const handle = await elementOf(targetLocator(page, input)!, remaining(deadline), gate.signal);
-  try {
-    const ready = await waitUntilSelectable(handle, input.values, deadline, readiness, gate);
-    const found = await handle.evaluate((element) => {
-      if (element.tagName !== "SELECT") return null;
-      const select = element as unknown as {
-        matches(selector: string): boolean;
-        readonly multiple: boolean;
-        readonly options: ArrayLike<{ value: string; label: string }>;
-      };
-      return {
-        disabled: select.matches(":disabled"),
-        multiple: select.multiple,
-        options: Array.from(select.options, ({ value, label }) => ({ value, label: label.trim() })),
-      };
-    });
-    if (found === null)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationTargetNotEditableError",
-        "This element is not a <select>. Click a custom dropdown, then click its option.",
-      );
-    if (found.disabled && !ready)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "This <select> stayed disabled until the deadline, so nothing was selected.",
-        { beforeInput: true },
-      );
-    if (found.disabled) throw targetChanged();
-    const values = input.values.map(
-      (entry) =>
-        (
-          found.options.find((option) => option.value === entry) ??
-          found.options.find((option) => option.label === entry.trim())
-        )?.value,
-    );
-    const missing = values.indexOf(undefined);
-    if (missing !== -1 || (!found.multiple && values.length > 1))
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        missing !== -1
-          ? `This <select> ${ready ? "has" : "still has"} no option "${input.values[missing]}"${ready ? "" : " after waiting for it"}.`
-          : "This <select> takes one option.",
-        { beforeInput: true },
-      );
-    remaining(deadline);
-    await gate();
-    gate.signal?.throwIfAborted();
-    // What Playwright's selectOption does once the options exist, without its wait for them.
-    const selected = await handle.evaluate((element, chosen) => {
-      const select = element as unknown as {
-        selectedIndex: number;
-        readonly options: ArrayLike<{ value: string; selected: boolean }>;
-        readonly selectedOptions: ArrayLike<{ value: string }>;
-        dispatchEvent(event: unknown): boolean;
-      };
-      // No values clears the selection, single select included (selectOption's contract).
-      select.selectedIndex = -1;
-      for (const value of chosen) {
-        const option = Array.from(select.options).find((entry) => entry.value === value);
-        if (option) option.selected = true;
-      }
-      const EventType = (
-        globalThis as unknown as { Event: new (type: string, init: object) => unknown }
-      ).Event;
-      select.dispatchEvent(new EventType("input", { bubbles: true, composed: true }));
-      select.dispatchEvent(new EventType("change", { bubbles: true }));
-      return Array.from(select.selectedOptions, (option) => option.value);
-    }, values as ReadonlyArray<string>);
-    return { selected };
-  } finally {
-    void handle.dispose().catch(constVoid);
-  }
-};
+export { select } from "./actionSelect.ts";
 
 export const drag = async (
   page: Page,
@@ -989,7 +920,9 @@ export const drag = async (
   await pointer(start, "move");
   await settled(source, deadline, false, gate);
   await settled(target, deadline, false, gate);
-  const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
+  const end = await actionCall(gate, () =>
+    target.boundingBox({ timeout: remaining(deadline) }),
+  ).catch(() => null);
   if (!end) throw targetChanged();
   const finish = { x: end.x + end.width / 2, y: end.y + end.height / 2 };
   await pointer(finish, "move");
@@ -1024,17 +957,19 @@ export const scroll = async (
     await gate();
     gate.signal?.throwIfAborted();
     // Page-side code is passed as source: the server compiles without DOM types.
-    await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
+    await actionCall(gate, () => page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`));
     return { settled: await settleScroll(page, undefined, gate.deadline) };
   }
-  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS, gate.signal);
+  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS, gate.signal, gate);
   try {
     await gate();
     gate.signal?.throwIfAborted();
-    await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
+    await actionCall(gate, () =>
+      handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
+    );
     return { settled: await settleScroll(page, { element: handle }, gate.deadline) };
   } finally {
-    void handle.dispose().catch(constVoid);
+    disposeAction(gate, handle);
   }
 };
 
