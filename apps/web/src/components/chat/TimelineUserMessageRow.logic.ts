@@ -1,4 +1,4 @@
-import { type ChatImageAttachment } from "../../types";
+import { type ChatFileAttachment, type ChatImageAttachment } from "../../types";
 import type { ComposerContextRecord, KnownComposerContextRecord } from "@goat/contracts";
 import { asKnownContextRecord } from "~/lib/composerContextRecords";
 
@@ -22,4 +22,8 @@ export function resolvePreviewAnnotationImage(input: {
     input.previewImages[input.annotationRecordIds.indexOf(input.record.contextId)] ??
     null
   );
+}
+
+export function userMessageFileLabel(file: Pick<ChatFileAttachment, "name" | "source">) {
+  return file.source?._tag === "pasted-text" ? "Pasted text" : file.name;
 }

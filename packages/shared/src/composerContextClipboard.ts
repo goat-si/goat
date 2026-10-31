@@ -37,9 +37,10 @@ export function decodeComposerContextClipboardHtml(
 ): ComposerContextClipboardFragment | null {
   // Percent encoding can expand each UTF-16 code unit to nine characters.
   if (!html || html.length > MAX_FRAGMENT_CHARS * 9 + HTML_WRAPPER_SLACK_CHARS) return null;
-  const encoded = new RegExp(
-    `(?:${LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE}|${GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE})=["']([^"']+)["']`,
-  ).exec(html)?.[1];
+  const match = new RegExp(
+    `(?:${LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE}|${GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE})=(?:"([^"]+)"|'([^']+)')`,
+  ).exec(html);
+  const encoded = match?.[1] ?? match?.[2];
   if (!encoded) return null;
   try {
     return decodeComposerContextFragment(decodeURIComponent(encoded));
