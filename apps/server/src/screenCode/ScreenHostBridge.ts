@@ -108,25 +108,7 @@ const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set(
 ]);
 // A tab wait's deadline answer must still reach the cell process before the cell ends.
 const WAIT_REPLY_RESERVE_MS = 100;
-/** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
-export const observationReplyBudget = (
-  call: ScreenHostCall,
-  limits: ScreenRunLimits,
-  reserveBytes = 0,
-): number => {
-  const envelope = JSON.stringify({
-    t: "reply",
-    runId: call.runId,
-    cellId: call.cellId,
-    callId: call.callId,
-    outcome: "ok",
-    value: null,
-  });
-  return Math.min(
-    limits.treeBytes,
-    limits.returnBytes - (Buffer.byteLength(envelope) - 4) - reserveBytes,
-  );
-};
+export { observationReplyBudget } from "./ScreenHostReplyBudget.ts";
 
 export class ScreenHostBridge {
   private readonly cells = new Map<string, CellState>();
