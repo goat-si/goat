@@ -28,7 +28,7 @@ type ViewportTab = {
 const mutate = <A>(channel: ActionChannel | undefined, work: () => A) =>
   channel ? channel.call(work) : work();
 
-export const layoutSize = (tab: ViewportTab) => {
+const layoutSize = (tab: ViewportTab) => {
   const size = tab.page.viewportSize();
   if (!size || tab.desktop) return size;
   return {
