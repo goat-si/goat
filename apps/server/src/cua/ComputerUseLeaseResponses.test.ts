@@ -54,9 +54,18 @@ describe("cut-off and off-screen answers for menu_bar_extras", () => {
 
 it("person stop is terminal and preserves uncertainty for an interrupted write", () => {
   const notSent = parsed(
-    refusal(1, "tools/call", "stopped", "Do not continue this turn.", undefined, undefined, {
-      tool: "click",
-    }),
+    refusal(
+      { possibleCommit: false },
+      1,
+      "tools/call",
+      "stopped",
+      "Do not continue this turn.",
+      undefined,
+      undefined,
+      {
+        tool: "click",
+      },
+    ),
   ).result;
   assert.equal(notSent.structuredContent.code, "stopped_by_person");
   assert.equal(notSent.structuredContent.safety.retryClass, "never");
@@ -90,4 +99,19 @@ it("screen lock never retries interrupted reads or writes", () => {
     assert.equal(answer.structuredContent.code, "screen_locked");
     assert.equal(answer.structuredContent.safety.retryClass, "never");
   }
+});
+
+it("a terminal refusal preserves an earlier possible input and person Stop", () => {
+  const answer = parsed(
+    refusal(
+      { reason: "stopped_by_person", possibleCommit: true },
+      1,
+      "tools/call",
+      "screen_locked",
+      "locked",
+    ),
+  ).result;
+  assert.equal(answer.structuredContent.code, "stopped_by_person");
+  assert.isTrue(answer.structuredContent.safety.possibleCommit);
+  assert.equal(answer.structuredContent.safety.retryClass, "never");
 });

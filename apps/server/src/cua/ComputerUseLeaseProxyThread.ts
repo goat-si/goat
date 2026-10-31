@@ -142,7 +142,8 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     output: (line) => options.output(options.screenshots?.scrub(line) ?? line),
     ownAnswers,
     ended,
-    endAnswer: (id, method, reason) => refusal(id, method, reason, LEASE_END_MESSAGES[reason]),
+    endAnswer: (id, method, reason) =>
+      refusal({ possibleCommit: false }, id, method, reason, LEASE_END_MESSAGES[reason]),
   });
   const answerStopped = Effect.fn("ComputerUseLeaseProxyThread.answerStopped")((
     id: JsonRpcId,
@@ -164,7 +165,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         { id, ...(method === undefined ? {} : { method }) },
         () => latch?.reason,
         () => false,
-      ).answer(refusal(id, method, "reconnecting", RECONNECTING));
+      ).answer(refusal({ possibleCommit: false }, id, method, "reconnecting", RECONNECTING));
     const candidate =
       given ??
       terminal ??
@@ -178,6 +179,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         ? "reconnecting"
         : candidate;
     const answer = refusal(
+      { possibleCommit: false },
       id,
       method,
       reason,
@@ -579,7 +581,13 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             () => false,
           );
           yield* sink.answer(
-            refusal(request.callId, "tools/call", "invalid_target", WAITING),
+            refusal(
+              { possibleCommit: false },
+              request.callId,
+              "tools/call",
+              "invalid_target",
+              WAITING,
+            ),
             "not_started",
           );
           options.onPrimitiveSettled?.(request.requestId);
@@ -647,7 +655,9 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       );
     const key = JSON.stringify(id);
     if (isRequest && (owners.has(key) || setup.pending(key)))
-      return yield* response.answer(refusal(id, message.method, "invalid_target", REQUEST_ID_BUSY));
+      return yield* response.answer(
+        refusal({ possibleCommit: false }, id, message.method, "invalid_target", REQUEST_ID_BUSY),
+      );
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     if (context === undefined || current !== context || !context.ready || terminal !== undefined) {

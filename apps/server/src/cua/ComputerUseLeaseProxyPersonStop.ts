@@ -187,9 +187,15 @@ export function makePersonStopFence() {
     },
     refusal: (id: JsonRpcId, method: string | undefined) =>
       reason === "screen_locked"
-        ? refusal(id, method, "screen_locked", PAUSE_MESSAGES.screen_locked)
+        ? refusal(
+            { possibleCommit: false },
+            id,
+            method,
+            "screen_locked",
+            PAUSE_MESSAGES.screen_locked,
+          )
         : reason === "stopped_by_person"
-          ? refusal(id, method, "stopped", LEASE_END_MESSAGES.stopped)
+          ? refusal({ possibleCommit: false }, id, method, "stopped", LEASE_END_MESSAGES.stopped)
           : undefined,
   };
 }

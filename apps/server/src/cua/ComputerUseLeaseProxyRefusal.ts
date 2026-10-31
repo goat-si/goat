@@ -176,22 +176,48 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   const finished = input.finished();
   const paused = input.paused();
   if (finished !== undefined)
-    return refusal(input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      finished,
+      LEASE_END_MESSAGES[finished],
+    );
   if (paused !== undefined)
-    return refusal(input.id, input.message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      pausedDetail(paused),
+      PAUSE_MESSAGES[paused],
+    );
   if (input.idle())
     return refusal(
+      { possibleCommit: false },
       input.id,
       input.message.method,
       "control_idle",
       "This thread's turn has ended. Computer use is idle until its next turn.",
     );
   if (input.message.params?.name === "get_desktop_state")
-    return refusal(input.id, input.message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      "desktop_capture_off",
+      DESKTOP_CAPTURE_OFF,
+    );
   if (toFile !== undefined)
-    return refusal(input.id, input.message.method, "desktop_capture_off", toFile);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      "desktop_capture_off",
+      toFile,
+    );
   if (initiallyDenied && verdict._tag === "resolve")
     return refusal(
+      { possibleCommit: false },
       input.id,
       input.message.method,
       "foreground_not_approved",
@@ -200,6 +226,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   const missing = verdict._tag === "allow" ? unresolvedBatch() : undefined;
   if (missing !== undefined)
     return refusal(
+      { possibleCommit: false },
       input.id,
       input.message.method,
       "app_not_allowed",
@@ -208,6 +235,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (verdict._tag === "resolve")
     return refusal(
+      { possibleCommit: false },
       input.id,
       input.message.method,
       "app_not_allowed",
@@ -218,6 +246,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (verdict._tag === "refuse")
     return refusal(
+      { possibleCommit: false },
       input.id,
       input.message.method,
       verdict.reason,
@@ -225,12 +254,25 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       verdict.app,
     );
   if (input.shared() && takesScreen(input.message.params?.name, input.message.params?.arguments))
-    return refusal(input.id, input.message.method, "screen_shared", SCREEN_SHARED);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      "screen_shared",
+      SCREEN_SHARED,
+    );
   if (input.tokenFirstRefuses())
-    return refusal(input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      "token_first",
+      TOKEN_FIRST_MESSAGE,
+    );
   const now = yield* Clock.currentTimeMillis;
   if (foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > now))
     return refusal(
+      { possibleCommit: false },
       input.id,
       input.message.method,
       "foreground_not_approved",
@@ -255,9 +297,21 @@ const listAutomationTarget = Effect.fn("ComputerUseLeaseProxy.listAutomationTarg
   yield* input.listApps;
   const finished = input.finished();
   if (finished !== undefined)
-    return refusal(input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      finished,
+      LEASE_END_MESSAGES[finished],
+    );
   const paused = input.paused();
   if (paused !== undefined)
-    return refusal(input.id, input.message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    return refusal(
+      { possibleCommit: false },
+      input.id,
+      input.message.method,
+      pausedDetail(paused),
+      PAUSE_MESSAGES[paused],
+    );
   return undefined;
 });

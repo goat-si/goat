@@ -356,7 +356,15 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
             Effect.suspend(() =>
               dispatchedPrimitives.has(request)
                 ? Effect.void
-                : sink.answer(refusal(id, "tools/call", "expired", SCREEN_CALL_EXPIRED)),
+                : sink.answer(
+                    refusal(
+                      { possibleCommit: false },
+                      id,
+                      "tools/call",
+                      "expired",
+                      SCREEN_CALL_EXPIRED,
+                    ),
+                  ),
             ),
           ),
           Effect.forkScoped,

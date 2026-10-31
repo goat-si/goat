@@ -43,6 +43,7 @@ export const reservedIdAnswer = (id: string, prefix: string) =>
   });
 
 export const refusal = (
+  state: ComputerUseTerminalState,
   id: JsonRpcId,
   method: string | undefined,
   detail: ComputerUseRefusalDetail,
@@ -51,6 +52,28 @@ export const refusal = (
   holderThreadId?: import("@goat/contracts").ThreadId,
   call?: { readonly tool?: string | undefined; readonly args?: unknown },
 ) => {
+  const incoming =
+    detail === "screen_locked"
+      ? "screen_locked"
+      : detail === "stopped" || detail === "stopped_all"
+        ? "stopped_by_person"
+        : undefined;
+  const merged = mergeTerminal(state, { reason: incoming });
+  if (merged.reason !== undefined && merged.possibleCommit) {
+    const cause: Interruption =
+      merged.reason === "screen_locked"
+        ? { _tag: "pause", reason: "screen_locked" }
+        : { _tag: "end", reason: "stopped" };
+    return cutOff(id, call?.tool, cause, call?.args, merged);
+  }
+  if (merged.reason === "stopped_by_person" && incoming !== "stopped_by_person") {
+    detail = "stopped";
+    message = LEASE_END_MESSAGES.stopped;
+  }
+  if (merged.reason === "screen_locked" && incoming !== "screen_locked") {
+    detail = "screen_locked";
+    message = PAUSE_MESSAGES.screen_locked;
+  }
   const refused = {
     refused: computerUseRefusalReason(detail),
     detail,
@@ -94,6 +117,7 @@ export const terminalReplacement = (
   return dispatched || state.possibleCommit
     ? cutOff(id, tool, cause, args, state)
     : refusal(
+        state,
         id,
         "tools/call",
         state.reason === "screen_locked" ? "screen_locked" : "stopped",
@@ -217,6 +241,7 @@ export const offScreenAnswer = (
 ) =>
   isReadOnlyCall(tool, args)
     ? refusal(
+        { possibleCommit: false },
         id,
         method,
         "wrong_display",
@@ -272,27 +297,44 @@ export const unsentCallRefusal = (
     state.finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
   const pausing =
     state.paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
-  if (ending !== undefined) return refusal(id, method, ending, LEASE_END_MESSAGES[ending]);
+  if (ending !== undefined)
+    return refusal({ possibleCommit: false }, id, method, ending, LEASE_END_MESSAGES[ending]);
   if (pausing !== undefined)
-    return refusal(id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
+    return refusal(
+      { possibleCommit: false },
+      id,
+      method,
+      pausedDetail(pausing),
+      PAUSE_MESSAGES[pausing],
+    );
   if (state.idle || (pending !== undefined && "idle" in pending))
     return refusal(
+      { possibleCommit: false },
       id,
       method,
       "control_idle",
       "This thread's turn has ended. Computer use is idle until its next turn.",
     );
-  if (state.held === true) return refusal(id, method, "reconnecting", RECONNECTING);
+  if (state.held === true)
+    return refusal({ possibleCommit: false }, id, method, "reconnecting", RECONNECTING);
   if (pending !== undefined && "narrowed" in pending)
     return refusal(
+      { possibleCommit: false },
       id,
       method,
       "app_not_approved",
       "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
     );
   if (state.foregroundRevoked)
-    return refusal(id, method, "foreground_not_approved", FOREGROUND_NOT_APPROVED);
+    return refusal(
+      { possibleCommit: false },
+      id,
+      method,
+      "foreground_not_approved",
+      FOREGROUND_NOT_APPROVED,
+    );
   return refusal(
+    { possibleCommit: false },
     id,
     method,
     interruptionDetail(lastInterruption),
@@ -310,9 +352,10 @@ export const unsentOutcome = (
   notSent: () => string,
 ) =>
   outcome === "shared"
-    ? refusal(id, method, "screen_shared", SCREEN_SHARED)
+    ? refusal({ possibleCommit: false }, id, method, "screen_shared", SCREEN_SHARED)
     : outcome === "expired"
       ? refusal(
+          { possibleCommit: false },
           id,
           method,
           "expired",

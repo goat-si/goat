@@ -230,6 +230,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       if (!binding)
         return {
           refused: refusal(
+            { possibleCommit: false },
             id,
             message.method,
             "outside_manifest",
@@ -252,6 +253,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if (isRecord(untrustedArgs) && untrustedArgs.authority === "claimBind")
       return {
         refused: refusal(
+          { possibleCommit: false },
           id,
           message.method,
           "outside_manifest",
@@ -266,6 +268,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if ("refused" in browser)
       return {
         refused: refusal(
+          { possibleCommit: false },
           id,
           message.method,
           "outside_manifest",
@@ -284,6 +287,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
         return {
           refused: refusal(
+            { possibleCommit: false },
             id,
             message.method,
             "outside_manifest",
@@ -295,6 +299,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
       return {
         refused: refusal(
+          { possibleCommit: false },
           id,
           message.method,
           "outside_manifest",
@@ -353,6 +358,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     outstanding.delete(key);
     yield* request.sink.answer(
       refusal(
+        { possibleCommit: false },
         request.id,
         request.method,
         "outside_manifest",
@@ -375,7 +381,13 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     method: string | undefined,
   ) {
     if (selected === undefined || (yield* supported())) return undefined;
-    return refusal(id, method, "outside_manifest", "This driver does not support browser claims.");
+    return refusal(
+      { possibleCommit: false },
+      id,
+      method,
+      "outside_manifest",
+      "This driver does not support browser claims.",
+    );
   });
   return { update, gate, allowed, outside, refuseReply, attach, unsupported, report };
 };
