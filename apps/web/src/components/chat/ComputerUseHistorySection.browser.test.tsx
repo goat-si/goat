@@ -1,7 +1,7 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
-import { render } from "../../../test/render";
+import { act, render } from "../../../test/render";
 
 const mocks = vi.hoisted(() => ({ request: vi.fn(), canRead: true }));
 vi.mock(import("@effect/atom-react"), async (original) => ({
@@ -131,7 +131,10 @@ it.each([false, true])(
       await expect.element(screen.getByText(/thread_A_only_action/)).toBeVisible();
     }
     await screen.rerender(<ComputerUseHistorySection environmentId={environmentId} threadId={b} />);
-    if (delayed) reply.resolve({ _tag: "Success", value: { entries: [row], nextCursor: null } });
+    if (delayed)
+      await act(async () =>
+        reply.resolve({ _tag: "Success", value: { entries: [row], nextCursor: null } }),
+      );
     await expect.element(screen.getByRole("button", { name: "Show input history" })).toBeVisible();
     expect(screen.getByText(/thread_A_only_action/).elements()).toHaveLength(0);
     await userEvent.click(screen.getByRole("button", { name: "Show input history" }));
