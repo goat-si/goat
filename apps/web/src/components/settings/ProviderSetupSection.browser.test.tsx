@@ -14,6 +14,9 @@ import { act, render } from "../../../test/render";
 const setup = vi.hoisted(() => ({
   auth: null as ProviderAuthState | null,
   installation: null as ProviderInstallState | null,
+  installationError: null as string | null,
+  installationPending: false,
+  refreshInstall: vi.fn(),
   authState: vi.fn(() => "auth"),
   installState: vi.fn(() => "installation"),
   startAuth: vi.fn(),
@@ -63,9 +66,14 @@ vi.mock(import("../../state/query"), async (original) => {
       data: useSyncExternalStore(subscribe, () =>
         atom === "auth" ? setup.auth : setup.installation,
       ),
-      error: null,
-      isPending: false,
-      refresh: vi.fn(),
+      error: useSyncExternalStore(subscribe, () =>
+        atom === "installation" ? setup.installationError : null,
+      ),
+      isPending: useSyncExternalStore(
+        subscribe,
+        () => atom === "installation" && setup.installationPending,
+      ),
+      refresh: atom === "installation" ? setup.refreshInstall : vi.fn(),
     })) as never,
   };
 });
@@ -155,6 +163,9 @@ async function renderSetup(options: SectionOptions = {}) {
 function resetSetup() {
   vi.clearAllMocks();
   setup.auth = authState();
+  setup.installationError = null;
+  setup.installationPending = false;
+  setup.refreshInstall.mockReset();
   setup.installation = {
     driver: ProviderDriverKind.make("antigravity"),
     operationId: null,
@@ -181,6 +192,101 @@ function resetSetup() {
 }
 
 describe("Antigravity setup", () => {
+  it("can start installation before the first install snapshot arrives", async () => {
+    resetSetup();
+    setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
+    const idleInstallation = setup.installation!;
+    setup.installation = null;
+    let resolveStart!: () => void;
+    const command = new Promise<{ _tag: "Success"; value: undefined }>((resolve) => {
+      resolveStart = () => resolve({ _tag: "Success", value: undefined });
+    });
+    setup.startInstall.mockReturnValueOnce(command);
+    await using screen = await renderSetup({ provider: { ...provider, installed: false } });
+
+    await expect
+      .element(screen.getByRole("status").filter({ hasText: "Checking installation status." }))
+      .toBeVisible();
+    await screen.click("Install Antigravity");
+    await expect
+      .element(screen.getByRole("status").filter({ hasText: "Starting installation." }))
+      .toBeVisible();
+
+    setup.installation = {
+      ...idleInstallation,
+      operationId: "install-1",
+      phase: "downloading",
+      downloadedBytes: 1_000_000,
+      totalBytes: 2_000_000,
+    };
+    await publish();
+    await expect.element(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await act(async () => resolveStart());
+    await expect.element(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    await expect
+      .element(screen.getByRole("status").filter({ hasText: "Downloading 1.0 MB of 2.0 MB." }))
+      .toBeVisible();
+  });
+
+  it.each(["retry", "install"] as const)(
+    "recovers a failed initial installation-status query via %s",
+    async (action) => {
+      resetSetup();
+      setup.auth = authState({ phase: "idle", flowId: null, authorizationUrl: null });
+      const idleInstallation = setup.installation!;
+      setup.installation = null;
+      setup.installationError = "Status request failed";
+      setup.refreshInstall.mockImplementation(() => {
+        setup.installationPending = true;
+      });
+      await using screen = await renderSetup({ provider: { ...provider, installed: false } });
+
+      await expect
+        .element(
+          screen.getByRole("status").filter({ hasText: "Could not check installation status." }),
+        )
+        .toBeVisible();
+      await expect
+        .element(screen.getByRole("alert").filter({ hasText: "Status request failed" }))
+        .toBeVisible();
+      await expect
+        .element(screen.getByRole("button", { name: "Install Antigravity" }))
+        .toBeEnabled();
+
+      if (action === "install") {
+        await screen.click("Install Antigravity");
+        expect(setup.startInstall).toHaveBeenCalledWith({ environmentId, input: { instanceId } });
+        return;
+      }
+
+      await screen.click("Retry status check");
+      await publish();
+      await expect
+        .element(screen.getByRole("status").filter({ hasText: "Checking installation status." }))
+        .toBeVisible();
+      await expect
+        .element(screen.getByRole("button", { name: "Retry status check" }))
+        .toBeDisabled();
+      setup.installation = idleInstallation;
+      setup.installationError = null;
+      setup.installationPending = false;
+      await publish();
+      await expect
+        .element(
+          screen
+            .getByRole("status")
+            .filter({ hasText: "Antigravity isn't installed on this environment." }),
+        )
+        .toBeVisible();
+      await expect
+        .element(screen.getByRole("button", { name: "Retry status check" }))
+        .not.toBeInTheDocument();
+      await expect
+        .element(screen.getByRole("button", { name: "Install Antigravity" }))
+        .toBeEnabled();
+    },
+  );
+
   it("waits for verified auth after submitting a callback to the selected environment", async () => {
     resetSetup();
     const callbackUrl = "http://127.0.0.1:5555/?state=test-only&code=test-only";
