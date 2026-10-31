@@ -419,6 +419,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         const fetched = yield* broker
           .invoke({
             scope: context.invocation,
+            runId: context.runId,
             operation: "fetch",
             input: {
               url,

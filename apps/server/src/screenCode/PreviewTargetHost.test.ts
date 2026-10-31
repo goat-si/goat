@@ -44,6 +44,21 @@ it.effect("a blocked tab claim returns blocked_url without acquiring a claim", (
   }),
 );
 
+it.effect("screen fetch passes the active run identity and preserves a blocked refusal", () =>
+  Effect.gen(function* () {
+    const fixture = yield* browserFixture();
+    fixture.state.failure = new PreviewAutomationControlInterruptedError({
+      ...actionErrorContext,
+      operation: "fetch",
+      reason: "blocked_url",
+      dispatched: false,
+    });
+    const result = yield* fixture.dispatch("fetch_tab", { url: "https://example.test/resource" });
+    expect(result?.error).toMatchObject({ code: "blocked_url", effectStarted: false });
+    expect(fixture.requests.find((request) => request.operation === "fetch")?.runId).toBe("run");
+  }),
+);
+
 it.effect("a cell reads page text from an unclaimed tab within the reply budget", () =>
   Effect.gen(function* () {
     const fixture = yield* browserFixture();
