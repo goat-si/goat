@@ -101,36 +101,6 @@ const layer = ServerBrowser.layer.pipe(
   ),
 );
 
-it.effect("an unattributed blocked popup fences all active tabs in its context", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const f = yield* fixture;
-      shareNextContext = true;
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          shareNextContext = false;
-        }),
-      );
-      const opened = yield* f.broker.invoke<PreviewAutomationStatus>({
-        scope,
-        operation: "open",
-        input: { reuseExistingTab: false, show: false },
-      });
-      const other = PreviewTabId.make(opened.tabId!);
-      const opening = yield* Effect.promise(() =>
-        f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
-      ).pipe(Effect.forkChild);
-      yield* Deferred.await(f.slowStarted);
-      const first = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
-      const second = yield* f.call(other, "press", { key: "Enter" }).pipe(Effect.result);
-      yield* Deferred.succeed(f.slowGate, undefined);
-      yield* Fiber.join(opening);
-      blocked(first);
-      blocked(second);
-    }),
-  ).pipe(Effect.provide(layer)),
-);
-
 const fixture = Effect.gen(function* () {
   const hits: string[] = [];
   const slowStarted = yield* Deferred.make<void>();
@@ -236,9 +206,15 @@ it.effect("an agent link to a blocked host fences the tab", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
-      const arrived = f.page.waitForURL(`${f.blocked}/blocked`);
+      const requested = yield* Deferred.make<void>();
+      const onRequest = (request: import("playwright-core").Request) => {
+        if (request.isNavigationRequest() && request.url() === `${f.blocked}/blocked`)
+          Deferred.doneUnsafe(requested, Effect.void);
+      };
+      f.page.on("request", onRequest);
+      yield* Effect.addFinalizer(() => Effect.sync(() => f.page.off("request", onRequest)));
       yield* f.call(f.tabId, "click", { locator: "#link" }).pipe(Effect.result);
-      yield* Effect.promise(() => arrived);
+      yield* Deferred.await(requested);
       yield* Effect.promise(() => f.page.goto(`${f.allowed}/safe`));
       blocked(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result));
     }),
@@ -484,6 +460,15 @@ it.effect("a slow blocked popup fences active context tabs before the response a
   Effect.scoped(
     Effect.gen(function* () {
       const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      yield* viewer.input({ type: "takeControl" });
       const opening = yield* Effect.promise(() =>
         f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
       ).pipe(Effect.forkChild);

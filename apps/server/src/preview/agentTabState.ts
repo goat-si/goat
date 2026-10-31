@@ -17,6 +17,7 @@ export interface AgentInput {
   /** The tab's control generation then; a person taking the tab since moves it on. */
   readonly generation: number;
   readonly signal?: AbortSignal;
+  readonly runSignal?: AbortSignal | undefined;
 }
 
 /**
@@ -56,21 +57,26 @@ export class PopupAttribution {
   lastInput: AgentInput | undefined;
   private readonly openings = new Map<
     string,
-    { owner: string | null; agentControlled: boolean; signal?: AbortSignal }
+    {
+      owner: string | null;
+      agentControlled: boolean;
+      signal?: AbortSignal;
+      runSignal?: AbortSignal;
+    }
   >();
 
   opened(targetId: string, opener: Opener, now: number) {
     const recent = this.lastInput;
-    const signal =
-      recent &&
-      recent.generation === opener.control.generation &&
-      (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
-        ? recent.signal
+    const owner = popupOwner({ ...opener, lastAgentInput: recent }, now);
+    const input =
+      recent && recent.agentId === owner && recent.generation === opener.control.generation
+        ? recent
         : undefined;
     this.openings.set(targetId, {
-      owner: popupOwner({ ...opener, lastAgentInput: recent }, now),
+      owner,
       agentControlled: !("controller" in opener.control) || opener.control.controller === null,
-      ...(signal ? { signal } : {}),
+      ...(input?.signal ? { signal: input.signal } : {}),
+      ...(input?.runSignal ? { runSignal: input.runSignal } : {}),
     });
     if (this.openings.size > OPENINGS_KEPT)
       this.openings.delete(this.openings.keys().next().value ?? "");

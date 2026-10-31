@@ -43,6 +43,10 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
   const pending = new Map<string, { runId: string; check: Promise<void> }>();
   const tokens = new Map<string, object>();
   const runs = new Map<string, AbortController>();
+  const popupRuns = new Map<
+    AbortController,
+    { threadId: string; origin: AbortSignal; release: () => void }
+  >();
   const operations = new Map<
     string,
     { threadId: string; runId: string; controller: AbortController }
@@ -92,6 +96,19 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     runs.set(key, controller);
     return controller.signal;
   };
+  const popupRun = (threadId: string, origin: AbortSignal | undefined) => {
+    const current = capture(threadId);
+    if (!origin || origin.aborted || !current || runSignal(threadId, current.runId) !== origin)
+      return undefined;
+    const controller = new AbortController();
+    const release = () => {
+      popupRuns.delete(controller);
+      origin.removeEventListener("abort", release);
+    };
+    popupRuns.set(controller, { threadId, origin, release });
+    origin.addEventListener("abort", release, { once: true });
+    return { signal: AbortSignal.any([origin, controller.signal]), release };
+  };
   const signal = (tab: Tab, runId: string | undefined) => {
     const actualRun = runId ?? capture(tab.threadId)?.runId;
     if (!actualRun || !active(tab.threadId, actualRun)) return undefined;
@@ -115,6 +132,17 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     const value = token(threadId, runId);
     return value ? { runId, token: value } : undefined;
   };
+  yield* activity.onRunStart((threadId) => {
+    if (popupRuns.size === 0) return;
+    const current = capture(threadId);
+    const signal = current && runSignal(threadId, current.runId);
+    for (const [controller, popup] of popupRuns) {
+      if (popup.threadId === threadId && popup.origin !== signal) {
+        controller.abort(new BrowserControlInterrupted("The agent run changed.", "interrupted"));
+        popup.release();
+      }
+    }
+  });
   const observe = (tab: Tab, url: string, observedRun?: BlockedTabRun) => {
     const key = keyOf(tab);
     const observed = observedRun ?? capture(tab.threadId);
@@ -246,5 +274,6 @@ export const makeBlockedTabFence = Effect.fn("BlockedTabFence.make")(function* (
     blockedFrame,
     signal,
     runSignal,
+    popupRun,
   };
 });

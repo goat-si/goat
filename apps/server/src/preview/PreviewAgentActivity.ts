@@ -25,6 +25,9 @@ export class PreviewAgentActivity extends Context.Service<
     readonly onRunEnd: (
       handler: (threadId: ThreadId, runId: string) => void,
     ) => Effect.Effect<void, never, Scope.Scope>;
+    readonly onRunStart: (
+      handler: (threadId: ThreadId, runId: string | undefined) => void,
+    ) => Effect.Effect<void, never, Scope.Scope>;
     /** Each thread's transitions between no turn and some turn, from subscription on. */
     readonly changes: Effect.Effect<
       PubSub.Subscription<PreviewAgentTurnChange>,
@@ -39,6 +42,7 @@ const make = Effect.gen(function* () {
   // A token per turn, so overlapping turns on one thread end only when the last does.
   const turns = new Map<ThreadId, Map<symbol, string | undefined>>();
   const endHandlers = new Set<(threadId: ThreadId, runId: string) => void>();
+  const startHandlers = new Set<(threadId: ThreadId, runId: string | undefined) => void>();
 
   const begin = Effect.fn("PreviewAgentActivity.begin")(function* (
     threadId: ThreadId,
@@ -49,6 +53,7 @@ const make = Effect.gen(function* () {
     if (existing === undefined) turns.set(threadId, tokens);
     const token = Symbol(threadId);
     tokens.set(token, runId);
+    for (const handler of startHandlers) handler(threadId, runId);
     if (existing === undefined) yield* PubSub.publish(changes, { threadId, active: true });
     return Effect.suspend(() => {
       if (!tokens.delete(token)) return Effect.void;
@@ -70,6 +75,17 @@ const make = Effect.gen(function* () {
     }),
     isRunActive: Effect.fn("PreviewAgentActivity.isRunActive")((threadId, runId) =>
       Effect.sync(() => [...(turns.get(threadId)?.values() ?? [])].includes(runId)),
+    ),
+    onRunStart: Effect.fn("PreviewAgentActivity.onRunStart")((handler) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          startHandlers.add(handler);
+        }),
+        () =>
+          Effect.sync(() => {
+            startHandlers.delete(handler);
+          }),
+      ).pipe(Effect.asVoid),
     ),
     onRunEnd: Effect.fn("PreviewAgentActivity.onRunEnd")((handler) =>
       Effect.acquireRelease(

@@ -249,3 +249,34 @@ it.effect("a blocked check without an explicit run cuts the active run's observe
     ),
   ),
 );
+
+it.effect("a popup run signal is cut when another run becomes current", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const fence = yield* makeBlockedTabFence();
+      const threadId = ThreadId.make("popup-current-run");
+      const endFirst = yield* activity.begin(threadId, "first");
+      const first = fence.runSignal(threadId, "first");
+      expect(fence.popupRun(threadId, undefined)).toBeUndefined();
+      const popup = fence.popupRun(threadId, first);
+      expect(popup?.signal.aborted).toBe(false);
+      const endLater = yield* activity.begin(threadId, "later");
+      expect(popup?.signal.aborted).toBe(true);
+      expect(fence.popupRun(threadId, first)).toBeUndefined();
+      popup?.release();
+      yield* endLater;
+      yield* endFirst;
+      const endReused = yield* activity.begin(threadId, "first");
+      expect(fence.popupRun(threadId, first)).toBeUndefined();
+      yield* endReused;
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(PreviewAgentActivity.layer, ServerSettings.layerTest()).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-popup-run-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);

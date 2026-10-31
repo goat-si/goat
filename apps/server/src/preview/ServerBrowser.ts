@@ -1037,7 +1037,7 @@ const make = Effect.gen(function* () {
   const prepareContext = makeContextPreparer();
 
   const adoptPopup = async (opener: ServerTab, popup: Page) => {
-    const { agentId, visits, refused, signal } = await inspectPopup(
+    const { agentId, visits, refused, signal, releaseOrigin, close } = await inspectPopup(
       opener,
       popup,
       blockedTabs,
@@ -1046,7 +1046,7 @@ const make = Effect.gen(function* () {
       () => Date.now(),
     );
     if (refused) return;
-    const release = closePopupOnAbort(popup, signal);
+    const release = closePopupOnAbort(popup, signal, releaseOrigin, close);
     if (signal?.aborted) return release();
     const url = popup.url();
     const controller = [...opener.viewers].find(
@@ -1066,6 +1066,7 @@ const make = Effect.gen(function* () {
             openerTabId: opener.tabId,
             ...(signal ? { signal } : {}),
             release,
+            close,
             visits,
           }),
       }),
@@ -1075,7 +1076,7 @@ const make = Effect.gen(function* () {
       },
       async () => {
         release();
-        await popup.close().catch(constVoid);
+        await close().catch(constVoid);
       },
     );
   };
@@ -1092,7 +1093,7 @@ const make = Effect.gen(function* () {
         adopted?.release();
         if (adopted?.signal?.aborted) {
           adoptedPages.delete(key);
-          await adopted.page.close().catch(constVoid);
+          await adopted.close().catch(constVoid);
           await runPromise(
             manager.close({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId }),
           ).catch(constVoid);
@@ -1784,14 +1785,15 @@ const make = Effect.gen(function* () {
             "dialogPending",
           );
         const generation = tab.control.generation;
+        const attribution = {
+          agentId: agentSessionId,
+          at: Date.now(),
+          generation,
+          signal: operationSignal,
+          runSignal,
+        };
         tab.agentOperating = !READ_OPERATIONS.has(request.operation);
-        if (tab.agentOperating)
-          tab.popups.lastInput = {
-            agentId: agentSessionId,
-            at: Date.now(),
-            generation,
-            signal: operationSignal,
-          };
+        if (tab.agentOperating) tab.popups.lastInput = attribution;
         updateFileChooserInterception(tab);
         try {
           return await executeTabOperation(
@@ -1801,13 +1803,7 @@ const make = Effect.gen(function* () {
             AbortSignal.any([signal, operationSignal]),
           );
         } finally {
-          if (tab.agentOperating)
-            tab.popups.lastInput = {
-              agentId: agentSessionId,
-              at: Date.now(),
-              generation,
-              signal: operationSignal,
-            };
+          if (tab.agentOperating) tab.popups.lastInput = { ...attribution, at: Date.now() };
           tab.agentOperating = false;
           updateFileChooserInterception(tab);
           if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);

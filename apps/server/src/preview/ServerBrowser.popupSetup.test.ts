@@ -356,51 +356,251 @@ it.effect("a cut while popup setup waits closes it without sending setup command
   ).pipe(Effect.provide(layer)),
 );
 
-it.effect("a popup navigated after opening blank fences its opener and any adopted tab", () =>
+it.effect("a new current run closes an older popup while setup waits", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const f = yield* fixture;
+      const f = yield* popupSetup;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const latch = Promise.withResolvers<void>();
+      yield* Deferred.await(release).pipe(
+        Effect.tap(() => Effect.sync(latch.resolve)),
+        Effect.forkChild,
+      );
+      let popupSessions = 0;
+      f.hook.beforeReturn = async (target) => {
+        if (target !== f.page && ++popupSessions === 2) {
+          Deferred.doneUnsafe(entered, Effect.void);
+          await latch.promise;
+        }
+      };
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          latch.resolve();
+          delete f.hook.beforeReturn;
+        }),
+      );
       yield* Effect.promise(() =>
-        f.page.locator("#popupBlank").evaluate((button, url) => {
-          button.setAttribute(
-            "onclick",
-            `const p=window.open('about:blank');p.location.href='${url}'`,
-          );
-        }, `${f.blocked}/slow`),
+        f.page.locator("#next").evaluate((button, url) => {
+          button.setAttribute("onclick", `window.open('${url}')`);
+        }, `${f.allowed}/safe`),
       );
       const popupReady = f.page.waitForEvent("popup");
       const clicking = yield* f
-        .call(f.tabId, "click", { locator: "#popupBlank" })
+        .call(f.tabId, "click", { locator: "#next" })
         .pipe(Effect.result, Effect.forkChild);
-      yield* Deferred.await(f.slowStarted);
-      yield* Deferred.succeed(f.slowGate, undefined);
-      yield* Fiber.join(clicking);
       const popup = yield* Effect.promise(() => popupReady);
-      const closeEvent = yield* Deferred.make<void>();
-      if (popup.isClosed()) yield* Deferred.succeed(closeEvent, undefined);
-      else popup.once("close", () => Deferred.doneUnsafe(closeEvent, Effect.void));
-      const closed = Deferred.await(closeEvent).pipe(Effect.as(undefined));
-      const adopted = Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
-        Stream.mapEffect(() => f.manager.list({ threadId })),
-        Stream.filter((result) => result.sessions.some((view) => view.tabId !== f.tabId)),
-        Stream.runHead,
-        Effect.map((result) =>
-          result._tag === "Some"
-            ? result.value.sessions.find((view) => view.tabId !== f.tabId)
-            : undefined,
+      yield* Deferred.await(entered);
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const endLater = yield* activity.begin(threadId, "later-run");
+      yield* Effect.addFinalizer(() => endLater);
+      if (!popup.isClosed()) yield* Effect.promise(() => popup.waitForEvent("close"));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(clicking);
+      expect(f.sent).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+      expect(f.sent).not.toContain("Fetch.enable");
+      expect(f.sent).not.toContain("Page.enable");
+      expect(f.sent.filter((method) => method !== "Target.getTargetInfo")).toEqual([]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "a blank popup's blocked navigation observes the request or closure and fences its opener",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* fixture;
+        yield* Effect.promise(() =>
+          f.page.locator("#popupBlank").evaluate((button, url) => {
+            button.setAttribute(
+              "onclick",
+              `const p=window.open('about:blank');p.location.href='${url}'`,
+            );
+          }, `${f.blocked}/slow`),
+        );
+        const requestObserved = yield* Deferred.make<void>();
+        const onRequest = (request: import("playwright-core").Request) => {
+          if (request.isNavigationRequest() && request.url() === `${f.blocked}/slow`)
+            Deferred.doneUnsafe(requestObserved, Effect.void);
+        };
+        f.page.context().on("request", onRequest);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => f.page.context().off("request", onRequest)),
+        );
+        const closed = yield* Deferred.make<string>();
+        const monitor = yield* Effect.acquireRelease(
+          Effect.promise(() => f.page.context().newCDPSession(f.page)),
+          (session) => Effect.promise(() => session.detach().catch(() => undefined)),
+        );
+        const root = yield* Effect.promise(() => monitor.send("Target.getTargetInfo"));
+        let popupTarget: string | undefined;
+        monitor.on("Target.targetCreated", ({ targetInfo }) => {
+          if (targetInfo.openerId === root.targetInfo.targetId) popupTarget = targetInfo.targetId;
+        });
+        monitor.on("Target.targetDestroyed", ({ targetId }) => {
+          if (targetId === popupTarget) Deferred.doneUnsafe(closed, Effect.succeed(targetId));
+        });
+        yield* Effect.promise(() => monitor.send("Target.setDiscoverTargets", { discover: true }));
+        const clicking = yield* f
+          .call(f.tabId, "click", { locator: "#popupBlank" })
+          .pipe(Effect.result, Effect.forkChild);
+        const first = yield* Effect.raceFirst(
+          Deferred.await(requestObserved).pipe(Effect.as("request" as const)),
+          Deferred.await(closed).pipe(Effect.map((targetId) => ({ targetId }))),
+        );
+        yield* Deferred.succeed(f.slowGate, undefined);
+        yield* Fiber.join(clicking);
+        if (first !== "request") expect(first.targetId).toBe(popupTarget);
+        expect(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result)).toMatchObject(
+          { _tag: "Failure", failure: { reason: "blocked_url" } },
+        );
+      }),
+    ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a person's adopted blank popup fences both tabs after a blocked visit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      yield* viewer.input({ type: "takeControl" });
+      const events = yield* f.manager.subscribeEvents;
+      const popupReady = f.page.waitForEvent("popup");
+      yield* Effect.promise(() => f.page.evaluate("window.open('about:blank')"));
+      const popup = yield* Effect.promise(() => popupReady);
+      const opened = yield* Stream.fromSubscription(events).pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "opened" && event.threadId === threadId && event.tabId !== f.tabId,
         ),
+        Stream.runHead,
       );
-      const tab = yield* Effect.raceFirst(closed, adopted);
-      if (tab) {
-        expect(
-          yield* f
-            .call(PreviewTabId.make(tab.tabId), "press", { key: "Enter" })
-            .pipe(Effect.result),
-        ).toMatchObject({ _tag: "Failure", failure: { reason: "blocked_url" } });
-      }
+      if (opened._tag === "None") return yield* Effect.die("popup event stream ended");
+      const tabId = PreviewTabId.make(opened.value.tabId);
+      yield* f.call(tabId, "claim", {});
+      yield* Effect.promise(() => popup.goto(`${f.blocked}/blocked`));
+      yield* Effect.promise(() => popup.goto(`${f.allowed}/safe`));
+      yield* viewer.input({ type: "releaseControl" });
+      expect(yield* f.call(tabId, "press", { key: "Enter" }).pipe(Effect.result)).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "blocked_url" },
+      });
       expect(yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result)).toMatchObject({
         _tag: "Failure",
         failure: { reason: "blocked_url" },
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
+const delayedPopup = (startLaterRun: boolean, endOriginal = true) =>
+  Effect.gen(function* () {
+    const f = yield* popupSetup;
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    yield* Effect.addFinalizer(() => Effect.sync(() => now.mockRestore()));
+    const trigger = yield* Deferred.make<void>();
+    const latch = Promise.withResolvers<void>();
+    yield* Deferred.await(trigger).pipe(
+      Effect.tap(() => Effect.sync(latch.resolve)),
+      Effect.forkScoped,
+    );
+    yield* Effect.addFinalizer(() => Effect.sync(latch.resolve));
+    yield* Effect.promise(() => f.page.exposeFunction("delayedPopupGate", () => latch.promise));
+    yield* Effect.promise(() =>
+      f.page.locator("#next").evaluate((button) => {
+        button.setAttribute(
+          "onclick",
+          "void globalThis.delayedPopupGate().then(() => window.open('about:blank'))",
+        );
+      }),
+    );
+    yield* f.call(f.tabId, "click", { locator: "#next" });
+    if (endOriginal) yield* f.end;
+    if (startLaterRun) {
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const end = yield* activity.begin(threadId, "later-run");
+      yield* Effect.addFinalizer(() => end);
+    }
+    now.mockReturnValue(5_000);
+    const popupReady = f.page.waitForEvent("popup");
+    yield* Deferred.succeed(trigger, undefined);
+    const popup = yield* Effect.promise(() => popupReady);
+    const closed = yield* Deferred.make<void>();
+    if (popup.isClosed()) yield* Deferred.succeed(closed, undefined);
+    else popup.once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+    const adopted = Stream.merge(Stream.succeed(undefined), f.service.sessionChanges).pipe(
+      Stream.mapEffect(() => f.manager.list({ threadId })),
+      Stream.filter((result) => result.sessions.some((view) => view.tabId !== f.tabId)),
+      Stream.runHead,
+      Effect.as("adopted"),
+    );
+    expect(yield* Effect.raceFirst(Deferred.await(closed).pipe(Effect.as("closed")), adopted)).toBe(
+      "closed",
+    );
+    expect(f.sent.filter((method) => method !== "Target.getTargetInfo")).toEqual([]);
+  });
+
+it.effect("a delayed agent popup closes without setup after its originating run ends", () =>
+  Effect.scoped(delayedPopup(false)).pipe(Effect.provide(layer)),
+);
+
+it.effect("a delayed popup from an ended run closes while a later run is active", () =>
+  Effect.scoped(delayedPopup(true)).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "a delayed popup closes when a later run is current even if its original run is still active",
+  () => Effect.scoped(delayedPopup(true, false)).pipe(Effect.provide(layer)),
+);
+
+it.effect("a person's unattributed blocked popup fences all active tabs in its context", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const f = yield* fixture;
+      const viewer = yield* f.service.attachViewer({
+        threadId,
+        tabId: f.tabId,
+        canOperate: true,
+        maxWidth: 1280,
+        maxHeight: 800,
+        quality: 70,
+      });
+      yield* viewer.input({ type: "takeControl" });
+      shareNextContext = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          shareNextContext = false;
+        }),
+      );
+      const opened = yield* f.broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const other = PreviewTabId.make(opened.tabId!);
+      const opening = yield* Effect.promise(() =>
+        f.page.evaluate(`window.open(${JSON.stringify(`${f.blocked}/slow`)})`),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(f.slowStarted);
+      const first = yield* f.call(f.tabId, "press", { key: "Enter" }).pipe(Effect.result);
+      const second = yield* f.call(other, "press", { key: "Enter" }).pipe(Effect.result);
+      yield* Deferred.succeed(f.slowGate, undefined);
+      yield* Fiber.join(opening);
+      expect(first).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "blocked_url", dispatched: false },
+      });
+      expect(second).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "blocked_url", dispatched: false },
       });
     }),
   ).pipe(Effect.provide(layer)),
