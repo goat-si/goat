@@ -100,6 +100,14 @@ interface ProxyCallCheck {
 export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(function* (
   input: ProxyCallCheck,
 ) {
+  const toFile = input.toFile();
+  const foregroundRequired = requiresForeground({
+    name: typeof input.message.params?.name === "string" ? input.message.params.name : "unknown",
+    args: input.message.params?.arguments,
+  });
+  const initialTime = yield* Clock.currentTimeMillis;
+  const initiallyDenied =
+    foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
   const batch = batchAppScope(input.message.params?.name, input.message.params?.arguments);
   const unresolvedBatch = () =>
     batch?.apps.find(
@@ -133,6 +141,8 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   };
   let verdict = judge();
   if (
+    toFile === undefined &&
+    !initiallyDenied &&
     verdict._tag === "allow" &&
     unresolvedBatch() !== undefined &&
     input.finished() === undefined &&
@@ -142,6 +152,8 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     verdict = judge();
   }
   if (
+    toFile === undefined &&
+    !initiallyDenied &&
     (verdict._tag === "resolve" || !confirmed(verdict, () => false)) &&
     input.finished() === undefined &&
     input.paused() === undefined
@@ -173,9 +185,15 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (input.message.params?.name === "get_desktop_state")
     return refusal(input.id, input.message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
-  const toFile = input.toFile();
   if (toFile !== undefined)
     return refusal(input.id, input.message.method, "desktop_capture_off", toFile);
+  if (initiallyDenied && verdict._tag === "resolve")
+    return refusal(
+      input.id,
+      input.message.method,
+      "foreground_not_approved",
+      FOREGROUND_NOT_APPROVED,
+    );
   const missing = verdict._tag === "allow" ? unresolvedBatch() : undefined;
   if (missing !== undefined)
     return refusal(
@@ -208,13 +226,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   if (input.tokenFirstRefuses())
     return refusal(input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
   const now = yield* Clock.currentTimeMillis;
-  if (
-    requiresForeground({
-      name: typeof input.message.params?.name === "string" ? input.message.params.name : "unknown",
-      args: input.message.params?.arguments,
-    }) &&
-    !input.foreground().some((grant) => grant.expiresAtMillis > now)
-  )
+  if (foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > now))
     return refusal(
       input.id,
       input.message.method,

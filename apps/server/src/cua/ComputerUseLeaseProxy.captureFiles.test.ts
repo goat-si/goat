@@ -39,7 +39,14 @@ const allowedCalls = [
   ["get_window_state", { pid: 4, window_id: 9, query: "image_path" }],
   ["type_text", { pid: 4, window_id: 9, text: "Rename file_path to outputPath" }],
   ["set_value", { pid: 4, window_id: 9, element_index: 1, value: "screenshot_out_file" }],
-  ["run_steps", { steps: [{ type: "click", pid: 4, window_id: 9 }], observe: { window_id: 9 } }],
+  [
+    "run_steps",
+    {
+      steps: [{ type: "click", pid: 4, window_id: 9 }],
+      observe: { window_id: 9 },
+      app_scope: { apps: ["com.example.app4"] },
+    },
+  ],
 ] as const;
 
 describe("capture file arguments (#1688)", () => {
@@ -47,7 +54,7 @@ describe("capture file arguments (#1688)", () => {
     "on %s, only a call that asks the driver to write a capture to a file is refused",
     ([, options]) =>
       Effect.gen(function* () {
-        const h = yield* harness(options);
+        const h = yield* harness({ ...options, autoAppListing: true });
         // Foreground approval lets run_steps through, so only the file check can refuse.
         yield* h.push(foregroundActive());
         yield* h.applied;
