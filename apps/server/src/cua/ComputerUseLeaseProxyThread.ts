@@ -78,6 +78,8 @@ interface Context {
   deadline: number;
   ended?: LeaseEnd;
   terminal: { reason?: ComputerUseTerminalReason };
+  driverGeneration?: number;
+  readonly driverTerminals: Map<number, { reason?: ComputerUseTerminalReason }>;
   /** Cuts off the driver's screen work when the lease stream drops; set once the proxy runs. */
   dropTransport?: () => void;
 }
@@ -219,7 +221,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
 
   const receive = (context: Context, update: ComputerUseLeaseUpdate | undefined) => {
     if (update?.state === "paused" && update.reason === "screen_locked")
-      context.terminal.reason ??= "screen_locked";
+      latchCurrent(context, "screen_locked");
     else if (update?.state === "active" && context.terminal.reason === "screen_locked") {
       context.terminal = {};
       controlTerminals.set(context.controlId, context.terminal);
@@ -227,12 +229,21 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     if (context.receive === undefined) context.updates.push(update);
     else context.receive(update);
   };
+  const latchCurrent = (context: Context, reason: ComputerUseTerminalReason) => {
+    if (context.terminal.reason !== undefined && context.terminal.reason !== reason) {
+      context.terminal = {};
+      controlTerminals.set(context.controlId, context.terminal);
+      if (context.driverGeneration !== undefined)
+        context.driverTerminals.set(context.driverGeneration, context.terminal);
+    }
+    context.terminal.reason = reason;
+  };
   // Receipt and routing must change in one synchronous step, before any Effect can yield.
   const stop = (context: Context, reason: ControlStop) => {
     if (context.ended !== undefined) return;
     context.ended = reason;
     if (reason === "stopped" || reason === "stopped_all")
-      context.terminal.reason ??= "stopped_by_person";
+      latchCurrent(context, "stopped_by_person");
     context.ready = false;
     if (current === context) current = undefined;
     Queue.shutdownUnsafe(context.primitiveInput);
@@ -281,6 +292,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       wake: yield* Queue.sliding<void>(1),
       deadline: DateTime.toEpochMillis(expiresAt.value),
       terminal: controlTerminals.get(update.controlId) ?? {},
+      driverTerminals: new Map(),
     };
     controlTerminals.set(context.controlId, context.terminal);
     const connectionId = `${options.connectionId}:control:${sequence++}`;
@@ -319,6 +331,16 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         input: Stream.fromQueue(context.input),
         primitiveRequests: Stream.fromQueue(context.primitiveInput),
         onDriverStarted: (driver) => {
+          const previous =
+            context.driverGeneration === undefined
+              ? undefined
+              : context.driverTerminals.get(context.driverGeneration);
+          if (previous === context.terminal && previous?.reason !== undefined) {
+            context.terminal = {};
+            controlTerminals.set(context.controlId, context.terminal);
+          }
+          context.driverGeneration = driver.generation;
+          context.driverTerminals.set(driver.generation, context.terminal);
           generations.set(
             context.controlId,
             Math.max(generations.get(context.controlId) ?? -1, driver.generation),
@@ -326,7 +348,11 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
           return options.onControlDriverStarted?.(context.controlId, driver) ?? Effect.void;
         },
         onDriverCutoff: (driver) => {
-          if (driver.terminal !== undefined) context.terminal.reason ??= driver.terminal;
+          if (driver.terminal !== undefined) {
+            const latch = context.driverTerminals.get(driver.generation);
+            if (latch === context.terminal) latchCurrent(context, driver.terminal);
+            else if (latch !== undefined) latch.reason = driver.terminal;
+          }
           return options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void;
         },
         output: (line, reply) => output(context, line, reply),
@@ -429,7 +455,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             seen.add(update.controlId);
             if (update.reason === "stopped" || update.reason === "stopped_all") {
               const latch = controlTerminals.get(update.controlId) ?? {};
-              latch.reason ??= "stopped_by_person";
+              if (current?.controlId !== update.controlId) latch.reason = "stopped_by_person";
               controlTerminals.set(update.controlId, latch);
             }
             if (current?.controlId === update.controlId) stop(current, update.reason);

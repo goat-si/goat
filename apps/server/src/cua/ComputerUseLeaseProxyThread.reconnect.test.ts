@@ -306,3 +306,56 @@ it.effect("round7 new control does not inherit predecessor stop while native clo
     assert.notEqual(answer.result?.structuredContent?.code, "stopped_by_person");
   }),
 );
+
+it.effect("round8 admission overlapping missed screen lock stays terminal", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const h = yield* threadHarness({
+      reservation: (r) =>
+        r.action === "reserve"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as({ status: "admitted", reservationId: "probe" }),
+            )
+          : Effect.succeed(
+              r.action === "validate"
+                ? {
+                    status: "admitted",
+                    reservationId: r.reservationId,
+                    permissions: { validUntilMillis: 3600000 },
+                  }
+                : { status: "released" },
+            ),
+    });
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.send(work(980));
+    yield* Deferred.await(entered);
+    yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+    yield* h.started;
+    yield* h.applied;
+    yield* Deferred.succeed(gate, undefined);
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round8 stop after resumed missed lock reports person stop", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ state: "reconnecting" });
+    yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+    yield* h.closed;
+    yield* h.send(work(981));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "stopped_by_person");
+  }),
+);

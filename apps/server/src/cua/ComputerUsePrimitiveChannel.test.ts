@@ -88,6 +88,9 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
   const signals = yield* PubSub.unbounded<void>();
   let state: TurnState = { _tag: "active" };
   let liveControlId = controlId;
+  let notify: Parameters<
+    NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+  >[0] = () => {};
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     // An ended control keeps its record with the reason, as ComputerUseLeases.end writes it.
     currentControl: () =>
@@ -100,6 +103,10 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
       ),
     controlState: () => Effect.sync(() => state),
     subscribe: PubSub.subscribe(signals),
+    onAuthorityChange: (listener) => {
+      notify = listener;
+      return () => {};
+    },
   } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
   const channel = yield* PrimitiveChannel.make.pipe(
     Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
@@ -115,6 +122,8 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
   return {
     channel,
     registration,
+    stopAuthority: () =>
+      notify({ kind: "stop", threadId, controlId: liveControlId, terminal: "stopped_by_person" }),
     replaceControl: Effect.sync(() => {
       liveControlId = "control:next";
     }),
@@ -143,6 +152,20 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("an unbound call retains its control's stop when another control binds", () =>
+    Effect.gen(function* () {
+      const f = yield* turnFixture();
+      const pending = yield* f
+        .request()
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+      f.stopAuthority();
+      yield* f.replaceControl;
+      yield* f.channel.reportControlReady(f.report(authority, 0));
+      const answer = yield* Fiber.join(pending);
+      assert.equal(answer._tag, "Failure");
+      if (answer._tag === "Failure") assert.equal(answer.failure.code, "stopped_by_person");
+    }),
+  );
   it("terminal deadlines preserve possible input and never suggest a retry", () => {
     const failure = terminalFailure("screen_locked", "click", {}, true);
     assert.equal(failure?.safety?.possibleCommit, true);
