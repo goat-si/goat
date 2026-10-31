@@ -77,8 +77,8 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       const args = ["--base-dir", "/srv/goat home"];
       expect(
         yield* rootCommand({
-          node: "/home/theo/.local/node/bin/node",
-          entry: "/home/theo/.local/lib/node_modules/goat/dist/bin.mjs",
+          node: "/home/sam/.local/node/bin/node",
+          entry: "/home/sam/.local/lib/node_modules/goat/dist/bin.mjs",
           path: yield* pathWithGoat,
           args,
         }),
