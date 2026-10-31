@@ -3910,8 +3910,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.refName);
     yield* refuseOptionLikeRefName("GitVcsDriver.createWorktree", input.cwd, input.newRefName);
     const targetBranch = input.newRefName ?? input.refName;
-    const sanitizedBranch = worktreeFolderName(targetBranch, hostPlatform);
+    let sanitizedBranch = worktreeFolderName(targetBranch, hostPlatform);
+    if (sanitizedBranch.length > 40) {
+      const digest = yield* crypto
+        .digest("SHA-256", new TextEncoder().encode(targetBranch))
+        .pipe(Effect.orDie);
+      const prefix = sanitizedBranch.slice(0, 23).replace(/[\uD800-\uDBFF]$/, "");
+      sanitizedBranch = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
+    }
     // resolve: a cwd like `<repo>/sub/..` must not name the folder `..`.
+
     const repoName = path.basename(path.resolve(input.cwd));
     let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
     const progress = options?.progress;
