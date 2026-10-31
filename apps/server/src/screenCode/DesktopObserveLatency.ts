@@ -449,6 +449,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
 ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
   const { observations } = deps;
   const capture = call.method === "screenshot";
+  // Any read starts the tree baseline over; only a whole read below sets it again.
+  delete bound.fullRows;
   if (!capture && args.after !== undefined)
     return yield* observePage(deps, bound, call, context, args);
   const startedAt = yield* Clock.currentTimeMillis;
@@ -692,21 +694,22 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       isDiff && !numbersChanged && bound.rows
         ? retainPairingTitles(bound.rows, tree.shown, rows)
         : tree.shown;
-    // Only a whole read compares: a cut or filtered one adds or drops rows the window still has.
+    // Only a whole read compares: a cut, filtered or degraded one drops rows the window still has.
     if (
       !capture &&
       query === undefined &&
       !interactive &&
       !filtered &&
       state.truncated !== true &&
-      limit === READ_BOUNDS[0]
+      state.degraded !== true &&
+      limit === READ_BOUNDS[0] &&
+      bound.rows.length > 0
     )
       bound.fullRows = {
         rows: bound.rows,
         windowId: expectedWindowId,
         connectionGeneration: bound.connectionGeneration,
       };
-    else delete bound.fullRows;
     bound.elementsByToken = inspectTreeElements(
       tree.elements,
       tree.rows,

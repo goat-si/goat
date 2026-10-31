@@ -188,21 +188,25 @@ interface SidebarCase {
   /** The read before the input; a cut one is no baseline. */
   readonly first?: Record<string, unknown>;
   readonly observeFirst?: boolean;
-  /** Another call between that read and the input. */
-  readonly between?: boolean;
+  /** Another call between that read and the input: a key press, or a screenshot. */
+  readonly between?: "key" | "screenshot";
   /** The input: the sidebar click, or cmd+w, a close only the window list can prove. */
   readonly close?: boolean;
 }
 
-const sidebarClick = (after: ReturnType<typeof sidebarRead>, options: SidebarCase = {}) =>
+const sidebarClick = (after: Record<string, unknown>, options: SidebarCase = {}) =>
   Effect.gen(function* () {
     let reads = 0;
     const { host, sent } = fixture({
       click: { effect: "suspected_noop" },
       press_key: (args: { key?: string }) =>
         args.key === "w" ? { effect: "suspected_noop" } : { effect: "confirmed" },
-      get_window_state: () =>
-        reads++ === 0 ? (options.first ?? sidebarRead("s1", "Friends", ["Kim", "Lee"])) : after,
+      get_window_state: (args: Record<string, unknown>) =>
+        args.include_screenshot === true
+          ? goat2WindowState(args, { snapshot_id: "s1" })
+          : reads++ === 0
+            ? (options.first ?? sidebarRead("s1", "Friends", ["Kim", "Lee"]))
+            : after,
     });
     const ref = (yield* host.bindApp(
       call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
@@ -213,19 +217,26 @@ const sidebarClick = (after: ReturnType<typeof sidebarRead>, options: SidebarCas
         ? undefined
         : ((yield* host.observe(call("get_window_state", {}, ref), context))
             .value as ScreenObservation);
-    if (options.between === true)
+    if (options.between === "key")
       yield* settled(host, {
         ...call("press_key", { key: "Escape" }, ref),
-        deadlineMillis: 10_000,
+        deadlineMillis: 1_000_000,
       });
+    if (options.between === "screenshot")
+      yield* host.observe({ ...call("screenshot", {}, ref), deadlineMillis: 1_000_000 }, context);
     const chats = seen?.elements.find((element) => element.name === "chatrooms");
     const out = yield* settled(host, {
       ...(options.close === true
         ? call("press_key", { key: "w", modifiers: ["cmd"] }, ref)
         : call("click", chats ? { elementRef: chats.ref } : { x: 10, y: 10 }, ref)),
-      deadlineMillis: 10_000,
+      deadlineMillis: 1_000_000,
     });
-    return { out, reads: sent.filter((each) => each.tool === "get_window_state").length };
+    const trees = sent.filter(
+      (each) =>
+        each.tool === "get_window_state" &&
+        (each.args as { include_screenshot?: boolean }).include_screenshot !== true,
+    );
+    return { out, reads: trees.length };
   });
 
 it.effect(
@@ -258,17 +269,35 @@ it.effect(
     }),
 );
 
-it.effect("a tree change never confirms after a cut read, after another call, or for a close", () =>
-  Effect.gen(function* () {
-    const changed = sidebarRead("s2", "Chats", ["Team room", "Family"]);
-    const cut = yield* sidebarClick(changed, {
-      first: { ...sidebarRead("s1", "Friends", ["Kim"]), truncated: true },
-    });
-    const between = yield* sidebarClick(changed, { between: true });
-    const close = yield* sidebarClick(changed, { close: true });
-    for (const each of [cut, between, close]) {
-      expect(each.out.category).toBe("suspected_noop");
-      expect(each.reads).toBe(1);
-    }
-  }),
+it.effect(
+  "a tree change never confirms after a cut or degraded read, after another call, or for a close",
+  () =>
+    Effect.gen(function* () {
+      const changed = sidebarRead("s2", "Chats", ["Team room", "Family"]);
+      const degraded = {
+        degraded: true,
+        degraded_reason: "ax_timeout",
+        elements: [],
+        tree_markdown: "",
+      };
+      const cases = {
+        cut: yield* sidebarClick(changed, {
+          first: { ...sidebarRead("s1", "Friends", ["Kim"]), truncated: true },
+        }),
+        degraded: yield* sidebarClick(changed, {
+          first: { ...sidebarRead("s1", "Friends", ["Kim"]), ...degraded },
+        }),
+        key: yield* sidebarClick(changed, { between: "key" }),
+        screenshot: yield* sidebarClick(changed, { between: "screenshot" }),
+        close: yield* sidebarClick(changed, { close: true }),
+      };
+      for (const [name, each] of Object.entries(cases)) {
+        expect(each.out.category, name).toBe("suspected_noop");
+        expect(each.reads, name).toBe(1);
+      }
+      // A failed read after the input is no evidence that its rows went away.
+      const degradedAfter = yield* sidebarClick({ ...changed, ...degraded });
+      expect(degradedAfter.out.category).toBe("suspected_noop");
+      expect(degradedAfter.reads).toBe(2);
+    }),
 );
