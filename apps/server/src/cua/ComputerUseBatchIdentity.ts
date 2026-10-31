@@ -61,6 +61,8 @@ export const narrowBatch = (
         "The batch app scope has too many verified apps, so the call did not run.",
       ),
     };
+  if (canonical.size === batch.apps.length && batch.apps.every((app) => canonical.has(app)))
+    return { line, message };
   const raw: unknown = JSON.parse(line);
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
     return {
