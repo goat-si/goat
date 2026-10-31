@@ -36,6 +36,7 @@ import {
   replaceWithTerminal,
   terminalReplyState,
   type ComputerUseTerminalReason,
+  type ComputerUseTerminalState,
 } from "./ComputerUseTerminal.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -450,7 +451,12 @@ const proxyAdmission =
       return finalize(answer, input);
     });
 
-export const preDispatchSites = [
+export const preDispatchSites: ReadonlyArray<{
+  readonly name: string;
+  readonly undispatched: true;
+  readonly implicitReason?: ComputerUseTerminalReason;
+  readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
+}> = [
   {
     name: "ComputerUseLeaseProxy.duplicateId",
     undispatched: true,
