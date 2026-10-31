@@ -13,6 +13,11 @@ import {
 } from "@goat/shared/actionOutcomeSafety";
 import { actionResultFromDriver, PRE_DISPATCH_CODES } from "@goat/shared/computerUseActions";
 
+import {
+  replaceWithTerminal,
+  terminalReplyState,
+  terminalErrorState,
+} from "./ComputerUseTerminal.ts";
 import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 
 export { driverExitReason } from "./ComputerUseDriverExit.ts";
@@ -128,33 +133,24 @@ export function driverOutcomeSafety(
 ): ActionOutcomeSafety {
   const safety = classifiedSafety(tool, message, args);
   const envelope = isRecord(message) ? message : {};
-  const result = isRecord(envelope.result) ? envelope.result : {};
-  const error = isRecord(envelope.error) ? envelope.error : {};
-  const sources = [result.structuredContent, error, error.data].filter(isRecord);
-  const failed =
-    result.isError === true ||
-    envelope.error !== undefined ||
-    envelope.status === "unknown_outcome" ||
-    envelope.status === "not_started";
-  const terminal =
-    failed &&
-    sources.some((source) => {
-      const nested = isRecord(source.refusal) ? source.refusal.code : undefined;
-      return [source.code, nested].some(
-        (code) => code === "screen_locked" || code === "stopped_by_person",
-      );
-    });
-  if (terminal) {
-    const possibleCommit =
-      safety.possibleCommit ||
-      sources.some((source) => isRecord(source.safety) && source.safety.possibleCommit === true);
-    return possibleCommit
+  const status =
+    envelope.status === "settled" ||
+    envelope.status === "not_started" ||
+    envelope.status === "unknown_outcome"
+      ? envelope.status
+      : undefined;
+  const terminal = replaceWithTerminal(
+    terminalReplyState(envelope.result, status),
+    terminalErrorState(envelope.error),
+    safety.possibleCommit,
+  );
+  if (terminal.reason !== undefined)
+    return terminal.possibleCommit
       ? {
           ...classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true }),
           retryClass: "never",
         }
       : { ...safety, retryClass: "never" };
-  }
   const marked = markedSafety(message);
   return !safety.possibleCommit &&
     !isReadOnlyCall(tool, args) &&
