@@ -149,29 +149,11 @@ const replyTargetId = (value: unknown): string | undefined => {
     : undefined;
 };
 
-/** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
-export const observationReplyBudget = (
-  call: ScreenHostCall,
-  limits: ScreenRunLimits,
-  reserveBytes = 0,
-): number => {
-  const envelope = JSON.stringify({
-    t: "reply",
-    runId: call.runId,
-    cellId: call.cellId,
-    callId: call.callId,
-    outcome: "ok",
-    value: null,
-  });
-  return Math.min(
-    limits.treeBytes,
-    limits.returnBytes - (Buffer.byteLength(envelope) - 4) - reserveBytes,
-  );
-};
+export { observationReplyBudget } from "./ScreenObservationBudget.ts";
 
 export class ScreenHostBridge {
   private readonly cells = new Map<string, CellState>();
-  private readonly invalidTargets = new Map<string, Set<string>>();
+  private readonly invalidTargets = new Map<string, Map<string, string>>();
   private readonly turnTargets = new Map<string, Set<string>>();
   private readonly targetRefs = new Map<string, ScreenTargetRef>();
   private readonly cellTargets = new Map<string, Set<string>>();
@@ -189,7 +171,10 @@ export class ScreenHostBridge {
   private dispatcher: ScreenHostDispatcher | undefined;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
 
-  constructor(cursorPhases?: ScreenCursorPhases) {
+  constructor(
+    cursorPhases?: ScreenCursorPhases,
+    private readonly staleTargetStep?: (targetId: string, reason?: string) => string | undefined,
+  ) {
     this.cursorPhases = cursorPhases;
   }
 
@@ -395,8 +380,18 @@ export class ScreenHostBridge {
         call.targetRef.turnId !== context.turnId ||
         call.targetRef.environmentId !== context.environmentId ||
         this.invalidTargets.get(turn)?.has(call.targetRef.id))
-    )
-      return deny(failure("stale_reference", call.callId));
+    ) {
+      const why =
+        call.targetRef.turnId !== context.turnId
+          ? "turn_ended"
+          : this.invalidTargets.get(turn)?.get(call.targetRef.id);
+      const nextStep =
+        call.targetRef.kind === "app" ? this.staleTargetStep?.(call.targetRef.id, why) : undefined;
+      return deny({
+        ...failure("stale_reference", call.callId),
+        ...(nextStep === undefined ? {} : { nextStep }),
+      });
+    }
     // Until the call settles, neither axis is known; a deadline may collect it as it stands.
     const admittedIndex = record("unverifiable", "admitted", false, [], undefined, axes("unknown"));
     let callDispatched = false;
@@ -941,11 +936,11 @@ export class ScreenHostBridge {
     const turn = `${runId}\u0000${turnId}`;
     let invalid = this.invalidTargets.get(turn);
     if (!invalid) {
-      invalid = new Set();
+      invalid = new Map();
       this.invalidTargets.set(turn, invalid);
     }
     if (invalid.size >= 4096) this.fencedTurns.add(turn);
-    else invalid.add(targetId);
+    else invalid.set(targetId, reason ?? "invalidated");
     const ref = this.targetRefs.get(targetId);
     if (ref)
       this.cursorPhases?.ended(

@@ -164,7 +164,8 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly bindApp: DesktopMethod;
   readonly observe: DesktopMethod;
   readonly invoke: DesktopMethod;
-  readonly invalidateTarget: (targetId: string) => void;
+  readonly invalidateTarget: (targetId: string, reason?: string) => void;
+  readonly staleTargetStep?: (targetId: string, reason?: string) => string | undefined;
   readonly matchesControl: (targetId: string, controlId: string, windowId?: number) => boolean;
   readonly controlIdForTarget: (targetId: string) => string | undefined;
   readonly windowForTarget?: (
@@ -193,6 +194,42 @@ export const createDesktopTargetHost = (deps: {
   const observations = deps.observations ?? new ScreenObservations();
   const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
   const targets = new Map<string, BoundWindow>();
+  const dropped = new Map<string, { bundleId?: string; windowId: number; reason: string }>();
+  const dropTarget = (targetId: string, reason: string) => {
+    const bound = targets.get(targetId);
+    if (bound) {
+      if (dropped.size >= 4096) {
+        const oldest = dropped.keys().next().value;
+        if (oldest !== undefined) dropped.delete(oldest);
+      }
+      dropped.set(targetId, { bundleId: bound.bundleId, windowId: bound.windowId, reason });
+    }
+    observations.evictTarget(targetId);
+    targets.delete(targetId);
+  };
+  const staleTargetStep = (targetId: string, override?: string) => {
+    const bound = targets.get(targetId);
+    const entry =
+      dropped.get(targetId) ??
+      (bound && { bundleId: bound.bundleId, windowId: bound.windowId, reason: "invalidated" });
+    if (!entry) return undefined;
+    const why = override ?? entry.reason;
+    const reason =
+      why === "permission_denied"
+        ? "Permission was lost."
+        : why === "turn_ended"
+          ? "The target was bound in an earlier turn."
+          : why === "replaced"
+            ? "The window was replaced by another binding."
+            : `The control changed (${why}).`;
+    const rebind =
+      entry.bundleId === undefined
+        ? "Use screen.discover() to find the window and bind it again."
+        : `Rebind with screen.app({ bundle_id: ${JSON.stringify(entry.bundleId)}, window_id: ${entry.windowId} }).`;
+    return `${reason} ${rebind}`;
+  };
+  const staleTarget = (targetId: string | undefined) =>
+    fail("stale_reference", targetId === undefined ? undefined : staleTargetStep(targetId));
   const cellTrackers = new Map<
     string,
     { tracker: CellWindowTracker; connectionGeneration: string }
@@ -582,7 +619,7 @@ export const createDesktopTargetHost = (deps: {
   );
   const bindWindow = makeBindWindow({
     targets,
-    evict: (id) => observations.evictTarget(id),
+    evict: (id) => dropTarget(id, "replaced"),
     nextEpoch: () => ++epoch,
     labelTarget: deps.labelTarget,
   });
@@ -614,7 +651,7 @@ export const createDesktopTargetHost = (deps: {
   const observe: DesktopTargetHost["observe"] = Effect.fn("DesktopTargetHost.observe")(
     function* (call, context) {
       const bound = resolve(call, context);
-      if (!bound) return yield* Effect.fail(fail("stale_reference"));
+      if (!bound) return yield* Effect.fail(staleTarget(call.targetRef?.id));
       if (
         !["get_window_state", "get_accessibility_tree", "verify_state", "screenshot"].includes(
           call.method,
@@ -638,7 +675,7 @@ export const createDesktopTargetHost = (deps: {
       return yield* launch(call, callArgs(call.args), context);
     }
     const bound = resolve(call, context);
-    if (!bound) return yield* Effect.fail(fail("stale_reference"));
+    if (!bound) return yield* Effect.fail(staleTarget(call.targetRef?.id));
     // Any call here may change this process's windows, so only an input right after a read of its
     // own window compares with it; another binding's input on the process voids that read too.
     const baseline = bound.fullRows;
@@ -943,10 +980,8 @@ export const createDesktopTargetHost = (deps: {
     observe,
     invoke,
     dispatchBatch,
-    invalidateTarget: (targetId) => {
-      observations.evictTarget(targetId);
-      targets.delete(targetId);
-    },
+    invalidateTarget: (targetId, reason = "invalidated") => dropTarget(targetId, reason),
+    staleTargetStep,
     matchesControl: (targetId, controlId, windowId) => {
       const target = targets.get(targetId);
       return (
@@ -968,8 +1003,7 @@ export const createDesktopTargetHost = (deps: {
     finishTurn: (runId, turnId) => {
       for (const [targetId, bound] of targets)
         if (bound.ref.runId === runId && bound.ref.turnId === turnId) {
-          observations.evictTarget(targetId);
-          targets.delete(targetId);
+          dropTarget(targetId, "turn_ended");
         }
     },
     availability: Effect.fn("DesktopTargetHost.availability")(function* (context) {

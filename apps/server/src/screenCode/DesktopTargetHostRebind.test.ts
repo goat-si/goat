@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import type { ScreenElementRef, ScreenTargetRef } from "@goat/contracts";
 import { call, context, fixture, goat2WindowState } from "./DesktopTargetHost.testkit.ts";
+import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 
 /** A window bound and seen under driver:1, after which a new driver replaced it. */
 const replaced = Effect.fn(function* () {
@@ -32,6 +33,42 @@ it.effect(
       yield* host.observe(call("get_window_state", {}, ref), context);
       expect(sentSince(before)).toEqual(["list_windows", "press_key", "get_window_state"]);
       expect(sent.at(-1)?.expectedConnectionGeneration).toBe("driver:2");
+    }),
+);
+
+it.effect(
+  "bridge refusals name earlier turns, control changes and lost permission without driver calls",
+  () =>
+    Effect.gen(function* () {
+      for (const [reason, expected] of [
+        ["turn_ended", "The target was bound in an earlier turn."],
+        ["takeover", "The control changed (takeover)."],
+        ["permission_denied", "Permission was lost."],
+      ] as const) {
+        const { host, sent } = fixture();
+        const first = yield* host.bindApp(
+          call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+          context,
+        );
+        const ref = first.value as ScreenTargetRef;
+        const bridge = new ScreenHostBridge(undefined, host.staleTargetStep);
+        bridge.setDispatcher(host);
+        const nextContext = reason === "turn_ended" ? { ...context, turnId: "later" } : context;
+        if (reason !== "turn_ended") {
+          bridge.invalidateTargetNow(context.runId, context.turnId, ref.id, reason);
+          host.invalidateTarget(ref.id, reason);
+        } else host.finishTurn(context.runId, context.turnId);
+        const before = sent.length;
+        const result = yield* bridge.handle(
+          { ...call("get_window_state", {}, ref), turnId: nextContext.turnId },
+          nextContext,
+        );
+        expect(result && "error" in result ? result.error : undefined).toMatchObject({
+          code: "stale_reference",
+          nextStep: `${expected} Rebind with screen.app({ bundle_id: "org.example.Editor", window_id: 7 }).`,
+        });
+        expect(sent).toHaveLength(before);
+      }
     }),
 );
 
@@ -83,4 +120,29 @@ it.effect("rebinding a window in the same turn preserves its target and observat
     );
     expect(after.value).toMatchObject({ indexedText: "Apply" });
   }),
+);
+
+it.effect(
+  "a dropped target explains the control change and how to rebind without calling the driver",
+  () =>
+    Effect.gen(function* () {
+      const { host, sent } = fixture();
+      const first = yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      );
+      const ref = first.value as ScreenTargetRef;
+      host.invalidateTarget(ref.id, "takeover");
+      const before = sent.length;
+      const failure = yield* host
+        .observe(call("get_window_state", {}, ref), context)
+        .pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        code: "stale_reference",
+        effectStarted: false,
+        nextStep:
+          'The control changed (takeover). Rebind with screen.app({ bundle_id: "org.example.Editor", window_id: 7 }).',
+      });
+      expect(sent).toHaveLength(before);
+    }),
 );
