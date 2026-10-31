@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { cancelledRequestKey } from "./ComputerUseDriverReply.ts";
 import { type Envelope, decodeProviderIngress, parse } from "./ComputerUseLeaseProtocol.ts";
@@ -63,6 +64,17 @@ type ThreadProxyOptions<EU, ED> = Omit<
 
 const OWN_ID = "goat-thread-proxy:";
 const WAITING = "Computer use is not available for this turn.";
+const replySafety = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      result: Schema.Struct({
+        structuredContent: Schema.Struct({
+          safety: Schema.Struct({ possibleCommit: Schema.Boolean }),
+        }),
+      }),
+    }),
+  ),
+);
 type ControlStop = ComputerUseControlEnd | "lost" | "transport_lost";
 
 interface Context {
@@ -109,6 +121,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     {
       context: Context;
       latch: Context["terminal"];
+      message: Envelope;
       id: JsonRpcId;
       method: string;
       cancelled: boolean;
@@ -215,6 +228,14 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         owners.delete(key);
         if (owner.cancelled) return Effect.void;
         setup.remember(owner.method, message);
+        const safety = replySafety(line);
+        return terminalSink(
+          { answer: (answer, _status, result) => options.output(answer, result) },
+          owner.message,
+          () => owner.latch.reason,
+          () =>
+            safety._tag === "None" || safety.value.result.structuredContent.safety.possibleCommit,
+        ).answer(line, undefined, reply);
       }
       return options.output(line, reply);
     });
@@ -598,6 +619,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
       owners.set(key, {
         context,
         latch: context.terminal,
+        message,
         id,
         method: message.method,
         cancelled: false,
