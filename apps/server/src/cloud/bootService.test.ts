@@ -1327,3 +1327,11 @@ it.layer(NodeServices.layer)("boot service legacy migration", (it) => {
     }),
   );
 });
+
+it("protects the server unit from agents under CPU and memory pressure", () => {
+  const unit = BootService.renderBootServiceUnit(linuxPlan);
+  const service = unit.slice(unit.indexOf("[Service]"), unit.indexOf("[Install]"));
+  for (const line of ["CPUWeight=1000", "IOWeight=1000", "MemoryLow=1536M", "OOMPolicy=continue"]) {
+    expect(service.split("\n")).toContain(line);
+  }
+});
