@@ -631,13 +631,13 @@ const __target = (binding, note, owner, extraProps = {}) => {
     bringToFront: () => call('bring_to_front'),
     endForeground: () => call('end_foreground'),
   };
-  // A copied handle spread into any argument has lost its binding, whichever call form carries it.
+  // A handle counts only as a whole argument: any other one, a copy or one inside options, is refused before normalizing could drop it.
   for (const key of Object.keys(surface)) {
     const method = surface[key];
     if (typeof method !== 'function') continue;
     surface[key] = (...args) => {
-      if (args.some((arg) => arg !== null && typeof arg === 'object' && !__handles.has(arg) && 'elementHandle' in arg))
-        throw new ScreenError('stale_reference', 'This element handle is a copy; take obs.ref(n) from a current observation in this cell.', true);
+      if (args.some((arg) => !(arg !== null && typeof arg === 'object' && __handles.has(arg)) && __carriesHandle(arg)))
+        throw new ScreenError('stale_reference', 'Pass an element handle from obs.ref(n) itself as the target argument; a copy or a handle inside other arguments is refused, and nothing was sent.', true);
       return method(...args);
     };
   }
