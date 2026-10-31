@@ -21,7 +21,6 @@ import {
   RunId,
   SCREEN_TARGET_CONTRACT_VERSION,
   screenTargetApi,
-  ScreenRunError as ScreenRunErrorSchema,
   ScreenTargetRef,
   ThreadId,
 } from "@goat/contracts";
@@ -52,7 +51,6 @@ import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset, screenRuntimeLayout } from "./ScreenRuntimeAsset.ts";
 import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
-const isScreenRunErrorSchema = Schema.is(ScreenRunErrorSchema);
 
 const isScreenTargetRef = Schema.is(ScreenTargetRef);
 const OPEN_RUN = new Set(["preparing", "queued", "starting", "running", "waiting"]);
@@ -682,7 +680,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                 const classified = cellResultSafety(result);
                 const receipts = journal.map((entry) => entry.receipt);
                 const merged = completionCellError(
-                  isScreenRunErrorSchema(classified.error) ? classified.error : undefined,
+                  classified.error,
                   receipts,
                   cellTerminals.get(id),
                 );

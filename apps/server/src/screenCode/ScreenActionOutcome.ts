@@ -6,6 +6,9 @@ import type {
   ScreenRunResult,
 } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
+import { ScreenRunError as ScreenRunErrorSchema } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+const isScreenRunError = Schema.is(ScreenRunErrorSchema);
 import {
   mergeTerminal,
   terminalFailure,
@@ -176,10 +179,11 @@ export const latchCellTerminal = (
 };
 
 export const completionCellError = (
-  error: ScreenRunError | undefined,
+  candidate: unknown,
   receipts: readonly ScreenEffectReceipt[],
   reason: ComputerUseTerminalReason | undefined,
 ): ScreenRunError | undefined => {
+  const error = isScreenRunError(candidate) ? candidate : undefined;
   if (error === undefined && reason === undefined) return undefined;
   return cellTerminalError(
     error ?? {
