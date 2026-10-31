@@ -38,6 +38,7 @@ function partition(threads: readonly Thread[], hiddenBotThreadKeys: ReadonlySet<
     threads,
     scopedProjectKeys: null,
     serverConfigs: new Map(),
+    connectedEnvironmentIds: [local],
     optimisticDrop: null,
     workingShelfEnabled: false,
     clockKey: "",

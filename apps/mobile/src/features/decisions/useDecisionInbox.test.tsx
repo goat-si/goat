@@ -975,14 +975,8 @@ vi.mock("../threads/goatBotThreadVisibility", async () => {
 });
 vi.mock("../../state/use-thread-outbox", () => ({ useQueuedThreadKeys: () => new Set() }));
 vi.mock("../../state/use-pending-new-tasks", () => ({ usePendingNewTasks: () => [] }));
-vi.mock("../../state/server", async () => {
-  const { Atom } = await import("effect/reactivity");
-  const { createThreadListEnvironmentsAtom } = await import("../../state/thread-list-environments");
-  return {
-    serverEnvironment: { answerDecision: "answerDecision" },
-    threadListEnvironmentsAtom: createThreadListEnvironmentsAtom(Atom.make(new Map())),
-  };
-});
+vi.mock("../../state/server", () => ({ serverEnvironment: { answerDecision: "answerDecision" } }));
+vi.mock("../../state/presentation", () => import("../../testing/threadListEnvironments"));
 vi.mock("../threads/thread-provider-instance", () => ({
   useThreadRowProviderInstanceResolver: () => () => null,
 }));
