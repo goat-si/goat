@@ -134,3 +134,42 @@ it.live("a copied element handle is refused before any input, including press", 
     ),
   );
 });
+
+it.live("a copied handle spread into an older call form is refused before any input", () => {
+  const { host, sent } = fixture({ get_window_state: goat2WindowState });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+        const held = (await app.observe()).ref(1);
+        const outcome = [];
+        for (const send of [() => app.pressKey({ ...held, key: 'a' }), () => app.typeText({ ...JSON.parse(JSON.stringify(held)), text: 'x' })])
+          try { await send(); outcome.push('sent'); } catch (e) { outcome.push([e.code, e.nothingSent]); }
+        return outcome;`,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      value: [
+        ["stale_reference", true],
+        ["stale_reference", true],
+      ],
+    });
+    expect(sent.filter((entry) => ["press_key", "type_text"].includes(entry.tool))).toHaveLength(0);
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});

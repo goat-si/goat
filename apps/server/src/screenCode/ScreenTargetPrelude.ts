@@ -611,6 +611,16 @@ const __target = (binding, note, owner, extraProps = {}) => {
     bringToFront: () => call('bring_to_front'),
     endForeground: () => call('end_foreground'),
   };
+  // A copied handle spread into any argument has lost its binding, whichever call form carries it.
+  for (const key of Object.keys(surface)) {
+    const method = surface[key];
+    if (typeof method !== 'function') continue;
+    surface[key] = (...args) => {
+      if (args.some((arg) => arg !== null && typeof arg === 'object' && !__handles.has(arg) && Object.hasOwn(arg, 'elementHandle')))
+        throw new ScreenError('stale_reference', 'This element handle is a copy; take obs.ref(n) from a current observation in this cell.', true);
+      return method(...args);
+    };
+  }
   Object.defineProperties(surface, {
     generation: { get: () => ref.generation, enumerable: true },
     targetRef: { get: () => ref, enumerable: true },

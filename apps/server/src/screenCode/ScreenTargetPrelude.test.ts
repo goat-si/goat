@@ -186,6 +186,8 @@ it.live("tab handles are refused unsent after a new read or on another target", 
     `const first = await screen.tab('form'); const other = await screen.tab('other');
     await first.claim(); await other.claim(); const obs = await first.observe(); const held = obs.ref(0);
     const errors = []; try { await other.click(held); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    try { await first.fillSecret({ ...held, selector: '#other' }, 'secret-ref'); } catch (e) { errors.push([e.code, e.nothingSent]); }
+    try { await first.upload({ ...held }, ['/tmp/a.txt']); } catch (e) { errors.push([e.code, e.nothingSent]); }
     await first.observe({diff:false});
     try { await first.click(held); } catch (e) { errors.push([e.code, e.nothingSent]); }
     return errors;`,
@@ -197,10 +199,16 @@ it.live("tab handles are refused unsent after a new read or on another target", 
           value: [
             ["stale_reference", true],
             ["stale_reference", true],
+            ["stale_reference", true],
+            ["stale_reference", true],
           ],
         },
       });
-      expect(operations.filter((operation) => operation === "click")).toHaveLength(0);
+      expect(
+        operations.filter((operation) =>
+          ["click", "fill_secret", "upload"].some((name) => operation.includes(name)),
+        ),
+      ).toHaveLength(0);
     }),
   );
 });
