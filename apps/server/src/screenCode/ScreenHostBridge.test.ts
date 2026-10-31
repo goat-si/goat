@@ -57,6 +57,46 @@ const call = (callId: number): ScreenHostCall => ({
   deadlineMillis: 60_000,
 });
 
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "a terminal %s fence keeps its reason for an in-flight read",
+  (reason) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const bridge = new ScreenHostBridge();
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const { targetRef: _targetRef, ...base } = call(1);
+      const pending = yield* bridge
+        .handle({ ...base, method: "list_apps" }, context())
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      bridge.cutCellNow("r", "t", "c", reason);
+      const answer = yield* Fiber.join(pending);
+      expect(answer?.outcome).toBe("error");
+      if (answer?.outcome === "error") {
+        expect(answer.error?.code).toBe(reason);
+        expect(answer.error?.safety?.retryClass).toBe("never");
+      }
+    }),
+);
+
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "a terminal %s fence refuses a call that arrives after the cutoff",
+  (reason) =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      bridge.cutCellNow("r", "t", "c", reason);
+      const answer = yield* bridge.handle(call(1), context());
+      expect(answer?.outcome).toBe("error");
+      if (answer?.outcome === "error") {
+        expect(answer.error?.code).toBe(reason);
+        expect(answer.error?.safety?.retryClass).toBe("never");
+      }
+    }),
+);
+
 it.effect("a cut before the first host call refuses that call", () =>
   Effect.gen(function* () {
     const bridge = new ScreenHostBridge();

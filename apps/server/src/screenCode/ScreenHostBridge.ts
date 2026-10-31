@@ -25,10 +25,12 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
+import { terminalFailure, type ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
+import { failure, notRun, refused } from "./ScreenHostFailures.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
 
 const decodeOptionScreenHostCall = Schema.decodeUnknownOption(ScreenHostCall);
@@ -98,30 +100,12 @@ interface CellState {
   readonly batches: BatchGroups;
 }
 
-const failure = (code: ScreenRunError["code"], callId?: number): ScreenRunError => ({
-  code,
-  ...(callId === undefined ? {} : { callId }),
-  effectStarted: false,
-  nextStep: "Refresh the screen target and retry if appropriate.",
-});
-const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply => ({
-  t: "reply",
-  runId: call.runId,
-  cellId: call.cellId,
-  callId: call.callId,
-  outcome: "error",
-  error,
-});
 /** Results that did not do what was asked; a write that answers one fails its call. */
 const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
   "partial",
   "suspected_noop",
   "refused",
 ]);
-const notRun = (callId: number, haltedBy: number): ScreenRunError => ({
-  ...failure("not_run", callId),
-  nextStep: `Call ${haltedBy} in this cell failed, so this call did not run. Observe in a new cell before acting again.`,
-});
 const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
 // A tab wait's deadline answer must still reach the cell process before the cell ends.
 const WAIT_REPLY_RESERVE_MS = 100;
@@ -177,6 +161,7 @@ export class ScreenHostBridge {
     { readonly targets: string[]; readonly keys: Map<number, string> }
   >();
   private readonly closedCells = new Map<string, Set<string>>();
+  private readonly terminalCells = new Map<string, ComputerUseTerminalReason>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
@@ -206,8 +191,10 @@ export class ScreenHostBridge {
     const id = key(context.runId, context.turnId, context.cellId);
     let state = this.cells.get(id);
     if (!state) {
+      const terminal = this.terminalCells.get(id);
       state = {
         closed: false,
+        ...(terminal === undefined ? {} : { cutoffReason: terminal }),
         cutoff: new AbortController(),
         calls: 0,
         pending: 0,
@@ -301,10 +288,18 @@ export class ScreenHostBridge {
       call.turnId !== context.turnId ||
       call.cellId !== context.cellId
     )
-      return deny({
-        ...failure("stopped", call.callId),
-        ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
-      });
+      return deny(
+        terminalFailure(
+          state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
+            ? state.cutoffReason
+            : undefined,
+          call.method,
+          call.args,
+        ) ?? {
+          ...failure("stopped", call.callId),
+          ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
+        },
+      );
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
     if (joined !== undefined && "late" in joined) return deny(notRun(call.callId, joined.late));
@@ -643,11 +638,25 @@ export class ScreenHostBridge {
     );
     if (ownFailure) {
       if (callDispatched && !ownFailure.effectStarted) state.effectsStarted--;
-      return refused(call, { ...ownFailure, callId: call.callId });
+      const terminal = terminalFailure(
+        state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
+          ? state.cutoffReason
+          : undefined,
+        call.method,
+        call.args,
+        callDispatched,
+      );
+      return refused(call, { ...ownFailure, ...terminal, callId: call.callId });
     }
     if (state.closed) {
       const dispatched = callDispatched;
-      const safety = screenActionSafety(call, dispatched ? "indeterminate" : "refused", dispatched);
+      const terminal =
+        state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
+          ? terminalFailure(state.cutoffReason, call.method, call.args, dispatched)
+          : undefined;
+      const safety =
+        terminal?.safety ??
+        screenActionSafety(call, dispatched ? "indeterminate" : "refused", dispatched);
       settle(
         dispatched ? "unknown_outcome" : "refused",
         dispatched ? "unknown" : "settled",
@@ -662,6 +671,7 @@ export class ScreenHostBridge {
         nextStep: state.paused
           ? outcomeSentence(dispatched ? "paused_dispatched" : "paused_unsent")
           : outcomeSentence(dispatched ? "unknown_outcome" : "refused"),
+        ...terminal,
       });
     }
     if (result._tag === "Failure") {
@@ -850,9 +860,12 @@ export class ScreenHostBridge {
 
   cutCellNow(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
+    if (reason === "stopped_by_person" || reason === "screen_locked")
+      this.terminalCells.set(id, reason);
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
+      if (reason === "stopped_by_person" || reason === "screen_locked") state.cutoffReason = reason;
       if (reason === "permission_denied" || reason === "target_permission_denied")
         state.cutoffReason = "permission_denied";
       if (reason === "pause" || reason === "takeover" || reason === "waiting_for_human")
@@ -968,6 +981,8 @@ export class ScreenHostBridge {
       if (cellId.startsWith(`${turn}\u0000`)) this.cellFacts.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
+    for (const cellId of this.terminalCells.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.terminalCells.delete(cellId);
     this.fencedTurns.delete(turn);
     for (const targetId of this.turnTargets.get(turn) ?? []) this.targetGates.delete(targetId);
     this.turnTargets.delete(turn);

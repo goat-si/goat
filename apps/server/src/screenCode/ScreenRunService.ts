@@ -28,6 +28,7 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
+import { terminalFailure, type ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
@@ -97,6 +98,7 @@ export class ScreenRunService extends Context.Service<
       readonly threadId?: string;
       readonly tabId?: string;
       readonly controlId?: string;
+      readonly terminal?: ComputerUseTerminalReason;
     }) => Effect.Effect<void>;
     readonly controlChanged: (input: {
       readonly kind:
@@ -112,6 +114,7 @@ export class ScreenRunService extends Context.Service<
       readonly threadId?: string;
       readonly tabId?: string;
       readonly controlId?: string;
+      readonly terminal?: ComputerUseTerminalReason;
     }) => Effect.Effect<{ readonly cleanupFailures: number }>;
     readonly journalSnapshot: (input: {
       readonly runId: string;
@@ -386,6 +389,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
   const activeCells = new Map<string, string>();
+  const cellTerminals = new Map<string, ComputerUseTerminalReason>();
   const cleanupJournal = new Map<string, ScreenJournalEntry[]>();
   const turnKey = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
   const recordCleanupFailure = (runId: string, turnId: string, tabId?: string) => {
@@ -481,6 +485,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     threadId?: string;
     tabId?: string;
     controlId?: string;
+    terminal?: ComputerUseTerminalReason;
   }) => {
     // A hand back or resume restores authority; the generation check already refuses stale input.
     if (change.kind === "handBack" || change.kind === "resume") return;
@@ -491,7 +496,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        bridge.cutCellNow(runId, turnId, cellId, change.kind ?? "stopped");
+        if (change.terminal !== undefined) cellTerminals.set(id, change.terminal);
+        bridge.cutCellNow(runId, turnId, cellId, change.terminal ?? change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
       for (const [targetId, route] of routes) {
@@ -621,14 +627,16 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   code: cause.endedBy ?? cause.code,
                   receipts: cause.journal ?? cause.receipts ?? [],
                 };
+                const terminal = terminalFailure(cellTerminals.get(id), "list_apps", {});
+                const base = terminal ?? fail(cause.code);
                 return Effect.fail({
-                  ...fail(cause.code),
+                  ...base,
                   ...(cause.startupFailed
                     ? { message: "The screen runtime did not start; nothing ran. Retry the cell." }
                     : {}),
                   cellId,
                   ...cellErrorSafety(
-                    { effectStarted: cause.effectStarted === true },
+                    { ...base, effectStarted: cause.effectStarted === true },
                     cause.receipts ?? [],
                   ),
                   ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
@@ -721,6 +729,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           Effect.ensuring(
             Effect.sync(() => {
               if (activeCells.get(id) === cellId) activeCells.delete(id);
+              cellTerminals.delete(id);
             }),
           ),
         );
@@ -810,6 +819,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       threadId?: string;
       tabId?: string;
       controlId?: string;
+      terminal?: ComputerUseTerminalReason;
     }) {
       fenceNow(input);
     }),
@@ -827,6 +837,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       threadId?: string;
       tabId?: string;
       controlId?: string;
+      terminal?: ComputerUseTerminalReason;
     }) {
       if (input.kind === "resume" || input.kind === "handBack") return { cleanupFailures: 0 };
       let cleanupFailures = 0;
@@ -854,7 +865,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         if (cut && cellId) {
-          yield* bridge.cutCell(runId, turnId, cellId, input.kind);
+          if (input.terminal !== undefined) cellTerminals.set(id, input.terminal);
+          yield* bridge.cutCell(runId, turnId, cellId, input.terminal ?? input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }
         if (releases)
