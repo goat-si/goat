@@ -17,6 +17,8 @@ export function makePersonStopFence() {
   let lockConfirmed = false;
   return {
     pending: () => personStop || screenLock,
+    terminal: (): "stopped_by_person" | "screen_locked" | undefined =>
+      screenLock ? "screen_locked" : personStop ? "stopped_by_person" : undefined,
     beginStop: () => {
       if (personStop) return false;
       personStop = true;
@@ -62,12 +64,25 @@ export const isTerminalStop = (finished: string | undefined, paused: string | un
 
 export const terminalForInterruption = (
   cause: Interruption,
+  terminal: "stopped_by_person" | "screen_locked" | undefined,
 ): { readonly terminal?: "stopped_by_person" | "screen_locked" } =>
-  cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
-    ? { terminal: "stopped_by_person" }
-    : cause._tag === "pause" && cause.reason === "screen_locked"
-      ? { terminal: "screen_locked" }
-      : {};
+  terminal !== undefined
+    ? { terminal }
+    : cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
+      ? { terminal: "stopped_by_person" }
+      : cause._tag === "pause" && cause.reason === "screen_locked"
+        ? { terminal: "screen_locked" }
+        : {};
+
+export const latchedInterruption = (
+  cause: Interruption,
+  terminal: "stopped_by_person" | "screen_locked" | undefined,
+): Interruption =>
+  terminal === "stopped_by_person"
+    ? { _tag: "end", reason: "stopped" }
+    : terminal === "screen_locked"
+      ? { _tag: "pause", reason: "screen_locked" }
+      : cause;
 
 export const forwardPersonStop = Effect.fn("ComputerUseLeaseProxy.forwardPersonStop")(
   function* (input: {

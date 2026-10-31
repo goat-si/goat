@@ -75,6 +75,7 @@ import { makeUnansweredWatch } from "./ComputerUseLeaseProxyUnanswered.ts";
 import {
   forwardPersonStop,
   isTerminalStop,
+  latchedInterruption,
   makePersonStopFence,
   terminalForInterruption,
 } from "./ComputerUseLeaseProxyPersonStop.ts";
@@ -181,6 +182,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
    * final answer without releasing ownership or touching a newer child.
    */
   const interrupt = Effect.fn("ComputerUseLeaseProxy.interrupt")(function* (cause: Interruption) {
+    cause = latchedInterruption(cause, personStop.terminal());
     lastInterruption = cause;
     const message = interruptionRefusal(cause);
     const { token, current } = lifecycle.interrupt();
@@ -188,7 +190,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       yield* options.onDriverCutoff({
         connectionId: current.connectionId,
         generation: current.generation,
-        ...terminalForInterruption(cause),
+        ...terminalForInterruption(cause, personStop.terminal()),
       });
     const pending =
       current === undefined
