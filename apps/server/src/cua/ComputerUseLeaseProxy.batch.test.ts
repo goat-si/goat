@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { BATCH_SCOPE_UNSUPPORTED } from "./ComputerUseLeaseProxyBatch.ts";
 import { active, call, CONTROL, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 
@@ -170,6 +171,94 @@ it.effect("scopes an unscoped batch from the tool list the provider asked the sa
       ...window,
       steps,
       app_scope: scope(["com.apple.calculator"], "background"),
+    });
+  }),
+);
+
+it.effect("refreshes a cached executable alias when a denied app starts before a batch", () =>
+  Effect.gen(function* () {
+    const executable = "C:\\Shared\\host.exe";
+    const h = yield* harness({
+      reservation: (request) =>
+        Effect.sync(() => {
+          if (request.action !== "reserve") return { status: "released" } as const;
+          const app = deniedCallApp(request, ["com.example.Blocked"]);
+          return app === undefined
+            ? ({ status: "admitted", reservationId: null } as const)
+            : ({ status: "refused", detail: "app_not_allowed", app } as const);
+        }),
+    });
+    yield* h.push(active());
+    yield* h.send(call(10, "list_apps", {}));
+    assert.equal((yield* h.nextToDriver).id, 10);
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 10,
+        result: {
+          structuredContent: {
+            apps: [{ pid: 42, bundle_id: "com.example.Allowed", name: "Allowed", executable }],
+          },
+        },
+      }),
+    );
+    yield* h.nextToProvider;
+    yield* h.send(
+      call(11, "run_steps", {
+        app_scope: scope([executable]),
+        steps: [{ tool: "click", args: { pid: 99, window_id: 7, x: 1, y: 1 } }],
+      }),
+    );
+    yield* listedTools(h, true);
+    const lookup = yield* h.nextToDriver;
+    assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: lookup.id,
+        result: {
+          structuredContent: {
+            apps: [
+              { pid: 42, bundle_id: "com.example.Allowed", name: "Allowed", executable },
+              { pid: 99, bundle_id: "com.example.Blocked", name: "Blocked", executable },
+            ],
+          },
+        },
+      }),
+    );
+    assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "app_not_allowed" });
+    assert.equal(yield* h.driverQueued, 0);
+  }),
+);
+
+it.effect("narrows an executable alias to verified bundle identities before forwarding", () =>
+  Effect.gen(function* () {
+    const h = yield* harness();
+    yield* h.push(active());
+    const executable = "/opt/shared/host";
+    yield* h.send(call(1, "run_steps", { app_scope: scope([executable]), steps: [] }));
+    yield* listedTools(h, true);
+    const lookup = yield* h.nextToDriver;
+    assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: lookup.id,
+        result: {
+          structuredContent: {
+            apps: [{ pid: 42, bundle_id: "com.example.Allowed", name: "Allowed", executable }],
+          },
+        },
+      }),
+    );
+    const sent = yield* h.nextToDriver;
+    assert.equal(sent.id, 1);
+    assert.deepEqual(sent.params, {
+      name: "run_steps",
+      arguments: {
+        app_scope: scope(["com.example.Allowed"], "background"),
+        steps: [],
+      },
     });
   }),
 );

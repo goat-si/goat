@@ -9,6 +9,7 @@ import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
 import { batchAppScope } from "./ComputerUseBatchScope.ts";
+import { batchNeedsListing } from "./ComputerUseBatchIdentity.ts";
 import {
   appKey,
   takesScreen,
@@ -146,7 +147,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     toFile === undefined &&
     !initiallyDenied &&
     verdict._tag === "allow" &&
-    unresolvedBatch() !== undefined &&
+    (unresolvedBatch() !== undefined || batchNeedsListing(input.message, input.listed)) &&
     input.finished() === undefined &&
     input.paused() === undefined
   ) {
