@@ -1838,14 +1838,15 @@ const make = Effect.gen(function* () {
         "This tab belongs to another agent session. You can read it, but open your own tab to act.",
         "agentMismatch",
       );
-    if (request.operation === "fillSecret")
-      return secretFill.fill(
+    if (request.operation === "fillSecret") {
+      const gate = secretBlockedGate(tab, request.runId, blockedTabs, operationSignal);
+      return AgentTabState.attributeSecretFill(
         tab,
-        request,
-        deadlineMs,
-        recordAction,
-        secretBlockedGate(tab, request.runId, blockedTabs, operationSignal),
+        { agentId: request.agentSessionId ?? "", signal: operationSignal, runSignal },
+        Date.now,
+        () => secretFill.fill(tab, request, deadlineMs, recordAction, gate),
       );
+    }
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
       if (tab.control.agentId !== request.agentSessionId)

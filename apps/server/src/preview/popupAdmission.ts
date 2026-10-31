@@ -84,7 +84,7 @@ export const inspectPopup = async (
     const refused =
       opener.closing ||
       (agentId !== null && atLimit(agentId)) ||
-      (agentControlled && !origin) ||
+      (agentControlled && !origin && opening?.runless !== true) ||
       (await closeCutAgentPopup({
         agentControlled,
         signal,

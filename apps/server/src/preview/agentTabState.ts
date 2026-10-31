@@ -62,6 +62,8 @@ export class PopupAttribution {
       agentControlled: boolean;
       signal?: AbortSignal;
       runSignal?: AbortSignal;
+      /** The input that opened it came from a request without a run, which keeps run-less adoption. */
+      runless?: boolean;
     }
   >();
 
@@ -76,7 +78,7 @@ export class PopupAttribution {
       owner,
       agentControlled: !("controller" in opener.control) || opener.control.controller === null,
       ...(input?.signal ? { signal: input.signal } : {}),
-      ...(input?.runSignal ? { runSignal: input.runSignal } : {}),
+      ...(input?.runSignal ? { runSignal: input.runSignal } : { runless: input !== undefined }),
     });
     if (this.openings.size > OPENINGS_KEPT)
       this.openings.delete(this.openings.keys().next().value ?? "");
@@ -200,3 +202,18 @@ export class ClosedPopups {
     );
   }
 }
+
+/**
+ * A secret fill runs outside the agent queue and moves the generation as private mode starts and
+ * ends, so its input counts for popups only once it succeeds, at the generation it leaves behind.
+ */
+export const attributeSecretFill = async <A>(
+  tab: { readonly popups: PopupAttribution; readonly control: { readonly generation: number } },
+  input: Omit<AgentInput, "at" | "generation">,
+  now: () => number,
+  fill: () => Promise<A>,
+) => {
+  const result = await fill();
+  tab.popups.lastInput = { ...input, at: now(), generation: tab.control.generation };
+  return result;
+};
