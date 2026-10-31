@@ -59,6 +59,7 @@ import { driverOutcomeSafety } from "./ComputerUseDriverOutcome.ts";
 import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
 import { makeProxyBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
+import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
 type Input = { readonly possible: boolean; readonly reasons: readonly ComputerUseTerminalReason[] };
@@ -494,6 +495,26 @@ const refusalBase: Parameters<typeof refuseProxyCall>[0] = {
 };
 const proxyMessage = (name: string, args: object) =>
   parse(JSON.stringify({ id: 1, method: "tools/call", params: { name, arguments: args } })) ?? {};
+const finalFresh = (line: string, input: Input) =>
+  outputState(
+    finalTerminalLine(
+      line,
+      "not_started",
+      { id: 1, method: "tools/call", params: { name: "list_apps" } },
+      sourceState(input),
+    ).line,
+    "not_started",
+  );
+const claimGate = (name: string, args: object, expected: string, authority?: "claimBind"): Driver =>
+  sync((input) => {
+    const claims = makeProxyBrowserClaims();
+    claims.update({ ...active(), claimedBrowserPids: [55] });
+    const message = proxyMessage(name, args);
+    const gated = claims.gate(1, JSON.stringify(message), message, authority);
+    if (!("refused" in gated)) throw new Error(`expected a claim refusal: ${expected}`);
+    assert.include(gated.refused, expected);
+    return finalFresh(gated.refused, input);
+  });
 const proxyRefusal =
   (overrides: Partial<Parameters<typeof refuseProxyCall>[0]>, detail: string): Driver =>
   (input) =>
@@ -516,6 +537,31 @@ const sites: ReadonlyArray<{
   readonly run: Driver;
   readonly undispatched?: boolean;
 }> = [
+  {
+    name: "ComputerUseLeaseProxyPrimitive.staleGeneration",
+    undispatched: true,
+    run: sync((input) => finalFresh(staleGeneration(1, "tools/call"), input)),
+  },
+  {
+    name: "ComputerUseLeaseProxyBrowserClaims.gate.bind",
+    undispatched: true,
+    run: claimGate("get_browser_state", {}, "no approved pending claim", "claimBind"),
+  },
+  {
+    name: "ComputerUseLeaseProxyBrowserClaims.gate.untrusted",
+    undispatched: true,
+    run: claimGate("get_browser_state", { authority: "claimBind" }, "host-only"),
+  },
+  {
+    name: "ComputerUseLeaseProxyBrowserClaims.gate.unclaimed",
+    undispatched: true,
+    run: claimGate("get_browser_state", {}, "no approved claim"),
+  },
+  {
+    name: "ComputerUseLeaseProxyBrowserClaims.gate.desktop",
+    undispatched: true,
+    run: claimGate("get_window_state", { pid: 55, window_id: 7 }, "Desktop access"),
+  },
   {
     name: "ComputerUseLeaseProxyRefusal.finished",
     undispatched: true,
