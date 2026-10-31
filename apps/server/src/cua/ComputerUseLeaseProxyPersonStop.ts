@@ -28,7 +28,15 @@ export function makePersonStopFence() {
       return true;
     },
     confirm: (update: ComputerUseLeaseUpdate | undefined) => {
-      if (update?.state === "paused" && update.reason === "screen_locked") lockConfirmed = true;
+      if (update?.state === "paused" && update.reason === "screen_locked") {
+        reason ??= "screen_locked";
+        lockConfirmed = true;
+      }
+      if (
+        update?.state === "ended" &&
+        (update.reason === "stopped" || update.reason === "stopped_all")
+      )
+        reason ??= "stopped_by_person";
     },
     activate: (
       update: Extract<ComputerUseLeaseUpdate, { readonly state: "active" }>,
@@ -76,11 +84,16 @@ export const latchedInterruption = (
   cause: Interruption,
   terminal: "stopped_by_person" | "screen_locked" | undefined,
 ): Interruption =>
-  terminal === "stopped_by_person"
-    ? { _tag: "end", reason: "stopped" }
-    : terminal === "screen_locked"
-      ? { _tag: "pause", reason: "screen_locked" }
-      : cause;
+  (terminal === "stopped_by_person" &&
+    cause._tag === "end" &&
+    (cause.reason === "stopped" || cause.reason === "stopped_all")) ||
+  (terminal === "screen_locked" && cause._tag === "pause" && cause.reason === "screen_locked")
+    ? cause
+    : terminal === "stopped_by_person"
+      ? { _tag: "end", reason: "stopped" }
+      : terminal === "screen_locked"
+        ? { _tag: "pause", reason: "screen_locked" }
+        : cause;
 
 export const forwardPersonStop = Effect.fn("ComputerUseLeaseProxy.forwardPersonStop")(
   function* (input: {
