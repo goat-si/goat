@@ -119,16 +119,25 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const answerReconnecting = (id: JsonRpcId, method: string | undefined) =>
     options.output(refusal(id, method, "reconnecting", RECONNECTING));
   const answerStopped = (id: JsonRpcId, method: string | undefined, given?: LeaseEnd) => {
-    if (given === undefined && terminal === undefined && transport === "reconnecting")
+    const personStopped =
+      (waiting === "stopped" || waiting === "stopped_all") && stoppedControls.size > 0;
+    if (
+      given === undefined &&
+      terminal === undefined &&
+      transport === "reconnecting" &&
+      !personStopped
+    )
       return answerReconnecting(id, method);
     const reason =
-      given ?? terminal ?? (transport === "lost" ? ("transport_lost" as const) : waiting);
+      given ??
+      terminal ??
+      (personStopped ? waiting : transport === "lost" ? ("transport_lost" as const) : waiting);
     return options.output(
       refusal(
         id,
         method,
         reason,
-        terminal !== undefined || reason === "transport_lost"
+        terminal !== undefined || personStopped || reason === "transport_lost"
           ? LEASE_END_MESSAGES[reason]
           : reason === "disabled"
             ? "Computer use is turned off in settings. Re-enable it, then start a new turn or approval."

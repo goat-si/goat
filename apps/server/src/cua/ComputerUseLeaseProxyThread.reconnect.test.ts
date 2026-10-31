@@ -11,6 +11,21 @@ const detail = (answer: { result?: { structuredContent?: Record<string, unknown>
   answer.result?.structuredContent?.detail;
 
 describe("thread lease proxy across a dropped lease stream", () => {
+  it.effect("reconnect cannot replace a person's stopped control with a retry hint", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      yield* h.started;
+      yield* h.applied;
+      yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+      yield* h.closed;
+      yield* h.push({ state: "reconnecting" });
+      yield* h.send(work(900));
+      const answer = yield* h.next;
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
+      assert.notInclude(JSON.stringify(answer), "Try again");
+    }),
+  );
   it.effect("a call already being admitted when the stream drops never reaches the driver", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
