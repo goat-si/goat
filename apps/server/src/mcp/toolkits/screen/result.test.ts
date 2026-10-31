@@ -18,6 +18,12 @@ const image = {
 };
 
 describe("screen run MCP result", () => {
+  it("describes state and target lifetimes across cells and turns", () => {
+    const api = screenTargetApi({ app: true, tab: true });
+    expect(api).toContain("state values survive later turns");
+    expect(api).toContain("targets must be bound again each turn");
+    expect(api).toContain("rebinding the same window returns the same target");
+  });
   it.each([
     { hasApi: false, hasImage: false },
     { hasApi: true, hasImage: false },
