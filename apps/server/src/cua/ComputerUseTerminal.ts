@@ -150,8 +150,7 @@ export const terminalReplyState = (
   const decoded = decodeTerminalReply(value);
   if (decoded._tag === "None")
     return {
-      reason: undefined,
-      possibleCommit: false,
+      ...replaceWithTerminal("none"),
       wireReason: undefined,
       terminalSafety: false,
     };
@@ -159,8 +158,10 @@ export const terminalReplyState = (
   const safety = decodeSafety(content.safety);
   if (decoded.value.isError !== true && status !== "not_started" && status !== "unknown_outcome")
     return {
-      reason: undefined,
-      possibleCommit: safety._tag === "Some" && safety.value.possibleCommit === true,
+      ...replaceWithTerminal(
+        "none",
+        safety._tag === "Some" && safety.value.possibleCommit === true,
+      ),
       wireReason: undefined,
       terminalSafety: false,
     };
