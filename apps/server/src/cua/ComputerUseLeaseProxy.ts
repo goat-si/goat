@@ -108,6 +108,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: Contracts.ComputerUsePauseReason | undefined;
   let idle = false;
   const personStop = makePersonStopFence();
+  const fresh = { possibleCommit: false };
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
@@ -138,7 +139,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     ownAnswers,
     ended,
     endAnswer: (id, method, reason) =>
-      refusal({ possibleCommit: false }, id, method, reason, LEASE_END_MESSAGES[reason]),
+      refusal(fresh, id, method, reason, LEASE_END_MESSAGES[reason]),
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const batches = makeProxyCallScope(handshakeAnswers, () => lifecycle.current, claims.report);
@@ -227,13 +228,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               reason: undefined,
               possibleCommit: false,
             })
-          : refusal(
-              { possibleCommit: false },
-              request.id,
-              request.method,
-              interruptionDetail(cause),
-              message,
-            ),
+          : refusal(fresh, request.id, request.method, interruptionDetail(cause), message),
         request.sink === providerSink ? undefined : "unknown_outcome",
       );
       // A handshake the pause cut off is still answered (#1604); only an end refuses it.
@@ -706,20 +701,14 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     const key = isRequest ? JSON.stringify(id) : "";
     if (isRequest && (outstanding.has(key) || handshakeAnswers.pending(key)))
       return yield* sink.answer(
-        refusal({ possibleCommit: false }, id, message.method, "invalid_target", REQUEST_ID_BUSY),
+        refusal(fresh, id, message.method, "invalid_target", REQUEST_ID_BUSY),
       );
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);
     if (finished !== undefined) {
       if (isRequest)
         yield* sink.answer(
-          refusal(
-            { possibleCommit: false },
-            id,
-            message?.method,
-            finished,
-            LEASE_END_MESSAGES[finished],
-          ),
+          refusal(fresh, id, message?.method, finished, LEASE_END_MESSAGES[finished]),
         );
       return;
     }
@@ -731,7 +720,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (held()) return yield* sink.answer(notSent(id));
       if (!primitiveCurrent() || (yield* Clock.currentTimeMillis) >= primitiveDeadline)
         return yield* sink.answer(
-          refusal({ possibleCommit: false }, id, message.method, "expired", SCREEN_CALL_EXPIRED),
+          refusal(fresh, id, message.method, "expired", SCREEN_CALL_EXPIRED),
         );
       const browser = claims.gate(id, line, message, primitive?.authority);
       if (browser.refused !== undefined) return yield* sink.answer(browser.refused);
@@ -771,17 +760,11 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const targets = namedWindows(message.params?.arguments);
         if (targets === undefined)
           return yield* sink.answer(
-            refusal(
-              { possibleCommit: false },
-              id,
-              message.method,
-              "wrong_display",
-              UNCONFIRMED_DISPLAY,
-            ),
+            refusal(fresh, id, message.method, "wrong_display", UNCONFIRMED_DISPLAY),
           );
         if (targets.length > 0 && (yield* options.placement(targets)) !== "same")
           return yield* sink.answer(
-            refusal({ possibleCommit: false }, id, message.method, "wrong_display", WRONG_DISPLAY),
+            refusal(fresh, id, message.method, "wrong_display", WRONG_DISPLAY),
           );
         if (needsProof) yield* proveDisplay(primitiveAllowed);
       }
@@ -796,7 +779,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (admitted !== undefined && lifecycle.current !== admitted)
         return yield* sink.answer(
           refusal(
-            { possibleCommit: false },
+            fresh,
             id,
             message.method,
             interruptionDetail(lastInterruption),
@@ -806,9 +789,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (needsProof && (lifecycle.current === undefined || proven !== lifecycle.current))
         return yield* sink.answer(
           finished === undefined && options.transportHeld?.() === true
-            ? refusal({ possibleCommit: false }, id, message.method, "reconnecting", RECONNECTING)
+            ? refusal(fresh, id, message.method, "reconnecting", RECONNECTING)
             : refusal(
-                { possibleCommit: false },
+                fresh,
                 id,
                 message.method,
                 "wrong_display",
@@ -828,7 +811,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       if (!isRequest || message.method === undefined) return;
       const refuse = sink.answer(
         refusal(
-          { possibleCommit: false },
+          fresh,
           id,
           message.method,
           "waiting_for_human",
@@ -882,13 +865,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       ) {
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(
-          refusal(
-            { possibleCommit: false },
-            id,
-            message.method,
-            "capture_hide_unconfirmed",
-            CAPTURE_HIDE_UNCONFIRMED,
-          ),
+          refusal(fresh, id, message.method, "capture_hide_unconfirmed", CAPTURE_HIDE_UNCONFIRMED),
         );
       }
       if (options.onTarget !== undefined) {
@@ -944,7 +921,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* drawOverlay({ type: "reply", id: JSON.stringify(id), failed: true });
         return yield* sink.answer(
           refusal(
-            { possibleCommit: false },
+            fresh,
             id,
             message?.method,
             "unauthorized",
