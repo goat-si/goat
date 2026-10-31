@@ -3,6 +3,7 @@ import { ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -29,8 +30,16 @@ it.effect.each(["lock then stop", "lock then resume then stop", "stop then lock"
       const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-            currentControl: () => Effect.succeedSome({ controlId }),
-            controlState: () => Effect.succeed({ _tag: "active" }),
+            currentControl: () =>
+              Effect.succeedSome({ controlId, threadId, expiresAt: DateTime.makeUnsafe(60000) }),
+            controlState: () =>
+              Effect.succeed({
+                _tag: "active",
+                expiresAt: DateTime.makeUnsafe(60000),
+                interruptions: { count: 0, last: "screen_locked" },
+                apps: undefined,
+                wakeAt: 60000,
+              }),
             subscribe: PubSub.subscribe(signals),
             onAuthorityChange: (listener) => {
               notify = listener;

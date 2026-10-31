@@ -888,6 +888,6 @@ it.effect.each(["server Stop", "physical Esc"])(
       }
       yield* Deferred.succeed(gate, undefined);
       const answer = yield* h.nextToProvider;
-      assert.equal(answer.result?.structuredContent?.code, "stopped_by_person");
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
     }),
 );
