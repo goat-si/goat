@@ -17,8 +17,13 @@ describe("CodexAdapterV2 injected prefix", () => {
           modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
           hasGoatMcp: true,
           screenCode: true,
+          screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
         });
         assert.include(JSON.stringify(params.additionalContext), "goat_screen_run");
+        assert.include(
+          JSON.stringify(params.additionalContext?.goat_code_runtime_screen_code_01),
+          "Read the screen-code skill at /state/skills/screen-code/SKILL.md",
+        );
       }),
   );
   it.effect("stays byte-identical across turns that carry different notices", () =>
