@@ -34,7 +34,6 @@ const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set
   "snapshot",
   "read",
   "logs",
-  "fetch",
   "waitFor",
   "signInState",
 ]);
