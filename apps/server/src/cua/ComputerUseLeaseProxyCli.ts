@@ -50,7 +50,7 @@ import {
   followLeaseStream,
 } from "./ComputerUseLeaseStreamFollower.ts";
 import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
-import { type DriverWatchReport, makeDriverWatch } from "./ComputerUseDriverWatch.ts";
+import { makeDriverWatch } from "./ComputerUseDriverWatch.ts";
 import { endDriversWithProxy, killDriverGroup, spawnDriverProcess } from "./driverProcess.ts";
 import { overlayChannel } from "./overlayChannel.ts";
 import { helperCursorListing } from "./ComputerUseCursorTools.ts";
@@ -362,7 +362,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
   // queue for every driver this proxy starts, so no working report, of this driver or a later
   // one, can land before a crash reported ahead of it.
   let reported = Promise.resolve();
-  const send = (body: DriverWatchReport | undefined) => {
+  const send = (body: ComputerUseLeaseReport | undefined) => {
     if (body === undefined) return;
     reported = reported
       .then(() => report(url, authorization, body))
@@ -673,6 +673,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           });
     yield* following.pipe(Effect.ignoreCause, Effect.ensuring(closeQueues), Effect.forkScoped);
     const common = {
+      onBrowserClaimReport: send,
       primitiveCancelled: (requestId: string) => cancelledPrimitives.has(requestId),
       subscribePrimitiveCancels: (listener: (requestId: string) => void) => {
         cancelListeners.add(listener);

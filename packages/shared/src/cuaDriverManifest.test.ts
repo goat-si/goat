@@ -33,10 +33,16 @@ vi.mock("node:child_process", { spy: true });
 
 /**
  * Every tool the pinned driver can offer, on any platform. Refresh it from the new tag when the
- * pin moves to a version not in `verified`; goat.16 changes no tool registration.
+ * pin moves to a version not in `verified`; goat.17 changes no tool registration.
  */
 const PINNED_DRIVER_TOOLS = {
-  verified: ["0.38.0-goat.13", "0.38.0-goat.14", "0.38.0-goat.15", "0.38.0-goat.16"],
+  verified: [
+    "0.38.0-goat.13",
+    "0.38.0-goat.14",
+    "0.38.0-goat.15",
+    "0.38.0-goat.16",
+    "0.38.0-goat.17",
+  ],
   tools: [
     // `cua-driver list-tools` of the macOS binary.
     "bring_to_front",
@@ -117,6 +123,41 @@ const PINNED_DRIVER_TOOLS = {
 } as const;
 
 describe("cuaDriverManifest", () => {
+  it("admits exact browser windows and claim tools only with capability and live claims", () => {
+    const browser = {
+      existingProfiles: [
+        { pid: 42, windowId: 7 },
+        { pid: 42, windowId: 8 },
+      ],
+      origins: ["https://example.test"],
+    };
+    const unavailable = cuaDriverCapabilityManifest({
+      applications: [],
+      browser,
+      browserClaimsSupported: false,
+    });
+    expect(unavailable).not.toContain("  browser:");
+    expect(unavailable).not.toContain('"browser_click"');
+    const empty = cuaDriverCapabilityManifest({
+      applications: [],
+      browser: { existingProfiles: [], origins: [] },
+      browserClaimsSupported: true,
+    });
+    expect(empty).not.toContain("  browser:");
+    const available = cuaDriverCapabilityManifest({
+      applications: [],
+      browser,
+      browserClaimsSupported: true,
+    });
+    expect(available).toContain(
+      "    existing_profiles:\n      - pid: 42\n        window_id: 7\n      - pid: 42\n        window_id: 8",
+    );
+    expect(available).toContain('    origins:\n      - "https://example.test"');
+    expect(available).toContain('    - "browser_click"');
+    expect(available).not.toContain("kind: existing_profile");
+    expect(available).not.toContain('"browser_download"');
+    expect(available).not.toContain('"browser_set_input_files"');
+  });
   it("records the tool set of the pinned driver version", () => {
     expect(PINNED_DRIVER_TOOLS.verified).toContain(CUA_DRIVER_VERSION);
   });

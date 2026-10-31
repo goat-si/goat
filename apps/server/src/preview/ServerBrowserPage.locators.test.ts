@@ -2,6 +2,7 @@ import { chromium, type CDPSession, type Page } from "playwright-core";
 import { expect, it } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { pointBefore } from "./ServerBrowserPointer.ts";
 
 const fixture = async (run: (page: Page, cdp: CDPSession) => Promise<void>) => {
   expect(chromiumInstalled).toBe(true);
@@ -64,15 +65,46 @@ it("refuses a stale bare ref at once and before any input", () =>
     });
   }));
 
-it("reports a target that never appeared as refused before input", () =>
+it("reports a target that is there but never got ready as refused before input", () =>
   fixture(async (page) => {
-    await page.setContent("<button>continue</button>");
+    await page.setContent("<button hidden id=later>continue</button>");
     await expect(
-      ServerBrowserPage.click(page, { selector: "#missing", timeoutMs: 200 }),
+      ServerBrowserPage.click(page, { selector: "#later", timeoutMs: 200 }),
     ).rejects.toMatchObject({
       tag: "PreviewAutomationTimeoutError",
       detail: { beforeInput: true },
     });
+  }));
+
+it("refuses a selector that matches nothing as no match within its short grace, not after the whole wait", () =>
+  fixture(async (page) => {
+    await page.setContent("<input role=combobox aria-label=Search>");
+    // A wait past the grace: the old path spent all of it and answered a timeout. The server
+    // browser moves the pointer before typing, so that step is checked on its own too.
+    const input = { selector: "input[name=q]", text: "goat", timeoutMs: 6_000 };
+    const refusals = await Promise.all(
+      [
+        pointBefore(
+          page,
+          input,
+          async () => {},
+          () => {},
+        ),
+        ServerBrowserPage.type(page, input),
+        ServerBrowserPage.click(page, input),
+      ].map((action) =>
+        action.then(
+          () => "acted",
+          (error: unknown) => error,
+        ),
+      ),
+    );
+    for (const refusal of refusals)
+      expect(refusal).toMatchObject({
+        tag: "PreviewAutomationInvalidSelectorError",
+        detail: { noMatch: true },
+      });
+    expect(await page.locator("input").inputValue()).toBe("");
   }));
 
 it("lists interactive-only lines flat, so no control reads as nested under another", () =>
@@ -85,4 +117,21 @@ it("lists interactive-only lines flat, so no control reads as nested under anoth
       .slice(1);
     expect(lines.length).toBeGreaterThan(1);
     for (const line of lines) expect(line).toMatch(/^- [^\n]*[^:]$/);
+  }));
+it("acts on a target that already exists while the page is still loading", () =>
+  fixture(async (page) => {
+    const release = Promise.withResolvers<void>();
+    await page.route("https://held.test/**", async (route) => {
+      await release.promise;
+      await route.abort();
+    });
+    try {
+      await page.setContent('<img src="https://held.test/slow.png"><input aria-label=Search>', {
+        waitUntil: "domcontentloaded",
+      });
+      await ServerBrowserPage.type(page, { selector: "input", text: "goat", timeoutMs: 6_000 });
+      expect(await page.locator("input").inputValue()).toBe("goat");
+    } finally {
+      release.resolve();
+    }
   }));

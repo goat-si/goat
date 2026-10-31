@@ -3,9 +3,10 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/22";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/24";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
+// At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
 // An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Never resend an input. Stop from the person ends the cell at once.`;
 
@@ -13,7 +14,8 @@ const COMMON = `type Target = number | string | { window: [x: number, y: number]
 // number: [N] in the latest observe. string: a tab's Playwright selector or snapshot ref, or an app element's name (reads once if needed).
 // { id }: an app element's accessibility id, as its observation lists it; the same in every language.
 // { window: [x, y] }: macOS app window points from the window's top-left (the unit of app element frames), recommended first; [x, y]: pixels of the latest screenshot.
-// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page; Linux and Windows app actions use element numbers from observe().
+// macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page.
+// Linux and Windows apps take points only in click: [x, y] pixels of a screenshot whose window position the driver proved (otherwise unsupported, nothing sent). They stay usable after input until the window moves, resizes or changes scale (stale_reference: take a new screenshot); other app actions there use element numbers from observe().
 type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"; note?: string; warnings?: string[]; result?: { debug: { value?: unknown; evidence: string[] } } };
 // suspected_noop: input was sent but its effect was not seen; observe before retrying, never blindly resend.
 // warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
@@ -62,10 +64,11 @@ const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContent
 // and with target or role: enabled?, value?, checked?, selected? (true/false or exact value of the one match) and state?: "attached" | "detached" | "visible" | "hidden".
 // text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
 // A canvas, map or drawing has no elements inside it: click its spot at [x, y] from tab.screenshot(). Any input but a click retires those points (stale_reference): take a new one. scroll may leave the page moving.
+// A selector that still matches nothing 2 s after its page loaded throws target_missing with nothing sent; waitFor({ target }) waits for an element that appears later.
 interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<object>; // tabs you opened need no claim
   hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls; a selector matching several hovers the first
-  goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>;
-  read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>;
+  goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>; close(): Promise<Done>; // close: a tab this agent opened
+  read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>; // fetch runs in the page, so its CORS and CSP apply; a failure's detail is cors, csp, dns or network
   fillSecret(t: Target | { selector: string }, secretRef: string): Promise<object>; // observed elements and exact observed names are focused first; any other string is a CSS selector
   upload(t: Target, files: string[]): Promise<object>;
   dialog(action: "accept" | "dismiss", promptText?: string): Promise<object>;

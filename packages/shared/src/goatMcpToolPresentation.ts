@@ -306,6 +306,16 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Clean up", "Cleaning up", "Cleaned up", "GOAT storage"],
     "storage-clean",
   ),
+  goat_browser_claim_request: tool(
+    ["Request", "Requesting", "Requested", "browser tab access"],
+    "browser",
+    "browser",
+  ),
+  goat_browser_claim_list: tool(
+    ["List", "Listing", "Listed", "browser tab claims"],
+    "browser",
+    "browser",
+  ),
   goat_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   goat_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
   goat_browser_site_note_read: tool(

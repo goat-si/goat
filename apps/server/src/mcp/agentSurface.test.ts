@@ -73,8 +73,8 @@ const registered = catalog.pipe(
 );
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
-  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state and site notes.
-  expect(entries).toHaveLength(282);
+  // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes and browser claims.
+  expect(entries).toHaveLength(284);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 74 shipped names off the path grammar plus five whose verb D11 normalized.
@@ -369,6 +369,7 @@ const TARGET_THREAD = "thread:conformance-target";
 // Inputs the schema sampler cannot satisfy, and reads that reach other machines with this
 // machine's SSH keys unless asked for the local answer.
 const FIXTURE_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+  "browser_claim.request": { pid: 42, windowId: 7, origin: "https://example.test" },
   "decision.list": {},
   "decision.read": { id: "decision:fixture" },
   "decision.answer": { id: "decision:fixture", optionId: "wait", reason: "Wait for capacity" },

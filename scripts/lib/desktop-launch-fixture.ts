@@ -66,6 +66,12 @@ export function prepareDesktopLaunchHome(scratch: string) {
   NodeFS.mkdirSync(NodePath.dirname(dbPath), { recursive: true });
   NodeFS.mkdirSync(workspace);
   NodeFS.copyFileSync(DESKTOP_LAUNCH_FIXTURE, dbPath);
+  // The seeded thread's fixed timestamps age past the default auto-settle window, which would
+  // file it under Settled, out of the sidebar list this check reads.
+  NodeFS.writeFileSync(
+    NodePath.join(NodePath.dirname(dbPath), "settings.json"),
+    JSON.stringify({ sidebarAutoSettleAfterDays: null }),
+  );
   const database = new NodeSqlite.DatabaseSync(dbPath);
   try {
     assertSafeDesktopFixture(database);

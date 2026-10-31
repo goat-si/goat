@@ -32,6 +32,37 @@ const expired = () =>
     beforeInput,
   );
 
+/** How long a selector may match nothing on a loaded page before an action refuses it. */
+const NO_MATCH_GRACE_MS = 2_000;
+
+/**
+ * Refuses a target that still matches nothing a short grace after its page loaded, rather than
+ * spending the whole wait on it; a target that exists but is not ready yet keeps the full wait.
+ */
+export const requireMatch = async (target: Locator, timeoutMs: number) => {
+  const ends = performance.now() + timeoutMs;
+  const left = () => Math.max(1, Math.floor(ends - performance.now()));
+  // A target already there needs no wait; only a miss waits for the page to finish loading.
+  if ((await target.count()) > 0) return;
+  await target.page().waitForLoadState("load", { timeout: left() });
+  const found = await target
+    .first()
+    .waitFor({ state: "attached", timeout: Math.min(NO_MATCH_GRACE_MS, left()) })
+    .then(
+      () => true,
+      (cause: unknown) => {
+        if (isTimeout(cause)) return false;
+        throw cause;
+      },
+    );
+  if (!found)
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationInvalidSelectorError",
+      "No element matches the selector, so no input was sent.",
+      { noMatch: true },
+    );
+};
+
 /** One deadline for the whole action: the request's, narrowed by the action's own timeout. */
 export const actionDeadline = (timeoutMs: number, requestDeadline: number | undefined) =>
   Math.min(requestDeadline ?? Number.POSITIVE_INFINITY, performance.now() + timeoutMs);
@@ -101,12 +132,20 @@ export const revealFramesOf = async (handle: ElementHandle, deadline: number) =>
   }
 };
 
-/** The element a locator names now, held for the rest of the action. */
-export const pinTarget = async (target: Locator, deadline: number) => {
-  const handle = await target.elementHandle({ timeout: remaining(deadline) });
-  if (handle === null) throw targetChanged();
+/** The element a locator names once something matches it; one that detached is `gone`. */
+export const matchedElement = async (target: Locator, timeoutMs: number, gone: () => Error) => {
+  const ends = performance.now() + timeoutMs;
+  await requireMatch(target, timeoutMs);
+  const handle = await target.elementHandle({
+    timeout: Math.max(1, Math.floor(ends - performance.now())),
+  });
+  if (handle === null) throw gone();
   return handle;
 };
+
+/** The element a locator names now, held for the rest of the action. */
+export const pinTarget = (target: Locator, deadline: number) =>
+  matchedElement(target, remaining(deadline), targetChanged);
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
 const selectable = ([element, wanted]: readonly [unknown, ReadonlyArray<string>]) => {

@@ -11,6 +11,7 @@ import {
   FOREGROUND_NOT_APPROVED,
   LEASE_END_MESSAGES,
   RECONNECTING,
+  SCREEN_SHARED,
   PAUSE_STATE,
   PAUSE_NEXT,
   PAUSE_MESSAGES,
@@ -226,3 +227,20 @@ export const unsentCallRefusal = (
       : interruptionRefusal(lastInterruption),
   );
 };
+
+export const unsentOutcome = (
+  outcome: "shared" | "expired" | "stale",
+  id: JsonRpcId,
+  method: string | undefined,
+  notSent: () => string,
+) =>
+  outcome === "shared"
+    ? refusal(id, method, "screen_shared", SCREEN_SHARED)
+    : outcome === "expired"
+      ? refusal(
+          id,
+          method,
+          "expired",
+          "This call’s permission expired before dispatch, so it did not run. Observe the current approval before trying again.",
+        )
+      : notSent();

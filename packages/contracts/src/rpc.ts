@@ -118,6 +118,7 @@ import {
   AcpRegistrySetProviderResult,
 } from "./acpRegistry.ts";
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
+import { BROWSER_CLAIMS_WS_METHODS, BrowserClaimsRpcs } from "./browserClaimsRpc.ts";
 import { NOTES_WS_METHODS, NotesRpcs } from "./notesRpc.ts";
 import { ChannelRpcs } from "./channelRpc.ts";
 import { DECISION_WS_METHODS, DecisionRpcs } from "./decisionRpc.ts";
@@ -519,6 +520,7 @@ import {
 
 export const WS_METHODS = {
   ...MEMORY_WS_METHODS,
+  ...BROWSER_CLAIMS_WS_METHODS,
 
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -2778,9 +2780,11 @@ export const WsChannelRpcGroup = ChannelRpcs.middleware(RpcScopeAuthorization);
 export const WsNotesRpcGroup = NotesRpcs.middleware(RpcScopeAuthorization);
 
 export const WsDecisionRpcGroup = DecisionRpcs.middleware(RpcScopeAuthorization);
+export const WsBrowserClaimsRpcGroup = BrowserClaimsRpcs.middleware(RpcScopeAuthorization);
 export const WsRpcGroup = WsCoreRpcGroup.merge(WsChannelRpcGroup)
   .merge(WsNotesRpcGroup)
-  .merge(WsDecisionRpcGroup);
+  .merge(WsDecisionRpcGroup)
+  .merge(WsBrowserClaimsRpcGroup);
 
 export {
   WsMemoryProjectBindingGetRpc,

@@ -109,6 +109,7 @@ export const harness = Effect.fn(function* (
     readonly onCallOutcome?: (
       report: import("@goat/contracts").ComputerUseLeaseCallOutcome,
     ) => Effect.Effect<unknown>;
+    readonly onBrowserClaimReport?: LeaseProxyOptions<never, never>["onBrowserClaimReport"];
     /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
     readonly manifestStamp?: () => string | undefined;
     /** Holds the first driver's kill open until done, as a child slow to stop would. */
@@ -172,6 +173,9 @@ export const harness = Effect.fn(function* (
   const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const validationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
   const proxy = yield* runLeaseProxy({
+    ...(options.onBrowserClaimReport === undefined
+      ? {}
+      : { onBrowserClaimReport: options.onBrowserClaimReport }),
     connectionId: "proxy:test",
     reservation: (call) =>
       Effect.sync(() => void reservations.push(call)).pipe(

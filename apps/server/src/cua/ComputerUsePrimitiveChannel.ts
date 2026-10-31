@@ -104,6 +104,8 @@ export interface PrimitiveChannelRequest {
   readonly callId: number;
   readonly deadlineMillis: number;
   readonly tool: string;
+  readonly authority?: "claimBind";
+  readonly bindingVersion?: number;
   readonly args: ComputerUsePrimitiveRequest["args"];
   readonly cursor?: ComputerUsePrimitiveRequest["cursor"];
 }
@@ -152,7 +154,10 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
     readonly reportControlCutoff: (input: Report) => Effect.Effect<boolean>;
     readonly request: (
       input: PrimitiveChannelRequest,
-    ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
+    ) => Effect.Effect<
+      ComputerUsePrimitiveReply & { readonly driverGeneration?: number },
+      ScreenRunError
+    >;
     readonly reply: (
       input: Authority & {
         readonly registrationId: string;
@@ -340,6 +345,8 @@ export const make = Effect.gen(function* () {
       callId: input.callId,
       deadlineMillis,
       tool: input.tool,
+      ...(input.authority === undefined ? {} : { authority: input.authority }),
+      ...(input.bindingVersion === undefined ? {} : { bindingVersion: input.bindingVersion }),
       args: input.args,
       ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
     };
@@ -378,7 +385,11 @@ export const make = Effect.gen(function* () {
         ({ answered, at }) => at <= deadlineMillis || answered.status === "not_started",
         deadlineFailure,
       ),
-      Effect.map(({ answered }) => answered),
+      Effect.map(({ answered }) =>
+        input.authority === "claimBind"
+          ? { ...answered, driverGeneration: binding.generation + 1 }
+          : answered,
+      ),
       Effect.ensuring(
         Effect.sync(() => {
           if (!record.pending.delete(request.requestId)) return;

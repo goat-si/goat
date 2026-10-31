@@ -26,6 +26,7 @@ import {
   actionDeadline,
   pinTarget,
   remaining,
+  matchedElement,
   revealFramesOf,
   waitUntilSelectable,
   waitUntilWritable,
@@ -257,11 +258,8 @@ const targetChanged = () =>
   );
 
 /** The target's element, after Playwright's wait for it; a detached target is a changed one. */
-export const elementOf = async (locator: Locator, timeout: number) => {
-  const handle = await locator.elementHandle({ timeout });
-  if (handle === null) throw targetChanged();
-  return handle;
-};
+export const elementOf = (locator: Locator, timeout: number) =>
+  matchedElement(locator, timeout, targetChanged);
 
 /** A wait for the target that timed out sent nothing, so the broker can report it unsent. */
 const unsentOnTimeout = (cause: unknown) =>

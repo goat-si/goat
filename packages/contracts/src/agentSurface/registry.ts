@@ -23,6 +23,7 @@ import { operationEntries } from "./entries/operation.ts";
 import { originEntries } from "./entries/origin.ts";
 import { pendingRequestEntries } from "./entries/pending_request.ts";
 import { permissionProfileEntries } from "./entries/permission_profile.ts";
+import { browserClaimEntries } from "./entries/browser_claim.ts";
 import { previewEntries } from "./entries/preview.ts";
 import { projectEntries } from "./entries/project.ts";
 import { providerEntries } from "./entries/provider.ts";
@@ -83,6 +84,7 @@ export const agentSurfaceRegistry = {
   ...scheduleEntries,
   ...handoffEntries,
   ...previewEntries,
+  ...browserClaimEntries,
   ...projectEntries,
   ...pullRequestEntries,
   ...pullRequestWriteEntries,

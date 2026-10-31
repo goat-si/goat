@@ -485,9 +485,8 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       const no = async () => null;
       const element = { boundingBox: box, waitForElementState: box, dispose: box, ownerFrame: no };
       const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
-      page.locator.mockImplementationOnce(
-        () => ({ ...locator, elementHandle: async () => element }) as never,
-      );
+      const handle = { elementHandle: async () => element, count: async () => 1 };
+      page.locator.mockImplementationOnce(() => ({ ...locator, ...handle }) as never);
       yield* broker.invoke({
         scope,
         tabId,

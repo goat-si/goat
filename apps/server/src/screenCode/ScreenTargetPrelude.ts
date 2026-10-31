@@ -26,7 +26,7 @@ class ScreenError extends Error {
     this.code = code;
     this.nothingSent = nothingSent;
     if (host)
-      for (const key of ['callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'evidence', 'receipts'])
+      for (const key of ['callId', 'effectStarted', 'nextStep', 'safety', 'refused', 'detail', 'evidence', 'receipts', 'limit'])
         if (host[key] !== undefined) this[key] = host[key];
   }
 }
@@ -72,9 +72,12 @@ const __flush = () => {
       jsons = group.map((entry, index) =>
         JSON.stringify([group.length > 1 ? { ...entry.arg, batch: { index, size: group.length } } : entry.arg]));
     } catch (raw) { for (const entry of group) entry.reject(__error(raw)); continue; }
-    if (group.length > 1 && !__hostGroup(JSON.stringify(group.map((entry, index) => [entry.method, jsons[index]])))) {
-      for (const entry of group) entry.reject(new ScreenError('refused', 'screen call refused', true));
-      continue;
+    if (group.length > 1) {
+      const admitted = __hostGroup(JSON.stringify(group.map((entry, index) => [entry.method, jsons[index]])));
+      if (admitted !== true) {
+        for (const entry of group) entry.reject(typeof admitted === 'string' ? __error(admitted) : new ScreenError('refused', 'screen call refused', true));
+        continue;
+      }
     }
     group.forEach((entry, index) => __sendJson(entry.method, jsons[index]).then(entry.resolve, entry.reject));
   }
