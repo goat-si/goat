@@ -78,7 +78,6 @@ import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { getProviderOptionCurrentValue } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
-import { formatThreadLink } from "@goat/shared/threadLinks";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -140,6 +139,7 @@ import {
   type McpInvocationScope,
   type McpThreadInvocationScope,
   requireThreadScope,
+  threadLinkFor,
 } from "./McpInvocationContext.ts";
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -1099,7 +1099,7 @@ const make = Effect.gen(function* () {
           ),
         );
 
-  const loadProjection = (threadId: ThreadId) =>
+  const loadProjection = (threadId: ThreadId, includeUserMessages = true) =>
     threadManagement
       .getThreadRecords(
         threadId,
@@ -1113,7 +1113,7 @@ const make = Effect.gen(function* () {
           "contextTransfers",
           "turnItems",
         ],
-        { turnItemTypes: [], messageRoles: ["user"] },
+        { turnItemTypes: [], messageRoles: includeUserMessages ? ["user"] : [] },
       )
       .pipe(
         Effect.mapError((error) =>
@@ -1147,6 +1147,7 @@ const make = Effect.gen(function* () {
 
   const loadCaller = Effect.fn("OrchestratorMcpService.loadCaller")(function* (
     scope: McpInvocationScope,
+    includeUserMessages = true,
   ) {
     yield* requireCapability(scope);
     if (scope.thread === undefined) {
@@ -1158,7 +1159,7 @@ const make = Effect.gen(function* () {
         } satisfies { runtimeMode: RuntimeMode; interactionMode: ProviderInteractionMode },
       } as const;
     }
-    const parent = yield* loadProjection(scope.thread.threadId);
+    const parent = yield* loadProjection(scope.thread.threadId, includeUserMessages);
     return {
       parent,
       limits: {
@@ -1267,7 +1268,8 @@ const make = Effect.gen(function* () {
     scope: McpInvocationScope,
     threadId: ThreadId,
   ) {
-    const { parent } = yield* loadCaller(scope);
+    // Caller prompts are not used to read a timeline or acknowledge a child result.
+    const { parent } = yield* loadCaller(scope, false);
     const shell = yield* threadManagement
       .getThreadShell(threadId)
       .pipe(Effect.mapError(threadManagementFailure));
@@ -1278,14 +1280,20 @@ const make = Effect.gen(function* () {
         `Thread ${threadId} is no longer available.`,
       );
     }
-    const target = yield* threadManagement
-      .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [
-        "runs",
-        "runtimeRequests",
-        "contextTransfers",
-        "providerThreads",
-      ])
-      .pipe(Effect.mapError(threadManagementFailure));
+    const input = { projectId: shell.projectId, threadId };
+    // Transfers are needed only to acknowledge a caller's child-task result.
+    const records =
+      parent === undefined
+        ? threadManagement
+            .getProjectThreadRecords(input, ["runs", "runtimeRequests", "providerThreads"])
+            .pipe(Effect.map((target) => ({ ...target, contextTransfers: [] })))
+        : threadManagement.getProjectThreadRecords(input, [
+            "runs",
+            "runtimeRequests",
+            "contextTransfers",
+            "providerThreads",
+          ]);
+    const target = yield* records.pipe(Effect.mapError(threadManagementFailure));
     return { parent, target, shell } as const;
   });
 
@@ -1713,7 +1721,7 @@ const make = Effect.gen(function* () {
       ...(cloudTask === undefined ? {} : { cloudTask }),
       taskId: task.id,
       childThreadId: task.childThreadId,
-      link: formatThreadLink(task.childThreadId, childControls.thread.title),
+      link: threadLinkFor(scope, task.childThreadId, childControls.thread.title),
       childRunId: childRun?.id ?? null,
       childNodeId: task.id,
       status,
@@ -2263,7 +2271,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(() => failure("orchestration_error", "Unable to read server settings.")),
       );
       const inherited = parent?.thread.modelSelection;
-      const searchTerms = input.search?.toLowerCase().split(/\s+/) ?? [];
+      const searchTerms = input.search?.toLowerCase().split(/\s+/).filter(Boolean) ?? [];
       return {
         parentThreadId: parent?.thread.id ?? null,
         inheritedProviderInstanceId: inherited?.instanceId ?? null,
@@ -3460,7 +3468,7 @@ const make = Effect.gen(function* () {
                 );
               return {
                 threadId,
-                link: formatThreadLink(threadId, projection.thread.title),
+                link: threadLinkFor(scope, threadId, projection.thread.title),
                 runId: run?.id ?? null,
                 status: run?.status ?? "idle",
                 title: projection.thread.title,
@@ -3508,7 +3516,11 @@ const make = Effect.gen(function* () {
             .listProjectThreads({ projectId, includeSubagents: input.includeSubagents !== false })
             .pipe(Effect.mapError(listFailure));
       const nowMs = yield* Clock.currentTimeMillis;
-      const statuses = input.statuses === undefined ? null : new Set(input.statuses);
+      // An empty list is no filter: clients that fill every optional field send `[]`.
+      const statuses =
+        input.statuses === undefined || input.statuses.length === 0
+          ? null
+          : new Set(input.statuses);
       const titleContains = input.titleContains?.toLocaleLowerCase();
       const filtered = projectThreads
         .filter(
@@ -3542,7 +3554,7 @@ const make = Effect.gen(function* () {
         threads: yield* Effect.forEach(page, (shell) =>
           pendingRequestCountOf(shell).pipe(
             Effect.map((pendingRequestCount) =>
-              View.listItemFromShell(shell, nowMs, {
+              View.listItemFromShell(scope, shell, nowMs, {
                 foldState: foldStateOf(shell.id),
                 pendingRequestCount,
               }),
@@ -3662,6 +3674,7 @@ const make = Effect.gen(function* () {
       return {
         ...(cloudTask === undefined ? {} : { cloudTask }),
         thread: View.threadDetail(
+          scope,
           target,
           timeline.totalItems,
           shell,
@@ -3788,7 +3801,7 @@ const make = Effect.gen(function* () {
       if (admitted?.enabled) yield* permissions.complete(admissionId);
       return {
         threadId: input.threadId,
-        link: formatThreadLink(input.threadId, target.thread.title),
+        link: threadLinkFor(scope, input.threadId, target.thread.title),
         messageId,
         runId: result.run.id,
         ...(result.run.delegatedTaskId === undefined ? {} : { taskId: result.run.delegatedTaskId }),

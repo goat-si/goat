@@ -3,6 +3,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DeviceId,
+  DeviceOperationError,
   EnvironmentId,
   LOCAL_DEVICE_HOST_ID,
   type Project,
@@ -61,10 +62,11 @@ interface Fixture {
   /** Runs each time agent tools are made ready. */
   readonly agentReady?: Effect.Effect<void>;
   readonly projectLookupFails?: boolean;
+  readonly screenshotFails?: DeviceOperationError["reason"];
 }
 
 // A local iOS host that records agent tool starts, device attaches, and agent-device configuration.
-const makeDeviceService = ({ activity, boot, configure, agentReady }: Fixture) =>
+const makeDeviceService = ({ activity, boot, configure, agentReady, screenshotFails }: Fixture) =>
   Effect.gen(function* () {
     let booted = boot === undefined;
     const ready: DeviceHost.DeviceHostReady = {
@@ -81,7 +83,16 @@ const makeDeviceService = ({ activity, boot, configure, agentReady }: Fixture) =
           ),
         attach: () => Effect.sync(() => void activity.push("attach")),
         shutdown: () => Effect.void,
-        screenshot: () => Effect.succeed(new Uint8Array(24)),
+        screenshot: () =>
+          screenshotFails === undefined
+            ? Effect.succeed(new Uint8Array(24))
+            : Effect.fail(
+                new DeviceOperationError({
+                  operation: "screenshot",
+                  reason: screenshotFails,
+                  cause: new Error("private hub output"),
+                }),
+              ),
       },
       run: () => Effect.succeed({ code: 0, stdout: "", stderr: "" }),
       helpers: { serveSimAxSettings: null, serveSimCli: null },
@@ -420,4 +431,60 @@ describe("device tools authorize the calling thread's project at each call", () 
       Effect.provide(layer({ ...envOffProjectOn, enableDeviceSupport: false }, { activity })),
     );
   });
+});
+
+describe("device screenshot failures keep their actionable text", () => {
+  const screenshotText = (
+    open: boolean,
+    args: Record<string, unknown>,
+    screenshotFails?: DeviceOperationError["reason"],
+  ) =>
+    Effect.gen(function* () {
+      if (open) {
+        const opened = yield* call(threads.granted, "goat_device_open", { deviceId: "SIM-1" });
+        expect(opened.isError, JSON.stringify(opened.content)).toBe(false);
+      }
+      const result = yield* call(threads.granted, "goat_device_screenshot", args);
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("private hub output");
+      expect(result.structuredContent).toMatchObject({ error: { operation: "screenshot" } });
+      return result.content;
+    }).pipe(
+      Effect.provide(
+        layer(
+          { enableDeviceSupport: true, enableAgentDeviceAccess: true },
+          { activity: [], ...(screenshotFails === undefined ? {} : { screenshotFails }) },
+        ),
+      ),
+    );
+
+  it.effect.each([
+    {
+      open: false,
+      args: {},
+      text: "No device is open in this thread. Call goat_device_open first.",
+    },
+    {
+      open: false,
+      args: { deviceId: "missing", hostId: "local" },
+      text: "Device missing on host local is not open in this thread. Call goat_device_open first.",
+    },
+    {
+      open: true,
+      args: {},
+      fails: "request_failed" as const,
+      text: "Device screenshot failed: Could not communicate with device support. Try refreshing devices.",
+    },
+    {
+      open: true,
+      args: {},
+      fails: "hub_rejected" as const,
+      text: "Device screenshot failed: The device hub could not complete the request. Call goat_device_list to check the device state, and goat_device_open if it needs to be reopened.",
+    },
+  ])("$text", ({ open, args, text, ...rest }) =>
+    Effect.gen(function* () {
+      const fails = "fails" in rest ? rest.fails : undefined;
+      expect(yield* screenshotText(open, args, fails)).toEqual([{ type: "text", text }]);
+    }),
+  );
 });

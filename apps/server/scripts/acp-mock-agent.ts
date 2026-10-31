@@ -61,6 +61,7 @@ const omitInitializeModelState = process.env.GOAT_ACP_OMIT_INITIALIZE_MODEL_STAT
 const waitForResumeRelease = process.env.GOAT_ACP_WAIT_FOR_RESUME_RELEASE === "1";
 const completeFirstPromptOnCancel = process.env.GOAT_ACP_COMPLETE_FIRST_PROMPT_ON_CANCEL === "1";
 const floodStderr = process.env.GOAT_ACP_FLOOD_STDERR === "1";
+const emitTrackedToolCallKindThenHang = process.env.GOAT_ACP_EMIT_TRACKED_TOOL_CALL_KIND_THEN_HANG;
 const hangPromptForever = process.env.GOAT_ACP_HANG_PROMPT_FOREVER === "1";
 const clientFsProbePath = process.env.GOAT_ACP_CLIENT_FS_PROBE_PATH;
 const clientFsProbeLogPath = process.env.GOAT_ACP_CLIENT_FS_PROBE_LOG_PATH;
@@ -1524,6 +1525,21 @@ const program = Effect.gen(function* () {
             },
           });
         }
+      }
+
+      if (emitTrackedToolCallKindThenHang !== undefined) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tracked-tool-call",
+            title: "git status",
+            kind: emitTrackedToolCallKindThenHang as AcpSchema.ToolKind,
+            status: "pending",
+            rawInput: { command: "git status" },
+          },
+        });
+        return yield* Effect.never;
       }
 
       if (failPrompt || promptCount === failPromptOrdinal) {

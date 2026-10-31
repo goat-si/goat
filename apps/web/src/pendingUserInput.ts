@@ -1,5 +1,6 @@
 import {
   buildPendingUserInputAnswers,
+  normalizeSelectedOptionValues,
   resolvePendingUserInputAnswer,
   type PendingUserInputDraftAnswer,
 } from "@goat/client-runtime/state/user-input-draft";
@@ -65,15 +66,6 @@ export interface PendingUserInputProgress {
   canAdvance: boolean;
 }
 
-function normalizeSelectedOptionValues(value: ReadonlyArray<string> | undefined): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  // Provider option IDs must stay unchanged, including whitespace.
-  return Array.from(new Set(value.filter((entry) => typeof entry === "string")));
-}
-
 const DISPLACED_ANSWER_SEPARATOR = "\n\n";
 
 export function carryDisplacedCustomAnswerIntoPrompt(
@@ -136,7 +128,9 @@ export function derivePendingUserInputProgress(
     questionIndex: normalizedQuestionIndex,
     activeQuestion,
     activeDraft,
-    selectedOptionValues: normalizeSelectedOptionValues(activeDraft?.selectedOptionValues),
+    selectedOptionValues: activeQuestion
+      ? normalizeSelectedOptionValues(activeQuestion, activeDraft?.selectedOptionValues)
+      : [],
     customAnswer,
     resolvedAnswer,
     usingCustomAnswer:

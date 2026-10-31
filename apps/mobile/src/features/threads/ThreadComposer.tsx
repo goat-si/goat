@@ -40,7 +40,8 @@ import {
   useState,
   type RefObject,
 } from "react";
-import { Keyboard, Platform, View, type ViewStyle } from "react-native";
+import { I18nManager, Keyboard, Platform, View, type ViewStyle } from "react-native";
+import { compactEditorInsets } from "./compactEditorInsets";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
@@ -75,7 +76,6 @@ import { appAtomRegistry } from "../../state/atom-registry";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
 import { useProject, useThreadShells } from "../../state/entities";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
-
 import { AppText as Text } from "../../components/ui/AppText";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
 import {
@@ -131,23 +131,18 @@ import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
 } from "./use-thread-settings-sheet-presentation";
-
 export const COMPOSER_COLLAPSED_CHROME = 60;
-
 const COLLAPSED_EDITOR_DEFAULT_INSET = 6;
 // iOS puts line-height slack above glyphs. DM Sans's lowercase midline is
 // descender (0.31em) + half x-height (0.504em) above the line bottom.
 const LOWERCASE_MIDLINE_EM = 0.562;
-
 function lowercaseMidline(text: ScaledTextRole): number {
   return text.lineHeight - LOWERCASE_MIDLINE_EM * text.fontSize;
 }
-
 function collapsedEditorInset(text: ScaledTextRole): number {
   const shift = lowercaseMidline(text) - lowercaseMidline(MOBILE_TYPOGRAPHY.body);
   return Math.max(0, Math.round(COLLAPSED_EDITOR_DEFAULT_INSET - shift));
 }
-
 export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   const [contentSize, setContentSize] = useState({ width: 0, height: 0 });
   const [compactWidth, setCompactWidth] = useState(0);
@@ -218,12 +213,19 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
   const containerStyle = useAnimatedStyle(() => ({
     height: surfaceHeight.value,
   }));
+  const isRTL = I18nManager.isRTL;
   const editorStyle = useAnimatedStyle(() => ({
     position: "absolute",
     overflow: "hidden",
     height: animatedHeight.value,
-    left: isWide ? 14 : editorX.value + 4,
-    right: isWide ? 14 : rowWidth.value - editorX.value - editorWidth.value + 4,
+    ...(isWide
+      ? { left: 14, right: 14 }
+      : compactEditorInsets({
+          slotX: editorX.value,
+          slotWidth: editorWidth.value,
+          rowWidth: rowWidth.value,
+          isRTL,
+        })),
     bottom:
       (compactRowHeight - minimum) / 2 + expansion.value * (52 - (compactRowHeight - minimum) / 2),
   }));
@@ -256,7 +258,6 @@ export function useCompactComposerEditor(text: ScaledTextRole, value: string) {
     },
   };
 }
-
 export interface ThreadComposerProps {
   readonly isDraft?: boolean;
   readonly canOperateThread: boolean;
@@ -309,7 +310,6 @@ export interface ThreadComposerProps {
   readonly onUpdateInteractionMode?: (interactionMode: ProviderInteractionMode) => void;
   readonly onEditorFocusChange?: (focused: boolean) => void;
 }
-
 // Android KeyboardStickyView tracks the IME; concurrent timed layout morphs cause jitter.
 export const COMPOSER_TRANSITION_DURATION_MS = 220;
 // Side panes animate dock width; nested horizontal transitions would make the surface trail the toolbar.

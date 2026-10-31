@@ -2,7 +2,7 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, NonNegativeInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
-export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex"]);
+export const AgentSessionSource = Schema.Literals(["claudeAgent", "codex", "pi"]);
 export type AgentSessionSource = typeof AgentSessionSource.Type;
 
 export const AgentSessionImportSource = Schema.Struct({
@@ -20,7 +20,10 @@ export const AgentSessionImportSource = Schema.Struct({
 });
 export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
 
-export const AgentSessionScanInput = Schema.Struct({});
+export const AgentSessionScanInput = Schema.Struct({
+  // Older clients cannot decode Pi in the response's closed source union.
+  includePi: Schema.optionalKey(Schema.Boolean),
+});
 export type AgentSessionScanInput = typeof AgentSessionScanInput.Type;
 
 export const AgentSessionProjectGit = Schema.Struct({
@@ -50,6 +53,7 @@ export type AgentSessionScanResult = typeof AgentSessionScanResult.Type;
 
 export const AgentSessionImportInput = Schema.Struct({
   projectId: ProjectId,
+  includePi: AgentSessionScanInput.fields.includePi,
   expectedWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
 });
 export type AgentSessionImportInput = typeof AgentSessionImportInput.Type;

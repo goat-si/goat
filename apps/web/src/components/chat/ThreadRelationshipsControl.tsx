@@ -55,7 +55,7 @@ import {
   UnplugIcon,
 } from "~/components/solar";
 import { Spinner } from "~/components/ui/spinner";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { useArchivedThreadSnapshots } from "../../lib/archivedThreadsState";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -332,6 +332,8 @@ export function ThreadRelationshipsPanel(props: {
     orchestrationEnvironment.stopWorkflow.permissionAtom(props.environmentId),
   );
   const [busyAction, setBusyAction] = useState<"merge" | "detach" | null>(null);
+  const mergeErrorToastId = useRef<string | null>(null);
+  const detachErrorToastId = useRef<string | null>(null);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   // Derive graphs after hooks to preserve their compiler cache.
   const providers = providersByEnvironment.get(props.environmentId);
@@ -467,6 +469,10 @@ export function ThreadRelationshipsPanel(props: {
 
   const merge = async () => {
     if (!latestMergeBackRun || mergeTargetThreadId === null || busyAction !== null) return;
+    if (mergeErrorToastId.current !== null) {
+      toastManager.close(mergeErrorToastId.current);
+      mergeErrorToastId.current = null;
+    }
     setBusyAction("merge");
     const result = await mergeBack({
       environmentId: props.environmentId,
@@ -477,17 +483,34 @@ export function ThreadRelationshipsPanel(props: {
       },
     });
     setBusyAction(null);
-    if (result._tag === "Success") openThread(mergeTargetThreadId);
+    if (result._tag === "Failure") {
+      mergeErrorToastId.current = toastManager.add({
+        type: "error",
+        title: "Could not merge back",
+      });
+      return;
+    }
+    openThread(mergeTargetThreadId);
   };
 
   const detach = async () => {
     if (!canDetach || busyAction !== null) return;
+    if (detachErrorToastId.current !== null) {
+      toastManager.close(detachErrorToastId.current);
+      detachErrorToastId.current = null;
+    }
     setBusyAction("detach");
-    await stopSession({
+    const result = await stopSession({
       environmentId: props.environmentId,
       input: { threadId: props.threadId },
     });
     setBusyAction(null);
+    if (result._tag === "Failure") {
+      detachErrorToastId.current = toastManager.add({
+        type: "error",
+        title: "Could not disconnect agent session",
+      });
+    }
   };
 
   const stopSubagent = async (
@@ -664,9 +687,7 @@ export function ThreadRelationshipsPanel(props: {
                 ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
                 : "";
               const project = projects.find((project) => project.id === node?.thread?.projectId);
-              const relationshipHint = node?.missing
-                ? "This related thread is unavailable"
-                : `Open ${relationship.toLowerCase()} in this chat`;
+              const relationshipHint = `Open ${relationship.toLowerCase()} in this chat`;
               const RelationshipPopup = agent ? ThreadHoverCardPopup : TooltipPopup;
               const relationshipTooltip = agent ? (
                 <SubagentTooltipContent
@@ -736,7 +757,6 @@ export function ThreadRelationshipsPanel(props: {
                         size="sm"
                         variant="ghost"
                         part={workflowGroup ? "primary" : "row"}
-                        disabled={node?.missing === true}
                         onClick={() => openThread(threadId)}
                       />
                     }
@@ -756,9 +776,6 @@ export function ThreadRelationshipsPanel(props: {
                     providers={providers}
                     driver={providerDriver}
                     onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
-                    isThreadAvailable={(memberThreadId) =>
-                      graph.nodes.get(memberThreadId as ThreadId)?.missing === false
-                    }
                     onStop={canStopWorkflow ? () => void stopWorkflow(agent.id) : undefined}
                     stopping={stoppingId === agent.id}
                     stopDisabled={stoppingId !== null}
@@ -784,7 +801,6 @@ export function ThreadRelationshipsPanel(props: {
                               variant="ghost"
                               part="primary"
                               aria-label={`${threadTitle} ${threadRelationshipStatusLabel(rowStatus)}`}
-                              disabled={node?.missing === true}
                               onClick={() => openThread(threadId)}
                             />
                           }

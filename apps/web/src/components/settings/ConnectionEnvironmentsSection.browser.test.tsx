@@ -273,6 +273,23 @@ it("keeps the dialog open with the error when pairing fails", async () => {
   expect(open?.textContent).toContain("Pairing code expired");
 });
 
+it("reopens Add device on Remote link with empty fields after leaving SSH", async () => {
+  (window as { desktopBridge?: unknown }).desktopBridge = { getLocalEnvironmentBootstraps };
+  const dialog = await openAddDialog();
+  type(input("hub.tailnet-name.ts.net"), "old.example.com");
+  type(input("PAIRCODE"), "OLDCODE");
+  const ssh = [...dialog.querySelectorAll("button")].find((element) =>
+    element.textContent?.startsWith("SSH"),
+  )!;
+  await act(() => ssh.click());
+  type(document.querySelector<HTMLInputElement>("#saved-backend-ssh-host")!, "old-host");
+  await act(() => button("Close", dialog).click());
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+  await act(() => button("Add device").click());
+  expect(input("hub.tailnet-name.ts.net").value).toBe("");
+  expect(input("PAIRCODE").value).toBe("");
+});
+
 it("keeps thread jump chords inside the SSH host suggestions", async () => {
   state.connectSshEnvironment.mockResolvedValue({ _tag: "Success", value: undefined });
   const resolveSshHost = vi.fn(async () => ({

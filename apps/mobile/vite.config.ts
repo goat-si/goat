@@ -4,6 +4,8 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
+  "src/features/pull-requests/usePullRequestList.test.tsx",
+  "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/features/files/useFileTreeEntries.test.tsx",
@@ -65,12 +67,14 @@ const reactTests = [
   "src/features/threads/ThreadMarkdownImage.test.tsx",
   "src/features/threads/UsageLimitRecoveryCard.test.tsx",
   "src/native/NativeHeaderToolbar.test.tsx",
+  "src/native/V5StackHeader.ios.test.tsx",
   "src/features/diagnostics/ThreadStreamsSection.test.tsx",
   "src/native/GoatComposerEditor.ios.test.tsx",
   "src/native/useRestingTopOffset.test.tsx",
   "src/native/useRetryingImageSource.test.tsx",
   "src/state/queries.debounce.test.tsx",
   "src/state/use-selected-thread-git-actions.test.tsx",
+  "src/state/use-selected-thread-git-state.test.tsx",
   "src/features/terminal/useTerminalExitNavigation.test.tsx",
 ];
 

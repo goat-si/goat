@@ -58,7 +58,10 @@ import {
   resolveUserMessageContext,
   selectedMessageContextFragment,
 } from "~/lib/composerContextRecords";
-import { collectComposerContextReferences } from "@goat/shared/composerContextReferences";
+import {
+  collectComposerContextReferences,
+  formatComposerContextReference,
+} from "@goat/shared/composerContextReferences";
 import {
   COMPOSER_CONTEXT_CLIPBOARD_MIME,
   encodeComposerContextClipboardHtml,
@@ -76,7 +79,10 @@ import {
   TimelineRowTimestamp,
 } from "./TimelineRowParts";
 import { UserMessageContextReferenceChip } from "./UserMessageContextChips";
-import { resolvePreviewAnnotationImage } from "./TimelineUserMessageRow.logic";
+import {
+  resolvePreviewAnnotationImage,
+  userMessageFileLabel,
+} from "./TimelineUserMessageRow.logic";
 
 function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
   const ctx = use(TimelineRowCtx);
@@ -352,11 +358,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       : sender.kind === "remote" && sender.connected
         ? { threadId: sender.threadId, environmentId: sender.environmentId }
         : null;
-  const resolvedContext = resolveUserMessageContext(
-    userMessage.standingInstructions !== null || userMessage.attribution === "guest"
-      ? { ...row.message, text: userMessage.text }
-      : row.message,
-  );
+  const resolvedContext = resolveUserMessageContext({ ...row.message, text: userMessage.text });
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const revertTurnCount = row.revertTurnCount;
   const chippedAttachmentIds = new Set(
@@ -380,8 +382,28 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       .split(/\r?\n/)
       .find((line) => line.trim().length > 0)
       ?.trim() ?? "";
+  const mediaRecords = resolvedContext.records.flatMap((record) => {
+    const known = asKnownContextRecord(record);
+    return (known?.kind === "image" || known?.kind === "file") &&
+      (regularImages.some((image) => image.id === known.attachmentId) ||
+        userVideos.some((file) => file.id === known.attachmentId))
+      ? [known]
+      : [];
+  });
+  const mediaOnly =
+    regularImages.length + userVideos.length > 0 &&
+    userAudio.length + otherUserFiles.length + unknownAttachments.length === 0 &&
+    replaceComposerContextReferences(resolvedContext.text, (reference) =>
+      mediaRecords.some((record) => record.contextId === reference.contextId)
+        ? ""
+        : reference.label,
+    ).trim() === "";
+  const copyRecords = mediaOnly ? mediaRecords : resolvedContext.records;
+  const copyText =
+    resolvedContext.text ||
+    (mediaOnly ? mediaRecords.map(formatComposerContextReference).join("\n") : "");
   const contextClipboardFragment =
-    resolvedContext.records.length === 0
+    copyRecords.length === 0
       ? null
       : encodeComposerContextFragment({
           version: 1,
@@ -390,7 +412,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             ...(ctx.threadRef ? { threadId: ctx.threadRef.threadId } : {}),
             messageId: row.message.id,
           },
-          records: resolvedContext.records,
+          records: copyRecords,
         });
   const onBodyCopyCapture = (event: React.ClipboardEvent<HTMLDivElement>) => {
     if (resolvedContext.records.length === 0 || !event.clipboardData) return;
@@ -614,6 +636,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             {unchippedFiles.length > 0 || unknownAttachments.length > 0 ? (
               <div className="mb-2 flex flex-col gap-1">
                 {unchippedFiles.map((file) => {
+                  const label = userMessageFileLabel(file);
                   const fileIdentity = (
                     <>
                       <PierreEntryIcon
@@ -621,7 +644,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                         kind="file"
                         theme={ctx.resolvedTheme}
                       />
-                      <span className="min-w-0 flex-1 truncate">{file.name}</span>
+                      <span className="min-w-0 flex-1 truncate">
+                        {label}
+                        {file.downloadable === false ? " · Sending…" : ""}
+                      </span>
                     </>
                   );
                   if (file.downloadable !== false) {
@@ -629,7 +655,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                       <div key={file.id} className="flex min-w-0 items-center gap-1">
                         <button
                           type="button"
-                          aria-label={`Preview ${file.name}`}
+                          aria-label={`Preview ${label}`}
                           onClick={() => ctx.onFileOpen(file)}
                           className="focus-visible:ring-ring/70 flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md py-1 text-left text-sm hover:underline focus-visible:ring-2 focus-visible:ring-inset focus-visible:outline-none"
                         >
@@ -642,14 +668,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                               <Button
                                 size="icon-xs"
                                 variant="ghost-muted"
-                                aria-label={`Download ${file.name}`}
+                                aria-label={`Download ${label}`}
                                 onClick={() => ctx.onFileDownload(file)}
                               />
                             }
                           >
                             <DownloadIcon />
                           </TooltipTrigger>
-                          <TooltipPopup side="top">Download {file.name}</TooltipPopup>
+                          <TooltipPopup side="top">Download {label}</TooltipPopup>
                         </Tooltip>
                       </div>
                     );
@@ -733,9 +759,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               {typeof revertTurnCount === "number" && (
                 <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
               )}
-              {resolvedContext.text && (
+              {copyText && (
                 <MessageCopyButton
-                  text={contextClipboardFragment ? resolvedContext.text : plainText}
+                  text={contextClipboardFragment ? copyText : plainText}
                   {...(contextClipboardFragment
                     ? {
                         extraFlavors: {

@@ -5,7 +5,8 @@ import {
   DEFAULT_RESOLVED_KEYBINDINGS,
 } from "@goat/shared/keybindings";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
+import { dismissContextMenu, showContextMenuFallback } from "~/contextMenuFallback";
 
 import { resolveShortcutCommand } from "~/keybindings";
 import { render } from "../../../test/render";
@@ -307,6 +308,32 @@ describe("file tree path copy shortcuts", () => {
     );
     expect(state.copy).not.toHaveBeenCalled();
   });
+});
+
+it("copies with the pointer and restores the shadow row after keyboard dismissal", async () => {
+  setup();
+  state.menu.mockImplementation(showContextMenuFallback);
+  await using screen = await renderPanel();
+  using _menu = { [Symbol.dispose]: () => dismissContextMenu() };
+  const target = await row(screen.container, "README.md");
+  target.dispatchEvent(
+    new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      button: 2,
+    }),
+  );
+  const action = page.getByRole("menuitem", { name: "Copy mention", exact: true });
+  await expect.element(action).toBeVisible();
+  await userEvent.click(action);
+  await vi.waitFor(() => expect(state.copy).toHaveBeenCalledWith("[README.md](README.md)"));
+  await userEvent.keyboard("{Tab}");
+  target.focus();
+  await userEvent.keyboard("{Shift>}{F10}{/Shift}");
+  await expect.element(action).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  await vi.waitFor(() => expect(treeRoot(screen.container).activeElement).toBe(target));
 });
 
 describe("file tree context menu path copy", () => {

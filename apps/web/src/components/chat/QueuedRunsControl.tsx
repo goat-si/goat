@@ -2,7 +2,10 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { deriveThreadQueueWorkflowState } from "@goat/client-runtime/state/thread-workflows";
 import { resolveUserMessagePresentation } from "@goat/client-runtime/user-message";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
-import { replaceComposerContextReferences } from "@goat/shared/composerContextReferences";
+import {
+  isAttachmentOnlyBootstrapPrompt,
+  replaceComposerContextReferences,
+} from "@goat/shared/composerContextReferences";
 import type {
   ChatAttachment as ContractChatAttachment,
   EnvironmentId,
@@ -305,11 +308,15 @@ export function QueuedRunsControl({
         <ComposerBanner.Scroll className={cn("max-h-32", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={queueListId}>
             {items.map((item) => {
-              const previewText = assistantCitationsToPlainText(
-                replaceComposerContextReferences(item.text, (reference) =>
-                  reference.kind === "image" && item.thumbnails.length > 0 ? "" : reference.label,
-                ),
-              ).trim();
+              const previewText = isAttachmentOnlyBootstrapPrompt(item.text)
+                ? ""
+                : assistantCitationsToPlainText(
+                    replaceComposerContextReferences(item.text, (reference) =>
+                      reference.kind === "image" && item.thumbnails.length > 0
+                        ? ""
+                        : reference.label,
+                    ),
+                  ).trim();
               const rowRunId = item.runId;
               const rowServerIndex = item.serverIndex;
               const isEditing = rowRunId !== null && rowRunId === props.editingRunId;

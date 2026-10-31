@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -67,7 +68,7 @@ it.effect.each([false, true])(
       yield* Effect.acquireRelease(
         Effect.sync(() => {
           const client = new NodeWS.WebSocket(
-            `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(ticket.ticket)}`,
+            `${origin.replace(/^http/u, "ws")}ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}`,
           );
           client.on("open", () => opened.resolve());
           client.on("close", () => closed.resolve());

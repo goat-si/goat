@@ -44,21 +44,27 @@ export function ProviderInstallRow({
       ? ` ${installation.version} is available.`
       : "";
   const status =
-    installation?.phase === "downloading"
-      ? `Downloading ${megabytes(installation.downloadedBytes)} MB${installation.totalBytes === null ? "" : ` of ${megabytes(installation.totalBytes)} MB`}.`
-      : installation?.phase === "extracting"
-        ? (installation.message ?? `Extracting ${label}.`)
-        : installation?.phase === "verifying"
-          ? (installation.message ?? "Checking the download.")
-          : installation?.phase === "succeeded"
-            ? "Installed. Checking the provider…"
-            : installation?.phase === "failed"
-              ? (installation.message ?? "Installation failed.")
-              : installedVersion
-                ? `Installed · v${installedVersion}.${updateAvailable}`
-                : installation?.totalBytes
-                  ? `Not installed. ${Math.ceil(installation.totalBytes / 1_000_000)} MB download.`
-                  : `${label} isn't installed on this environment.`;
+    pending && !active
+      ? "Starting installation."
+      : installation === null
+        ? query.error !== null && !query.isPending
+          ? "Could not check installation status."
+          : "Checking installation status."
+        : installation.phase === "downloading"
+          ? `Downloading ${megabytes(installation.downloadedBytes)} MB${installation.totalBytes === null ? "" : ` of ${megabytes(installation.totalBytes)} MB`}.`
+          : installation?.phase === "extracting"
+            ? (installation.message ?? `Extracting ${label}.`)
+            : installation?.phase === "verifying"
+              ? (installation.message ?? "Checking the download.")
+              : installation?.phase === "succeeded"
+                ? "Installed. Checking the provider…"
+                : installation?.phase === "failed"
+                  ? (installation.message ?? "Installation failed.")
+                  : installedVersion
+                    ? `Installed · v${installedVersion}.${updateAvailable}`
+                    : installation?.totalBytes
+                      ? `Not installed. ${Math.ceil(installation.totalBytes / 1_000_000)} MB download.`
+                      : `${label} isn't installed on this environment.`;
 
   async function run(command: () => Promise<AtomCommandResult<unknown, unknown>>) {
     if (pendingRef.current) return;
@@ -84,9 +90,21 @@ export function ProviderInstallRow({
       description={<span role="status">{status}</span>}
       status={
         error || query.error ? (
-          <p role="alert" className="text-destructive [overflow-wrap:anywhere]">
-            {error ?? query.error}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p role="alert" className="text-destructive [overflow-wrap:anywhere]">
+              {error ?? query.error}
+            </p>
+            {query.error !== null ? (
+              <Button
+                size="sm"
+                variant="ghost-muted"
+                disabled={query.isPending}
+                onClick={query.refresh}
+              >
+                Retry status check
+              </Button>
+            ) : null}
+          </div>
         ) : undefined
       }
       control={
@@ -109,7 +127,7 @@ export function ProviderInstallRow({
           <Button
             size="sm"
             variant="outline"
-            disabled={disabled || pending || active || !installation || query.error !== null}
+            disabled={disabled || pending || active}
             onClick={() => void run(() => startInstall(target))}
           >
             {installedVersion

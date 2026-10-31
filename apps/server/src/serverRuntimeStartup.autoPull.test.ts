@@ -184,6 +184,7 @@ it.effect.each([
           }),
           Layer.mock(ProjectService.ProjectService)({ snapshot: Effect.succeed(snapshot) }),
           Layer.mock(ThreadManagement.ThreadManagementService)({
+            countThreads: () => Effect.succeed(0),
             getShellSnapshot: () =>
               Effect.succeed({
                 schemaVersion: 1,

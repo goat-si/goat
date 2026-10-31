@@ -315,12 +315,21 @@ export interface DesktopUpdateReleaseNote {
   version: string;
   items: ReadonlyArray<string>;
   totalItems: number;
+  /** ISO time from the update feed for the offered version, else `YYYY-MM-DD` from a prerelease version. */
+  releasedAt?: string;
+  /** Generated summaries only: the highlights paragraph. `items` then holds the fixes. */
+  intro?: string;
+  /** Generated summaries only, for example "275 changes from 22 contributors". */
+  stats?: string;
 }
 
 export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
   version: Schema.String,
   items: Schema.Array(Schema.String),
   totalItems: Schema.Number,
+  releasedAt: Schema.optionalKey(Schema.String),
+  intro: Schema.optionalKey(Schema.String),
+  stats: Schema.optionalKey(Schema.String),
 });
 
 /** The downloaded update the desktop app will install; persisted in desktop settings. */
@@ -1171,6 +1180,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
   onTrackpadScrollEnd?: (listener: () => void) => () => void;
+  onTrackpadScrollBegin?: (listener: () => void) => () => void;
   /**
    * Renderer `window.focus()` cannot raise an Electron window, and on Wayland
    * only the main process can spend a notification click's activation token.

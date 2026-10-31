@@ -11,7 +11,7 @@ export const mockCopy: { page: string; key: string; focusedFrame: MockFrame | nu
   focusedFrame: null,
 };
 
-function makeFrame() {
+export function makeFrame() {
   const frame = {
     copy: "",
     detached: false,
@@ -29,11 +29,16 @@ const PNG_HEADER = (() => {
   return header.toString("base64");
 })();
 
-export function makeSession(frame?: MockFrame) {
+export function makeSession(
+  frame?: MockFrame,
+  viewportAnswer?: () => Promise<Record<string, unknown>>,
+) {
   const events = new NodeEvents.EventEmitter();
   return {
-    on: vi.fn((name: string, listener: () => void) => events.on(name, listener)),
-    emit: (name: string) => events.emit(name),
+    on: vi.fn((name: string, listener: (...args: unknown[]) => void) => events.on(name, listener)),
+    emit: (name: string, ...args: unknown[]) => events.emit(name, ...args),
+    emitAsync: (name: string, ...args: unknown[]) =>
+      Promise.all(events.listeners(name).map((listener) => listener(...args))),
     detach: vi.fn(async () => {}),
     send: vi.fn(async (method: string, input?: unknown): Promise<Record<string, unknown>> => {
       if (method === "Page.getNavigationHistory") return { currentIndex: 0, entries: [{}] };
@@ -49,12 +54,17 @@ export function makeSession(frame?: MockFrame) {
       if (method === "Page.createIsolatedWorld") {
         return {
           executionContextId:
-            (input as { worldName?: string }).worldName === "goat-preview"
-              ? 1
-              : (input as { worldName?: string }).worldName === "goat-preview-metrics"
-                ? 8
-                : 7,
+            (input as { worldName?: string }).worldName === "goat-preview-viewport"
+              ? 9
+              : (input as { worldName?: string }).worldName === "goat-preview"
+                ? 1
+                : (input as { worldName?: string }).worldName === "goat-preview-metrics"
+                  ? 8
+                  : 7,
         };
+      }
+      if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 9) {
+        return viewportAnswer?.() ?? { result: { value: { width: 1280, height: 800 } } };
       }
       if (method === "Runtime.evaluate" && (input as { contextId?: number }).contextId === 1) {
         return { result: { value: [] } };

@@ -30,6 +30,7 @@ vi.mock(import("../../state/session"), async (original) => ({
 vi.mock(import("../../state/entities"), async (original) => ({
   ...(await original()),
   useProjects: (() => [project()]) as never,
+  useThreadShell: (() => ({ title: "Synthetic thread" })) as never,
 }));
 vi.mock(import("../../state/query"), async (original) => ({
   ...(await original()),

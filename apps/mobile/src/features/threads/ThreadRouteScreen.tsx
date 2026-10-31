@@ -77,7 +77,7 @@ import { useSelectedThreadWorktree } from "../../state/use-selected-thread-workt
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { resolveMergeBackTargetThreadId } from "@goat/client-runtime/state/thread-relationships";
 import { resolveLatestMergeBackRun } from "@goat/client-runtime/state/thread-workflows";
-import { threadEnvironment, useThreadFamily } from "../../state/threads";
+import { threadEnvironment } from "../../state/threads";
 import { EMPTY_ENVIRONMENT_THREAD_STATE } from "@goat/client-runtime/state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
@@ -91,7 +91,11 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
-import { threadRouteIsHydrating } from "./thread-route-hydration";
+import {
+  threadDetailErrorIsCurrent,
+  threadRouteIsHydrating,
+  threadRouteOpensDraft,
+} from "./thread-route-hydration";
 import {
   OpeningThreadLoadingScreen,
   ThreadUnavailableScreen,
@@ -159,12 +163,6 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   const connectionsReady = useConnectionsReady();
   const { connectionState } = useRemoteConnectionStatus();
   const { selectedThread } = useThreadSelection();
-  // Subagent rows, the open child's own row and its ancestors come from the family when the
-  // shell leaves idle children out.
-  useThreadFamily(
-    selectedThread?.environmentId ?? null,
-    selectedThread?.lineage.rootThreadId ?? null,
-  );
   const params = props.route.params ?? {};
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const threadIdRaw = firstRouteParam(params.threadId);
@@ -186,6 +184,13 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
       : scopedThreadKey(selectedThread.environmentId, selectedThread.id);
   const selectedThreadDetailState = useSelectedThreadDetailState();
   useThreadPromptLink(params, routeThreadKey);
+  const detailError = selectedThreadDetailState.error;
+  const [errorBeforeConnected, setErrorBeforeConnected] = useState(() =>
+    routeConnectionState === "connected" ? Option.none<string>() : detailError,
+  );
+  if (routeConnectionState !== "connected" && errorBeforeConnected !== detailError) {
+    setErrorBeforeConnected(detailError);
+  }
   const withInspectorHeader = (content: ReactNode) => (
     <>
       {props.inspectorPresentation ? (
@@ -218,14 +223,25 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
     shellStatus: routeEnvironmentShellState.status,
     shellHasError: routeEnvironmentShellState.hasError,
     detailStatus: selectedThreadDetailState.status,
-    detailHasError: Option.isSome(selectedThreadDetailState.error),
+    detailHasError: threadDetailErrorIsCurrent({
+      connectionState: routeConnectionState,
+      error: detailError,
+      errorBeforeConnected,
+    }),
   });
 
   if (stillHydrating) {
     return withInspectorHeader(<OpeningThreadLoadingScreen />);
   }
 
-  if (routeName === "Thread" && !props.inspectorPresentation) {
+  if (
+    routeName === "Thread" &&
+    !props.inspectorPresentation &&
+    threadRouteOpensDraft({
+      connectionState: routeConnectionState,
+      detailStatus: selectedThreadDetailState.status,
+    })
+  ) {
     return <UnavailableThreadDraftRedirect environmentId={environmentId} />;
   }
 

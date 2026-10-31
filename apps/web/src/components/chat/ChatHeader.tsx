@@ -84,6 +84,7 @@ interface ChatHeaderProps {
   onToggleSideChat?: (() => void) | undefined;
   sideChatOpen?: boolean | undefined;
   sideChatShortcutLabel?: string | null | undefined;
+  onFindInThread?: ((threadRef: ScopedThreadRef) => void) | undefined;
 }
 
 function resolveRenameCommit(input: {
@@ -116,6 +117,7 @@ export const ChatHeader = memo(function ChatHeader({
   onToggleSideChat,
   sideChatOpen = false,
   sideChatShortcutLabel = null,
+  onFindInThread,
 }: ChatHeaderProps) {
   const relatedThreadLink = parentThreadLink ?? (onOpenScopedThread ? launcherThreadLink : null);
   const launcherOnly =
@@ -244,6 +246,7 @@ export const ChatHeader = memo(function ChatHeader({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
     onStartRename: startRename,
+    onFind: onFindInThread,
     canShareWithGuest,
     globalAgent,
   });

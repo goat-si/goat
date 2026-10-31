@@ -62,6 +62,7 @@
     "@trycua/cua-driver": "catalog:",
     "character-entities": "2.0.2",
     "dbus-next": "0.10.2",
+    "diff": "8.0.3",
     "effect": "catalog:",
     "github-slugger": "2.0.0",
     "jose": "catalog:",

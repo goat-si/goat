@@ -121,9 +121,13 @@ function PendingSecretRequestForm(props: {
       onSubmit={onSubmit}
       onFocusCapture={markOpened}
       autoComplete="off"
-      onPointerDown={(event) => {
-        if (!(event.target instanceof HTMLElement)) return;
+      // On click, not pointerdown: the mousedown that follows a pointerdown
+      // moves focus back off the input. A click that ends a text selection
+      // leaves it alone so the reason can still be copied.
+      onClick={(event) => {
+        if (!(event.target instanceof Element)) return;
         if (event.target.closest("input, button, a")) return;
+        if (window.getSelection()?.isCollapsed === false) return;
         document.getElementById(inputId)?.focus();
       }}
     >

@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Schedule from "effect/Schedule";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -70,7 +71,7 @@ export async function runLoad(origin: string, credential: string, rounds: number
     });
     const { ticket } = decodeTicket(await ticketResponse.json());
     const socket = Socket.layerWebSocket(
-      `${origin.replace("http:", "ws:")}/ws?wsTicket=${encodeURIComponent(ticket)}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`,
+      `${origin.replace("http:", "ws:")}/ws?wsTicket=${encodeURIComponent(Redacted.value(ticket))}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`,
     ).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, (url) => new WebSocket(url))));
     const protocol = RpcClient.layerProtocolSocket({
       retryTransientErrors: false,

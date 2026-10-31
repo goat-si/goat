@@ -8,7 +8,8 @@ import { agentSessionScan } from "../state/agentSessions";
 import { environmentAtomList, environmentIdsKey } from "../state/environmentAtomList";
 import { formatEnvironmentQueryError } from "../state/query";
 
-const scanAtom = (environmentId: EnvironmentId) => agentSessionScan({ environmentId, input: {} });
+const scanAtom = (environmentId: EnvironmentId) =>
+  agentSessionScan({ environmentId, input: { includePi: true } });
 const projectScansAtom = environmentAtomList("web-project-scans", scanAtom);
 
 export function useProjectScans(environmentIds: readonly EnvironmentId[]) {

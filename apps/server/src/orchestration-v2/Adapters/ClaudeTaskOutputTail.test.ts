@@ -132,3 +132,23 @@ describe("claudeTaskOutputRoot", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });
+
+it.effect("resolves Linux temp variables per launch cwd and preserves the macOS fallback", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const root = (
+      environment: Record<string, string>,
+      platform: NodeJS.Platform,
+      cwd: string | null = null,
+    ) => claudeTaskOutputRoot(environment, path, { uid: 501, platform, cwd });
+    assert.equal(root({ TMPDIR: "/custom" }, "linux"), "/custom/claude-501");
+    assert.equal(root({ TMP: "/other" }, "linux"), "/other/claude-501");
+    assert.equal(root({ TEMP: "/temp" }, "linux"), "/temp/claude-501");
+    assert.equal(root({ TMPDIR: "/custom" }, "darwin"), "/tmp/claude-501");
+    assert.equal(root({ TMPDIR: "../tmp" }, "linux", "/work/project"), "/work/tmp/claude-501");
+    assert.equal(
+      root({ CLAUDE_CODE_TMPDIR: "../override", TMPDIR: "/custom" }, "darwin", "/work/project"),
+      "/work/override/claude-501",
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

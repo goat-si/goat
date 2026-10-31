@@ -9,6 +9,7 @@ import {
   splitStandingInstructions,
   type StandingInstructionsBlock,
 } from "@goat/shared/standingInstructions";
+import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 
 /** The working row while GOAT's own compaction runs. */
 export const IDLE_COMPACTING_LABELS = {
@@ -94,7 +95,8 @@ function resolveSender(message: PresentedUserMessage): UserMessageSender {
     };
   }
   return {
-    text: message.text,
+    // The agent needs words to start a turn; people sent only the attachments.
+    text: isAttachmentOnlyBootstrapPrompt(message.text) ? "" : message.text,
     attribution:
       message.createdBy !== "agent"
         ? null

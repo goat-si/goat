@@ -10,7 +10,7 @@ export { SCREEN_CODE_INSTRUCTION_SECTIONS } from "./builtinSkills/screenCodeRunt
  */
 export const GOAT_PULL_REQUEST_INSTRUCTIONS = `## GOAT pull requests
 
-Link each PR you create, take over, or push to with goat_pull_request_link (full URL, each stack layer). If linking fails, say so. Skip PRs you only read or review. Call goat_pull_request_watch when asked to monitor, or when your work (a merge) waits on checks or reviews: push, then watch and end your turn. Otherwise act now or hand back. Children never watch, even if told to; their last line: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. Never poll or sleep. At handback, call goat_pull_request_unwatch.`;
+Link each PR you create, take over, or push to with goat_pull_request_link (full URL, each stack layer). If linking fails, say so. Skip PRs you only read or review. Call goat_pull_request_watch when asked to monitor, or when your work (a merge) waits on checks or reviews: push, then watch and end your turn. Otherwise act now or hand back. Children never watch, even if told to; their last line: PR <full URL>, head <SHA>, checks and reviews <state>. Links and watches persist across pushes. For PR waits, never poll or sleep. At handback, call goat_pull_request_unwatch.`;
 
 /**
  * GOAT's built-in computer use skill for this host, attached only when the turn actually has the

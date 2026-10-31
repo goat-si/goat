@@ -77,6 +77,7 @@ export const browserArchive = makeZip([
 
 export const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
   options: {
+    readonly version?: string;
     readonly archive?: Buffer;
     readonly sha256?: string;
     readonly body?: Stream.Stream<Uint8Array>;
@@ -104,7 +105,7 @@ export const makeHarness = Effect.fn("test.makePreviewBrowser")(function* (
       : options.unsupported
         ? null
         : {
-            version: "1.2.3",
+            version: options.version ?? "1.2.3",
             platform: "fixture",
             url: "https://storage.googleapis.com/chrome-headless-shell-fixture.zip",
             bytes: archive.byteLength,

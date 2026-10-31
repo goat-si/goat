@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { prependStandingInstructions } from "@goat/shared/standingInstructions";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
 
 import { GuestMessageId } from "@goat/contracts";
 import { resolveUserMessagePresentation } from "./userMessage.ts";
@@ -16,6 +17,20 @@ describe("resolveUserMessagePresentation", () => {
     ]) {
       expect(resolveUserMessagePresentation({ ...message, text: legacyText })).toEqual({
         text: legacyText,
+        attribution: null,
+        scheduledTaskId: undefined,
+        standingInstructions: null,
+      });
+    }
+  });
+
+  it("hides the prompt that stands in for an attachment-only message", () => {
+    for (const text of [
+      ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
+      `Ultrathink:\n${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}`,
+    ]) {
+      expect(resolveUserMessagePresentation({ role: "user", text })).toEqual({
+        text: "",
         attribution: null,
         scheduledTaskId: undefined,
         standingInstructions: null,

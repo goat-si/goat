@@ -346,6 +346,7 @@ describe("pullCurrentBranch", () => {
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const fs = yield* FileSystem.FileSystem;
         const { cwd, updater, initialBranch, remoteHead } = yield* cloneBehindRemote;
+        yield* git(cwd, ["tag", initialBranch]);
         yield* git(updater, ["push", "origin", "HEAD:refs/heads/other"]);
         const remoteName = customMapping ? "team/upstream" : "origin";
         const refPrefix = customMapping
@@ -944,6 +945,45 @@ describe("rejected git refs", () => {
 });
 
 it.layer(layerTest)("GitVcsDriver core integration", (it) => {
+  it.effect("keeps large change sets available for status and commit preparation", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const driver = yield* GitVcsDriver.GitVcsDriver;
+      yield* git(cwd, ["init"]);
+      yield* git(cwd, ["config", "user.email", "test@test.com"]);
+      yield* git(cwd, ["config", "user.name", "Test"]);
+      const files = Array.from(
+        { length: 6_000 },
+        (_, index) => `file-${String(index).padStart(5, "0")}-${"x".repeat(160)}.txt`,
+      );
+      yield* Effect.forEach(files, (file) => fs.writeFileString(path.join(cwd, file), "before\n"), {
+        concurrency: 16,
+        discard: true,
+      });
+      yield* git(cwd, ["add", "."]);
+      const unborn = yield* driver.statusDetailsLocal(cwd);
+      assert.lengthOf(unborn.workingTree.files, files.length);
+      assert.equal(unborn.workingTree.insertions, files.length);
+      const initial = yield* driver.commit(cwd, "initial", "");
+      assert.match(initial.commitSha, /^[a-f0-9]{40}$/);
+      assert.isFalse((yield* driver.statusDetailsLocal(cwd)).hasWorkingTreeChanges);
+      yield* Effect.forEach(files, (file) => fs.writeFileString(path.join(cwd, file), "after\n"), {
+        concurrency: 16,
+        discard: true,
+      });
+      const status = yield* driver.statusDetailsLocal(cwd);
+      assert.isTrue(status.hasWorkingTreeChanges);
+      assert.lengthOf(status.workingTree.files, files.length);
+      assert.equal(status.workingTree.insertions, files.length);
+      assert.equal(status.workingTree.deletions, files.length);
+      const context = yield* driver.prepareCommitContext(cwd, undefined, { includePatch: false });
+      assert.isNotNull(context);
+      assert.isAbove(context!.stagedSummary.length, 1_000_000);
+      assert.lengthOf(context!.stagedSummary.split("\n"), files.length);
+    }),
+  );
   describe("structured errors", () => {
     it.effect("does not retain git arguments or stderr in command failures", () =>
       Effect.gen(function* () {
@@ -2096,6 +2136,27 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect.each([
+      { scenario: "kept", before: "\uFEFFold\n", after: "\uFEFFnew\n" },
+      { scenario: "added", before: "same\n", after: "\uFEFFsame\n" },
+      { scenario: "removed", before: "\uFEFFsame\n", after: "same\n" },
+    ])("preserves byte-order marks in diff expansion when $scenario", ({ before, after }) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* writeTextFile(cwd, "README.md", before);
+        yield* git(cwd, ["commit", "-am", "write original contents"]);
+        yield* writeTextFile(cwd, "README.md", after);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const contents = yield* driver.getReviewDiffFileContents(
+          makeReviewDiffFileContentsInput(cwd),
+        );
+
+        assert.deepStrictEqual(contents, { oldContents: before, newContents: after });
+      }),
+    );
+
     it.effect("reads a base ref that looks like an option as a revision", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -2474,6 +2535,22 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
   });
 
   describe("repository status", () => {
+    it.effect("reads the current branch by name when a tag shares it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["checkout", "-b", "release"]);
+        yield* git(cwd, ["tag", "release"]);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const remoteStatus = yield* driver.statusDetailsRemote(cwd, { refreshUpstream: false });
+        assert.equal(remoteStatus.branch, "release");
+        const preview = yield* driver.getReviewDiffPreview({ cwd });
+        const branchRange = preview.sources.find((source) => source.kind === "branch-range");
+        assert.equal(branchRange?.headRef, "release");
+      }),
+    );
+
     it.effect("does not open a project folder laid out as a bare repository", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -3777,6 +3854,42 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }),
     );
 
+    it.effect("keeps generated worktree folders short without changing long branch names", () =>
+      Effect.gen(function* () {
+        const pathService = yield* Path.Path;
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const worktreesDirectory = yield* makeTmpDir("custom-worktrees-");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const folders = new Set<string>();
+        const branches = [
+          `feature/${"a".repeat(90)}/${"b".repeat(90)}/${"c".repeat(90)}`,
+          `feature/${"a".repeat(90)}/${"b".repeat(90)}/${"d".repeat(90)}`,
+          `feature/${"a".repeat(40)}/5fac`,
+          `feature/${"a".repeat(40)}/18828`,
+          `${"a".repeat(22)}😀/${"b".repeat(30)}`,
+          "z".repeat(40),
+          "z".repeat(41),
+        ];
+        for (const branch of branches) {
+          const created = yield* driver.createWorktree(
+            { cwd, path: null, refName: initialBranch, newRefName: branch },
+            { worktreesDirectory },
+          );
+          const folder = pathService.basename(created.worktree.path);
+          assert.isAtMost(folder.length, 40);
+          if (branch.length <= 40) assert.equal(folder, branch);
+          assert.equal(yield* git(created.worktree.path, ["branch", "--show-current"]), branch);
+          assert.include(
+            yield* git(cwd, ["-c", "core.quotePath=false", "worktree", "list", "--porcelain"]),
+            `worktree ${created.worktree.path}`,
+          );
+          folders.add(folder);
+        }
+        assert.equal(folders.size, branches.length);
+      }),
+    );
+
     it.effect("resolves the submodule mode from the option, then t3.json", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -4486,6 +4599,137 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect.each([
+      { location: "root", ref: "refs/heads/MERGE_HEAD" },
+      { location: "nested", ref: "refs/heads/MERGE_HEAD" },
+      { location: "worktree", ref: "refs/heads/MERGE_HEAD" },
+      { location: "root", ref: "refs/tags/MERGE_HEAD" },
+      { location: "nested", ref: "refs/tags/MERGE_HEAD" },
+      { location: "worktree", ref: "refs/tags/MERGE_HEAD" },
+    ])(
+      "commits selected files with a MERGE_HEAD ref and no merge ($location, $ref)",
+      ({ location, ref }) =>
+        Effect.gen(function* () {
+          let cwd = yield* makeTmpDir();
+          yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const originalHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+          yield* git(cwd, ["update-ref", ref, originalHead]);
+          if (location === "worktree") {
+            const linked = path.join(yield* makeTmpDir(), "linked");
+            yield* git(cwd, ["worktree", "add", "-b", "linked", linked]);
+            cwd = linked;
+          }
+          const commitCwd = location === "nested" ? path.join(cwd, "nested") : cwd;
+          yield* fs.makeDirectory(commitCwd, { recursive: true });
+          yield* writeTextFile(cwd, "selected.txt", "selected\n");
+          yield* writeTextFile(cwd, "unrelated.txt", "unrelated\n");
+          const mergePath = yield* git(commitCwd, ["rev-parse", "--git-path", "MERGE_HEAD"]);
+          assert.isFalse(yield* fs.exists(path.resolve(commitCwd, mergePath)));
+
+          yield* driver.commit(commitCwd, "Selected without merge", "", {
+            stage: { filePaths: ["selected.txt"] },
+          });
+
+          assert.equal(yield* git(cwd, ["show", "-s", "--format=%P", "HEAD"]), originalHead);
+          assert.equal(
+            yield* git(cwd, ["show", "--pretty=", "--name-only", "HEAD"]),
+            "selected.txt",
+          );
+          assert.equal(yield* git(cwd, ["rev-parse", ref]), originalHead);
+          assert.include(yield* git(cwd, ["status", "--porcelain"]), "?? unrelated.txt");
+        }),
+    );
+
+    it.effect.each([
+      { location: "root", conflict: false },
+      { location: "nested", conflict: false },
+      { location: "worktree", conflict: false },
+      { location: "root", conflict: true },
+      { location: "nested", conflict: true },
+      { location: "worktree", conflict: true },
+    ])(
+      "rejects selected-file merge commits without mutation ($location, conflict: $conflict)",
+      ({ location, conflict }) =>
+        Effect.gen(function* () {
+          let cwd = yield* makeTmpDir();
+          const { initialBranch } = yield* initRepoWithCommit(cwd);
+          const driver = yield* GitVcsDriver.GitVcsDriver;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          yield* git(cwd, ["checkout", "-b", "feature"]);
+          yield* writeTextFile(cwd, "feature.txt", "feature\n");
+          if (conflict) yield* writeTextFile(cwd, "README.md", "feature version\n");
+          yield* git(cwd, ["add", "."]);
+          yield* git(cwd, ["commit", "-m", "Feature"]);
+          const featureHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+          yield* git(cwd, ["checkout", initialBranch]);
+          yield* writeTextFile(cwd, "main.txt", "main\n");
+          if (conflict) yield* writeTextFile(cwd, "README.md", "main version\n");
+          yield* git(cwd, ["add", "."]);
+          yield* git(cwd, ["commit", "-m", "Main"]);
+          const mainHead = yield* git(cwd, ["rev-parse", "HEAD"]);
+          if (location === "worktree") {
+            const worktree = path.join(yield* makeTmpDir(), "linked");
+            yield* git(cwd, ["worktree", "add", "-b", "linked", worktree]);
+            cwd = worktree;
+          }
+          const merge = yield* driver.execute({
+            operation: "test.merge",
+            cwd,
+            args: ["merge", "--no-commit", "--no-ff", "feature"],
+            allowNonZeroExit: true,
+          });
+          assert.equal(merge.exitCode, conflict ? 1 : 0);
+          yield* writeTextFile(cwd, "unrelated.txt", "unrelated\n");
+          const commitCwd = location === "nested" ? path.join(cwd, "nested") : cwd;
+          yield* fs.makeDirectory(commitCwd, { recursive: true });
+          const gitDir = yield* git(cwd, ["rev-parse", "--absolute-git-dir"]);
+          const names = ["index", "MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "ORIG_HEAD"];
+          const before = names.map((name) => NodeFS.readFileSync(path.join(gitDir, name)));
+          const files = ["README.md", "feature.txt", "main.txt", "unrelated.txt"];
+          const contents = files.map((name) => NodeFS.readFileSync(path.join(cwd, name)));
+          const unmerged = yield* git(cwd, ["ls-files", "--unmerged"]);
+
+          const result = yield* driver
+            .commit(commitCwd, "Partial merge", "", { stage: { filePaths: ["feature.txt"] } })
+            .pipe(Effect.result);
+          if (Result.isSuccess(result)) {
+            const parents = yield* git(cwd, ["show", "-s", "--format=%P", "HEAD"]);
+            assert.fail(
+              `Selected merge commit succeeded with parents ${parents}; MERGE_HEAD exists: ${NodeFS.existsSync(path.join(gitDir, "MERGE_HEAD"))}`,
+            );
+          } else {
+            assert.include(result.failure.detail, "Cannot commit selected files during a merge");
+            assert.include(result.failure.detail, "Commit all files");
+          }
+          assert.deepEqual(
+            names.map((name) => NodeFS.readFileSync(path.join(gitDir, name))),
+            before,
+          );
+          assert.deepEqual(
+            files.map((name) => NodeFS.readFileSync(path.join(cwd, name))),
+            contents,
+          );
+          assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), mainHead);
+          assert.equal(yield* git(cwd, ["ls-files", "--unmerged"]), unmerged);
+
+          if (conflict) yield* writeTextFile(cwd, "README.md", "resolved version\n");
+          yield* driver.commit(commitCwd, "Finish merge", "", { stage: {} });
+          assert.equal(
+            yield* git(cwd, ["show", "-s", "--format=%P", "HEAD"]),
+            `${mainHead} ${featureHead}`,
+          );
+          assert.isFalse(NodeFS.existsSync(path.join(gitDir, "MERGE_HEAD")));
+          assert.equal(yield* git(cwd, ["show", "HEAD:feature.txt"]), "feature");
+          assert.equal(yield* git(cwd, ["show", "HEAD:unrelated.txt"]), "unrelated");
+          if (conflict)
+            assert.equal(yield* git(cwd, ["show", "HEAD:README.md"]), "resolved version");
+        }),
+    );
+
     it.effect("treats selected file paths literally", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
@@ -4510,6 +4754,56 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
 
         const status = yield* git(cwd, ["status", "--porcelain"]);
         assert.include(status, "?? selected1.txt");
+      }),
+    );
+
+    const commitWithHooks = (hooks: Record<string, string>) =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        for (const [name, script] of Object.entries(hooks)) {
+          yield* writeTextFile(cwd, `.git/hooks/${name}`, `#!/bin/sh\n${script}\n`);
+          yield* fs.chmod(path.join(cwd, ".git/hooks", name), 0o755);
+        }
+        yield* writeTextFile(cwd, "a.txt", "a\n");
+        const events: string[] = [];
+        const result = yield* (yield* GitVcsDriver.GitVcsDriver)
+          .commit(cwd, "Add a", "", {
+            stage: { filePaths: ["a.txt"] },
+            progress: {
+              onHookStarted: (hookName) => Effect.sync(() => void events.push(`start ${hookName}`)),
+              onHookFinished: ({ hookName, exitCode }) =>
+                Effect.sync(() => void events.push(`finish ${hookName} ${exitCode}`)),
+            },
+          })
+          .pipe(Effect.result);
+        return { events, committed: Result.isSuccess(result) };
+      });
+
+    it.effect("reports each commit hook finishing with its exit code", () =>
+      Effect.gen(function* () {
+        // The pre-commit hook runs git, whose own children reuse child_id 0 in the shared trace.
+        const { events, committed } = yield* commitWithHooks({
+          "pre-commit": "git -c alias.noop='!false' noop\nexit 0",
+          "commit-msg": "exit 0",
+        });
+        assert.isTrue(committed);
+        assert.deepEqual(events, [
+          "start pre-commit",
+          "finish pre-commit 0",
+          "start commit-msg",
+          "finish commit-msg 0",
+        ]);
+      }),
+    );
+
+    it.effect("reports the exit code of a commit hook that rejects the commit", () =>
+      Effect.gen(function* () {
+        const { events, committed } = yield* commitWithHooks({ "commit-msg": "exit 3" });
+        assert.isFalse(committed);
+        assert.deepEqual(events, ["start commit-msg", "finish commit-msg 3"]);
       }),
     );
 

@@ -1,4 +1,12 @@
-import type { UserInputQuestion } from "@goat/contracts";
+/** The question fields answer handling reads. Web and mobile question types both fit it. */
+export interface PendingUserInputQuestion {
+  readonly id: string;
+  readonly options: ReadonlyArray<{ readonly label: string; readonly value?: string | undefined }>;
+  readonly multiSelect?: boolean | undefined;
+  readonly allowCustomAnswer?: boolean | undefined;
+  readonly initialAnswer?: string | undefined;
+  readonly required?: boolean | undefined;
+}
 
 export interface PendingUserInputDraftAnswer {
   readonly selectedOptionValues?: ReadonlyArray<string>;
@@ -6,6 +14,9 @@ export interface PendingUserInputDraftAnswer {
   readonly attachmentCount?: number;
   readonly attachmentsBlocked?: boolean;
 }
+
+export type PendingUserInputAnswer = string | string[];
+
 function normalizeDraftAnswer(value: string | undefined): string | null {
   if (typeof value !== "string") {
     return null;
@@ -15,19 +26,46 @@ function normalizeDraftAnswer(value: string | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeSelectedOptionValues(value: ReadonlyArray<string> | undefined): string[] {
+// Provider option values stay exact, including whitespace. Only options without a value match by label.
+function resolvePendingUserInputOptionValue(
+  question: PendingUserInputQuestion,
+  value: string,
+): string | null {
+  if (question.options.some((option) => option.value === value)) {
+    return value;
+  }
+
+  const label = value.trim();
+  return label.length > 0 &&
+    question.options.some((option) => option.value === undefined && option.label.trim() === label)
+    ? label
+    : null;
+}
+
+/** The draft's selections that name an offered option, deduplicated, in selection order. */
+export function normalizeSelectedOptionValues(
+  question: PendingUserInputQuestion,
+  value: ReadonlyArray<string> | undefined,
+): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
-  // Provider option IDs must stay unchanged, including whitespace.
-  return Array.from(new Set(value.filter((entry) => typeof entry === "string")));
+  return Array.from(
+    new Set(
+      value
+        .filter((entry) => typeof entry === "string")
+        .map((entry) => resolvePendingUserInputOptionValue(question, entry))
+        .filter((entry): entry is string => entry !== null),
+    ),
+  );
 }
 
+/** The answer to submit for one question, or null while it is unanswered. */
 export function resolvePendingUserInputAnswer(
-  question: UserInputQuestion,
+  question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
-): string | string[] | null {
+): PendingUserInputAnswer | null {
   if (draft?.attachmentsBlocked) return null;
   const customAnswer =
     question.allowCustomAnswer === false
@@ -39,9 +77,7 @@ export function resolvePendingUserInputAnswer(
     return customAnswer;
   }
 
-  const selectedOptionValues = normalizeSelectedOptionValues(draft?.selectedOptionValues).filter(
-    (value) => question.options.some((option) => (option.value ?? option.label) === value),
-  );
+  const selectedOptionValues = normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
   if (question.multiSelect) {
     return selectedOptionValues.length > 0
       ? selectedOptionValues
@@ -56,15 +92,22 @@ export function resolvePendingUserInputAnswer(
   );
 }
 
+/** Text typed for a question. A question that accepts only offered options keeps its draft. */
 export function setPendingUserInputCustomAnswer(
   draft: PendingUserInputDraftAnswer | undefined,
   customAnswer: string,
-  question?: Pick<UserInputQuestion, "initialAnswer">,
+  question?: PendingUserInputQuestion,
 ): PendingUserInputDraftAnswer {
+  if (question?.allowCustomAnswer === false) {
+    return draft ?? {};
+  }
+
   const selectedOptionValues =
     question?.initialAnswer !== undefined || customAnswer.trim().length > 0
       ? undefined
-      : normalizeSelectedOptionValues(draft?.selectedOptionValues);
+      : question === undefined
+        ? draft?.selectedOptionValues
+        : normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
 
   return {
     customAnswer,
@@ -72,16 +115,43 @@ export function setPendingUserInputCustomAnswer(
   };
 }
 
+export function isPendingUserInputOptionSelected(
+  question: PendingUserInputQuestion,
+  draft: PendingUserInputDraftAnswer | undefined,
+  optionValue: string,
+): boolean {
+  if (question.allowCustomAnswer !== false && normalizeDraftAnswer(draft?.customAnswer)) {
+    return false;
+  }
+
+  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
+  return (
+    resolvedOptionValue !== null &&
+    normalizeSelectedOptionValues(question, draft?.selectedOptionValues).includes(
+      resolvedOptionValue,
+    )
+  );
+}
+
+/** Toggles an offered option. An unknown option returns the same draft. */
 export function togglePendingUserInputOptionSelection(
-  question: UserInputQuestion,
+  question: PendingUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
   optionValue: string,
 ): PendingUserInputDraftAnswer {
+  const resolvedOptionValue = resolvePendingUserInputOptionValue(question, optionValue);
+  if (resolvedOptionValue === null) {
+    return draft ?? {};
+  }
+
   if (question.multiSelect) {
-    const selectedOptionValues = normalizeSelectedOptionValues(draft?.selectedOptionValues);
-    const nextSelectedOptionValues = selectedOptionValues.includes(optionValue)
-      ? selectedOptionValues.filter((value) => value !== optionValue)
-      : [...selectedOptionValues, optionValue];
+    const selectedOptionValues = normalizeSelectedOptionValues(
+      question,
+      draft?.selectedOptionValues,
+    );
+    const nextSelectedOptionValues = selectedOptionValues.includes(resolvedOptionValue)
+      ? selectedOptionValues.filter((value) => value !== resolvedOptionValue)
+      : [...selectedOptionValues, resolvedOptionValue];
 
     return {
       customAnswer: "",
@@ -93,15 +163,16 @@ export function togglePendingUserInputOptionSelection(
 
   return {
     customAnswer: "",
-    selectedOptionValues: [optionValue],
+    selectedOptionValues: [resolvedOptionValue],
   };
 }
 
-export function buildPendingUserInputAnswers(
-  questions: ReadonlyArray<UserInputQuestion & { readonly required?: boolean | undefined }>,
+/** Every answered question keyed by id, or null while a required question is unanswered. */
+export function buildPendingUserInputAnswers<Question extends PendingUserInputQuestion>(
+  questions: ReadonlyArray<Question>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
-): Record<string, string | string[]> | null {
-  const answers: Record<string, string | string[]> = {};
+): Record<string, PendingUserInputAnswer> | null {
+  const answers: Record<string, PendingUserInputAnswer> = {};
 
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);

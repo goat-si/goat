@@ -1,4 +1,4 @@
-import type { DeviceSummary, EnvironmentId } from "@goat/contracts";
+import type { DeviceHostSummary, DeviceSummary, EnvironmentId } from "@goat/contracts";
 import { useRef, useState } from "react";
 import {
   captureDeviceScreenshot,
@@ -16,6 +16,7 @@ export function DeviceWorkspace(props: {
   environmentId: EnvironmentId;
   device: DeviceSummary;
   hostLabel: string;
+  hostKind: DeviceHostSummary["kind"] | undefined;
   hostDiagnostics: string | undefined;
   visible: boolean;
   onFloat: () => void;
@@ -29,7 +30,12 @@ export function DeviceWorkspace(props: {
   // A capture always finishes, even if the panel hides or closes meanwhile; the user asked for it.
   const capturing = useRef(false);
   const access = useDeviceHubAccess(props.environmentId, props.device.hostId);
-  const controls = useDeviceControls({ ...props, access });
+  const runsHostCommands = props.hostKind === "local" || props.hostKind === "ssh";
+  const controls = useDeviceControls({
+    ...props,
+    access,
+    visible: props.visible && runsHostCommands,
+  });
   const saveScreenshot = () => {
     if (!access || capturing.current || !props.visible) return;
     capturing.current = true;
@@ -85,6 +91,7 @@ export function DeviceWorkspace(props: {
             renderControls={(view) => (
               <DeviceControlsRail
                 platform={props.device.platform}
+                hostKind={props.hostKind}
                 handle={view.handle}
                 view={view}
                 controls={controls}
@@ -100,7 +107,7 @@ export function DeviceWorkspace(props: {
           />
         </div>
       </div>
-      {toolsOpen ? (
+      {toolsOpen && runsHostCommands ? (
         <DeviceToolsPanel
           device={props.device}
           controls={controls}

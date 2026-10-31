@@ -1,8 +1,27 @@
 import type { EnvironmentMachineKind } from "@goat/contracts";
 import type { ReactNode } from "react";
 import { cn } from "~/lib/utils";
+import type { EnvironmentPresentation } from "~/state/environments";
+import { usePreparedConnection } from "~/state/session";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
+import { environmentTransportLabel } from "./EnvironmentRow.logic";
 export { environmentTransportLabel, formatDesktopSshTarget } from "./EnvironmentRow.logic";
+
+export function useEnvironmentTransportLabel(environment: EnvironmentPresentation): string {
+  const prepared = usePreparedConnection(environment.environmentId);
+  return environmentTransportLabel(
+    environment,
+    environment.connection.phase === "connected" && prepared._tag === "Some"
+      ? prepared.value.target
+      : null,
+  );
+}
+
+export function EnvironmentTransportLabel(props: {
+  readonly environment: EnvironmentPresentation;
+}) {
+  return useEnvironmentTransportLabel(props.environment);
+}
 
 export function EnvironmentRow({
   kind,

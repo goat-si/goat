@@ -2,7 +2,7 @@ import type { ScopedThreadRef } from "@goat/contracts";
 import { type ComponentProps, useLayoutEffect } from "react";
 import { useIncrementalTimelineEntries } from "../../hooks/useIncrementalTimelineEntries";
 import type { TimelineEntriesInput, TimelineEntry } from "../../session-logic";
-import { useThreadVisibleTurnItems } from "../../state/entities";
+import { useTimelineVisibleTurnItems } from "../../state/entities";
 import {
   peekRememberedThreadTimeline,
   rememberReadyThreadTimeline,
@@ -14,7 +14,8 @@ import { MessagesTimeline } from "./MessagesTimeline";
 /**
  * The timeline with the streamed text. ChatView reads the thread through its quiet
  * atoms, which hold through text deltas; this reads the live turn items, so a
- * delta re-renders the timeline without re-rendering ChatView.
+ * reasoning delta re-renders the timeline without re-rendering ChatView. Streamed
+ * assistant text reaches only its own row, through useAssistantMessageText.
  */
 export function ThreadTimeline({
   threadDetailRef,
@@ -41,7 +42,7 @@ export function ThreadTimeline({
   /** GOAT: the run state shown with these entries, kept so a thread switch can paint it. */
   readyActivity: Parameters<typeof rememberReadyThreadTimeline>[0]["activity"];
 }) {
-  const visibleTurnItems = useThreadVisibleTurnItems(threadDetailRef);
+  const visibleTurnItems = useTimelineVisibleTurnItems(threadDetailRef);
   const serverEntries = useIncrementalTimelineEntries(activeThreadKey, {
     ...entriesInput,
     visibleTurnItems,

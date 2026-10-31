@@ -1,3 +1,6 @@
+import type { FileDiffMetadata } from "@pierre/diffs";
+import { isTestChangedFile } from "@goat/shared/changedFileKind";
+import { findPatchFile, resolveFileDiffPath } from "../lib/diffRendering";
 import type { RunId } from "@goat/contracts";
 
 /**
@@ -28,4 +31,20 @@ export function resolveDiffPanelTurn<T extends { readonly runId: RunId }>(input:
     return { turn: undefined, awaitingCheckpoint: true, runActive };
   }
   return { turn: orderedSummaries[0], awaitingCheckpoint: false, runActive };
+}
+
+export function selectVisibleDiffFiles(
+  files: readonly FileDiffMetadata[],
+  selectedPath: string | null,
+  cwd: string | undefined,
+  hideTestFiles: boolean,
+) {
+  const selectedPatchFile = selectedPath ? findPatchFile(files, selectedPath, cwd) : null;
+  return {
+    selectedPatchFile,
+    visibleFiles: files.filter((file) => {
+      const path = resolveFileDiffPath(file);
+      return !hideTestFiles || file === selectedPatchFile || !isTestChangedFile(path);
+    }),
+  };
 }

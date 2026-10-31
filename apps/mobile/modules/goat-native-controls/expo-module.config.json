@@ -4,7 +4,8 @@
     "modules": ["GoatNativeControlsModule", "GoatKeyboardCommandsModule"],
     "appDelegateSubscribers": [
       "GoatWorkspaceOrientationSubscriber",
-      "GoatMenuDismissTouchGateSubscriber"
+      "GoatMenuDismissTouchGateSubscriber",
+      "GoatBackgroundGraceSubscriber"
     ]
   },
   "android": {

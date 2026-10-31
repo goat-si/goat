@@ -59,6 +59,7 @@ export function PreviewChromeRow({
   onForward,
   onRefresh,
   onSubmit,
+  onInvalidInput,
   onOpenInBrowser,
   onCapture,
   captureDisabled,
@@ -153,6 +154,7 @@ export function PreviewChromeRow({
           disabled={inputDisabled}
           inputRef={inputRef}
           onSubmit={onSubmit}
+          onInvalidInput={onInvalidInput}
           onActivateTab={onActivateTab}
           onOpenInBrowser={onOpenInBrowser}
         />

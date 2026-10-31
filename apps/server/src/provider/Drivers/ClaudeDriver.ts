@@ -330,6 +330,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           ),
         ),
       checkProvider,
+      invalidateUsageCache: Cache.invalidateAll(capabilitiesProbeCache),
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
           Effect.flatMap((maintenanceCapabilities) =>

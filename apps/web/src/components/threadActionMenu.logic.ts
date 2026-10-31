@@ -3,9 +3,11 @@ import type { SnoozePreset } from "@goat/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
   | "continue-on-ssh"
+  | "find"
   | "new-thread-on-branch"
   | "promote"
   | "filter-by-project"
+  | "turn-into-project"
   | "project-settings"
   | "pin"
   | "unpin"
@@ -71,6 +73,7 @@ export interface ThreadActionMenuState {
   readonly canOperate: boolean;
   /** The active chat owns the SSH host dialog. */
   readonly canOpenSshHandoff?: boolean | undefined;
+  readonly canFind?: boolean;
   readonly branch: string | null;
   readonly projectFilter: {
     readonly label: string;
@@ -98,6 +101,8 @@ export interface ThreadActionMenuState {
   readonly globalAgent?: boolean | undefined;
   /** Guest links need their own grant, so the caller checks it instead of `canOperate`. */
   readonly canShareWithGuest?: boolean;
+  /** A No project thread with its own folder, on a server that can promote it. */
+  readonly canTurnIntoProject?: boolean;
 }
 
 const GLOBAL_AGENT_HIDDEN_ACTIONS: ReadonlySet<ThreadActionMenuId> = new Set([
@@ -112,6 +117,7 @@ const GLOBAL_AGENT_HIDDEN_ACTIONS: ReadonlySet<ThreadActionMenuId> = new Set([
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
     "continue-on-ssh", // The dialog uses sshWorkspaceLaunch.permissionAtom.
+    "find",
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -136,6 +142,9 @@ export function buildThreadActionMenuItems(
             icon: "arrow-up-from-line",
           },
         ]
+      : []),
+    ...(state.canFind
+      ? [{ id: "find" as const, label: "Find in thread", icon: "text-search" }]
       : []),
     ...(state.branch
       ? [
@@ -209,6 +218,16 @@ export function buildThreadActionMenuItems(
               ? "Show all projects"
               : `Filter by ${state.projectFilter.label}`,
             icon: "folder-tree",
+          },
+        ]
+      : []),
+    ...(state.canTurnIntoProject
+      ? [
+          {
+            id: "turn-into-project" as const,
+            label: "Turn into project",
+            icon: "folder-plus",
+            disabled: state.isRunning,
           },
         ]
       : []),

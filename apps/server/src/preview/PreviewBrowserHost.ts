@@ -82,7 +82,7 @@ export class PreviewBrowserRootError extends Schema.TaggedError<PreviewBrowserRo
   {},
 ) {
   override get message(): string {
-    return "Chrome will not start its sandbox as root, so GOAT's browser cannot run while the GOAT server runs as root. Run the server as a nonroot user (for example `User=` in its systemd service), or set `GOAT_SERVER_BROWSER_SANDBOX=0` to run the browser unsandboxed as root.";
+    return "GOAT server is running as root; Chrome's sandbox cannot start. Run GOAT as a nonroot user. Otherwise set `GOAT_SERVER_BROWSER_SANDBOX=0` in the GOAT server's environment and restart the server; this disables Chrome's sandbox. Manual: `GOAT_SERVER_BROWSER_SANDBOX=0 goat serve`. Systemd: add `Environment=GOAT_SERVER_BROWSER_SANDBOX=0` under `[Service]`, reload systemd, then restart the service. `goat browser setup` cannot fix root sandboxing.";
   }
 }
 

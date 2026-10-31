@@ -12,6 +12,7 @@ import {
   type EnvironmentId,
   type ServerProvider,
 } from "@goat/contracts";
+import { sessionPermissionsUnavailableMessage } from "@goat/shared/authScopeOptions";
 import * as Effect from "effect/Effect";
 import {
   settleAsyncResult,
@@ -241,11 +242,14 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
               </Text>
             ) : !allowed ? (
               <Text className="px-2 text-sm text-foreground-muted">
-                {AsyncResult.isFailure(sessionResult)
-                  ? "Could not verify your permissions. Reconnect to try again."
-                  : session === null
-                    ? "Checking permissions…"
-                    : "This connection does not have permission to manage the environment."}
+                {AsyncResult.isFailure(sessionResult) || session === null || !session.authenticated
+                  ? sessionPermissionsUnavailableMessage({
+                      connected,
+                      failed: AsyncResult.isFailure(sessionResult),
+                      rejected:
+                        !AsyncResult.isFailure(sessionResult) && session?.authenticated === false,
+                    })
+                  : "This connection does not have permission to manage the environment."}
               </Text>
             ) : null}
             {error ? (

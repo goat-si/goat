@@ -605,7 +605,7 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
         Effect.provideService(Settings.ServerSettingsService, settings),
       ),
     "screenshot",
-    "Device screenshot failed.",
+    DeviceHandlers.deviceScreenshotFailureText,
   );
 });
 
