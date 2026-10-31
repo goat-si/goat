@@ -1071,14 +1071,7 @@ export const PreviewAutomationError = Schema.Union([
 ]);
 export type PreviewAutomationError = typeof PreviewAutomationError.Type;
 
-export const PreviewUrlResolution = Schema.Struct({
-  requestedUrl: Schema.String,
-  resolvedUrl: Schema.String,
-  resolutionKind: Schema.Literals(["direct", "direct-private-network"]),
-  environmentId: EnvironmentId,
-});
-export type PreviewUrlResolution = typeof PreviewUrlResolution.Type;
-
 export * from "./previewAutomationInputHold.ts";
 export * from "./previewAutomationPrimitives.ts";
 export * from "./previewAutomationSession.ts";
+export * from "./previewUrlResolution.ts";

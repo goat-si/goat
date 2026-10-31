@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - a real origin for the page, since Playwright's own fulfilled responses carry CORS headers.
 import * as NodeHttp from "node:http";
 import type * as NodeNet from "node:net";
 import {
@@ -342,7 +343,7 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     await using _server = {
-      [Symbol.asyncDispose]: () => new Promise((done) => server.close(done)),
+      [Symbol.asyncDispose]: () => new Promise<void>((done) => server.close(() => done())),
     };
     const port = (server.address() as NodeNet.AddressInfo).port;
     await page.goto(`http://127.0.0.1:${port}/`);

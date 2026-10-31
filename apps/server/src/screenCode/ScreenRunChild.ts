@@ -157,39 +157,41 @@ export async function runScreenChild(
   };
   const emit = (frame: unknown) => output.write(`${JSON.stringify(frame)}\n`);
   /** Why a call never left the cell, as a host receipt the guest turns into a ScreenError. */
+  const refused = (code: ScreenRunError["code"], message: string, nextStep: string) =>
+    JSON.stringify({ code, effectStarted: false, message, nextStep } satisfies ScreenRunError);
   const limited = (
     code: ScreenRunError["code"],
     name: "callsPerCell" | "pendingCalls" | "argBytes",
-    message: string,
+    nextStep: string,
   ) =>
     JSON.stringify({
       code,
       effectStarted: false,
-      message: `${name} limit ${currentLimits[name]}: ${message}`,
+      message: `${name} limit ${currentLimits[name]}: this call was not sent.`,
+      nextStep,
       limit: { name, maximum: currentLimits[name] },
     } satisfies ScreenRunError);
-  const CALLS_SPENT = "this cell has made its last call; continue in a new cell.";
-  const PENDING_FULL =
-    "that many calls already wait for answers in this cell, so this one was not sent. Await some before starting more.";
+  const CALLS_SPENT = "Continue in a new cell.";
+  const PENDING_FULL = "Await some of this cell's calls before starting more.";
   const refusal = (method: string, argsJson: string, member: boolean): string | undefined => {
     if (!admitted)
-      return JSON.stringify({
-        code: "stopped",
-        effectStarted: false,
-        message: "The cell has ended, so this call was not sent.",
-      } satisfies ScreenRunError);
+      return refused(
+        "stopped",
+        "The cell has ended, so this call was not sent.",
+        "Act in a new cell.",
+      );
     if (!methods.includes(method as (typeof methods)[number]))
-      return JSON.stringify({
-        code: "invalid_argument",
-        effectStarted: false,
-        message: "Not a screen method; nothing was sent.",
-      } satisfies ScreenRunError);
+      return refused(
+        "invalid_argument",
+        "Not a screen method; nothing was sent.",
+        "Use the screen API.",
+      );
     if (++callCount > currentLimits.callsPerCell)
       return limited("call_limit", "callsPerCell", CALLS_SPENT);
     if (!member && pendingPlaces >= currentLimits.pendingCalls)
       return limited("pending_limit", "pendingCalls", PENDING_FULL);
     if (screenBytes(argsJson) > currentLimits.argBytes)
-      return limited("text_limit", "argBytes", "these arguments are too large; nothing was sent.");
+      return limited("text_limit", "argBytes", "Pass smaller arguments.");
     return undefined;
   };
   const initialize = () => {

@@ -129,13 +129,20 @@ export const revealFramesOf = async (handle: ElementHandle, deadline: number) =>
   }
 };
 
-/** The element a locator names now, held for the rest of the action. */
-export const pinTarget = async (target: Locator, deadline: number) => {
-  await requireMatch(target, remaining(deadline));
-  const handle = await target.elementHandle({ timeout: remaining(deadline) });
-  if (handle === null) throw targetChanged();
+/** The element a locator names once something matches it; one that detached is `gone`. */
+export const matchedElement = async (target: Locator, timeoutMs: number, gone: () => Error) => {
+  const ends = performance.now() + timeoutMs;
+  await requireMatch(target, timeoutMs);
+  const handle = await target.elementHandle({
+    timeout: Math.max(1, Math.floor(ends - performance.now())),
+  });
+  if (handle === null) throw gone();
   return handle;
 };
+
+/** The element a locator names now, held for the rest of the action. */
+export const pinTarget = (target: Locator, deadline: number) =>
+  matchedElement(target, remaining(deadline), targetChanged);
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
 const selectable = ([element, wanted]: readonly [unknown, ReadonlyArray<string>]) => {
