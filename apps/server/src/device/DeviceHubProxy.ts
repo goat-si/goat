@@ -280,9 +280,16 @@ const makeHandler = Effect.fnUntraced(function* (peers: ReturnType<typeof WebRtc
   const offer = signal[1] === "offer" && request.method === "POST";
   const httpClient = yield* HttpClient.HttpClient;
   const peer = WebRtcPeers.signalSessionId(body);
-  // A peer belongs to one upstream helper; the client picks its id.
+  const upstreamPeerUrl = new URL(upstreamUrl);
+  // iOS identifies the device in its helper path; Android uses the routed device query.
   const key = Option.map(peer, (id) =>
-    [owner, upstreamUrl.replace(/\/(offer|close)(\?.*)?$/, ""), id].join("\u0000"),
+    [
+      owner,
+      upstreamPeerUrl.origin,
+      upstreamPeerUrl.pathname.replace(/\/(offer|close)$/, ""),
+      upstreamPeerUrl.searchParams.get("device") ?? "",
+      id,
+    ].join("\u0000"),
   );
   const exchange = Effect.gen(function* () {
     if (offer && !(yield* peers.reserve(owner))) {
