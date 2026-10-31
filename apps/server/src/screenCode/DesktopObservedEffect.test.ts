@@ -189,7 +189,7 @@ interface SidebarCase {
   readonly first?: Record<string, unknown>;
   readonly observeFirst?: boolean;
   /** Another call between that read and the input: a key press, one in another window, or a screenshot. */
-  readonly between?: "key" | "otherWindow" | "screenshot";
+  readonly between?: "key" | "otherWindow" | "launch" | "screenshot";
   /** The input: the sidebar click, or cmd+w, a close only the window list can prove. */
   readonly close?: boolean;
 }
@@ -240,6 +240,11 @@ const sidebarClick = (after: Record<string, unknown>, options: SidebarCase = {})
         deadlineMillis: 1_000_000,
       });
     }
+    if (options.between === "launch")
+      yield* host.invoke(
+        { ...call("launch_app", { bundle_id: "org.example.Editor" }), deadlineMillis: 1_000_000 },
+        context,
+      );
     const chats = seen?.elements.find((element) => element.name === "chatrooms");
     const out = yield* settled(host, {
       ...(options.close === true
@@ -305,6 +310,7 @@ it.effect(
         }),
         key: yield* sidebarClick(changed, { between: "key" }),
         otherWindow: yield* sidebarClick(changed, { between: "otherWindow" }),
+        launch: yield* sidebarClick(changed, { between: "launch" }),
         screenshot: yield* sidebarClick(changed, { between: "screenshot" }),
         close: yield* sidebarClick(changed, { close: true }),
       };

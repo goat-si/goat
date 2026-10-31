@@ -612,8 +612,11 @@ export const createDesktopTargetHost = (deps: {
     context: ScreenHostContext,
     inBatch = false,
   ): Effect.fn.Return<ScreenHostDispatchResult, ScreenRunError> {
-    if (call.method === "launch_app" && !call.targetRef)
+    if (call.method === "launch_app" && !call.targetRef) {
+      // The process a launch reaches is known only after it, so no earlier read compares.
+      for (const each of targets.values()) delete each.fullRows;
       return yield* launch(call, callArgs(call.args), context);
+    }
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(fail("stale_reference"));
     // Any call here may change this process's windows, so only an input right after a read of its
