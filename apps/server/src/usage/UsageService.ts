@@ -28,6 +28,7 @@ import * as Semaphore from "effect/Semaphore";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
+import { formatMalformedUsageWarning } from "@goat/shared/usageFormat";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BUILT_IN_USAGE_DRIVERS, type BuiltInUsageReadersEnv } from "../provider/builtInDrivers.ts";
@@ -859,10 +860,7 @@ export const make = Effect.gen(function* () {
         distinctSessions: sessionIds.size,
         message:
           malformedRecords > 0
-            ? [
-                sourceMessage,
-                `${malformedRecords} malformed or inconsistent usage record(s) were skipped; usage may be incomplete.`,
-              ]
+            ? [sourceMessage, formatMalformedUsageWarning(malformedRecords)]
                 .filter(Boolean)
                 .join(" ")
             : sourceMessage,

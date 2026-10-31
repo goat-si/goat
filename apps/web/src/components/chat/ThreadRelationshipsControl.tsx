@@ -687,9 +687,7 @@ export function ThreadRelationshipsPanel(props: {
                 ? "group-hover:opacity-0 group-focus-within:opacity-0 pointer-coarse:opacity-0 [@media(hover:none)]:opacity-0"
                 : "";
               const project = projects.find((project) => project.id === node?.thread?.projectId);
-              const relationshipHint = node?.missing
-                ? "This related thread is unavailable"
-                : `Open ${relationship.toLowerCase()} in this chat`;
+              const relationshipHint = `Open ${relationship.toLowerCase()} in this chat`;
               const RelationshipPopup = agent ? ThreadHoverCardPopup : TooltipPopup;
               const relationshipTooltip = agent ? (
                 <SubagentTooltipContent
@@ -759,7 +757,6 @@ export function ThreadRelationshipsPanel(props: {
                         size="sm"
                         variant="ghost"
                         part={workflowGroup ? "primary" : "row"}
-                        disabled={node?.missing === true}
                         onClick={() => openThread(threadId)}
                       />
                     }
@@ -779,9 +776,6 @@ export function ThreadRelationshipsPanel(props: {
                     providers={providers}
                     driver={providerDriver}
                     onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
-                    isThreadAvailable={(memberThreadId) =>
-                      graph.nodes.get(memberThreadId as ThreadId)?.missing === false
-                    }
                     onStop={canStopWorkflow ? () => void stopWorkflow(agent.id) : undefined}
                     stopping={stoppingId === agent.id}
                     stopDisabled={stoppingId !== null}
@@ -807,7 +801,6 @@ export function ThreadRelationshipsPanel(props: {
                               variant="ghost"
                               part="primary"
                               aria-label={`${threadTitle} ${threadRelationshipStatusLabel(rowStatus)}`}
-                              disabled={node?.missing === true}
                               onClick={() => openThread(threadId)}
                             />
                           }
