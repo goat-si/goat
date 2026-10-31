@@ -1,18 +1,27 @@
 import { assert, it } from "@effect/vitest";
 import { COMPUTER_USE_LEASE_ROUTE, EnvironmentId, ProviderInstanceId } from "@goat/contracts";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import { HttpRouter } from "effect/http";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { callLayer, reportLayer } from "./ComputerUseLeaseRoute.ts";
+import { layer as routeLayer } from "./ComputerUseLeaseRoute.ts";
 import { database, fixture, serviceLayer } from "./ComputerUseCallReservations.testkit.ts";
-import { awaitHistory, refusalHistoryKey } from "./ComputerUseHistoryBackground.ts";
+import {
+  awaitHistory,
+  refusalHistoryKey,
+  registerHistoryTicket,
+  scheduleHistory,
+  settlementHistoryKey,
+} from "./ComputerUseHistoryBackground.ts";
 
 it.effect("accepts outcomes only for the authenticated thread and its control", () =>
   Effect.scoped(
@@ -42,7 +51,7 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
         }),
       );
       const services = Context.merge(current, registry);
-      const { handler, dispose } = HttpRouter.toWebHandler(Layer.merge(reportLayer, callLayer), {
+      const { handler, dispose } = HttpRouter.toWebHandler(routeLayer, {
         disableLogger: true,
       });
       const send = (controlId: string, reservationId?: string, proxyRefusal = false) =>
@@ -110,8 +119,24 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       assert.equal(pending[0]?.verdict, "unknown_outcome");
       assert.equal(pending[0]?.appId, "real.app");
       assert.equal((yield* send(f.second.controlId, ticket)).status, 409);
-      assert.equal((yield* send(f.first.controlId, ticket)).status, 204);
+      const gate = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      yield* scheduleHistory(
+        ticket,
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(gate))),
+      );
+      yield* Deferred.await(started);
+      const report = yield* send(f.first.controlId, ticket).pipe(
+        Effect.timeoutOption("2 seconds"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("3 seconds");
+      const responseBeforeWrite = yield* Fiber.join(report);
+      yield* Deferred.succeed(gate, undefined);
+      assert.isTrue(Option.isSome(responseBeforeWrite));
+      if (Option.isSome(responseBeforeWrite)) assert.equal(responseBeforeWrite.value.status, 204);
       assert.equal((yield* send(f.first.controlId, ticket)).status, 409);
+      yield* awaitHistory(settlementHistoryKey(ticket));
       const settled = yield* history.listForThread(f.a);
       assert.equal(settled[0]?.verdict, "sent");
       assert.equal(settled[0]?.appId, "real.app");
@@ -125,6 +150,40 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       assert.equal((yield* send(replacement.controlId, undefined, true)).status, 400);
       const proxyReported = yield* history.listForThread(f.a);
       assert.equal(proxyReported.length, 1);
+      const delayed = "ticket:delayed";
+      const delayedGate = yield* Deferred.make<void>();
+      const delayedStarted = yield* Deferred.make<void>();
+      yield* registerHistoryTicket(delayed, f.a, replacement.controlId);
+      yield* scheduleHistory(
+        delayed,
+        Deferred.succeed(delayedStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(delayedGate)),
+          Effect.andThen(
+            history.record({
+              threadId: f.a,
+              reservation: { id: delayed, controlId: replacement.controlId },
+              target: { kind: "app", id: "real.app", name: "Real app" },
+              method: "delayed_click",
+              verdict: "unknown_outcome",
+            }),
+          ),
+        ),
+      );
+      yield* Deferred.await(delayedStarted);
+      const delayedReport = yield* send(replacement.controlId, delayed).pipe(
+        Effect.timeoutOption("2 seconds"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("3 seconds");
+      const prompt = yield* Fiber.join(delayedReport);
+      assert.isTrue(Option.isSome(prompt));
+      if (Option.isSome(prompt)) assert.equal(prompt.value.status, 204);
+      yield* Deferred.succeed(delayedGate, undefined);
+      yield* awaitHistory(settlementHistoryKey(delayed));
+      const delayedEntry = (yield* history.listForThread(f.a)).find(
+        (entry) => entry.method === "delayed_click",
+      );
+      assert.equal(delayedEntry?.verdict, "sent");
       const denied = yield* Effect.promise(() =>
         handler(
           new Request("http://goat.test" + COMPUTER_USE_LEASE_ROUTE + "/calls", {

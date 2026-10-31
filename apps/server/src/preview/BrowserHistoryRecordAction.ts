@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import { pushBounded } from "./boundedBuffer.ts";
 import { browserFailure, recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
 import type { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import { scheduleHistory } from "../cua/ComputerUseHistoryBackground.ts";
 
 type Tab = {
   readonly threadId: string;
@@ -56,20 +57,33 @@ export function makeBrowserHistoryRecordAction(
         }),
       );
     };
+    const schedule = (outcome: {
+      verdict: "sent" | "refused" | "unknown_outcome";
+      refusalCode?: string;
+    }) => {
+      Effect.runFork(
+        scheduleHistory(
+          browserHistoryPrefix(tab.threadId) + event.id,
+          Effect.tryPromise(() => record(outcome)),
+        ),
+      );
+    };
     return execute().then(
-      async (result) => {
+      (result) => {
         event.status = "succeeded";
         event.completedAt = new Date().toISOString();
-        await record({ verdict: "sent" });
+        schedule({ verdict: "sent" });
         return result;
       },
-      async (cause: unknown) => {
+      (cause: unknown) => {
         event.status = "failed";
         event.completedAt = new Date().toISOString();
         event.error = tab.diagnostics.firstLine(cause);
-        await record(browserFailure(cause));
+        schedule(browserFailure(cause));
         throw cause;
       },
     );
   };
 }
+
+export const browserHistoryPrefix = (threadId: string) => `browser:${JSON.stringify(threadId)}:`;

@@ -1,5 +1,7 @@
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import { awaitHistoryPrefix } from "../cua/ComputerUseHistoryBackground.ts";
+import { browserHistoryPrefix } from "./BrowserHistoryRecordAction.ts";
 import * as NodeEvents from "node:events";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -263,6 +265,7 @@ it.live(
         expect(String(snapshot.accessibilityTree).startsWith("@layers none\n")).toBe(true);
         expect(snapshot.actionTimeline.map((entry) => entry.action)).toContain("scrollCollect");
         const history = yield* makeComputerUseHistory;
+        yield* awaitHistoryPrefix(browserHistoryPrefix(testThread.threadId));
         const entries = yield* history.listForThread(testThread.threadId);
         expect(entries.map((entry) => [entry.method, entry.tabHost, entry.verdict])).toEqual([
           ["scrollCollect", "app.example", "sent"],
@@ -282,6 +285,7 @@ it.live(
           operation: "open",
           input: { url: "https://second.example/private?secret=y", show: false },
         });
+        yield* awaitHistoryPrefix(browserHistoryPrefix(testThread.threadId));
         const navigations = (yield* history.listForThread(testThread.threadId)).filter(
           (entry) => entry.method === "navigate",
         );

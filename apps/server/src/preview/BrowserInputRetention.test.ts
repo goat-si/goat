@@ -5,9 +5,13 @@ import * as Queue from "effect/Queue";
 import { chromium } from "playwright-core";
 import { expect } from "vite-plus/test";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
+import { awaitHistoryPrefix } from "../cua/ComputerUseHistoryBackground.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
-import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
+import {
+  browserHistoryPrefix,
+  makeBrowserHistoryRecordAction,
+} from "./BrowserHistoryRecordAction.ts";
 import { makeBrowserInputRetention } from "./BrowserInputRetention.ts";
 import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
 import { browserHistoryTarget } from "./BrowserHistoryTarget.ts";
@@ -25,7 +29,7 @@ it.live("records trusted normal typing only with consent outside secret protecti
       }>();
       yield* Queue.take(requests).pipe(
         Effect.flatMap(({ effect, resolve, reject }) =>
-          effect.pipe(Effect.match({ onFailure: reject, onSuccess: resolve })),
+          effect.pipe(Effect.match({ onFailure: reject, onSuccess: resolve }), Effect.forkScoped),
         ),
         Effect.forever,
         Effect.forkScoped,
@@ -53,6 +57,7 @@ it.live("records trusted normal typing only with consent outside secret protecti
             () => ServerBrowserPage.click(page, { selector: "#save" }),
             targetLabel === undefined ? {} : { targetLabel },
           );
+          await run(awaitHistoryPrefix(browserHistoryPrefix(tab.threadId)));
           await page.setContent(
             '<input id="normal"><input id="password" type="password" value="private-secret"><div id="edit" contenteditable="true"></div>',
           );
@@ -75,6 +80,7 @@ it.live("records trusted normal typing only with consent outside secret protecti
                 }),
               { typedText: "hello", finishRetention: retention.finish },
             );
+            await run(awaitHistoryPrefix(browserHistoryPrefix(tab.threadId)));
           };
           await type("#normal", true, true);
           await type("#password", true, true);

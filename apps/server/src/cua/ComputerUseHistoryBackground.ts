@@ -1,8 +1,30 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import type * as Scope from "effect/Scope";
 
 const pending = new Map<string, Deferred.Deferred<void>>();
+const tickets = new Map<string, { readonly threadId: string; readonly controlId: string }>();
+const MAX_TICKETS = 10_000;
+
+export const registerHistoryTicket = (id: string, threadId: string, controlId: string) =>
+  Effect.sync(() => {
+    if (tickets.size >= MAX_TICKETS) {
+      const oldest = tickets.keys().next().value;
+      if (oldest !== undefined) tickets.delete(oldest);
+    }
+    tickets.set(id, { threadId, controlId });
+  });
+
+export const claimHistoryTicket = (id: string, threadId: string, controlId: string) =>
+  Effect.sync(() => {
+    const ticket = tickets.get(id);
+    if (ticket?.threadId !== threadId || ticket.controlId !== controlId) return false;
+    tickets.delete(id);
+    return true;
+  });
+
+export const settlementHistoryKey = (ticket: string) => `settlement:${ticket}`;
 export const refusalHistoryKey = (
   threadId: string,
   controlId: string,
@@ -13,10 +35,11 @@ export const refusalHistoryKey = (
 export const scheduleHistory = Effect.fn("ComputerUseHistory.schedule")(function* <E, R>(
   key: string | undefined,
   write: Effect.Effect<void, E, R>,
+  scope?: Scope.Scope,
 ) {
   const done = yield* Deferred.make<void>();
   if (key !== undefined) pending.set(key, done);
-  yield* write.pipe(
+  const task = write.pipe(
     Effect.interruptible,
     Effect.timeoutOption("5 seconds"),
     Effect.flatMap((result) =>
@@ -30,8 +53,9 @@ export const scheduleHistory = Effect.fn("ComputerUseHistory.schedule")(function
         if (key !== undefined && pending.get(key) === done) pending.delete(key);
       }).pipe(Effect.andThen(Deferred.succeed(done, undefined)), Effect.asVoid),
     ),
-    Effect.forkDetach,
   );
+  if (scope === undefined) yield* Effect.forkDetach(task);
+  else yield* Effect.forkIn(task, scope);
 });
 
 export const awaitHistory = (key: string) =>
@@ -39,3 +63,12 @@ export const awaitHistory = (key: string) =>
     const write = pending.get(key);
     return write === undefined ? Effect.void : Deferred.await(write);
   });
+
+export const awaitHistoryPrefix = (prefix: string) =>
+  Effect.suspend(() =>
+    Effect.forEach(
+      [...pending.entries()].filter(([key]) => key.startsWith(prefix)),
+      ([, write]) => Deferred.await(write),
+      { discard: true, concurrency: "unbounded" },
+    ),
+  );

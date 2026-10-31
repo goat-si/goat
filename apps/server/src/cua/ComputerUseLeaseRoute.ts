@@ -32,6 +32,7 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
@@ -55,8 +56,11 @@ import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 import { recordAdmittedCall } from "./ComputerUseHistoryAdmission.ts";
 import {
   awaitHistory,
+  claimHistoryTicket,
+  registerHistoryTicket,
   refusalHistoryKey,
   scheduleHistory,
+  settlementHistoryKey,
 } from "./ComputerUseHistoryBackground.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
@@ -216,93 +220,99 @@ const decodeReport = Schema.decodeUnknownEffect(Schema.fromJsonString(ComputerUs
  * report for a control that is not the thread's live one, such as an old proxy's after its
  * control was replaced, changes nothing.
  */
-export const reportLayer = HttpRouter.add(
-  "POST",
-  COMPUTER_USE_LEASE_ROUTE,
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const threadId = yield* threadOf;
-    if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
-    const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
-    if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
-    const value = report.value;
-    if ("browserClaimsSupported" in value || "browserClaimEnded" in value) {
-      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
-      if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
-      const result = yield* (
-        "browserClaimsSupported" in value
-          ? value.browserClaimsSupported
-            ? Effect.void
-            : grants.value.setDriverCapability(false)
-          : grants.value.end(
-              threadId,
-              value.browserClaimEnded.claimId,
-              value.browserClaimEnded.claimGeneration,
-              value.browserClaimEnded.reason,
-            )
-      ).pipe(Effect.option);
-      return HttpServerResponse.empty({ status: Option.isSome(result) ? 204 : 503 });
-    }
-    if ("driverEnded" in value) {
-      const connections = yield* Effect.serviceOption(
-        ComputerUseAgentConnections.ComputerUseAgentConnections,
-      );
-      if (Option.isSome(connections))
-        yield* connections.value.report(
-          value.driverEnded === false ? false : { reason: value.driverEnded.reason },
-        );
-      return HttpServerResponse.empty({ status: 204 });
-    }
-    const leases = yield* ComputerUseLeases.ComputerUseLeases;
-    if ("type" in value) {
-      const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
-      if (Option.isNone(sql)) {
-        yield* Effect.logWarning("Computer use history storage unavailable");
-        return HttpServerResponse.empty({ status: 503 });
+const makeReportLayer = (serverScope?: Scope.Scope) =>
+  HttpRouter.add(
+    "POST",
+    COMPUTER_USE_LEASE_ROUTE,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const threadId = yield* threadOf;
+      if (threadId === undefined) return HttpServerResponse.empty({ status: 401 });
+      const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
+      if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
+      const value = report.value;
+      if ("browserClaimsSupported" in value || "browserClaimEnded" in value) {
+        const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+        if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
+        const result = yield* (
+          "browserClaimsSupported" in value
+            ? value.browserClaimsSupported
+              ? Effect.void
+              : grants.value.setDriverCapability(false)
+            : grants.value.end(
+                threadId,
+                value.browserClaimEnded.claimId,
+                value.browserClaimEnded.claimGeneration,
+                value.browserClaimEnded.reason,
+              )
+        ).pipe(Effect.option);
+        return HttpServerResponse.empty({ status: Option.isSome(result) ? 204 : 503 });
       }
-      const history = yield* makeComputerUseHistory.pipe(
-        Effect.provideService(SqlClient.SqlClient, sql.value),
-      );
-      if (value.reservationId === undefined) return HttpServerResponse.empty({ status: 409 });
-      yield* awaitHistory(value.reservationId);
-      const saved = yield* history
-        .settle({
-          threadId,
-          controlId: value.controlId,
-          reservationId: value.reservationId,
-          verdict: value.verdict,
-          ...(value.refusalCode === undefined ? {} : { refusalCode: value.refusalCode }),
-        })
-        .pipe(
-          Effect.tapError((cause) =>
-            Effect.logWarning("Computer use history settlement failed", { cause }),
-          ),
-          Effect.option,
+      if ("driverEnded" in value) {
+        const connections = yield* Effect.serviceOption(
+          ComputerUseAgentConnections.ComputerUseAgentConnections,
         );
-      return HttpServerResponse.empty({
-        status: Option.isNone(saved) ? 503 : saved.value ? 204 : 409,
-      });
-    }
-    if ("humanInput" in value) {
-      const outcome = yield* leases.humanInput(
-        threadId,
-        value.controlId,
-        Array.isArray(value.humanInput) ? value.humanInput : [value.humanInput],
-      );
-      // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
-      // keeps reporting after a 202 (another agent's input) or a 409.
-      return HttpServerResponse.empty({
-        status: outcome === "paused" ? 204 : outcome === "agents" ? 202 : 409,
-      });
-    }
-    const recorded =
-      "agentInput" in value
-        ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
-        : yield* leases.setTarget(threadId, value.controlId, value);
-    return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
-    // Untraced like its request (http.ts): a pointer streaming moves reports many times a second.
-  }).pipe(Effect.withTracerEnabled(false)),
-);
+        if (Option.isSome(connections))
+          yield* connections.value.report(
+            value.driverEnded === false ? false : { reason: value.driverEnded.reason },
+          );
+        return HttpServerResponse.empty({ status: 204 });
+      }
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      if ("type" in value) {
+        const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
+        if (Option.isNone(sql)) {
+          yield* Effect.logWarning("Computer use history storage unavailable");
+          return HttpServerResponse.empty({ status: 503 });
+        }
+        const history = yield* makeComputerUseHistory.pipe(
+          Effect.provideService(SqlClient.SqlClient, sql.value),
+        );
+        if (value.reservationId === undefined) return HttpServerResponse.empty({ status: 409 });
+        const reservationId = value.reservationId;
+        if (!(yield* claimHistoryTicket(reservationId, threadId, value.controlId)))
+          return HttpServerResponse.empty({ status: 409 });
+        yield* scheduleHistory(
+          settlementHistoryKey(reservationId),
+          awaitHistory(reservationId).pipe(
+            Effect.andThen(
+              history.settle({
+                threadId,
+                controlId: value.controlId,
+                reservationId,
+                verdict: value.verdict,
+                ...(value.refusalCode === undefined ? {} : { refusalCode: value.refusalCode }),
+              }),
+            ),
+            Effect.flatMap((saved) =>
+              saved ? Effect.void : Effect.logWarning("Computer use history ticket has no entry"),
+            ),
+          ),
+          serverScope,
+        );
+        return HttpServerResponse.empty({ status: 204 });
+      }
+      if ("humanInput" in value) {
+        const outcome = yield* leases.humanInput(
+          threadId,
+          value.controlId,
+          Array.isArray(value.humanInput) ? value.humanInput : [value.humanInput],
+        );
+        // 204 only when it paused the agents: the proxy stops reporting for that helper then, and
+        // keeps reporting after a 202 (another agent's input) or a 409.
+        return HttpServerResponse.empty({
+          status: outcome === "paused" ? 204 : outcome === "agents" ? 202 : 409,
+        });
+      }
+      const recorded =
+        "agentInput" in value
+          ? yield* leases.agentInput(threadId, value.controlId, value.agentInput)
+          : yield* leases.setTarget(threadId, value.controlId, value);
+      return HttpServerResponse.empty({ status: recorded ? 204 : 409 });
+      // Untraced like its request (http.ts): a pointer streaming moves reports many times a second.
+    }).pipe(Effect.withTracerEnabled(false)),
+  );
+export const reportLayer = makeReportLayer();
 
 const streamLayer = HttpRouter.add(
   "GET",
@@ -505,6 +515,7 @@ export const callLayer = HttpRouter.add(
           const history = yield* makeComputerUseHistory.pipe(
             Effect.provideService(SqlClient.SqlClient, sql.value),
           );
+          yield* registerHistoryTicket(reservationId, threadId, call.value.controlId);
           yield* scheduleHistory(
             reservationId,
             recordAdmittedCall(history, threadId, call.value, { reservationId }),
@@ -608,11 +619,16 @@ const controlCutoffLayer = HttpRouter.add(
   }),
 );
 
-export const layer = Layer.mergeAll(
-  streamLayer,
-  reportLayer,
-  callLayer,
-  primitiveReplyLayer,
-  controlReadyLayer,
-  controlCutoffLayer,
+export const layer = Layer.unwrap(
+  Effect.gen(function* () {
+    const serverScope = yield* Effect.scope;
+    return Layer.mergeAll(
+      streamLayer,
+      makeReportLayer(serverScope),
+      callLayer,
+      primitiveReplyLayer,
+      controlReadyLayer,
+      controlCutoffLayer,
+    );
+  }),
 );
