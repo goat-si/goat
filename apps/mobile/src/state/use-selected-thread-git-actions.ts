@@ -54,6 +54,7 @@ export function useSelectedThreadGitActions() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const readRefs = useAtomCommand(vcsEnvironment.readRefs, { reportFailure: false });
   const refreshStatus = useAtomCommand(vcsEnvironment.refreshStatus, { reportFailure: false });
   const switchRef = useAtomCommand(vcsEnvironment.switchRef, { reportFailure: false });
   const createRef = useAtomCommand(vcsEnvironment.createRef, { reportFailure: false });
@@ -213,12 +214,25 @@ export function useSelectedThreadGitActions() {
     [selectedThread, selectedThreadCwd, selectedThreadProject],
   );
 
-  const refreshSelectedThreadBranches = useCallback(async (): Promise<ReadonlyArray<VcsRef>> => {
-    branchState.refresh();
-    return dedupeRemoteBranchesWithLocalMatches(branchState.data?.refs ?? []).filter(
-      (branch) => !branch.isRemote,
-    );
-  }, [branchState]);
+  const refreshSelectedThreadBranches =
+    useCallback(async (): Promise<ReadonlyArray<VcsRef> | null> => {
+      if (branchTarget.environmentId === null || branchTarget.cwd === null) return null;
+      const result = await readRefs({
+        environmentId: branchTarget.environmentId,
+        input: { cwd: branchTarget.cwd, limit: 100, refresh: true },
+      });
+      if (AsyncResult.isFailure(result)) {
+        const error = Cause.squash(result.cause);
+        const message = error instanceof Error ? error.message : "Failed to refresh branches.";
+        setPendingConnectionError(message);
+        showGitActionResult({ type: "error", title: "Git action failed", description: message });
+        return null;
+      }
+      setPendingConnectionError(null);
+      return dedupeRemoteBranchesWithLocalMatches(result.value.refs).filter(
+        (branch) => !branch.isRemote,
+      );
+    }, [branchTarget, readRefs]);
 
   const syncSelectedThreadBranchState = useCallback(
     async (input: {

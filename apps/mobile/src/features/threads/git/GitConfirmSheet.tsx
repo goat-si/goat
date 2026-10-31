@@ -14,7 +14,6 @@ import { ScreenContent } from "../../../components/ui/ScreenContent";
 import { NativeStackScreenOptions } from "../../../native/StackHeader";
 import { AppText as Text } from "../../../components/ui/AppText";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
-import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { SheetActionButton } from "./gitSheetComponents";
 
@@ -32,7 +31,6 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const { canWriteSourceControl, canChangeThreadBranch } = gitActions;
   const { selectedThreadProject } = useThreadSelection();
@@ -98,10 +96,8 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
       return;
     }
 
-    const branches =
-      gitState.selectedThreadBranches.length > 0
-        ? gitState.selectedThreadBranches
-        : await gitActions.refreshSelectedThreadBranches();
+    const branches = await gitActions.refreshSelectedThreadBranches();
+    if (branches === null) return;
     const newBranchName = resolveAutoFeatureBranchName(
       Arr.filterMap(branches, (branch) =>
         branch.isRemote ? Result.failVoid : Result.succeed(branch.name),
@@ -114,7 +110,6 @@ export function GitConfirmSheet(props: GitConfirmSheetProps) {
     canChangeThreadBranch,
     confirmAction,
     gitActions,
-    gitState.selectedThreadBranches,
     includesCommit,
     params,
     navigation,
