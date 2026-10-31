@@ -133,6 +133,28 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect("an old lock cutoff cannot poison a newer driver generation", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(2)));
+      assert.isTrue(
+        yield* f.channel.reportControlCutoff({ ...f.report(1), terminal: "screen_locked" }),
+      );
+      const pending = yield* f.request().pipe(Effect.forkChild);
+      const delivered = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: f.registered.registrationId,
+          reply: { ...delivered, status: "settled", result: { ok: true } },
+        }),
+      );
+      const answer = yield* Fiber.join(pending);
+      assert.equal(answer.status, "settled");
+      assert.deepEqual(answer.result, { ok: true });
+    }),
+  );
   it.effect("a terminal driver cutoff settles before a delayed stop report", () =>
     Effect.gen(function* () {
       const f = yield* fixture();

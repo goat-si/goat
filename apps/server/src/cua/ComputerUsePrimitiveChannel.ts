@@ -629,7 +629,8 @@ export const make = Effect.gen(function* () {
           record.binding.connectionId !== input.connectionId
         )
           return false;
-        if (input.terminal !== undefined) record.terminal ??= input.terminal;
+        if (input.terminal !== undefined && input.driverGeneration >= record.maxAcceptedGeneration)
+          record.terminal ??= input.terminal;
         record.maxCutoffGeneration = input.driverGeneration;
         if (record.binding !== undefined && record.binding.generation <= input.driverGeneration)
           clear(registered, record);
