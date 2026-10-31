@@ -32,6 +32,7 @@ export interface PreviewAddressBarProps {
   disabled?: boolean | undefined;
   inputRef?: RefObject<HTMLInputElement | null>;
   onSubmit: (url: string) => void;
+  onInvalidInput?: ((url: string) => void) | undefined;
   /** False means a result closed between rendering and selection. */
   onActivateTab: (tabId: string) => boolean;
   onOpenInBrowser?: (() => void) | undefined;
@@ -69,6 +70,7 @@ export function PreviewAddressBar(props: PreviewAddressBarProps) {
       props.onSubmit(url);
       dismiss();
     } catch {
+      props.onInvalidInput?.(url);
       return;
     }
   };
