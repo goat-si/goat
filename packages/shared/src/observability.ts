@@ -9,6 +9,8 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Tracer from "effect/Tracer";
 import { OtlpResource, OtlpTracer, OtlpSerialization } from "effect/observability";
 
+import { redactUrlCredentials, redactCauseCredentials } from "./urlCredentialRedaction.ts";
+
 import { makeTraceSink } from "./traceSink.ts";
 export { makeTraceSink } from "./traceSink.ts";
 
@@ -343,9 +345,10 @@ function traceExitOf(
   redactCause: LocalFileTracerOptions["redactCause"],
 ): Exit.Exit<unknown, unknown> {
   if (ExitRuntime.isSuccess(exit)) return ExitRuntime.void;
-  if (redactCause === undefined) return exit;
   try {
-    return ExitRuntime.failCause(redactCause(exit.cause));
+    return ExitRuntime.failCause(
+      redactCauseCredentials(redactCause ? redactCause(exit.cause) : exit.cause),
+    );
   } catch {
     // A redactor that fails must not let the unredacted cause through.
     return ExitRuntime.die(new Error("span cause could not be redacted"));
@@ -514,12 +517,20 @@ class LocalFileSpan implements Tracer.Span {
   }
 
   attribute(key: string, value: unknown): void {
-    this.attributes.set(key, value);
-    this.delegate.attribute(key, value);
+    const recorded =
+      (key === "url.full" || key === "url.query") && typeof value === "string"
+        ? redactUrlCredentials(value)
+        : value;
+    this.attributes.set(key, recorded);
+    this.delegate.attribute(key, recorded);
   }
 
   event(name: string, startTime: bigint, attributes?: Record<string, unknown>): void {
-    const nextAttributes = attributes ?? {};
+    const cause = attributes?.["effect.cause"];
+    const nextAttributes =
+      typeof cause === "string"
+        ? { ...attributes, "effect.cause": redactUrlCredentials(cause) }
+        : (attributes ?? {});
     this.events.push([name, startTime, nextAttributes]);
     this.delegate.event(name, startTime, nextAttributes);
   }
