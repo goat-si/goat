@@ -104,6 +104,7 @@ export const ForgejoCommit = Schema.Struct({
   ),
 });
 export const ForgejoStatus = Schema.Struct({
+  id: Schema.optional(Schema.Int),
   context: Schema.String,
   status: Schema.String,
   description: Schema.NullOr(Schema.String),
@@ -241,6 +242,7 @@ export function forgejoChecks(
     statuses.map((status) => ({
       workflowName: null,
       at: status.updated_at,
+      ...(status.id === undefined ? {} : { sequence: status.id }),
       check: {
         name: status.context || "check",
         description: status.description || null,
