@@ -37,7 +37,7 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 // Diff text uses + added, ~ changed and - removed rows; unchanged rows keep the numbers they had in the previous observation.
-// obs.ref(n) holds an element across awaits; refused unsent (stale_reference) after the target is read again (observe({after}) pages keep it). Bare numbers always mean the latest observation.
+// obs.ref(n) holds an element across awaits, passed as the target argument itself; refused unsent (stale_reference) after the target is read again (observe({after}) pages keep it). Bare numbers always mean the latest observation. Arguments are plain data.
 interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?: string; // first post-input diff: window evidence, not proof of the intended effect
   text: string; observationId: string; snapshot?: string; mode: "full" | "diff" | "query"; baseObservationId?: string;
   targetRef: { id: string; kind: "app" | "tab"; generation: number };
