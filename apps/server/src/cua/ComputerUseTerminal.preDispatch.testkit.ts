@@ -9,6 +9,8 @@ import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { makeProxyCallScope } from "./ComputerUseLeaseProxyPointBasis.ts";
 import { finalTerminalLine, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { forwardPrimitiveRequests } from "./ComputerUseLeaseProxyOptions.ts";
+import { call } from "./ComputerUseLeaseProxy.testkit.ts";
+import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
 import {
   replaceWithTerminal,
   terminalReplyState,
@@ -84,7 +86,34 @@ const deadline = (input: Input) =>
     return replaceWithTerminal(terminalReplyState(reply.result, reply.status));
   });
 
+const supervisor = (kind: "reserved" | "notReady") => (input: Input) =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    let stopped = false;
+    for (const reason of input.reasons) {
+      if (reason === "stopped_by_person") {
+        yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+        stopped = true;
+      } else {
+        yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+        if (!stopped) yield* h.applied;
+      }
+    }
+    yield* h.send(call(kind === "reserved" ? "goat-proxy:reserved" : 1, "list_apps"));
+    const answer = yield* h.next;
+    return replaceWithTerminal(terminalReplyState(answer.result));
+  });
+
 export const preDispatchSites = [
+  {
+    name: "ComputerUseLeaseProxyThread.reservedId",
+    undispatched: true,
+    run: supervisor("reserved"),
+  },
+  { name: "ComputerUseLeaseProxyThread.notReady", undispatched: true, run: supervisor("notReady") },
   { name: "ComputerUseLeaseProxyOptions.queuedDeadline", undispatched: true, run: deadline },
   { name: "ComputerUseLeaseProxyBatch.scope", undispatched: true, run: unsupported("batch") },
   { name: "ComputerUseLeaseProxyPointBasis.check", undispatched: true, run: unsupported("point") },
