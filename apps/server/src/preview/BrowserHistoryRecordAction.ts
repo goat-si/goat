@@ -21,7 +21,12 @@ export function makeBrowserHistoryRecordAction(
     tab: Tab,
     action: string,
     execute: () => Promise<A>,
-    details?: { url?: string; typedText?: string; finishRetention?: () => Promise<boolean> },
+    details?: {
+      url?: string;
+      typedText?: string;
+      targetLabel?: string;
+      finishRetention?: () => Promise<boolean>;
+    },
   ): Promise<A> => {
     const event: {
       -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
@@ -44,6 +49,7 @@ export function makeBrowserHistoryRecordAction(
           threadId: tab.threadId,
           url: action === "back" || action === "forward" ? tab.page.url() : url,
           action,
+          ...(details?.targetLabel === undefined ? {} : { targetLabel: details.targetLabel }),
           ...outcome,
           ...(details?.typedText === undefined ? {} : { typedText: details.typedText }),
           ...(keep ? { keepTypedText: true, normalField: true, secretProtected: false } : {}),

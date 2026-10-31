@@ -21,6 +21,7 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
     readonly action: string;
     readonly verdict: "sent" | "refused" | "unknown_outcome";
     readonly refusalCode?: string;
+    readonly targetLabel?: string;
     readonly typedText?: string;
     readonly keepTypedText?: boolean;
     readonly normalField?: boolean;
@@ -33,6 +34,7 @@ export const recordBrowserAction = Effect.fn("ComputerUseHistory.recordBrowserAc
     target: { kind: "tab", host },
     method: input.action,
     verdict: input.verdict,
+    ...(input.targetLabel === undefined ? {} : { targetLabel: input.targetLabel.slice(0, 80) }),
     ...(input.refusalCode === undefined ? {} : { refusalCode: input.refusalCode }),
     ...(input.typedText === undefined
       ? {}

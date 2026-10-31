@@ -14,6 +14,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("browser history", (i
         threadId: "thread:a",
         url: "https://user:password@example.test/private?token=secret#fragment",
         action: "click",
+        targetLabel: "button: Save",
         verdict: "sent",
       });
       yield* recordBrowserAction(history, {
@@ -29,6 +30,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("browser history", (i
       const entry = entries[1];
       assert.equal(entry?.tabHost, "example.test");
       assert.equal(entry?.method, "click");
+      assert.equal(entry?.targetLabel, "button: Save");
       assert.deepEqual(yield* history.listForThread("thread:b"), []);
     }),
   );

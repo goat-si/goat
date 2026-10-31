@@ -10,6 +10,7 @@ import { recordBrowserAction } from "./ComputerUseHistoryBrowser.ts";
 import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
 import { makeBrowserInputRetention } from "./BrowserInputRetention.ts";
 import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
+import { browserHistoryTarget } from "./BrowserHistoryTarget.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 it.live("records trusted normal typing only with consent outside secret protection", () =>
@@ -44,9 +45,18 @@ it.live("records trusted normal typing only with consent outside secret protecti
             actionTimeline: [],
             diagnostics: { firstLine: (cause: unknown) => String(cause) },
           };
+          await page.setContent('<button id="save" aria-label="Save">Save</button>');
+          const targetLabel = await browserHistoryTarget(page, { selector: "#save" });
+          await record(tab, "click", () => ServerBrowserPage.click(page, { selector: "#save" }), {
+            ...(targetLabel === undefined ? {} : { targetLabel }),
+          });
           await page.setContent(
-            '<input id="normal"><input id="password" type="password"><div id="edit" contenteditable="true"></div>',
+            '<input id="normal"><input id="password" type="password" value="private-secret"><div id="edit" contenteditable="true"></div>',
           );
+          const passwordLabel = await browserHistoryTarget(page, { selector: "#password" });
+          expect(passwordLabel).toBe("textbox");
+          expect(passwordLabel).not.toContain("private-secret");
+          await page.locator("#password").fill("");
           const type = async (selector: string, consent: boolean, safe: boolean) => {
             const retention = makeBrowserInputRetention(
               () => startBrowserInputEvidence(page),
@@ -78,8 +88,14 @@ it.live("records trusted normal typing only with consent outside secret protecti
         }
       });
       expect(
-        (yield* history.listForThread("thread:retention")).map((row) => row.typedText),
+        (yield* history.listForThread("thread:retention"))
+          .filter((row) => row.method === "type")
+          .map((row) => row.typedText),
       ).toEqual([null, null, "hello", null, null, "hello"]);
+      expect(
+        (yield* history.listForThread("thread:retention")).find((row) => row.method === "click")
+          ?.targetLabel,
+      ).toBe("button: Save");
     }),
   ).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

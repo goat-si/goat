@@ -97,6 +97,7 @@ import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { makeComputerUseHistory } from "../cua/ComputerUseHistory.ts";
 import { makeBrowserHistoryRecordAction } from "./BrowserHistoryRecordAction.ts";
+import { browserHistoryTarget } from "./BrowserHistoryTarget.ts";
 import { makeBrowserInputRetention } from "./BrowserInputRetention.ts";
 import { startBrowserInputEvidence } from "./BrowserInputEvidence.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -1905,8 +1906,14 @@ const make = Effect.gen(function* () {
         );
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
-        const { effect, evidence, pressesCompleted } = await recordAction(tab, "click", () =>
-          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
+        const targetLabel = secretFill.historySafe(tab, request.threadId)
+          ? await browserHistoryTarget(tab.page, clickInput)
+          : undefined;
+        const { effect, evidence, pressesCompleted } = await recordAction(
+          tab,
+          "click",
+          () => ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
+          targetLabel === undefined ? {} : { targetLabel: tab.diagnostics.mask(targetLabel) },
         );
         return {
           effect,
