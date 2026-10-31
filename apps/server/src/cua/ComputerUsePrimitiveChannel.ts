@@ -545,6 +545,19 @@ export const make = Effect.gen(function* () {
         controls: new Map(),
       };
       value.registration = registered;
+      const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
+      if (current !== undefined) {
+        const state = yield* leases
+          .controlState(input.threadId, current.controlId)
+          .pipe(Effect.option);
+        const terminal =
+          terminalReason(undefined, Option.getOrUndefined(state)) ??
+          terminalReason(
+            undefined,
+            current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+          );
+        if (terminal !== undefined) control(registered, current.controlId).terminal = terminal;
+      }
       const requests = Stream.merge(
         Stream.merge(Stream.fromQueue(queue), Stream.fromQueue(cancellations)),
         Stream.fromQueue(cursors),
