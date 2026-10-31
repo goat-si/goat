@@ -4,7 +4,13 @@ import * as Effect from "effect/Effect";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import type { ComputerUsePrimitiveReply, ComputerUsePrimitiveRequest } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  type ComputerUsePrimitiveReply,
+  type ComputerUsePrimitiveRequest,
+} from "@goat/contracts";
 import { parse } from "./ComputerUseLeaseProtocol.ts";
 import { makeProxyCallScope } from "./ComputerUseLeaseProxyPointBasis.ts";
 import { finalTerminalLine, terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
@@ -12,6 +18,8 @@ import { forwardPrimitiveRequests } from "./ComputerUseLeaseProxyOptions.ts";
 import { call } from "./ComputerUseLeaseProxy.testkit.ts";
 import { snapshot, threadHarness } from "./ComputerUseLeaseProxyThread.testkit.ts";
 import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
+import { ScreenHostBridge } from "../screenCode/ScreenHostBridge.ts";
+import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 import {
   replaceWithTerminal,
   terminalReplyState,
@@ -223,7 +231,48 @@ const retiredPrimitive = (input: Input) =>
     return replaceWithTerminal(terminalReplyState(answer.result, answer.status));
   });
 
+const fencedCell = (input: Input) =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    for (const reason of input.reasons) bridge.cutCellNow("run", "turn", "cell", reason);
+    const answer = yield* bridge.handle(
+      {
+        t: "call",
+        runId: "run",
+        turnId: "turn",
+        cellId: "cell",
+        callId: 1,
+        method: "list_apps",
+        args: {},
+        deadlineMillis: 60000,
+      },
+      {
+        runId: "run",
+        turnId: "turn",
+        cellId: "cell",
+        threadId: "thread",
+        environmentId: "env",
+        limits: screenRunLimits(),
+        invocation: {
+          environmentId: EnvironmentId.make("env"),
+          capabilities: new Set<"preview">(),
+          issuedAt: 0,
+          requestNamespace: "test",
+          client: undefined,
+          thread: {
+            threadId: ThreadId.make("thread"),
+            providerSessionId: "s",
+            providerInstanceId: ProviderInstanceId.make("p"),
+          },
+        },
+      },
+    );
+    if (answer?.outcome !== "error") return yield* Effect.die("expected fenced cell refusal");
+    return replaceWithTerminal(answer.error);
+  });
+
 export const preDispatchSites = [
+  { name: "ScreenHostBridge.fencedCell", undispatched: true, run: fencedCell },
   {
     name: "ComputerUseLeaseProxyRefusal.automationFinished",
     undispatched: true,
