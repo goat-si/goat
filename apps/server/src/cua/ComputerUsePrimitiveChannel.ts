@@ -814,6 +814,7 @@ export const make = Effect.gen(function* () {
         const registered = value?.registration;
         const record =
           registered === undefined ? undefined : control(registered, current.controlId);
+        // Nothing may yield between this check and the minimum-time or unbound refusals.
         const capturedFailure = terminalFailure(
           replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
           input.tool,
