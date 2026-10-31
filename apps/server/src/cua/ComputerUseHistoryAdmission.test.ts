@@ -41,5 +41,26 @@ it.effect("does not persist typed secrets supplied in desktop target metadata", 
       JSON.stringify(yield* sql`SELECT * FROM computer_use_input_history`),
       "private-secret",
     );
+    yield* recordAdmittedCall(
+      history,
+      threadId,
+      {
+        action: "reserve",
+        controlId: "control:private",
+        connectionId: "connection:private",
+        callId: "2",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { target: { role: "private-secret" } },
+      },
+      { reservationId: "ticket:role" },
+    );
+    const after = yield* history.listForThread(threadId);
+    assert.isNull(after[0]?.targetLabel);
+    assert.notInclude(
+      JSON.stringify(yield* sql`SELECT * FROM computer_use_input_history`),
+      "private-secret",
+    );
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
