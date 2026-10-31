@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../persistence/Migrations.ts";
 import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 
@@ -104,8 +105,13 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("computer use history
       } as const;
       yield* history.record(entry);
       yield* TestClock.adjust("31 days");
+      assert.equal((yield* history.listForThread("thread:a")).length, 0);
       yield* history.record(entry);
-      yield* history.prune;
+      const sql = yield* SqlClient.SqlClient;
+      const stored = yield* sql<{
+        count: number;
+      }>`SELECT count(*) AS count FROM computer_use_input_history`;
+      assert.equal(stored[0]?.count, 1);
       const entries = yield* history.listForThread("thread:a");
       assert.equal(entries.length, 1);
       assert.equal(entries[0]?.tabHost, "example.test");

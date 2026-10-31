@@ -45,6 +45,8 @@ export const makeComputerUseHistory = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const record = Effect.fn("ComputerUseHistory.record")(function* (entry: HistoryInput) {
     const now = yield* Clock.currentTimeMillis;
+    yield* sql`DELETE FROM computer_use_input_history WHERE id IN
+      (SELECT id FROM computer_use_input_history WHERE recorded_at < ${now - RETENTION_MS} LIMIT 500)`;
     const input = entry.typed;
     const typed =
       input === undefined
@@ -87,11 +89,13 @@ export const makeComputerUseHistory = Effect.gen(function* () {
     const beforeTime = options?.before?.recordedAt ?? 0;
     const beforeId = options?.before?.id ?? 0;
     const firstPage = options?.before === undefined ? 1 : 0;
+    const now = yield* Clock.currentTimeMillis;
     return yield* sql<HistoryEntry>`SELECT id, thread_id AS threadId, recorded_at AS recordedAt,
       target_kind AS targetKind, app_id AS appId, app_name AS appName, tab_host AS tabHost,
       method, target_label AS targetLabel, verdict, refusal_code AS refusalCode,
       typed_length AS typedLength, typed_text AS typedText
       FROM computer_use_input_history WHERE thread_id = ${threadId}
+      AND recorded_at >= ${now - RETENTION_MS}
       AND (${firstPage} = 1 OR recorded_at < ${beforeTime} OR (recorded_at = ${beforeTime} AND id < ${beforeId}))
       ORDER BY recorded_at DESC, id DESC LIMIT ${limit}`;
   });
