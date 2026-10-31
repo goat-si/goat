@@ -310,7 +310,8 @@ const fencedCell = (input: Input) =>
   });
 
 const channelRefusal =
-  (kind: "retainedWaiter" | "authority" | "activeRace" | "activeRaceClosed") => (input: Input) =>
+  (kind: "retainedWaiter" | "authority" | "activeRace" | "activeRaceClosed" | "replacedRace") =>
+  (input: Input) =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("matrix:channel");
       const signals = yield* PubSub.unbounded<void>();
@@ -323,6 +324,7 @@ const channelRefusal =
       yield* Effect.addFinalizer(() => Deferred.succeed(admissionGate, undefined));
       let armed = false;
       let reads = 0;
+      let currentControlId = "A";
       let notify: Parameters<
         NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
       >[0] = () => {};
@@ -330,10 +332,12 @@ const channelRefusal =
         Effect.provide(
           Layer.mock(ComputerUseLeases.ComputerUseLeases)({
             proxy: undefined,
-            currentControl: () => Effect.succeedSome({ threadId, controlId: "A", expiresAt }),
-            controlState: () => {
+            currentControl: () =>
+              Effect.succeedSome({ threadId, controlId: currentControlId, expiresAt }),
+            controlState: (_thread, controlId) => {
               const activeRace = kind === "activeRace" || kind === "activeRaceClosed";
               if (activeRace && armed) reads++;
+              if (kind === "replacedRace" && controlId === "B") reads++;
               const state: ComputerUseLeases.ComputerUseControlState =
                 kind === "authority" || (activeRace && armed && reads >= 2)
                   ? reason === "stopped_by_person"
@@ -347,6 +351,11 @@ const channelRefusal =
                       wakeAt: 60000,
                     };
               if (activeRace && armed && reads === 2)
+                return Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(admissionGate)),
+                  Effect.as(state),
+                );
+              if (kind === "replacedRace" && controlId === "B" && reads === 2)
                 return Deferred.succeed(entered, undefined).pipe(
                   Effect.andThen(Deferred.await(admissionGate)),
                   Effect.as(state),
@@ -403,7 +412,25 @@ const channelRefusal =
           Effect.result,
           Effect.forkChild({ startImmediately: true }),
         );
-      if (kind === "activeRace" || kind === "activeRaceClosed") {
+      if (kind === "replacedRace") {
+        currentControlId = "B";
+        yield* channel.reportControlReady({
+          ...authority,
+          registrationId: registered.registrationId,
+          controlId: "B",
+          connectionId: "new",
+          driverGeneration: 1,
+        });
+        yield* Deferred.await(entered);
+        for (const terminal of input.reasons)
+          notify({
+            kind: terminal === "screen_locked" ? "pause" : "stop",
+            threadId,
+            controlId: "A",
+            terminal,
+          });
+        yield* Deferred.succeed(admissionGate, undefined);
+      } else if (kind === "activeRace" || kind === "activeRaceClosed") {
         yield* Deferred.await(entered);
         if (kind === "activeRaceClosed")
           yield* channel.closeStream({ threadId, registrationId: registered.registrationId });
@@ -649,6 +676,11 @@ export const preDispatchSites: ReadonlyArray<{
     name: "ComputerUsePrimitiveChannel.activeRaceClosed",
     undispatched: true,
     run: channelRefusal("activeRaceClosed"),
+  },
+  {
+    name: "ComputerUsePrimitiveChannel.replacedRace",
+    undispatched: true,
+    run: channelRefusal("replacedRace"),
   },
   {
     name: "ComputerUseLeaseProxyPersonStop.lockRefusal",
