@@ -157,6 +157,9 @@ export const threadLeaseUpdates = (input: {
                   ...identity,
                   ...(value.apps === undefined ? {} : { apps: value.apps }),
                   ...(value.idleEpoch === undefined ? {} : { idleEpoch: value.idleEpoch }),
+                  ...(value.identityEpoch === undefined
+                    ? {}
+                    : { identityEpoch: value.identityEpoch }),
                   ...(value.foreground === undefined ? {} : { foreground: value.foreground }),
                   ...(value.interruptions.count === 0
                     ? {}

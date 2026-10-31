@@ -30,6 +30,22 @@ const listedTools = Effect.fn(function* (
   yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: probe.id, result: toolList(appScope) }));
 });
 
+const listedApps = Effect.fn(function* (h: Effect.Success<ReturnType<typeof harness>>) {
+  const probe = yield* h.nextToDriver;
+  assert.deepEqual(probe.params, { name: "list_apps", arguments: {} });
+  yield* h.reply(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: probe.id,
+      result: {
+        structuredContent: {
+          apps: [{ pid: 42, bundle_id: "com.apple.calculator", name: "Calculator" }],
+        },
+      },
+    }),
+  );
+});
+
 const refusalOf = (answer: Record<string, unknown>) =>
   (answer.result as { structuredContent: Record<string, unknown> }).structuredContent;
 
@@ -45,6 +61,7 @@ it.effect(
       );
       // The proxy asks the child whether its run_steps keeps an app_scope before sending one.
       yield* listedTools(h, true);
+      yield* listedApps(h);
       const sent = yield* h.nextToDriver;
       assert.equal(sent.id, 1);
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
@@ -103,7 +120,7 @@ it.effect(
       );
       // That driver could run a scope it does not know unscoped, so nothing is added either.
       yield* h.send(call(2, "run_script", { script: "click()" }));
-      assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "desktop_not_approved" });
+      assert.deepInclude(refusalOf(yield* h.nextToProvider), { detail: "app_not_allowed" });
       assert.equal(yield* h.driverQueued, 0);
     }),
 );
@@ -117,6 +134,7 @@ it.effect("asks a replacement driver child again before it gets a scoped batch",
       call(id, "run_steps", { ...window, steps, app_scope: scope(["com.apple.calculator"]) });
     yield* h.send(scoped(1));
     yield* listedTools(h, true);
+    yield* listedApps(h);
     assert.equal((yield* h.nextToDriver).id, 1);
     yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));
     assert.equal((yield* h.nextToProvider).id, 1);
@@ -145,6 +163,7 @@ it.effect("scopes an unscoped batch from the tool list the provider asked the sa
     assert.equal((yield* h.nextToProvider).id, 1);
     // No probe: that child already said its run_steps keeps an app_scope.
     yield* h.send(call(2, "run_steps", { ...window, steps }));
+    yield* listedApps(h);
     const scoped = yield* h.nextToDriver;
     assert.equal(scoped.id, 2);
     assert.deepEqual((scoped.params as { arguments: unknown }).arguments, {

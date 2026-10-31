@@ -216,7 +216,17 @@ describe("app leases between threads (D17)", () => {
         });
         yield* h.applied;
         yield* h.send(call(1, "click", { pid: 42, window_id: 8, x: 1, y: 1 }));
-        // B's proxy never needed the app's id; the call still meets A's lease on its process.
+        const lookup = yield* h.nextToDriver;
+        assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+        yield* h.reply(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: lookup.id,
+            result: {
+              structuredContent: { apps: [{ pid: 42, bundle_id: TEXTEDIT, name: "TextEdit" }] },
+            },
+          }),
+        );
         // Whichever side hears of the call first: the provider's refusal, or the driver's input.
         const first = yield* Effect.raceFirst(
           h.nextToProvider.pipe(Effect.map((line) => ({ to: "provider", line }) as const)),
@@ -838,6 +848,17 @@ describe("proxy releases (D17)", () => {
       const h = yield* harness();
       yield* h.push(active());
       yield* h.send(call(1, "click", { pid: 42, window_id: 7, x: 1, y: 1 }));
+      const lookup = yield* h.nextToDriver;
+      assert.deepEqual(lookup.params, { name: "list_apps", arguments: {} });
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: lookup.id,
+          result: {
+            structuredContent: { apps: [{ pid: 42, bundle_id: TEXTEDIT, name: "TextEdit" }] },
+          },
+        }),
+      );
       assert.equal((yield* h.nextReservation).action, "reserve");
       assert.equal((yield* h.nextToDriver).id, 1);
       yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { content: [] } }));

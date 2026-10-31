@@ -11,11 +11,12 @@
  *
  * @module ComputerUseScope
  */
-import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 
 import { backgroundBatch, batchAppScope } from "./ComputerUseBatchScope.ts";
 import { foreground } from "./ComputerUseCallReservations.ts";
 import { movesPointer } from "./computerUseTarget.ts";
+import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 
 /** Reads and session bookkeeping that touch no app's contents or input. */
 const UNSCOPED_TOOLS: ReadonlySet<string> = new Set([
@@ -65,7 +66,7 @@ export type ScopeVerdict =
   | { readonly _tag: "resolve"; readonly pid: number }
   | {
       readonly _tag: "refuse";
-      readonly reason: "app_not_approved" | "desktop_not_approved";
+      readonly reason: "app_not_approved" | "app_not_allowed" | "desktop_not_approved";
       readonly app?: string;
       readonly opaque?: boolean;
       /**
@@ -87,6 +88,48 @@ export const targetPid = (args: Readonly<Record<string, unknown>> | undefined) =
   const pid = args?.pid ?? record(args?.target)?.pid;
   return typeof pid === "number" && Number.isInteger(pid) ? pid : undefined;
 };
+
+const GONE_CODES = new Set([
+  "process_not_found",
+  "process_gone",
+  "target_gone",
+  "targetGone",
+  "target_missing",
+  "windowNotFound",
+  "px_window_not_found",
+  "window_not_found",
+  "window_id_not_found",
+  "window_target_not_found",
+  "bring_to_front_window_not_found",
+]);
+
+export function forgetGoneApp(value: unknown, args: unknown, listed: Map<number, ListedApp>): void {
+  const envelope = record(value);
+  const result = record(envelope?.result) ?? envelope;
+  const structured = record(result?.structuredContent);
+  if (
+    envelope?.error === undefined &&
+    result?.isError !== true &&
+    structured?.effect !== "refused" &&
+    structured?.refused === undefined
+  )
+    return;
+  const hasGoneCode = (input: unknown, depth: number): boolean => {
+    if (depth > 5) return false;
+    if (Array.isArray(input)) return input.some((item) => hasGoneCode(item, depth + 1));
+    const fields = record(input);
+    if (fields === undefined) return false;
+    return Object.entries(fields).some(
+      ([key, item]) =>
+        ((key === "code" || key === "detail" || key === "refused") &&
+          typeof item === "string" &&
+          GONE_CODES.has(item)) ||
+        (typeof item === "object" && item !== null && hasGoneCode(item, depth + 1)),
+    );
+  };
+  const pid = targetPid(record(args));
+  if (pid !== undefined && hasGoneCode(value, 0)) listed.delete(pid);
+}
 
 /**
  * Whether a call takes the screen itself: it brings a window forward, moves the pointer, or
@@ -123,17 +166,65 @@ export function scopeVerdict(input: {
   readonly bundleIds: boolean;
 }): ScopeVerdict {
   const approved = input.apps;
+  if (typeof input.name === "string" && UNSCOPED_TOOLS.has(input.name)) return { _tag: "allow" };
+  const args = record(input.args);
+  const alternateLaunchTarget =
+    input.name === "launch_app" &&
+    Object.entries(args ?? {}).some(
+      ([key, value]) =>
+        key !== "bundle_id" && key !== "session" && typeof value === "string" && value.length > 0,
+    );
+  const pid = targetPid(args);
+  const target = pid === undefined ? undefined : input.appOf(pid);
+  const named = text(args?.bundle_id) ?? text(args?.name) ?? text(args?.app_name);
+  const protectedApp = [target?.id, target?.name, target?.executable, named].find(
+    (value) => value !== undefined && isExcludedCuaApplication(value),
+  );
+  if (protectedApp !== undefined)
+    return { _tag: "refuse", reason: "app_not_allowed", app: protectedApp };
+  if (approved === undefined && isReadOnlyCall(input.name, input.args)) return { _tag: "allow" };
+  if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name)) {
+    const denied = batchAppScope(input.name, input.args)?.apps.find(isExcludedCuaApplication);
+    if (denied !== undefined) return { _tag: "refuse", reason: "app_not_allowed", app: denied };
+  }
+  if (typeof input.name === "string" && OPAQUE_TOOLS.has(input.name) && approved === undefined) {
+    const scope = batchAppScope(input.name, input.args);
+    return scope !== undefined && !scope.apps.some(isExcludedCuaApplication)
+      ? { _tag: "allow" }
+      : { _tag: "refuse", reason: "app_not_allowed", opaque: true };
+  }
+  if (
+    pid !== undefined &&
+    (target === undefined || (input.bundleIds && target.bundleId === undefined)) &&
+    (typeof input.name !== "string" || !OPAQUE_TOOLS.has(input.name))
+  )
+    return { _tag: "resolve", pid };
+  if (
+    approved === undefined &&
+    input.name === "launch_app" &&
+    (!input.bundleIds ||
+      alternateLaunchTarget ||
+      text(args?.bundle_id) === undefined ||
+      text(args?.name) !== undefined ||
+      text(args?.app_name) !== undefined)
+  )
+    return { _tag: "refuse", reason: "app_not_allowed" };
+  // Input without an identifiable target can land in any app, including one the policy denies.
+  if (approved === undefined && pid === undefined && input.name !== "launch_app")
+    return { _tag: "refuse", reason: "app_not_allowed" };
   if (approved === undefined) return { _tag: "allow" };
   const name = typeof input.name === "string" ? input.name : "";
-  if (UNSCOPED_TOOLS.has(name)) return { _tag: "allow" };
   if (OPAQUE_TOOLS.has(name)) {
     // The driver refuses each call the batch makes outside its scope, so approved apps suffice.
     const scope = batchAppScope(name, input.args);
     return scope !== undefined && scope.apps.every((app) => approves(approved, app))
       ? { _tag: "allow" }
-      : { _tag: "refuse", reason: "desktop_not_approved", opaque: true };
+      : {
+          _tag: "refuse",
+          reason: scope === undefined ? "app_not_allowed" : "desktop_not_approved",
+          opaque: true,
+        };
   }
-  const args = record(input.args);
   if (name === "launch_app") {
     // The driver picks what to open from a name, a path, an AUMID or URLs before any id a grant
     // names (cua-driver v0.37.0); on Linux and Windows those can open an app another thread's
@@ -141,15 +232,18 @@ export function scopeVerdict(input: {
     if (!input.bundleIds)
       return { _tag: "refuse", reason: "app_not_approved", launch: "unverifiable" };
     const bundle = text(args?.bundle_id);
-    const named = text(args?.name) ?? text(args?.app_name);
-    if (bundle === undefined || named !== undefined)
+    const launchName = text(args?.name) ?? text(args?.app_name);
+    if (bundle === undefined || launchName !== undefined || alternateLaunchTarget)
       return { _tag: "refuse", reason: "app_not_approved", launch: "bundle_id" };
     return approves(approved, bundle)
       ? { _tag: "allow" }
       : { _tag: "refuse", reason: "app_not_approved", app: bundle };
   }
-  const pid = targetPid(args);
-  if (pid === undefined) return { _tag: "refuse", reason: "desktop_not_approved" };
+  if (pid === undefined)
+    return {
+      _tag: "refuse",
+      reason: isReadOnlyCall(name, input.args) ? "desktop_not_approved" : "app_not_allowed",
+    };
   const app = input.appOf(pid);
   if (app === undefined) return { _tag: "resolve", pid };
   // Only the id list_apps reports counts, or the exact executable it runs: a display name would
@@ -172,9 +266,7 @@ export const grantedAppId = (app: ListedApp, apps: ReadonlySet<string> | undefin
  * app by the bundle id grants name, or the app name where there is none. Everything else names
  * apps without the bundle id: windows an entry nests, the `processes` list Windows and Linux
  * drivers send beside `apps`, and answers such as list_windows and get_window_state. A display
- * name taken as an id would let a grant naming it reach an app another grant names by bundle
- * id, so outside a listing an answer can only drop a pid whose app it names differently, which
- * also catches a pid reused by another app; the pid is listed again before it is judged.
+ * name is only used to invalidate a cached identity when it changes.
  */
 export function learnApps(
   value: unknown,
@@ -197,12 +289,14 @@ export function learnApps(
         ...(executable === undefined ? {} : { executable }),
       });
     } else {
-      // A reply naming another app or binary for the pid makes it unknown until listed again.
+      // PID reuse by a different bundle with the same display name within one control can retain the old identity.
       const known = into.get(entry.pid);
       if (
-        known?.id !== entry.id ||
+        (entry.bundleId !== undefined
+          ? known?.bundleId !== entry.bundleId
+          : known?.name !== entry.name && known?.id !== entry.id) ||
         (entry.executable !== undefined &&
-          known.executable !== undefined &&
+          known?.executable !== undefined &&
           appKey(entry.executable) !== appKey(known.executable))
       )
         into.delete(entry.pid);

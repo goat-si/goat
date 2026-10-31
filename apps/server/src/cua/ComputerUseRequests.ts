@@ -19,6 +19,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
+import * as ServerSettings from "../serverSettings.ts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -82,6 +83,29 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
 }) {
   const foreground = input.request.foreground === true;
   const wanted = input.request.apps;
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const denied = new Set(
+    Option.isSome(settings) ? (yield* settings.value.getSettings).cuaDeniedApps.map(cuaAppKey) : [],
+  );
+  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+  if (wanted !== undefined && denied.size > 0) {
+    const catalog = Option.isSome(cua) ? yield* cua.value.appCatalog : [];
+    const blocked = wanted.filter(
+      (app) =>
+        denied.has(cuaAppKey(app)) ||
+        catalog.some(
+          (entry) => cuaAppKey(entry.name) === cuaAppKey(app) && denied.has(cuaAppKey(entry.id)),
+        ),
+    );
+    if (blocked.length > 0)
+      return {
+        kind: "refused",
+        reason: "unknown_app",
+        code: "app_not_allowed",
+        unknownApps: blocked,
+        message: `Computer use cannot control ${blocked.join(", ")}: this organization blocks it. Ask the person to do this step.`,
+      } satisfies ComputerUseRequestResult;
+  }
   if (foreground && wanted !== undefined)
     return {
       kind: "refused",
@@ -89,7 +113,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message:
         "Foreground approval supports whole-desktop access only. Omit apps to ask explicitly for the whole desktop, or omit foreground for background-only access to these apps. No app scope has been broadened.",
     } satisfies ComputerUseRequestResult;
-  const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   if (Option.isNone(cua) || !(yield* cua.value.enabled)) {
     // Turning it on is refused where the driver cannot run, so the refusal names that first.
     const host = Option.isSome(cua) ? yield* cua.value.computerUse : undefined;
@@ -125,14 +148,21 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     } satisfies ComputerUseRequestResult;
   if (wanted !== undefined) {
     // Credential stores stay out whether or not the host can list its apps (#1598).
-    const excluded = wanted.filter(isExcludedCuaApplication);
+    const catalog = yield* cua.value.appCatalog;
+    const excluded = wanted.filter(
+      (app) =>
+        isExcludedCuaApplication(app) ||
+        catalog.some(
+          (entry) => cuaAppKey(entry.name) === cuaAppKey(app) && isExcludedCuaApplication(entry.id),
+        ),
+    );
     if (excluded.length > 0)
       return {
         kind: "refused",
         reason: "unknown_app",
         code: "app_not_allowed",
         unknownApps: excluded,
-        message: `Computer use never controls ${excluded.join(", ")}: password managers and other credential stores are always left out. Do not ask for them again; ask the person to do that step themselves.`,
+        message: `Computer use never controls ${excluded.join(", ")}: password managers, system security and Screen Time apps are always left out. Do not ask for them again; ask the person to do that step themselves.`,
       } satisfies ComputerUseRequestResult;
     const listed = yield* cua.value.listedApps;
     if (Option.isSome(listed)) {
@@ -179,6 +209,26 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     yield* leases.attached(input.threadId),
     (control) => run !== undefined && control.runId === run.id,
   );
+  if (
+    origin._tag === "unattended" &&
+    Option.isSome(current) &&
+    current.value.everyApp &&
+    wanted !== undefined
+  ) {
+    const terminals = wanted.filter((app) =>
+      ["com.apple.terminal", "com.googlecode.iterm2", "terminal", "iterm", "iterm2"].includes(
+        cuaAppKey(app),
+      ),
+    );
+    if (terminals.length > 0)
+      return {
+        kind: "refused",
+        reason: "unknown_app",
+        code: "app_not_allowed",
+        unknownApps: terminals,
+        message: `Full access from a non-person origin cannot control ${terminals.join(", ")}. Ask the person to perform this step.`,
+      } satisfies ComputerUseRequestResult;
+  }
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.
   const granted = Option.isSome(own) ? own.value.apps : [];

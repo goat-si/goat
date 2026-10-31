@@ -21,7 +21,7 @@ const listing = (executable: string | undefined) => ({
 /** A click on the pid's window, judged as the proxy judges one before it forwards it. */
 const click = (input: {
   readonly listed: Map<number, ListedApp>;
-  readonly approved: ReadonlyArray<string>;
+  readonly approved: ReadonlyArray<string> | undefined;
   readonly executableOf?: (pid: number) => string | undefined;
   readonly listApps: Effect.Effect<void>;
 }) =>
@@ -45,6 +45,50 @@ const click = (input: {
   });
 
 describe("an app approved by its executable path", () => {
+  it.effect("reuses a cached app identity after same-name replies without listing again", () =>
+    Effect.gen(function* () {
+      const listed = new Map<number, ListedApp>();
+      learnApps(
+        { apps: [{ pid: PID, bundle_id: "com.example.Editor", name: "Editor" }] },
+        listed,
+        true,
+      );
+      for (let index = 0; index < 2; index++) {
+        assert.isUndefined(
+          yield* click({
+            listed,
+            approved: ["com.example.Editor"],
+            listApps: Effect.die("unexpected lookup"),
+          }),
+        );
+        learnApps({ app_name: "Editor", pid: PID }, listed, false);
+      }
+    }),
+  );
+  it.effect("never forwards a full access call to a protected app", () =>
+    Effect.gen(function* () {
+      for (const app of [
+        "com.apple.systempreferences",
+        "com.apple.loginwindow",
+        "com.apple.SecurityAgent",
+        "com.apple.coreauthd",
+        "com.apple.LocalAuthentication.UIAgent",
+        "com.apple.keychainaccess",
+        "com.apple.ScreenTimeAgent",
+        "com.apple.ScreenTimeSettingsAgent",
+        "com.apple.ScreenTimeWidgetApplication",
+        "com.apple.ScreenTimeViewService",
+      ]) {
+        const listed = new Map<number, ListedApp>([[PID, { id: app, name: "System app" }]]);
+        const refused = yield* click({
+          listed,
+          approved: undefined,
+          listApps: Effect.die("already listed"),
+        });
+        assert.include(JSON.stringify(refused), "app_not_allowed");
+      }
+    }),
+  );
   it.effect("is refused when the same pid now runs another binary of the same name", () =>
     Effect.gen(function* () {
       const listed = new Map<number, ListedApp>();
@@ -67,7 +111,7 @@ describe("an app approved by its executable path", () => {
         approved: ["C:\\Good\\notes.exe"],
         listApps: Effect.void,
       });
-      assert.include(JSON.stringify(refused), "app_not_approved");
+      assert.include(JSON.stringify(refused), "app_not_allowed");
     }),
   );
 
@@ -131,7 +175,7 @@ describe("an app approved by its executable path", () => {
           executableOf,
           listApps: Effect.sync(() => learnApps(listing(undefined), listed, true, executableOf)),
         });
-        assert.include(JSON.stringify(refused), "app_not_approved");
+        assert.include(JSON.stringify(refused), "app_not_allowed");
         assert.deepEqual(reads, []);
       }),
   );

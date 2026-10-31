@@ -41,7 +41,8 @@ import { makeLeaseFences, type TakenUpdate } from "./leaseUpdateFences.ts";
 import { makeProxyChecks } from "./ComputerUseLeaseProxyChecks.ts";
 import { forwardProxyCursors } from "./ComputerUseLeaseProxyCursors.ts";
 import { captureStalled, driverExitReason, driverRefused } from "./ComputerUseDriverOutcome.ts";
-import { approvedApps, learnApps, type ListedApp, takesScreen } from "./ComputerUseScope.ts";
+import { approvedApps, takesScreen } from "./ComputerUseScope.ts";
+import { makeIdentityCache } from "./ComputerUseIdentityCache.ts";
 import { makeProxyBatchScope } from "./ComputerUseLeaseProxyBatch.ts";
 import { makeAppLabels } from "./ComputerUseAppLabels.ts";
 import { admitDriverReplyScreenshots, cancelledRequestKey } from "./ComputerUseDriverReply.ts";
@@ -145,7 +146,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     onCancelledRequestSettled: (key) => options.onCancelledRequestSettled?.(key),
   });
   const batches = makeProxyBatchScope(handshakeAnswers, () => lifecycle.current);
-  const listed = new Map<number, ListedApp>();
+  const identities = makeIdentityCache();
+  const listed = identities.listed;
   const labels = makeAppLabels();
   const sessions = new Set<string>();
   // The control's window survives pauses: the server keeps it until the control ends.
@@ -247,11 +249,9 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     if (sessions.size > 0)
       yield* options.revokeSessions([...sessions]).pipe(Effect.ignoreCause, Effect.forkIn(scope));
   }, Effect.uninterruptible);
-
   // completed: the driver answered it, so its connection's earlier calls ended too (D17).
   const release = makeProxyRelease(options);
   const releaseLater = makeProxyReleaseLater(options, scope);
-
   // The buffer reads the driver apart from the replies' checks, so a driver that exits while a
   // reply waits on GOAT's capture is seen at once and that reply dropped (#1677).
   const readLines = (current: Running, exited: Deferred.Deferred<void>) => {
@@ -268,7 +268,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const listing = own
           ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
           : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
-        learnApps(message.result, listed, listing, options.executableOf, labels);
+        identities.learn(message.result, listing, options.executableOf, labels);
         if (own) {
           const waiter = ownAnswers.get(message.id);
           ownAnswers.delete(message.id);
@@ -279,6 +279,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         const request = outstanding.get(key);
         // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
+        identities.forget(message, request.args);
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
         // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
@@ -457,6 +458,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       (yield* Deferred.isDone(confirmed)) &&
       next !== undefined &&
       (apps === undefined || [...apps].some((app) => !next.has(app)));
+    identities.scope(apps, next);
     apps = next;
     batches.grant(update.apps);
     shared = update.shared === true;
@@ -469,6 +471,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     interruptionsSeen = count;
     const nextIdleEpoch = update.idleEpoch ?? 0;
     const missedIdle = idleEpochSeen !== undefined && nextIdleEpoch > idleEpochSeen;
+    identities.turn(update.identityEpoch ?? 0, missedIdle || idle);
     idleEpochSeen = nextIdleEpoch;
     if (paused !== undefined || idle) {
       paused = undefined;
@@ -525,6 +528,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
               : update.state === "idle"
                 ? Effect.sync(() => {
                     idle = true;
+                    identities.clear();
                   }).pipe(
                     Effect.andThen(interrupt(TURN_ENDED)),
                     Effect.andThen(Deferred.succeed(confirmed, undefined)),
@@ -586,7 +590,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     Effect.andThen(take(undefined)),
     Effect.forkScoped,
   );
-
   // Held here, not in the agent's calls: expiry acts while a call is outstanding or none comes.
   yield* watchLeaseProxyDeadlines({
     wake: deadlineWake,
@@ -641,7 +644,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     deadline: () => deadline,
     expire: end("expired"),
   });
-
   const refreshManifest = refreshDriverManifest({
     stamp: options.manifestStamp,
     current: () => lifecycle.current,
@@ -738,6 +740,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         options.manifestStamp === undefined || lifecycle.current === undefined || !active()
           ? undefined
           : yield* refreshManifest;
+      if (refreshed !== undefined) identities.clear();
       if (refreshed !== undefined) admitted = refreshed;
       if (
         expectedConnection !== undefined &&
@@ -885,7 +888,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         yield* release({ reservationId, connectionId: current.connectionId });
       return yield* sink.answer(answer, "settled", { tool: "move_cursor" });
     }
-
     const kinds =
       isRequest && message?.method === "tools/call"
         ? inputKinds(

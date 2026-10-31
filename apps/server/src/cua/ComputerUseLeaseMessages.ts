@@ -56,17 +56,19 @@ export const reservationRefusal = (
 ) =>
   detail === "pointer_locked"
     ? POINTER_LOCKED
-    : detail === "screen_shared"
-      ? SCREEN_SHARED
-      : detail === "reconnecting"
-        ? ADMISSION_UNANSWERED
-        : detail === "unauthorized"
-          ? LEASE_END_MESSAGES.unauthorized
-          : detail === "app_busy"
-            ? `Thread ${holder ?? "another thread"} is using ${app ?? "an app this call could reach"}. This call did not run. Work in another app, or wait and observe again before retrying.`
-            : holder === undefined
-              ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
-              : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
+    : detail === "app_not_allowed"
+      ? `${app ?? "This app"} is blocked or could not be verified under the computer use policy. The call did not run.`
+      : detail === "screen_shared"
+        ? SCREEN_SHARED
+        : detail === "reconnecting"
+          ? ADMISSION_UNANSWERED
+          : detail === "unauthorized"
+            ? LEASE_END_MESSAGES.unauthorized
+            : detail === "app_busy"
+              ? `Thread ${holder ?? "another thread"} is using ${app ?? "an app this call could reach"}. This call did not run. Work in another app, or wait and observe again before retrying.`
+              : holder === undefined
+                ? "GOAT could not reserve this call under the current control, so it did not run. Observe again after the control is available."
+                : `Thread ${holder} is using this target. This call did not run; wait for that thread to finish, then observe again.`;
 
 export const LEASE_END_MESSAGES: Readonly<Record<LeaseEnd, string>> = {
   expired: `Computer use for this thread reached its time limit. A later turn gets it back while the thread is still admitted; otherwise ask again with ${REQUEST}.`,
@@ -204,17 +206,19 @@ export type Interruption =
   | { readonly _tag: "other"; readonly detail: ComputerUseRefusalDetail; readonly message: string };
 
 export const scopeMessage = (
-  reason: "app_not_approved" | "desktop_not_approved",
+  reason: "app_not_approved" | "app_not_allowed" | "desktop_not_approved",
   app?: string,
   opaque?: boolean,
   launch?: "bundle_id" | "unverifiable",
 ) =>
-  launch === "bundle_id"
-    ? "Launch an approved app by its bundle_id alone, as list_apps reports it; a name can open another app than the one approved, so the call did not run."
-    : launch === "unverifiable"
-      ? "On this computer the driver may open another app than the name, path or URL given, so a thread limited to approved apps cannot launch apps here and the call did not run. Work in an approved app's window that is already open, or ask the person to open the app."
-      : reason === "app_not_approved"
-        ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}. It waits for the person's answer, and once approved this turn can go on.`
-        : opaque
-          ? "This thread may control only its approved apps, and this script or batch is not kept to them by an app_scope of approved apps, so it did not run. Name only approved apps in app_scope, or make the calls one at a time, each with the pid and window_id of an approved app's window."
-          : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;
+  reason === "app_not_allowed"
+    ? `${app ?? "The target app"} is protected or could not be verified. The call did not run; ask the person to do this step.`
+    : launch === "bundle_id"
+      ? "Launch an approved app by its bundle_id alone, as list_apps reports it; a name can open another app than the one approved, so the call did not run."
+      : launch === "unverifiable"
+        ? "On this computer the driver may open another app than the name, path or URL given, so a thread limited to approved apps cannot launch apps here and the call did not run. Work in an approved app's window that is already open, or ask the person to open the app."
+        : reason === "app_not_approved"
+          ? `${app ?? "This app"} is not approved for this thread, so the call did not run. Ask with ${REQUEST} and args {purpose, apps:[${JSON.stringify(app ?? "<bundle_id from list_apps>")}]}. It waits for the person's answer, and once approved this turn can go on.`
+          : opaque
+            ? "This thread may control only its approved apps, and this script or batch is not kept to them by an app_scope of approved apps, so it did not run. Name only approved apps in app_scope, or make the calls one at a time, each with the pid and window_id of an approved app's window."
+            : `This call would act on the whole desktop, and this thread may control only its approved apps, so it did not run. Target an approved app's window with its pid and window_id, or ask for the whole screen with ${REQUEST} without apps.`;

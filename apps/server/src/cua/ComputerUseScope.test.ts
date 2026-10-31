@@ -1,6 +1,12 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { approvedApps, learnApps, type ListedApp, scopeVerdict } from "./ComputerUseScope.ts";
+import {
+  approvedApps,
+  forgetGoneApp,
+  learnApps,
+  type ListedApp,
+  scopeVerdict,
+} from "./ComputerUseScope.ts";
 
 const KAKAO = { pid: 6972, bundle_id: "com.kakao.KakaoTalkMac", name: "KakaoTalk" };
 
@@ -14,14 +20,151 @@ const verdict = (listed: Map<number, ListedApp>) =>
   });
 
 describe("learnApps", () => {
-  it("lists a pid again after a reply names its app without the bundle id a grant names", () => {
+  it("forgets the pid when a call reports that its target is gone", () => {
+    for (const code of [
+      "process_not_found",
+      "target_missing",
+      "windowNotFound",
+      "px_window_not_found",
+    ]) {
+      const listed = new Map<number, ListedApp>();
+      learnApps({ apps: [KAKAO] }, listed, true);
+      forgetGoneApp({ isError: true, structuredContent: { code } }, { pid: KAKAO.pid }, listed);
+      assert.equal(listed.has(KAKAO.pid), false, code);
+    }
+  });
+  it("does not invalidate cached identity for text in a successful response", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [KAKAO] }, listed, true);
+    forgetGoneApp({ structuredContent: { code: "process_not_found" } }, { pid: KAKAO.pid }, listed);
+    assert.equal(listed.has(KAKAO.pid), true);
+  });
+  it("keeps a cached bundle when a reply names the same display name", () => {
+    const listed = new Map<number, ListedApp>();
+    learnApps({ apps: [KAKAO] }, listed, true);
+    learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid }, listed, false);
+    assert.deepEqual(verdict(listed), { _tag: "allow" });
+  });
+  it("allows reads but refuses unidentified full-access input", () => {
+    const common = { apps: undefined, appOf: () => undefined, bundleIds: true };
+    assert.deepEqual(
+      scopeVerdict({ ...common, name: "get_window_state", args: { pid: 42, window_id: 1 } }),
+      { _tag: "allow" },
+    );
+    assert.deepInclude(scopeVerdict({ ...common, name: "press_key", args: { key: "return" } }), {
+      _tag: "refuse",
+      reason: "app_not_allowed",
+    });
+  });
+  it("does not treat a macOS display name as a bundle identity for input", () => {
+    assert.deepEqual(
+      scopeVerdict({
+        name: "click",
+        args: { pid: 42 },
+        apps: undefined,
+        appOf: () => ({ id: "Editor", name: "Editor" }),
+        bundleIds: true,
+      }),
+      { _tag: "resolve", pid: 42 },
+    );
+  });
+  it("refuses a full-access launch whose real app identity is unknown", () => {
+    assert.deepInclude(
+      scopeVerdict({
+        name: "launch_app",
+        args: { name: "Editor" },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      }),
+      { _tag: "refuse", reason: "app_not_allowed" },
+    );
+  });
+  it("refuses a launch that could override its bundle id with another path", () => {
+    assert.deepInclude(
+      scopeVerdict({
+        name: "launch_app",
+        args: { bundle_id: "com.example.Editor", path: "/Applications/Other.app" },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      }),
+      { _tag: "refuse", reason: "app_not_allowed" },
+    );
+  });
+  it("allows app discovery with a pid filter without resolving the target", () => {
+    assert.deepEqual(
+      scopeVerdict({
+        name: "list_windows",
+        args: { pid: 42 },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      }),
+      { _tag: "allow" },
+    );
+  });
+  it("refuses protected apps even under an unrestricted control", () => {
+    for (const id of [
+      "com.apple.systempreferences",
+      "com.apple.loginwindow",
+      "com.apple.SecurityAgent",
+      "com.apple.coreauthd",
+      "com.apple.LocalAuthentication.UIAgent",
+      "com.apple.keychainaccess",
+      "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeSettingsAgent",
+      "com.apple.ScreenTimeWidgetApplication",
+      "com.apple.ScreenTimeViewService",
+    ]) {
+      const result = scopeVerdict({
+        name: "click",
+        args: { pid: 12, window_id: 34 },
+        apps: undefined,
+        appOf: () => ({ id, name: "System app" }),
+        bundleIds: true,
+      });
+      assert.equal(result._tag, "refuse", id);
+      if (result._tag === "refuse") assert.equal(result.reason, "app_not_allowed", id);
+    }
+  });
+
+  it("does not run an unrestricted batch without an app scope", () => {
+    assert.equal(
+      scopeVerdict({
+        name: "run_script",
+        args: { script: "click()" },
+        apps: undefined,
+        appOf: () => undefined,
+        bundleIds: true,
+      })._tag,
+      "refuse",
+    );
+  });
+
+  it("refuses protected apps in batch scopes even when the grant names them", () => {
+    for (const apps of [undefined, approvedApps(["com.apple.systempreferences"])]) {
+      assert.deepInclude(
+        scopeVerdict({
+          name: "run_script",
+          args: {
+            script: "click()",
+            app_scope: { apps: ["com.apple.systempreferences"], delivery: "background" },
+          },
+          apps,
+          appOf: () => undefined,
+          bundleIds: true,
+        }),
+        { _tag: "refuse", reason: "app_not_allowed" },
+      );
+    }
+  });
+  it("lists a pid again after a reply names a different app", () => {
     const listed = new Map<number, ListedApp>();
     learnApps({ apps: [KAKAO] }, listed, true);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
-    // get_window_state answers with the app's name and pid but no bundle id.
-    learnApps({ app_name: "KakaoTalk", pid: KAKAO.pid, window_id: 57000 }, listed, false);
+    learnApps({ app_name: "Other", pid: KAKAO.pid, window_id: 57000 }, listed, false);
     assert.deepEqual(verdict(listed), { _tag: "resolve", pid: KAKAO.pid });
-    // The listing the proxy asks for then judges the call by bundle id again.
     learnApps({ apps: [KAKAO] }, listed, true);
     assert.deepEqual(verdict(listed), { _tag: "allow" });
   });

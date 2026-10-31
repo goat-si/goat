@@ -9,8 +9,11 @@ import {
   foregroundActive,
   call,
   CONTROL,
-  harness,
+  harness as makeHarness,
 } from "./ComputerUseLeaseProxy.testkit.ts";
+
+const harness = (options: Parameters<typeof makeHarness>[0] = {}) =>
+  makeHarness({ autoAppListing: true, ...options });
 
 describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
   it.effect.each(["removed", "replaced", "shortened"] as const)(
@@ -241,7 +244,7 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         const answer = yield* h.nextToProvider;
         assert.equal(answer.id, 2);
         assert.deepInclude((answer.result as Record<string, unknown>).structuredContent as object, {
-          detail: "app_not_approved",
+          detail: "app_not_allowed",
         });
         assert.notProperty(
           (answer.result as Record<string, unknown>).structuredContent as object,
@@ -262,7 +265,7 @@ describe("ComputerUseLeaseProxy manifest refresh (#1416)", () => {
         yield* h.push(foregroundActive());
         manifest = "v2";
         const forwarded = yield* h
-          .send(call(1, "move_cursor", { scope: "desktop", x: 1, y: 1 }))
+          .send(call(1, "click", { pid: 4, window_id: 9, x: 1, y: 1, delivery_mode: "foreground" }))
           .pipe(Effect.forkChild);
         assert.equal(yield* h.taken, "active");
         assert.equal(yield* h.applied, "active");

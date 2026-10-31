@@ -19,6 +19,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { MAC_STANDALONE_REASON } from "./CuaDisplayCapability.ts";
 
 import {
@@ -29,6 +30,77 @@ import {
   type Signals,
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
+
+it.effect("an organization denial refuses before approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(orchestrator, supported, ({ request }) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({
+          cuaDeniedApps: ["com.example.Editor"],
+          cuaAllowedApps: ["com.example.Editor"],
+        });
+        const result = yield* request({ apps: ["com.example.Editor"] });
+        assert.deepInclude(result, {
+          kind: "refused",
+          reason: "unknown_app",
+          code: "app_not_allowed",
+        });
+      }),
+    ),
+  ),
+);
+
+it.effect("an organization-denied bundle is refused when requested by display name", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaDeniedApps: ["com.example.Editor"],
+          });
+          assert.deepInclude(yield* request({ apps: ["Fancy Editor"] }), {
+            kind: "refused",
+            code: "app_not_allowed",
+          });
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "person",
+      undefined,
+      [{ id: "com.example.Editor", name: "Fancy Editor" }],
+    ),
+  ),
+);
+
+it.effect("a protected bundle is refused by its catalog display name", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          assert.deepInclude(yield* request({ apps: ["Mac Configuration"] }), {
+            kind: "refused",
+            code: "app_not_allowed",
+          });
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "person",
+      undefined,
+      [{ id: "com.apple.systempreferences", name: "Mac Configuration" }],
+    ),
+  ),
+);
 
 it.effect(
   "refuses a window title absent from the host app listing without creating an approval (#1536)",
@@ -99,7 +171,21 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
         supported,
         ({ request }) =>
           Effect.gen(function* () {
-            for (const app of ["NordPass", "me.proton.pass.electron", "com.1password.safari"]) {
+            for (const app of [
+              "NordPass",
+              "me.proton.pass.electron",
+              "com.1password.safari",
+              "com.apple.systempreferences",
+              "com.apple.loginwindow",
+              "com.apple.SecurityAgent",
+              "com.apple.coreauthd",
+              "com.apple.LocalAuthentication.UIAgent",
+              "com.apple.keychainaccess",
+              "com.apple.ScreenTimeAgent",
+              "com.apple.ScreenTimeSettingsAgent",
+              "com.apple.ScreenTimeWidgetApplication",
+              "com.apple.ScreenTimeViewService",
+            ]) {
               const result = yield* request({ apps: ["com.example.Editor", app] });
               assert.equal(result.kind, "refused");
               if (result.kind !== "refused") return assert.fail(`${app} must not ask a person`);

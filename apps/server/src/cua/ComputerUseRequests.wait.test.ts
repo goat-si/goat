@@ -11,10 +11,24 @@ import * as TestClock from "effect/testing/TestClock";
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import type * as Handoffs from "../handoffs/Handoffs.ts";
 import type * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { purpose, sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
 
 const WAIT = Duration.minutes(10);
 const APP = "com.example.AppA";
+
+it.effect("organization denial precedes full access", () =>
+  withWaiting(({ request, leases, runId }) =>
+    Effect.gen(function* () {
+      yield* leases.everyAppControl(threadId, false, { runId });
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({ cuaDeniedApps: [APP] });
+      assert.deepInclude(yield* request({ apps: [APP] }), {
+        kind: "refused",
+        code: "app_not_allowed",
+      });
+    }),
+  ),
+);
 
 type Orchestrator = Parameters<Parameters<typeof withHarness>[0]>[0]["orchestrator"];
 interface Waiting {
@@ -112,6 +126,27 @@ it.effect("an approved foreground request lets this turn's control take the fore
       assert.lengthOf(state._tag === "active" ? (state.foreground ?? []) : [], 1);
     }),
   ),
+);
+
+it.effect.each(["remote", "schedule"] as const)(
+  "refuses a terminal request in a %s full-access turn",
+  (from) =>
+    withWaiting(
+      ({ request, leases, runId }) =>
+        Effect.gen(function* () {
+          yield* leases.everyAppControl(threadId, from === "schedule", { runId });
+          for (const app of ["com.apple.Terminal", "com.googlecode.iterm2"]) {
+            const result = yield* request({ apps: [app] }, Duration.zero);
+            assert.deepInclude(result, {
+              kind: "refused",
+              reason: "unknown_app",
+              code: "app_not_allowed",
+            });
+          }
+        }),
+      undefined,
+      from,
+    ),
 );
 
 it.effect.each(["remote", "schedule"] as const)(
@@ -252,6 +287,7 @@ it.effect(
       Effect.gen(function* () {
         yield* leases.everyAppControl(threadId, false, { runId });
         assert.equal((yield* request({ apps: [APP] }, WAIT)).kind, "available");
+        assert.equal((yield* request({ apps: ["com.apple.Terminal"] }, WAIT)).kind, "available");
         assert.equal((yield* request({ foreground: true }, WAIT)).kind, "available");
         assert.deepInclude(yield* request({ foreground: true, apps: [APP] }, WAIT), {
           kind: "refused",
