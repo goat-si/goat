@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import type { ScreenRunError } from "@goat/contracts";
+import type { ActionOutcomeSafety, ScreenRunError } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { isReadOnlyCall, LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
@@ -13,7 +13,7 @@ export const terminalFailure = (
   dispatched = false,
 ): ScreenRunError | undefined => {
   if (reason === undefined) return undefined;
-  const safety = dispatched
+  const safety: ActionOutcomeSafety = dispatched
     ? {
         ...classifyActionOutcome({
           effect: isReadOnlyCall(tool, args) ? "read" : "write",
