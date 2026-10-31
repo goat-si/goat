@@ -10,6 +10,41 @@ const work = (id: number) => call(id, "type_text", { pid: 42, window_id: 7, text
 const detail = (answer: { result?: { structuredContent?: Record<string, unknown> } }) =>
   answer.result?.structuredContent?.detail;
 
+it.effect.each(["same control", "different control"])(
+  "a lock reaches only unfinished calls of the %s",
+  (scope) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const h = yield* threadHarness({
+        reservation: (request) =>
+          request.action === "reserve"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as({ status: "refused", detail: "reconnecting" }),
+              )
+            : Effect.succeed({ status: "released" }),
+      });
+      yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+      yield* h.push(snapshot("A"));
+      yield* h.started;
+      yield* h.applied;
+      yield* h.send(work(975));
+      yield* Deferred.await(entered);
+      yield* h.push({ state: "transport_lost" });
+      yield* h.push({
+        ...snapshot(scope === "same control" ? "A" : "B"),
+        state: "paused",
+        reason: "screen_locked",
+      });
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.next;
+      if (scope === "same control")
+        assert.include(JSON.stringify(answer), '"code":"screen_locked"');
+      else assert.notInclude(JSON.stringify(answer), '"code":"screen_locked"');
+    }),
+);
+
 it.effect("a request before any control does not inherit a person's stop", () =>
   Effect.gen(function* () {
     const h = yield* threadHarness();
