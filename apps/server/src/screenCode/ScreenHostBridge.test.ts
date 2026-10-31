@@ -197,6 +197,20 @@ it.effect("a refused preview call is never marked dispatched", () =>
   }),
 );
 
+it.effect("a target method without its targetRef is an invalid argument naming tab.close()", () =>
+  Effect.gen(function* () {
+    const { targetRef: _targetRef, ...untargeted } = call(1);
+    const result = yield* new ScreenHostBridge().handle(
+      { ...untargeted, method: "close_tab", args: [{ tabId: "tab_1" }] },
+      context(),
+    );
+    expect(result && "error" in result ? result.error : undefined).toMatchObject({
+      code: "invalid_argument",
+      nextStep: expect.stringContaining("tab.close()"),
+    });
+  }),
+);
+
 it.effect("discard and finishTurn release cell and target state", () =>
   Effect.gen(function* () {
     const bridge = new ScreenHostBridge();
