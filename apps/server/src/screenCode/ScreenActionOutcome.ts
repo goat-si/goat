@@ -175,6 +175,23 @@ export const latchCellTerminal = (
   if (merged !== undefined) cells.set(id, merged);
 };
 
+export const completionCellError = (
+  error: ScreenRunError | undefined,
+  receipts: readonly ScreenEffectReceipt[],
+  reason: ComputerUseTerminalReason | undefined,
+): ScreenRunError | undefined => {
+  if (error === undefined && reason === undefined) return undefined;
+  return cellTerminalError(
+    error ?? {
+      code: "stopped",
+      effectStarted: false,
+      nextStep: "Refresh the screen run and retry if appropriate.",
+    },
+    receipts,
+    reason,
+  );
+};
+
 export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
   result.error === undefined
     ? result

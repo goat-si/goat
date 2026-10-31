@@ -41,7 +41,12 @@ import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTarget
 import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollection.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
-import { cellResultSafety, cellTerminalError, latchCellTerminal } from "./ScreenActionOutcome.ts";
+import {
+  cellResultSafety,
+  cellTerminalError,
+  completionCellError,
+  latchCellTerminal,
+} from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
@@ -675,17 +680,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   })),
                 ].slice(-64);
                 const classified = cellResultSafety(result);
-                const reason = cellTerminals.get(id);
-                if (
-                  reason !== undefined ||
-                  (classified.error && isScreenRunErrorSchema(classified.error))
-                ) {
-                  const receipts = journal.map((entry) => entry.receipt);
-                  const error =
-                    classified.error && isScreenRunErrorSchema(classified.error)
-                      ? classified.error
-                      : fail("stopped");
-                  const merged = cellTerminalError(error, receipts, reason);
+                const receipts = journal.map((entry) => entry.receipt);
+                const merged = completionCellError(
+                  isScreenRunErrorSchema(classified.error) ? classified.error : undefined,
+                  receipts,
+                  cellTerminals.get(id),
+                );
+                if (merged !== undefined) {
                   failed = { code: merged.code, receipts };
                   return Effect.fail({
                     ...merged,
