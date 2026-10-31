@@ -1,5 +1,4 @@
-import type { ScreenHostCall } from "@goat/contracts";
-import type { ScreenRunLimits } from "./ScreenRunLimits.ts";
+import type { ScreenHostCall, ScreenRunLimits } from "@goat/contracts";
 
 /** Room left for an observation's tree once the reply envelope and `reserveBytes` are paid for. */
 export const observationReplyBudget = (
