@@ -206,7 +206,7 @@ export const make = Effect.gen(function* () {
     Deferred.doneUnsafe(waiting, Exit.void);
   };
   const settle = (pending: Pending, terminal?: Control["terminal"]) => {
-    pending.terminal ??= terminalReason(terminal);
+    if (pending.terminal === undefined && terminal !== undefined) pending.terminal = terminal;
     terminal = terminalReason(pending.terminal);
     return Deferred.doneUnsafe(
       pending.answer,
