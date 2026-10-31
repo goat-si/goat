@@ -80,7 +80,7 @@ import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionS
 import { AuthOrchestrationOperateScope } from "@goat/contracts";
 import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
-import { EnvironmentRow, environmentTransportLabel } from "./EnvironmentRow";
+import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
@@ -400,19 +400,13 @@ function ScheduledTaskEnvironmentList({
     <SettingsGroup>
       {populated.map(({ environment, tasks }) => {
         const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
-        const transport = environmentTransportLabel(environment);
         return (
           <div key={environment.environmentId} className="divide-y divide-border/50">
             <EnvironmentRow
               kind={resolveEnvironmentMachineKind(environment.serverConfig)}
               label={primary}
               subtitle={
-                <>
-                  {secondary && secondary !== transport ? (
-                    <span className="block truncate">{secondary}</span>
-                  ) : null}
-                  <span className="block truncate">{transport}</span>
-                </>
+                <ScheduledTaskEnvironmentSubtitle environment={environment} secondary={secondary} />
               }
             >
               <ConnectionStatusDot
@@ -467,6 +461,24 @@ function ScheduledTaskEnvironmentList({
         );
       })}
     </SettingsGroup>
+  );
+}
+
+function ScheduledTaskEnvironmentSubtitle({
+  environment,
+  secondary,
+}: {
+  readonly environment: EnvironmentPresentation;
+  readonly secondary: string;
+}) {
+  const transport = useEnvironmentTransportLabel(environment);
+  return (
+    <>
+      {secondary && secondary !== transport ? (
+        <span className="block truncate">{secondary}</span>
+      ) : null}
+      <span className="block truncate">{transport}</span>
+    </>
   );
 }
 
