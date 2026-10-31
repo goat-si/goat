@@ -16,7 +16,7 @@ import type {
   ScreenRunError,
 } from "@goat/contracts";
 import { COMPUTER_USE_PRIMITIVE_RESULT_TOO_LARGE } from "@goat/contracts";
-import { driverValue, fail } from "./DesktopDriverReplies.ts";
+import { driverValue, driverWarnings, fail } from "./DesktopDriverReplies.ts";
 import { hopsOf } from "./DesktopHops.ts";
 import { settleCaptureIfNeeded } from "./DesktopEvidence.ts";
 import { boundsOf, elementFrames, sameRect, windowOrigin } from "./DesktopFrames.ts";
@@ -129,6 +129,7 @@ const buildDesktopReadArgs = (input: {
   readonly capture: boolean;
   /** The macOS driver's JPEG is under half the PNG's bytes and takes a pixel click all the same. */
   readonly jpeg: boolean;
+  readonly modelFit: boolean;
   readonly limit: number;
   readonly filter?: string | undefined;
   readonly since?: string | undefined;
@@ -137,7 +138,8 @@ const buildDesktopReadArgs = (input: {
   window_id: input.windowId,
   include_accessibility_tree: !input.capture,
   include_screenshot: input.capture,
-  ...(input.capture && input.jpeg ? { screenshot_format: "jpeg" } : {}),
+  ...(input.capture && input.jpeg && !input.modelFit ? { screenshot_format: "jpeg" } : {}),
+  ...(input.capture && input.modelFit ? { screenshot_fit: "model" } : {}),
   max_elements: input.limit,
   ...(input.capture ? {} : { tree_format: "both" }),
   ...(input.filter === undefined ? {} : { query: input.filter }),
@@ -232,7 +234,56 @@ const parseDesktopTreeState = (input: {
     .map(object)
     .filter((entry) => entry !== undefined);
   const markdown = treeOf(input.state, elements, input.filtered);
-  const rows = desktopRows(elements, canLiftNamesFromTree(elements, markdown) ? markdown : "");
+  const source = string(input.state.tree_diff) ?? string(input.state.tree_markdown) ?? "";
+  const lines = new Map<number, string[]>();
+  for (const line of source.split("\n")) {
+    const match = /^(?:\s*- |[~+] )\[(\d+)\] (.*)$/.exec(line);
+    if (!match?.[1] || match[2] === undefined) continue;
+    const index = Number(match[1]);
+    lines.set(index, [...(lines.get(index) ?? []), match[2]]);
+  }
+  const entries = new Map<number, Record<string, unknown>[]>();
+  for (const entry of elements) {
+    const index = natural(entry.element_index);
+    if (index !== undefined) entries.set(index, [...(entries.get(index) ?? []), entry]);
+  }
+  const safeText = elements.every((entry) =>
+    [
+      entry.label,
+      entry.value,
+      entry.description,
+      ...(Array.isArray(entry.actions) ? entry.actions : []),
+    ].every((value) => typeof value !== "string" || !/[\r\n\u2028\u2029]/.test(value)),
+  );
+  const rows = desktopRows(elements, canLiftNamesFromTree(elements, markdown) ? markdown : "").map(
+    (row) => {
+      if (
+        !safeText ||
+        row.index === undefined ||
+        !row.name ||
+        row.lifted ||
+        row.name === row.text ||
+        /["\r\n]/.test(row.name)
+      )
+        return row;
+      const listed = entries.get(row.index);
+      const entry = listed?.length === 1 ? listed[0] : undefined;
+      if (
+        !entry ||
+        entry?.description === row.name ||
+        (typeof entry?.title === "string" && entry.title !== row.name)
+      )
+        return row;
+      const matches = lines.get(row.index);
+      const head = `${row.role} "${row.name}"`;
+      const content = matches?.[0];
+      return matches?.length === 1 &&
+        content?.startsWith(head) &&
+        /^(?:\s|$)/.test(content.slice(head.length))
+        ? { ...row, pairingTitle: row.name }
+        : row;
+    },
+  );
   const query = input.query;
   const shown = query
     ? rows.filter((row) => matchesQuery(row, query))
@@ -268,6 +319,7 @@ export interface DesktopObserveDeps {
     context: ScreenHostContext,
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
   readonly jpegScreenshots: boolean;
+  readonly modelFit: boolean;
   /** The host's latest target generation, and its update when a sheet's parent takes over. */
   readonly epoch: () => number;
   readonly setEpoch: (epoch: number) => void;
@@ -323,8 +375,8 @@ const structuralDiff = (
 ) => {
   if (/^(?:[+-] |reindexed:)/m.test(diff)) return true;
   const identity = (row: DesktopRow) => {
-    const name = row.id ?? row.name;
-    return name ? JSON.stringify([row.role, name]) : undefined;
+    if (row.id) return JSON.stringify([row.role, "id", row.id]);
+    return row.pairingTitle ? JSON.stringify([row.role, "title", row.pairingTitle]) : undefined;
   };
   for (const match of diff.matchAll(/^~ \[(\d+)\]/gm)) {
     const index = Number(match[1]);
@@ -334,8 +386,53 @@ const structuralDiff = (
     const old = previous.filter((row) => identity(row) === key);
     if (old.length !== 1 || old[0]?.index !== index) return true;
     if (current.filter((row) => identity(row) === key).length !== 1) return true;
+    const selected = atIndex[0];
+    if (
+      selected &&
+      !selected.id &&
+      [previous, current].some(
+        (rows) =>
+          rows.filter((row) => !row.id && row.role === selected.role && row.name === selected.name)
+            .length !== 1,
+      )
+    )
+      return true;
   }
   return false;
+};
+
+const retainPairingTitles = (
+  previous: ReadonlyArray<DesktopRow>,
+  current: ReadonlyArray<DesktopRow>,
+  diff: string,
+) => {
+  const changed = new Set([...diff.matchAll(/^~ \[(\d+)\]/gm)].map((match) => Number(match[1])));
+  const byIndex = (rows: ReadonlyArray<DesktopRow>) => {
+    const result = new Map<number, DesktopRow | undefined>();
+    for (const row of rows) {
+      if (row.index !== undefined) result.set(row.index, result.has(row.index) ? undefined : row);
+    }
+    return result;
+  };
+  const old = byIndex(previous);
+  const next = byIndex(current);
+  return current.map((row) => {
+    if (
+      row.pairingTitle ||
+      row.index === undefined ||
+      changed.has(row.index) ||
+      next.get(row.index) !== row
+    )
+      return row;
+    const before = old.get(row.index);
+    return before?.pairingTitle &&
+      before.role === row.role &&
+      before.name === row.name &&
+      before.text === row.text &&
+      before.id === row.id
+      ? { ...row, pairingTitle: before.pairingTitle }
+      : row;
+  });
 };
 
 export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(function* (
@@ -372,6 +469,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       ? bound.snapshotId
       : undefined;
   let retired = false;
+  const warnings: string[] = [];
   let readWindow = bound.windowId;
   const read = Effect.fn("DesktopObserveLatency.read")(function* (
     limit: number,
@@ -389,6 +487,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         windowId,
         capture,
         jpeg: deps.jpegScreenshots,
+        modelFit: deps.modelFit,
         limit,
         filter,
         since:
@@ -404,6 +503,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       context,
     );
     driverMs += elapsed(sentAt, yield* Clock.currentTimeMillis);
+    for (const warning of driverWarnings(reply, "read"))
+      if (!warnings.includes(warning) && warnings.length < 4) warnings.push(warning);
     return reply;
   });
   // A read that ran retired the driver's earlier tokens, so their refs go even when its
@@ -504,7 +605,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     ? (boundsOf(state.window_bounds) ??
       bound.boundWindows?.find((w) => w.window_id === expectedWindowId)?.bounds)
     : bound.windowBounds;
-  const rawBudget = observationReplyBudget(call, context.limits);
+  const warningBytes = warnings.length ? Buffer.byteLength(JSON.stringify({ warnings })) : 0;
+  const rawBudget = observationReplyBudget(call, context.limits, warningBytes);
   // A screenshot-only read that kept the tree's driver snapshot keeps its tokens, so the tree's
   // observation, rows and frames stay and the reply's tree is not read at all. Any other read
   // has retired them in the driver, so the old refs go now, before a render that may fail.
@@ -574,7 +676,10 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     observations.evictTarget(bound.ref.id);
     delete bound.observationId;
     delete bound.snapshotId;
-    bound.rows = tree.shown;
+    bound.rows =
+      isDiff && !numbersChanged && bound.rows
+        ? retainPairingTitles(bound.rows, tree.shown, rows)
+        : tree.shown;
     bound.elementsByToken = inspectTreeElements(tree.elements, tree.rows, tree.markdown);
     const basis = treeWindowBasis(bound.frames, nextBounds);
     if (basis === undefined) delete bound.framesBasis;
@@ -673,7 +778,11 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       });
       return {
         value: withObserveTiming(
-          { ...observation, ...(snapshotId === undefined ? {} : { snapshot: snapshotId }) },
+          {
+            ...observation,
+            ...(snapshotId === undefined ? {} : { snapshot: snapshotId }),
+            ...(warnings.length ? { warnings } : {}),
+          },
           timing,
           rawBudget,
         ),

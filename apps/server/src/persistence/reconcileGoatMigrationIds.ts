@@ -56,6 +56,9 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ChannelBotSessions",
   "MemoryGenerationReportBacklog",
   "ChannelSessionReceipts",
+  "BrowserSiteNotes",
+  "ComputerUseSessionApprovals",
+  "ComputerUseNamedApprovals",
   "ComputerUseInputHistory",
 ]);
 

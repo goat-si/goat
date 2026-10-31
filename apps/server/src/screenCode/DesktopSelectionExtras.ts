@@ -123,7 +123,7 @@ const SELECT_TEXT_KEYS = new Set([
 ]);
 
 /** select_text's arguments for the bound window, or why there are none. */
-const selectTextArgs = (
+export const selectTextArgs = (
   args: Record<string, unknown>,
   bound: BoundWindow,
   tokenOf: (element: Record<string, unknown>, bound: BoundWindow) => string | undefined,

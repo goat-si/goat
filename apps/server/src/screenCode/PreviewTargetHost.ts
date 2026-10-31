@@ -24,6 +24,7 @@ import { withInputTiming } from "./DesktopWindows.ts";
 import { nonWebUrl, pointerInput, waitConditions, WEB_ONLY } from "./PreviewTabInputs.ts";
 import { makeTurnTabClose, originOf, settleUnloadedOpen } from "./PreviewTabCleanup.ts";
 import { previewTargetFailure } from "./PreviewTargetFailures.ts";
+import { dispatchTabExtra } from "./PreviewTabExtras.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeTabClaims, type TabIdentity } from "./TabClaims.ts";
 
@@ -384,10 +385,28 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         call.method === "observe" ||
           call.method === "tab_status" ||
           call.method === "read_page" ||
+          call.method === "tab_logs" ||
           call.method === "wait_for",
       );
       if (call.method === "tab_status")
         return { value: current, category: "confirmed", evidence: ["Current tab status observed"] };
+      const extra = (upload?: {
+        locator: string | undefined;
+        documentGeneration: number | undefined;
+      }) =>
+        dispatchTabExtra(
+          call.method,
+          arg,
+          () => observations.index.invalidatePoints(bound.ref.id),
+          () => observations.index.invalidateTarget(bound.ref.id),
+          (operation, input, documentGeneration) =>
+            invoke(bound, context, operation, input, undefined, documentGeneration),
+          upload,
+        );
+      if (call.method === "tab_logs") {
+        const logs = extra();
+        if (logs) return yield* logs;
+      }
       if (call.method === "read_page") {
         const scope = cellScope(arg.scope, observations);
         const read = cellReadInput(arg, observationReplyBudget(call, context.limits));
@@ -511,6 +530,10 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return result;
       }
       const actions: Record<string, Parameters<typeof broker.invoke>[0]["operation"]> = {
+        tab_evaluate: "evaluate",
+        tab_dialog: "dialog",
+        tab_upload: "upload",
+        tab_fill_secret: "fillSecret",
         click: "click",
         right_click: "click",
         hover: "hover",
@@ -548,6 +571,8 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
           ),
         );
       }
+      const earlyExtra = call.method === "tab_upload" ? undefined : extra();
+      if (earlyExtra) return yield* earlyExtra;
       // A Playwright selector string, or a snapshot ref in it, targets like an observed element.
       const selector = stringField(arg, "selector");
       // A ref acts only through the binding that observed it, which holds its document and gate.
@@ -624,6 +649,14 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         return yield* Effect.fail(
           fail("stale_reference", "The page changed since that observation. Observe it again."),
         );
+      const upload =
+        call.method === "tab_upload"
+          ? extra({
+              locator,
+              documentGeneration: documentBound ? bound.documentGeneration : undefined,
+            })
+          : undefined;
+      if (upload) return yield* upload;
       if (point?.kind === "document")
         return yield* Effect.fail(
           fail(

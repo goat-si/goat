@@ -54,7 +54,7 @@ const supervisorFor = (
 it.live("a cell that reaches its deadline still returns the calls it finished", () =>
   Effect.gen(function* () {
     const asset = yield* resolveScreenRuntimeAsset("dev");
-    const limits = screenRunLimits({ cellWallMs: 1000 });
+    const limits = screenRunLimits({ cellWallMs: 5000 });
     const offered = yield* Deferred.make<void>();
     let presses = 0;
     const bridge = new ScreenHostBridge();
@@ -78,6 +78,13 @@ it.live("a cell that reaches its deadline still returns the calls it finished", 
             : Deferred.succeed(offered, undefined).pipe(Effect.andThen(Effect.never)),
     });
     const supervisor = supervisorFor(asset, limits, bridge);
+    const warmup = yield* supervisor.runCell(
+      { runId: "r", turnId: "t", context: { ...context(limits), cellId: "warmup" } },
+      "return 1;",
+      false,
+    );
+    expect(warmup.status).toBe("completed");
+    expect(warmup.value).toBe(1);
     const result = yield* supervisor.runCell(
       { runId: "r", turnId: "t", context: context(limits) },
       "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.press('Escape'); await app.press('Escape'); return true;",

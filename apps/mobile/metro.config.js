@@ -18,6 +18,7 @@ const licenseGeneratorSource = path.join(
 const escapedWorkspaceRoot = workspaceRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const generatedDeviceStreamRoot = path.join(__dirname, ".generated", "device-stream");
 const generatedPreviewStreamRoot = path.join(__dirname, ".generated", "preview-stream");
+const generatedNoteEditorRoot = path.join(__dirname, ".generated", "note-editor");
 
 config.watchFolders = [...new Set([...(config.watchFolders ?? []), workspaceRoot])];
 config.resolver = {
@@ -35,6 +36,7 @@ config.resolver = {
     "@goat/mobile-third-party-licenses": generatedLicenseModuleRoot,
     "@goat/mobile-device-stream": generatedDeviceStreamRoot,
     "@goat/mobile-preview-stream": generatedPreviewStreamRoot,
+    "@goat/mobile-note-editor": generatedNoteEditorRoot,
   },
 };
 
@@ -110,11 +112,35 @@ async function prepareStreamScripts() {
   }
 }
 
-module.exports = Promise.all([generateMobileThirdPartyLicenses(), prepareStreamScripts()]).then(
-  () =>
-    withUniwindConfig(config, {
-      cssEntryFile: "./global.css",
-      extraThemes,
-      polyfills: { rem: 14 },
-    }),
+// The editor ships as an HTML asset, so its code stays out of the startup JS bundle.
+async function prepareNoteEditor() {
+  const { generateNoteEditor } = await import(
+    pathToFileURL(path.join(__dirname, "scripts", "generate-note-editor.mts")).href
+  );
+  await generateNoteEditor();
+  if (process.env.NODE_ENV === "production") return;
+  let rebuild = Promise.resolve();
+  fs.watch(
+    path.join(__dirname, "src", "features", "notes", "live-editor"),
+    { persistent: false },
+    (_event, filename) => {
+      if (!filename || /\.test\.ts$/.test(String(filename))) return;
+      rebuild = rebuild
+        .then(generateNoteEditor)
+        .then(() => undefined)
+        .catch((error) => console.error("Could not rebuild the note editor:", error));
+    },
+  );
+}
+
+module.exports = Promise.all([
+  generateMobileThirdPartyLicenses(),
+  prepareStreamScripts(),
+  prepareNoteEditor(),
+]).then(() =>
+  withUniwindConfig(config, {
+    cssEntryFile: "./global.css",
+    extraThemes,
+    polyfills: { rem: 14 },
+  }),
 );

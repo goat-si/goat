@@ -1557,6 +1557,12 @@ export function createServerEnvironmentAtoms<R, E>(
       concurrency: configConcurrency,
     }),
     updateSettings,
+    removeComputerUseAllowedApp: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:remove-computer-use-app",
+      tag: WS_METHODS.computerUseRemoveAllowedApp,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     mutateProviderInstance: updateSettings,
     prepareAcpRegistryAgent: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:acp-registry:prepare",

@@ -1,6 +1,6 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@goat/contracts";
-import { useContext, useEffect, useEffectEvent } from "react";
+import { useContext, useEffect, useEffectEvent, useState } from "react";
 
 import { isElectron } from "../../env";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -13,6 +13,7 @@ import { readCuaGrants, type CuaPermission } from "./CuaSetupDialog.logic";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
+import { Button } from "../ui/button";
 
 /** Computer use state and controls for one connected host. */
 export function useComputerUseHost(environmentId: EnvironmentId, local: boolean) {
@@ -27,8 +28,12 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     environmentId,
     (settings) => settings.computerUseKeepTypedText,
   );
+  const allowedApps = useEnvironmentSettings(environmentId, (settings) => settings.cuaAllowedApps);
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
   const update = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const removeAllowed = useAtomCommand(serverEnvironment.removeComputerUseAllowedApp, {
+    reportFailure: false,
+  });
   const query = useEnvironmentQuery(serverEnvironment.computerUse({ environmentId, input: {} }));
   const refreshVisible = useEffectEvent(() => {
     if (!query.isPending && document.visibilityState !== "hidden") query.refresh();
@@ -68,17 +73,26 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     query.refresh();
     return result._tag === "Success" ? null : "Could not save the setting. Try again.";
   };
+  const removeApp = async (app: string): Promise<string | null> => {
+    if (!registry.get(serverEnvironment.removeComputerUseAllowedApp.permissionAtom(environmentId)))
+      return "This connection cannot change settings on this host.";
+    const result = await removeAllowed({ environmentId, input: { app } });
+    query.refresh();
+    return result._tag === "Success" ? null : "Could not save the setting. Try again.";
+  };
   return {
     enabled,
     disabledSkills,
     movePointer,
     keepTypedText,
+    allowedApps,
     canConfigure,
     status: query.data,
     error: query.error,
     localMac,
     localCheck,
     save,
+    removeApp,
     refresh: query.refresh,
   };
 }
@@ -160,32 +174,66 @@ function ComputerUseControls({
   local: boolean;
 }) {
   const host = useComputerUseHost(environmentId, local);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
   const bridge = window.desktopBridge;
   return (
-    <ComputerUsePanel
-      environmentId={environmentId}
-      hostLabel={hostLabel}
-      enabled={host.enabled}
-      canConfigure={host.canConfigure}
-      status={host.status}
-      error={host.error}
-      localMac={host.localMac}
-      localCheck={host.localCheck}
-      disabledSkills={host.disabledSkills}
-      movePointer={host.movePointer}
-      keepTypedText={host.keepTypedText}
-      save={host.save}
-      bridge={{
-        checkGrants,
-        openGuide,
-        verify: async () => {
-          const verifyDriver = window.desktopBridge?.verifyCuaDriver;
-          if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
-          return verifyDriver().finally(host.refresh);
-        },
-        relaunch: bridge?.relaunchForCuaGrants,
-        reveal: bridge?.revealCuaGrantTarget,
-      }}
-    />
+    <>
+      <ComputerUsePanel
+        environmentId={environmentId}
+        hostLabel={hostLabel}
+        enabled={host.enabled}
+        canConfigure={host.canConfigure}
+        status={host.status}
+        error={host.error}
+        localMac={host.localMac}
+        localCheck={host.localCheck}
+        disabledSkills={host.disabledSkills}
+        movePointer={host.movePointer}
+        keepTypedText={host.keepTypedText}
+        save={host.save}
+        bridge={{
+          checkGrants,
+          openGuide,
+          verify: async () => {
+            const verifyDriver = window.desktopBridge?.verifyCuaDriver;
+            if (!verifyDriver) throw new Error("This desktop app cannot check computer use.");
+            return verifyDriver().finally(host.refresh);
+          },
+          relaunch: bridge?.relaunchForCuaGrants,
+          reveal: bridge?.revealCuaGrantTarget,
+        }}
+      />
+      <SettingsRow title="Allowed apps" description="Apps always allowed on this environment.">
+        {host.allowedApps.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No apps always allowed.</p>
+        ) : (
+          host.allowedApps.map((app) => (
+            <div key={app} className="flex items-center justify-between gap-3">
+              <span className="text-sm">{app}</span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!host.canConfigure || removing}
+                onClick={() => {
+                  setRemoving(true);
+                  void host
+                    .removeApp(app)
+                    .then(setRemoveError)
+                    .finally(() => setRemoving(false));
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+          ))
+        )}
+        {removeError ? (
+          <p role="alert" className="text-sm text-destructive">
+            {removeError}
+          </p>
+        ) : null}
+      </SettingsRow>
+    </>
   );
 }

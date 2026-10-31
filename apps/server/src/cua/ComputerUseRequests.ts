@@ -29,6 +29,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import type { ComputerUseAnswer } from "../handoffs/computerUseContinuations.ts";
 import * as CuaDriver from "./CuaDriver.ts";
+import { namedAppMessages } from "./ComputerUseNamedApps.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import {
   computerUseOrigin,
@@ -64,7 +65,7 @@ const grantText = (input: {
       : []),
     input.apps === undefined
       ? "Approving admits this thread's turns until the request expires. It does not approve each action, and anything the screen shows can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too."
-      : "Approving admits this thread's turns to these apps' windows until the request expires. It does not approve each action, and anything those windows show can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
+      : "Approving admits this thread's turns to these apps' windows until the request expires. Your choice can also allow later requests for this conversation or always on this environment. It does not approve each action, and anything those windows show can be clicked or typed into. You can end it early from this request in the thread, and turning computer use off ends it too.",
   ].join("\n\n"),
 });
 
@@ -129,6 +130,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       return {
         kind: "refused",
         reason: "unknown_app",
+        code: "app_not_allowed",
         unknownApps: excluded,
         message: `Computer use never controls ${excluded.join(", ")}: password managers and other credential stores are always left out. Do not ask for them again; ask the person to do that step themselves.`,
       } satisfies ComputerUseRequestResult;
@@ -146,6 +148,8 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     }
   }
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
+  const handoffs = yield* Handoffs.Handoffs;
+  yield* handoffs.revalidateComputerUse();
   // Admissions to different apps hold at once; an app, or the whole screen, is one thread's.
   const held = yield* leases.holder(input.threadId, input.request.apps);
   if (Option.isSome(held))
@@ -175,22 +179,6 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     yield* leases.attached(input.threadId),
     (control) => run !== undefined && control.runId === run.id,
   );
-  if (
-    Option.isSome(current) &&
-    current.value.everyApp &&
-    (!foreground || (yield* leases.foregroundAvailable(input.threadId, input.request.purpose)))
-  ) {
-    if (wanted !== undefined)
-      yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
-    return {
-      kind: "available",
-      message: foreground
-        ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
-        : wanted === undefined
-          ? "This thread runs in full access: this turn can act on every app without approval."
-          : `This thread runs in full access: this turn can act on every app without approval. ${wanted.join(", ")} ${wanted.length === 1 ? "is" : "are"} added to computer use in a moment if opened after it started; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again.`,
-    } satisfies ComputerUseRequestResult;
-  }
   const own = yield* leases.active(input.threadId);
   // A live admission answers the request only when it already covers what is asked.
   const granted = Option.isSome(own) ? own.value.apps : [];
@@ -238,8 +226,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     purpose: input.request.purpose,
     foreground,
   });
-  const handoffs = yield* Handoffs.Handoffs;
-  const handoff = yield* handoffs.create({
+  const createInput: Parameters<typeof handoffs.create>[0] = {
     kind: "approval",
     title:
       wanted === undefined
@@ -266,7 +253,52 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       ? { computerUseForeground: { purpose: input.request.purpose, target: "desktop" as const } }
       : {}),
     ...(wanted === undefined ? {} : { apps: wanted }),
-  });
+  };
+  if (wanted !== undefined && !foreground) {
+    const namedMessages =
+      origin._tag === "interactive"
+        ? namedAppMessages(
+            wanted,
+            yield* cua.value.appCatalog,
+            (yield* threads.getThreadRecords(input.threadId, ["messages"])).messages,
+          )
+        : [];
+    const auto = yield* handoffs.autoComputerUse({
+      ...createInput,
+      namedMessages,
+      reason: grantText({
+        title: view.projection.thread.title.trim() || "A thread",
+        turn: run.ordinal,
+        apps: wanted,
+        minutes: DEFAULT_MINUTES,
+        purpose: input.request.purpose,
+        foreground: false,
+      }).reason,
+      expiresAt: DateTime.add(yield* DateTime.now, { minutes: DEFAULT_MINUTES }),
+    });
+    if (Option.isSome(auto))
+      return {
+        kind: "available",
+        message: "Allowed automatically. A time-limited admission is recorded in this thread.",
+      } satisfies ComputerUseRequestResult;
+  }
+  if (
+    Option.isSome(current) &&
+    current.value.everyApp &&
+    (!foreground || (yield* leases.foregroundAvailable(input.threadId, input.request.purpose)))
+  ) {
+    if (wanted !== undefined)
+      yield* leases.nameApps(input.threadId, current.value.controlId, wanted);
+    return {
+      kind: "available",
+      message: foreground
+        ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
+        : wanted === undefined
+          ? "This thread runs in full access: this turn can act on every app without approval."
+          : `This thread runs in full access: this turn can act on every app without approval. ${wanted.join(", ")} ${wanted.length === 1 ? "is" : "are"} added to computer use in a moment if opened after it started; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again.`,
+    } satisfies ComputerUseRequestResult;
+  }
+  const handoff = yield* handoffs.create(createInput);
   // A repeated request returns the pending handoff with its original expiry.
   const approvedUntil = DateTime.formatIso(handoff.expiresAt ?? expiresAt);
   if (

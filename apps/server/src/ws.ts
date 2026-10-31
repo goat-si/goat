@@ -1,12 +1,15 @@
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
 import * as SettingsRpc from "./auth/SettingsRpc.ts";
+import * as SettingsSessionPermit from "./auth/settingsSessionPermit.ts";
+import { canResolveHumanStep, sessionResolver } from "./handoffs/HumanStepAuthority.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as DecisionClient from "./goatclaw/DecisionClient.ts";
 import {
   CHANNEL_GATEWAY_WS_METHODS,
   ChannelGatewayError,
   HubProxyRpcError,
+  MemoryRpcError,
   OrchestrationDispatchCommandError,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
@@ -21,6 +24,8 @@ import { makeHubNodesHandlers } from "./hubNodes/HubNodes.rpc.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
+import * as SiteNotes from "./preview/SiteNotes.ts";
+
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
@@ -321,6 +326,7 @@ import {
   resolveEditorConfig,
   resolveFileManagerRevealKindForConfig,
   withLateEditorConfig,
+  withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
 import { isNetworkPath } from "@goat/shared/path";
 
@@ -625,6 +631,18 @@ function toAuthAccessStreamEvent(
 }
 
 const isClientSurface = Schema.is(ClientSurface);
+const isSiteNoteError = Schema.is(SiteNotes.SiteNoteError);
+const siteNoteRpcError = (error: unknown) =>
+  isSiteNoteError(error)
+    ? new MemoryRpcError({
+        code:
+          error.reason === "secret"
+            ? "secret_detected"
+            : error.reason === "too_large"
+              ? "payload_too_large"
+              : "unsupported_operation",
+      })
+    : memoryError(error);
 const isClientConnectionMethod = Schema.is(ClientConnectionMethod);
 const isClientDeviceType = Schema.is(ClientDeviceType);
 const isClientOs = Schema.is(ClientOs);
@@ -1387,6 +1405,10 @@ export const layerWsRpc = (
       const strayProcesses = yield* StrayProcesses.StrayProcesses;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const memory = yield* MemoryService.MemoryService;
+      // Absent only in runtimes that serve no browser, such as RPC test layers.
+      const siteNotes = Effect.fromOption(yield* Effect.serviceOption(SiteNotes.SiteNotes)).pipe(
+        Effect.mapError(() => new MemoryRpcError({ code: "unsupported_operation" })),
+      );
       const memorySync = yield* MemorySyncService.MemorySyncService;
       const ownerPolicy = yield* ServerSettings.MemoryOwnerSourceReadPolicyAdministration;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1422,6 +1444,7 @@ export const layerWsRpc = (
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const updateSettings = yield* SettingsRpc.make(currentSession);
+      const authorizeSettings = yield* SettingsSessionPermit.make(currentSession);
       // Service permits are rechecked after waits and inside SQL; this is a token-free Ref read.
       const memoryPermit = (
         required: ReadonlyArray<import("@goat/contracts").AuthEnvironmentScope>,
@@ -1442,6 +1465,30 @@ export const layerWsRpc = (
       const ownerSettings = memorySettings.pipe(Effect.mapError(memoryError));
       const hubNodesHandlers = yield* makeHubNodesHandlers;
       const memoryHandlers = WsMemoryCoreRpcGroup.middleware(RpcInstrumentation).of({
+        [WS_METHODS.siteNotesList]: () =>
+          memoryRead.pipe(
+            Effect.mapError(memoryError),
+            Effect.andThen(siteNotes),
+            Effect.map((notes) => notes.list()),
+          ),
+        [WS_METHODS.siteNotesWrite]: (input) =>
+          siteNotes.pipe(
+            Effect.flatMap((notes) => notes.write({ ...input, author: "person" }, memoryWrite)),
+            Effect.as({ ok: true as const }),
+            Effect.mapError(siteNoteRpcError),
+          ),
+        [WS_METHODS.siteNotesDelete]: (input) =>
+          siteNotes.pipe(
+            Effect.flatMap((notes) => notes.delete(input.origin, memoryWrite)),
+            Effect.as({ ok: true as const }),
+            Effect.mapError(siteNoteRpcError),
+          ),
+        [WS_METHODS.siteNotesRestoreSeed]: (input) =>
+          siteNotes.pipe(
+            Effect.flatMap((notes) => notes.restoreSeed(input.origin, memoryWrite)),
+            Effect.as({ ok: true as const }),
+            Effect.mapError(siteNoteRpcError),
+          ),
         [WS_METHODS.memoryProjectBindingGet]: (input) =>
           memory.getProjectBinding(input, memoryWrite).pipe(Effect.mapError(memoryError)),
         [WS_METHODS.memoryProjectBindingUpdate]: (input) =>
@@ -2692,6 +2739,56 @@ export const layerWsRpc = (
         ...(yield* storageRpcHandlers(currentSessionId)),
         [WS_METHODS.serverGetSettings]: (_input) =>
           serverSettings.getSettings.pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+        [WS_METHODS.computerUseRemoveAllowedApp]: ({ app }) =>
+          Effect.gen(function* () {
+            if (!canResolveHumanStep(sessionResolver(currentSession), "person_only"))
+              return yield* new EnvironmentAuthorizationError({
+                requiredScope: AuthSettingsWriteScope,
+                message: "Only a person may remove an allowed app.",
+              });
+            const authorize = authorizeSettings({ cuaAllowedApps: [] }).pipe(
+              Effect.andThen(
+                sessions.listActive().pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ServerSettingsError({
+                        settingsPath: config.settingsPath,
+                        operation: "normalize",
+                        cause,
+                      }),
+                  ),
+                  Effect.flatMap((active) =>
+                    active.some(
+                      (session) =>
+                        session.sessionId === currentSessionId &&
+                        session.client.deviceType !== "bot" &&
+                        canResolveHumanStep(sessionResolver(session), "person_only"),
+                    )
+                      ? Effect.void
+                      : Effect.fail(
+                          new ServerSettingsError({
+                            settingsPath: config.settingsPath,
+                            operation: "normalize",
+                            cause: "A person must remove an allowed app.",
+                          }),
+                        ),
+                  ),
+                ),
+              ),
+            );
+            yield* handoffs.removeComputerUseAllowedApp(app, authorize).pipe(
+              Effect.mapError((cause) =>
+                cause._tag === "HandoffError"
+                  ? new ServerSettingsError({
+                      settingsPath: config.settingsPath,
+                      operation: "normalize",
+                      cause,
+                    })
+                  : cause,
+              ),
+            );
+            return {};
+          }),
         [WS_METHODS.serverUpdateSettings]:
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* ({ patch, providerInstanceMutation, agentTerminalBinding }) {
@@ -2701,14 +2798,16 @@ export const layerWsRpc = (
                 settingsPath: config.settingsPath,
                 operation: "normalize",
               });
-            if (patch.enableCua === true) yield* ComputerUseSettings.admitEnable();
+            if (patch.enableCua === true) {
+              yield* ComputerUseSettings.admitEnable();
+            }
             const deviceHosts = patch.deviceHosts
               ? yield* remoteSshDeviceHosts(patch.deviceHosts).pipe(
                   Effect.provide(deviceHostContext),
                 )
               : undefined;
             const nextPatch = { ...patch, ...(deviceHosts ? { deviceHosts } : {}) };
-            const settings = yield* updateSettings({
+            const update = updateSettings({
               patch: nextPatch,
               ...(providerInstanceMutation === undefined ? {} : { providerInstanceMutation }),
               ...(agentTerminalBinding === undefined ? {} : { agentTerminalBinding }),
@@ -2729,6 +2828,12 @@ export const layerWsRpc = (
                     ),
                   ),
               }),
+            );
+            const settings = yield* ComputerUseSettings.applyPatch(
+              handoffs,
+              patch,
+              update,
+              config.settingsPath,
             );
             return ServerSettings.redactServerSettingsForClient(settings);
           }),
@@ -3390,7 +3495,7 @@ export const layerWsRpc = (
                 ),
               );
 
-              return Stream.concat(
+              const events = Stream.concat(
                 rpcInitialItems([{ version: 1 as const, type: "snapshot" as const, config }]),
                 withLateEditorConfig(
                   config,
@@ -3400,6 +3505,9 @@ export const layerWsRpc = (
                   automationHold.changes,
                 ),
               );
+              return input.providerStatusChanges === true
+                ? withProviderStatusChanges(events)
+                : events;
             }),
           ),
         [WS_METHODS.subscribeServerLifecycle]: (input) =>

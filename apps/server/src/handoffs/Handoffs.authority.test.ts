@@ -24,6 +24,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as SecretStore from "../auth/ServerSecretStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
+import { MCP_CLIENT_SUBJECT } from "../auth/mcpClientSubject.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -157,6 +158,23 @@ const run = <A, E>(
   });
 
 const secretAnswer = { threadId, turnItemId: handoffId, answer: { type: "decline" as const } };
+
+it.effect("an agent client cannot choose a computer-use approval scope", () =>
+  Effect.gen(function* () {
+    const denied = yield* run(
+      MCP_CLIENT_SUBJECT,
+      (service) =>
+        service.respond({ ...address, action: "completed", computerUseScope: "always" }, sessionId),
+      {
+        path: COMPUTER_USE_GRANT_HANDOFF_PATH,
+        scopes: ["orchestration:operate", "settings:write"],
+      },
+    );
+    expect(denied.result._tag).toBe("Failure");
+    if (denied.result._tag === "Failure")
+      expect(denied.result.failure._tag).toBe("EnvironmentAuthorizationError");
+  }),
+);
 
 it.effect(
   "Stop during the real holder read fences a pending foreground approval before first mint",

@@ -60,6 +60,33 @@ const dependencies = [
 
 const PreviewToolFailure = Schema.Union([PreviewAutomationError, OrchestratorMcpFailure]);
 
+const SiteNoteReadTool = Tool.make(agentSurfaceRegistry["browser_site_note.read"].name, {
+  description: agentSurfaceRegistry["browser_site_note.read"].description,
+  parameters: Schema.Struct({ origin: Schema.String }),
+  success: Schema.Struct({
+    note: Schema.NullOr(
+      Schema.Struct({
+        origin: Schema.String,
+        text: Schema.String,
+        author: Schema.Literals(["agent", "person", "seed"]),
+        updatedAt: Schema.NullOr(Schema.String),
+      }),
+    ),
+  }),
+  failure: PreviewToolFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["browser_site_note.read"]));
+
+const SiteNoteWriteTool = Tool.make(agentSurfaceRegistry["browser_site_note.write"].name, {
+  description: agentSurfaceRegistry["browser_site_note.write"].description,
+  parameters: Schema.Struct({ origin: Schema.String, text: Schema.String }),
+  success: Schema.Struct({ ok: Schema.Literal(true) }),
+  failure: PreviewToolFailure,
+  failureMode: "return",
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["browser_site_note.write"]));
+
 const safetyFields = { safety: Schema.optionalKey(ActionOutcomeSafety) };
 const presentationFields = {
   toolIcon: Schema.optional(ToolActivityIcon),
@@ -378,6 +405,8 @@ const PreviewRecordingStopTool = Tool.make(agentSurfaceRegistry["preview.recordi
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.recording_stop"]));
 
 export const PreviewToolkit = Toolkit.make(
+  SiteNoteReadTool,
+  SiteNoteWriteTool,
   PreviewDialogTool,
   PreviewStatusTool,
   PreviewOpenTool,
@@ -408,6 +437,8 @@ export const PreviewToolkit = Toolkit.make(
 );
 
 export const PreviewStandardToolkit = Toolkit.make(
+  SiteNoteReadTool,
+  SiteNoteWriteTool,
   PreviewLogsTool,
   PreviewFetchTool,
   PreviewReadTool,

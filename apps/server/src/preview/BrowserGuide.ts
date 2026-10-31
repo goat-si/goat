@@ -34,7 +34,8 @@ export const browserGuideFor = (
   stateDir: string | undefined,
   threadId: string,
   url: string | undefined,
+  deliver: (threadId: string, url: string) => string | undefined,
 ): string | undefined => {
   stateDirectory ??= stateDir;
-  return guide(threadId, url);
+  return guide(threadId, url, deliver);
 };

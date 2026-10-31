@@ -116,6 +116,15 @@ export class DriverError {
     this.text = text;
   }
 }
+/** A successful driver result with structured data and its text content. */
+export class DriverSuccess {
+  readonly structuredContent: Record<string, unknown>;
+  readonly text: string | readonly string[];
+  constructor(structuredContent: Record<string, unknown>, text: string | readonly string[]) {
+    this.structuredContent = structuredContent;
+    this.text = text;
+  }
+}
 /** A call GOAT refused before the driver: the proxy answers not_started with its refusal. */
 export class NotStarted extends DriverError {}
 /** A call cut off after it reached the driver: the proxy answers unknown_outcome. */
@@ -135,6 +144,7 @@ export const fixture = (
   labelTarget?: Parameters<typeof createDesktopTargetHost>[0]["labelTarget"],
   // Launch arguments depend on the platform; tests pin macOS so they read the same on every runner.
   platform: NodeJS.Platform = "darwin",
+  driverVersion?: string,
 ) => {
   const sent: Array<{
     tool: string;
@@ -195,7 +205,14 @@ export const fixture = (
                         ? {}
                         : { content: [{ type: "text", text: value.text }] }),
                     }
-                  : { structuredContent: value },
+                  : value instanceof DriverSuccess
+                    ? {
+                        structuredContent: value.structuredContent,
+                        content: (typeof value.text === "string" ? [value.text] : value.text).map(
+                          (text) => ({ type: "text", text }),
+                        ),
+                      }
+                    : { structuredContent: value },
               ...(request.tool === "get_window_state" &&
               typeof (value as { image?: unknown }).image === "object"
                 ? { image: (value as { image: unknown }).image }
@@ -215,6 +232,7 @@ export const fixture = (
       ...(observations ? { observations } : {}),
       ...(labelTarget ? { labelTarget } : {}),
       platform,
+      ...(driverVersion === undefined ? {} : { driverVersion }),
     }),
     sent,
     channel,

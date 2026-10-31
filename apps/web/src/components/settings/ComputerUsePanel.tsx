@@ -41,6 +41,7 @@ export interface ComputerUseSettingsPatch {
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
   readonly cuaMovePointer?: "never" | "allowed";
   readonly computerUseKeepTypedText?: boolean;
+  readonly cuaAllowedApps?: ReadonlyArray<string>;
 }
 
 interface StatusLine {

@@ -127,7 +127,7 @@ it.live(
           await tab.scroll(null, 'down', 1);
           let stale;
           try { await tab.click([140, 100]); } catch (error) { stale = error.code; }
-          return { size: [shot.pixelWidth, shot.pixelHeight], observed: page.image.imageRef, verdict: clicked.verdict, stale };`,
+          return { size: [shot.pixelWidth, shot.pixelHeight], shot: shot.imageRef, observed: page.image.imageRef, verdict: clicked.verdict, stale };`,
         });
       }).pipe(
         Effect.provide(
@@ -146,11 +146,10 @@ it.live(
         status: "completed",
         value: { size: [600, 400], stale: "stale_reference" },
       });
-      // Both reads carried their image, and the observe's imageRef names the second one.
-      expect(result.images.map((image) => image.imageRef)).toContain(
-        (result.value as { observed: string }).observed,
-      );
-      expect(result.images).toHaveLength(2);
+      // Both reads captured the unchanged page; the cell sends that image once and both name it.
+      const { shot, observed } = result.value as { shot: string; observed: string };
+      expect(observed).toBe(shot);
+      expect(result.images.map((image) => image.imageRef)).toEqual([shot]);
       expect(yield* Effect.promise(() => page.evaluate("hits"))).toEqual([[30, 20]]);
     }).pipe(Effect.scoped),
 );

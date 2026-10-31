@@ -133,7 +133,10 @@ describe("V2 preview upgrade", () => {
         [116, "ChannelBotSessions"],
         [117, "MemoryGenerationReportBacklog"],
         [118, "ChannelSessionReceipts"],
-        [119, "ComputerUseInputHistory"],
+        [119, "BrowserSiteNotes"],
+        [120, "ComputerUseSessionApprovals"],
+        [121, "ComputerUseNamedApprovals"],
+        [122, "ComputerUseInputHistory"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -277,7 +280,10 @@ describe("V2 preview upgrade", () => {
         [116, "ChannelBotSessions"],
         [117, "MemoryGenerationReportBacklog"],
         [118, "ChannelSessionReceipts"],
-        [119, "ComputerUseInputHistory"],
+        [119, "BrowserSiteNotes"],
+        [120, "ComputerUseSessionApprovals"],
+        [121, "ComputerUseNamedApprovals"],
+        [122, "ComputerUseInputHistory"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

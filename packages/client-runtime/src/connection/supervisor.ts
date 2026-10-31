@@ -36,6 +36,7 @@ import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { NETWORK_BLOCKING_HINT } from "../errors/network.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { isLoopbackEntry, loopbackBudgetMs, retryDelayMs } from "./loopbackHost.ts";
+import { SYNCHRONIZATION_TIMEOUT } from "./synchronization.ts";
 import {
   connectionRouteId,
   connectionRouteKind,
@@ -51,7 +52,6 @@ const SETUP_TIMEOUT_CAP_MS = 45_000;
 const SSH_PREPARATION_TIMEOUT_MS = 900_000;
 const SETUP_SAMPLE_COUNT = 5;
 const SETUP_HEADROOM = 1.5;
-const synchronizationTimeout = Duration.fromInputUnsafe("75 seconds");
 const BACKOFF_RESET_AFTER_MS = 30_000;
 const WAKE_RETRY_WINDOW_MS = 30_000;
 const WAKE_RETRY_DELAY_MS = 2_000;
@@ -919,7 +919,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             ? active.deadline
             : progress.ordinaryStartedAt +
               setup +
-              synchronized * Duration.toNanosUnsafe(synchronizationTimeout);
+              synchronized * Duration.toNanosUnsafe(SYNCHRONIZATION_TIMEOUT);
           const remaining = deadline - (yield* Clock.monotonicTimeNanos);
           if (remaining <= 0n) {
             return {

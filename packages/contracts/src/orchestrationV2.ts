@@ -116,7 +116,6 @@ import {
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export * from "./providerReplay.ts";
-
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
 
@@ -3582,6 +3581,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     handoffId: TurnItemId,
     state: HandoffState,
     actor: HandoffActor,
+    computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
   }),
   Schema.Struct({
     type: Schema.Literal("delegated_task.remote.register"),

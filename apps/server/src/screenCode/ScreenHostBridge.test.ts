@@ -128,7 +128,10 @@ it.effect("the host retains bounded images and guest replies contain metadata on
           scale: 1,
           mimeType: "image/png",
         };
-        const image: ScreenImage = { ...metadata, bytes: Buffer.from("1234").toString("base64") };
+        const image: ScreenImage = {
+          ...metadata,
+          bytes: Buffer.from(`123${request.callId}`).toString("base64"),
+        };
         return Effect.succeed({
           value: { observationId: "o", tree: "button Save", image },
           image,
@@ -424,8 +427,11 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
       const first = yield* Fiber.join(active);
       const second = yield* Fiber.join(queued);
       const landed = category !== "refused";
-      expect(first?.outcome).toBe("error");
-      expect(first?.error?.safety?.possibleCommit).toBe(landed);
+      if (category === "suspected_noop") expect(first).toMatchObject({ outcome: "ok", category });
+      else {
+        expect(first?.outcome).toBe("error");
+        expect(first?.error?.safety?.possibleCommit).toBe(landed);
+      }
       // The guest caught the failure and went on: it may observe, and sends more input only when
       // the failed write cannot have changed the page.
       const observed = yield* bridge.handle(
@@ -457,37 +463,36 @@ it.effect.each(["partial", "suspected_noop", "refused"] as const)(
     }),
 );
 
-it.effect(
-  "a host's unproven no-op after sending is an unknown outcome that stops the cell's later writes",
-  () =>
-    Effect.gen(function* () {
-      const bridge = new ScreenHostBridge();
-      let sent = 0;
-      bridge.setDispatcher({
-        availability: () => Effect.succeed([]),
-        dispatch: () =>
-          Effect.sync(() => {
-            sent++;
-            return { category: "suspected_noop" as const };
-          }),
-      });
-      const first = yield* bridge.handle(
-        call(1),
+it.effect("a host's unproven no-op is reported and stops the cell's later writes", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    let sent = 0;
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([]),
+      dispatch: () =>
+        Effect.sync(() => {
+          sent++;
+          return { category: "suspected_noop" as const };
+        }),
+    });
+    const first = yield* bridge.handle(
+      call(1),
+      context(() => Effect.void),
+    );
+    expect(first).toMatchObject({ outcome: "ok", category: "suspected_noop" });
+    expect(
+      (yield* bridge.handle(
+        call(2),
         context(() => Effect.void),
-      );
-      expect(first?.error).toMatchObject({
-        code: "unknown_outcome",
-        effectStarted: true,
-        safety: { possibleCommit: true, writeStatus: "may_have_applied" },
-      });
-      expect(
-        (yield* bridge.handle(
-          call(2),
-          context(() => Effect.void),
-        ))?.error?.code,
-      ).toBe("not_run");
-      expect(sent).toBe(1);
-    }),
+      ))?.error?.code,
+    ).toBe("not_run");
+    expect(sent).toBe(1);
+    const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
+    expect(journal[0]?.receipt.safety).toMatchObject({
+      possibleCommit: true,
+      writeStatus: "may_have_applied",
+    });
+  }),
 );
 
 it.effect("a failure on one target keeps another target's in-flight call and its result", () =>
@@ -504,7 +509,7 @@ it.effect("a failure on one target keeps another target's in-flight call and its
               yield* Deferred.await(release);
               return { category: "confirmed" as const, evidence: ["readback"], value: "typed" };
             })
-          : Effect.succeed({ category: "suspected_noop" as const }),
+          : Effect.succeed({ category: "partial" as const }),
     });
     const other = { ...tab, id: "other" };
     const slow = yield* bridge

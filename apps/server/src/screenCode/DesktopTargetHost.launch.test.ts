@@ -584,7 +584,9 @@ it.live(
         expect(ambRes.value).toMatchObject({ code: "target_ambiguous", nothingSent: true });
       }
       expect(SCREEN_TARGET_API).toContain("app(q: string | {");
-      expect(SCREEN_TARGET_API).toContain("observed?: string[]");
+      expect(SCREEN_TARGET_API).toContain(
+        'type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop";',
+      );
     });
   },
 );

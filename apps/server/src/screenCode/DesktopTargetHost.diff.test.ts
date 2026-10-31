@@ -649,7 +649,7 @@ it.effect("a value edit at the same number keeps the full observation baseline",
             element_token: `${snapshot}:1`,
             role: "AXTextField",
             label: "Name",
-            value: reads === 1 ? "a" : "ab",
+            value: reads <= 2 ? "a" : "ab",
           },
         ];
         return {
@@ -660,7 +660,9 @@ it.effect("a value edit at the same number keeps the full observation baseline",
           elements,
           ...(args.since === undefined
             ? { tree_markdown: '- [0] AXWindow "Document"\n- [1] AXTextField "Name" = "a"' }
-            : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
+            : reads === 2
+              ? { since_status: "no_change", tree_diff: "no change since s1" }
+              : { since_status: "diff", tree_diff: '~ [1] AXTextField "Name" = "ab"' }),
         };
       },
     });
@@ -670,8 +672,16 @@ it.effect("a value edit at the same number keeps the full observation baseline",
     )).value as ScreenTargetRef;
     const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
       .value as Observed;
-    const second = (yield* host.observe(
+    const unchanged = (yield* host.observe(
       call("get_accessibility_tree", { mode: "diff", baseObservationId: first.observationId }, ref),
+      context,
+    )).value as Observed;
+    const second = (yield* host.observe(
+      call(
+        "get_accessibility_tree",
+        { mode: "diff", baseObservationId: unchanged.observationId },
+        ref,
+      ),
       context,
     )).value as Observed;
     expect(second.indexedText).toBe(
@@ -679,3 +689,255 @@ it.effect("a value edit at the same number keeps the full observation baseline",
     );
   }),
 );
+
+it.effect("value labels cannot identify edited or moved fields, while identifiers can", () =>
+  Effect.gen(function* () {
+    for (const scenario of ["value-edit", "moved-value", "identified"] as const) {
+      let reads = 0;
+      const { host } = fixture({
+        get_window_state: (args: Record<string, unknown>) => {
+          const snapshot = `s${++reads}`;
+          const old = reads === 1;
+          const value = scenario === "moved-value" ? (old ? "other" : "same") : old ? "a" : "ab";
+          const elements = [
+            {
+              element_index: 0,
+              element_token: `${snapshot}:0`,
+              role: "AXWindow",
+              label: "Document",
+            },
+            ...(scenario === "moved-value" && old
+              ? [
+                  {
+                    element_index: 1,
+                    element_token: `${snapshot}:1`,
+                    role: "AXTextField",
+                    label: "same",
+                    value: "same",
+                  },
+                ]
+              : []),
+            {
+              element_index: scenario === "moved-value" && old ? 2 : 1,
+              element_token: `${snapshot}:${scenario === "moved-value" && old ? 2 : 1}`,
+              role: "AXTextField",
+              label: value,
+              value,
+              ...(scenario === "identified" ? { identifier: "field" } : {}),
+            },
+          ];
+          return {
+            pid: 42,
+            window_id: 7,
+            snapshot_id: snapshot,
+            elements_complete: false,
+            elements,
+            ...(args.since === undefined
+              ? {
+                  tree_markdown:
+                    scenario === "moved-value"
+                      ? '- [0] AXWindow "Document"\n- [1] AXTextField = "same"\n- [2] AXTextField = "other"'
+                      : `- [0] AXWindow "Document"\n- [1] AXTextField = "a"${scenario === "identified" ? " [id=field]" : ""}`,
+                }
+              : {
+                  since_status: "diff",
+                  tree_diff: `~ [1] AXTextField = "${value}"${scenario === "identified" ? " [id=field]" : ""}`,
+                }),
+          };
+        },
+      });
+      const ref = (yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 7 }),
+        context,
+      )).value as ScreenTargetRef;
+      const first = (yield* host.observe(call("get_accessibility_tree", {}, ref), context))
+        .value as Observed;
+      const second = (yield* host.observe(
+        call(
+          "get_accessibility_tree",
+          { mode: "diff", baseObservationId: first.observationId },
+          ref,
+        ),
+        context,
+      )).value as Observed;
+      if (scenario === "identified") {
+        expect(second.indexedText).toContain(
+          `other numbers unchanged; latest full observation is ${first.observationId}`,
+        );
+      } else {
+        expect(second.indexedText).toContain(
+          `other numbers unchanged since ${first.observationId};`,
+        );
+      }
+    }
+  }),
+);
+
+it.live.each([
+  {
+    label: "changed display",
+    diff: '~ AXStaticText = "8"',
+    count: 1,
+    expected: 'after click: changed (~ AXStaticText = "8")',
+    observed: "change_seen",
+  },
+  {
+    label: "no change",
+    diff: "no change since s1",
+    count: 1,
+    expected:
+      "after click: no change seen in this window; effect may be elsewhere, check before resending",
+    observed: "no_change_seen",
+  },
+  {
+    label: "two inputs",
+    diff: '~ AXStaticText = "8"',
+    count: 2,
+    expected: 'after 2 inputs: changed (~ AXStaticText = "8")',
+    observed: "change_seen",
+  },
+])("first app observation records $label after input", (scenario) => {
+  let reads = 0;
+  const { host, sent } = fixture({
+    click: { effect: "unverifiable" },
+    get_window_state: (args: Record<string, unknown>) => {
+      const snapshot = `s${++reads}`;
+      const old = goat2WindowState(args);
+      const full = {
+        ...old,
+        snapshot_id: snapshot,
+        elements:
+          "elements" in old
+            ? old.elements?.map((item) => ({
+                ...item,
+                element_token: `${snapshot}:${item.element_index}`,
+              }))
+            : undefined,
+      };
+      if (args.since === undefined) return full;
+      const { tree_markdown: _tree, ...diff } = full;
+      return {
+        ...diff,
+        since_status: scenario.diff.startsWith("no change") ? "no_change" : "diff",
+        tree_diff: scenario.diff,
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7});
+        await app.observe(); const done = []; for (let i = 0; i < ${scenario.count}; i++) done.push(await app.click(1));
+        const first = await app.observe(); const second = await app.observe(); await app.click(1); return {done, first, second};`,
+    });
+    const value = result.value as {
+      done: unknown[];
+      first: { effect?: string };
+      second: { effect?: string };
+    };
+    expect(value.done).toEqual(
+      Array.from({ length: scenario.count }, () => ({ ok: true, verdict: "unverifiable" })),
+    );
+    expect(value.first.effect).toBe(scenario.expected);
+    expect(value.second.effect).toBeUndefined();
+    const clicks = result.journal.filter((entry) => entry.receipt.method === "click");
+    expect(clicks).toHaveLength(scenario.count + 1);
+    expect(clicks.slice(0, scenario.count).map((entry) => entry.receipt.category)).toEqual(
+      Array(scenario.count).fill("unverifiable"),
+    );
+    expect(clicks.slice(0, scenario.count).map((entry) => entry.receipt.observedEffect)).toEqual(
+      Array.from({ length: scenario.count }, () => ({
+        state: scenario.observed,
+        rows: scenario.observed === "change_seen" ? [scenario.diff] : [],
+      })),
+    );
+    expect(sent.filter((entry) => entry.tool === "get_window_state")).toHaveLength(3);
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
+it.live("a full-read fallback after input does not attach observation evidence", () => {
+  const { host } = fixture({
+    click: { effect: "unverifiable" },
+    get_window_state: (args: Record<string, unknown>) => ({
+      ...goat2WindowState(args),
+      ...(args.since === undefined ? {} : { since_status: "unknown_snapshot" }),
+    }),
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const app = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await app.observe(); await app.click(1); const first = await app.observe(); return first;`,
+    });
+    expect(result.value).toMatchObject({ mode: "full" });
+    expect(result.value).not.toHaveProperty("effect");
+    expect(
+      result.journal.find((entry) => entry.receipt.method === "click")?.receipt.observedEffect,
+    ).toBeUndefined();
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
+it.live("rebinding retires the input target without attributing the new full read", () => {
+  const { host } = fixture({
+    click: { effect: "unverifiable" },
+    get_window_state: (args: Record<string, unknown>) => goat2WindowState(args),
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service.runCell({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      invocation: context.invocation,
+      source: `const a = await screen.app({bundle_id:'org.example.Editor', window_id:7}); await a.observe(); await a.click(1); const b = await screen.app({bundle_id:'org.example.Editor', window_id:7}); return await b.observe();`,
+    });
+    expect(result.value).toMatchObject({ mode: "full" });
+    expect(result.value).not.toHaveProperty("effect");
+    expect(
+      result.journal.find((entry) => entry.receipt.method === "click")?.receipt.observedEffect,
+    ).toBeUndefined();
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});

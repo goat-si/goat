@@ -22,14 +22,26 @@ export function transitionHandoff(
   actor: HandoffActor,
   now: DateTime.Utc,
   runEnded: boolean,
+  computerUseScope?: "session" | "always",
 ) {
+  if (
+    computerUseScope !== undefined &&
+    (record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
+      record.apps === undefined ||
+      record.apps.length === 0 ||
+      record.computerUseForeground !== undefined ||
+      state !== "completed" ||
+      actor.type !== "client")
+  )
+    return Effect.fail(new HandoffError({ reason: "invalid_request" }));
   if (!isHandoffPending(record.state)) {
     // The one exception: a person ends an approved computer use admission before its expiry.
     if (
       record.state === "completed" &&
       state === "cancelled" &&
       record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
-      actor.type === "client" &&
+      (actor.type === "client" ||
+        (actor.type === "server" && record.computerUseScope !== undefined)) &&
       (record.expiresAt === null ||
         DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now))
     )
@@ -38,7 +50,7 @@ export function transitionHandoff(
         state,
         actor,
         resolvedAt: now,
-        resolvedBy: actor.label,
+        ...(actor.type === "client" ? { resolvedBy: actor.label } : {}),
       });
     return record.state === state
       ? Effect.succeed(record)
@@ -65,6 +77,7 @@ export function transitionHandoff(
     ...record,
     state: next,
     actor: expired ? { type: "server" as const } : actor,
+    ...(next === "completed" && computerUseScope !== undefined ? { computerUseScope } : {}),
     ...(resolved
       ? {
           resolvedAt: now,
