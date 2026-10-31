@@ -12,6 +12,10 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("122_ComputerUseInput
       assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 122 }), [
         [122, "ComputerUseInputHistory"],
       ]);
+      const columns = yield* sql<{
+        readonly name: string;
+      }>`PRAGMA table_info(computer_use_input_history)`;
+      assert.isTrue(columns.some((column) => column.name === "order_seq"));
       yield* sql`INSERT INTO computer_use_input_history
         (thread_id, recorded_at, target_kind, method, verdict)
         VALUES ('thread:a', 42, 'tab', 'click', 'sent')`;
