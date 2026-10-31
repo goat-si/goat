@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- The fixture sends JSON-RPC through the proxy.
 import { assert } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
