@@ -48,7 +48,7 @@ interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?:
   omitted?: { kind: "frames" | "virtualized" | "pixels" | "budget"; detail?: string }[]; // absence there proves nothing
   resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
-  rolesPresent?: string[]; // up to 32 sorted bare roles searched on an app role-query miss
+  rolesPresent?: string[]; // app role-query miss: up to 32 sorted bare roles from this read (filtered if the driver filtered)
   warnings?: string[]; // app driver notes and warnings, including focus restoration
   otherWindows?: { window_id: number; title: string }[]; // apps: the app's other windows on screen, as this cell listed them
   title?: string; url?: string; image?: Shot } // image: with screenshot: true

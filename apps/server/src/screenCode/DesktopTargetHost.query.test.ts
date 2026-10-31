@@ -164,6 +164,7 @@ it.effect("a query whose walk stopped short says so and why", () =>
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
+    expect(observation.omitted?.every((item) => (item.detail?.length ?? 0) <= 200)).toBe(true);
     expect(
       observation.omitted?.some((item) => item.detail?.includes("stopped early (timeout)")),
     ).toBe(true);
@@ -420,6 +421,7 @@ it.effect("a text miss explains whole and driver filtered reads", () =>
       );
       const observation = observed(outcomes[0]);
       const detail = budgetDetail(observation) ?? "";
+      expect(detail.length).toBeLessThanOrEqual(200);
       expect(detail).toContain("role");
       expect(detail).toContain("name");
       expect(detail).toContain("row text");
@@ -463,9 +465,10 @@ it.effect("a driver-filtered sidebar miss does not invent a row match", () =>
     );
     const { outcomes, reads } = yield* observeAll(
       (args) => (args.query === undefined ? tooLarge : filtered),
-      { mode: "query", query: { text: "Applications" } },
+      { mode: "query", query: { role: "row", text: "Applications" } },
     );
     const observation = observed(outcomes[0]);
+    expect(observation.rolesPresent).toEqual(["window"]);
     expect(reads.map((r) => r.query)).toEqual([undefined, "Applications"]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
