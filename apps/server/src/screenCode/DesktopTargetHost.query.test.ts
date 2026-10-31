@@ -8,14 +8,16 @@ type Entry = {
   readonly role: string;
   readonly label?: string;
   readonly value?: string;
+  readonly actions?: readonly string[];
 };
-const element = ({ index, role, label, value }: Entry) => ({
+const element = ({ index, role, label, value, actions }: Entry) => ({
   role,
   depth: 1,
   element_index: index,
   element_token: `s1:${index}`,
   ...(label === undefined ? {} : { label }),
   ...(value === undefined ? {} : { value }),
+  ...(actions === undefined ? {} : { actions }),
 });
 const tooLarge = {
   code: "primitive_reply_too_large",
@@ -162,9 +164,10 @@ it.effect("a query whose walk stopped short says so and why", () =>
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
-    expect(budgetDetail(observation)).toBe(
-      "The search stopped early (timeout) within up to 4,096 elements; a more specific name or text reaches the rest.",
-    );
+    expect(observation.omitted?.every((item) => (item.detail?.length ?? 0) <= 200)).toBe(true);
+    expect(
+      observation.omitted?.some((item) => item.detail?.includes("stopped early (timeout)")),
+    ).toBe(true);
   }),
 );
 
@@ -231,9 +234,7 @@ it.effect("no match on an ordinary read is an empty result that says absence is 
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
-    expect(budgetDetail(observation)).toBe(
-      "Not found in what was read; compacted or skipped parts of the window were not searched.",
-    );
+    expect(budgetDetail(observation)).toContain("No match in 5 elements read");
   }),
 );
 
@@ -295,9 +296,7 @@ it.effect("a filtered read that misses says names from nearby text were not sear
     const observation = observed(outcomes[0]);
     expect(observation.elements).toEqual([]);
     expect(observation.incompleteSearch).toBe(true);
-    expect(budgetDetail(observation)).toBe(
-      "Not found in the driver's filtered read; names taken from text under an element were not searched.",
-    );
+    expect(budgetDetail(observation)).toContain("driver filtered; lifted names are absent");
   }),
 );
 
@@ -382,5 +381,98 @@ it.effect("text in a label cannot keep or take a multi-line element's number", (
       const { outcomes } = yield* observeAll(() => tree, { mode: "full" });
       expect(observed(outcomes[0]).indexedText).not.toContain("[1]");
     }
+  }),
+);
+
+it.effect("a role miss lists the sorted bare roles searched, capped at 32", () =>
+  Effect.gen(function* () {
+    const entries = Array.from({ length: 40 }, (_, i) => ({
+      index: i,
+      role: `AXRole${String(39 - i).padStart(2, "0")}`,
+    }));
+    const tree = entries.map((e) => `- [${e.index}] ${e.role}`);
+    const { outcomes } = yield* observeAll(
+      () => read(tree, entries),
+      { mode: "query", query: { role: "missing" } },
+      { mode: "query", query: { role: "role00" } },
+      { mode: "full" },
+    );
+    expect(
+      (observed(outcomes[0]) as ScreenObservation & { rolesPresent?: readonly string[] })
+        .rolesPresent,
+    ).toEqual(Array.from({ length: 32 }, (_, i) => `role${String(i).padStart(2, "0")}`));
+    expect(
+      (observed(outcomes[1]) as ScreenObservation & { rolesPresent?: readonly string[] })
+        .rolesPresent,
+    ).toBeUndefined();
+    expect(
+      (observed(outcomes[2]) as ScreenObservation & { rolesPresent?: readonly string[] })
+        .rolesPresent,
+    ).toBeUndefined();
+  }),
+);
+
+it.effect("a text miss explains whole and driver filtered reads", () =>
+  Effect.gen(function* () {
+    for (const filtered of [false, true]) {
+      const { outcomes } = yield* observeAll(
+        (args) => (filtered && args.query === undefined ? tooLarge : sidebar),
+        { mode: "query", query: { text: "Applications" } },
+      );
+      const observation = observed(outcomes[0]);
+      const detail = budgetDetail(observation) ?? "";
+      expect(detail.length).toBeLessThanOrEqual(200);
+      expect(detail).toContain("role");
+      expect(detail).toContain("name");
+      expect(detail).toContain("row text");
+      expect(detail).toContain("accessibility id");
+      expect(detail).toContain("5 elements");
+      expect(detail).toContain(filtered ? "driver filtered" : "not driver filtered");
+      expect(detail).toContain(filtered ? "observe({depth: 2})" : "different field");
+      if (filtered) expect(detail).toContain("lifted names are absent");
+    }
+  }),
+);
+
+it.effect("a text query finds an actionable row named only by its child static text", () =>
+  Effect.gen(function* () {
+    const finder = read(
+      [
+        '- [0] AXWindow "Finder"',
+        "  - [1] AXRow [actions=[press]]",
+        '    - AXStaticText = "Applications"',
+      ],
+      [
+        { index: 0, role: "AXWindow", label: "Finder" },
+        { index: 1, role: "AXRow", actions: ["press"] },
+      ],
+    );
+    const { outcomes } = yield* observeAll(() => finder, {
+      mode: "query",
+      query: { text: "Applications" },
+    });
+    expect(observed(outcomes[0]).elements.map((row) => [row.index, row.name])).toEqual([
+      [1, "Applications"],
+    ]);
+  }),
+);
+
+it.effect("a driver-filtered sidebar miss does not invent a row match", () =>
+  Effect.gen(function* () {
+    const filtered = read(
+      ['- [0] AXWindow "Finder"'],
+      [{ index: 0, role: "AXWindow", label: "Finder" }],
+    );
+    const { outcomes, reads } = yield* observeAll(
+      (args) => (args.query === undefined ? tooLarge : filtered),
+      { mode: "query", query: { role: "row", text: "Applications" } },
+    );
+    const observation = observed(outcomes[0]);
+    expect(observation.rolesPresent).toEqual(["window"]);
+    expect(reads.map((r) => r.query)).toEqual([undefined, "Applications"]);
+    expect(observation.elements).toEqual([]);
+    expect(observation.incompleteSearch).toBe(true);
+    expect(budgetDetail(observation)).toContain("lifted names are absent");
+    expect(budgetDetail(observation)).toContain("observe({depth: 2}) then observe({within: n})");
   }),
 );

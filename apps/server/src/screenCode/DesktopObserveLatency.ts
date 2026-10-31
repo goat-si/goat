@@ -29,6 +29,7 @@ import {
 } from "./DesktopInputPlan.ts";
 import {
   boundedReadDetail,
+  bareRole,
   buildObservedDraft,
   desktopQuery,
   driverQuery,
@@ -707,7 +708,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     const placed = placeInWindow(tree.shown, tree.elements, bound.frames, origin);
     const omitted = [
       ...(query
-        ? queryOmission(state, tree.shown.length, filtered)
+        ? queryOmission(state, tree.shown.length, filtered, tree.rows.length)
         : limit < READ_BOUNDS[0]
           ? [{ kind: "budget" as const, detail: boundedReadDetail(limit) }]
           : []),
@@ -769,8 +770,8 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
     const observation = yield* Effect.try({
       try: () =>
         observations.renderObservation({
-          draft: observations.normalizeAppTree(
-            buildObservedDraft({
+          draft: observations.normalizeAppTree({
+            ...buildObservedDraft({
               targetRef: nextRef,
               generation: nextEpoch,
               state: treeState,
@@ -791,7 +792,14 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
               fallbackTitle: bound.boundWindows?.find((w) => w.window_id === expectedWindowId)
                 ?.title,
             }),
-          ),
+            ...(query?.role !== undefined && tree.shown.length === 0
+              ? {
+                  rolesPresent: [...new Set(tree.rows.map((row) => bareRole(row.role)))]
+                    .sort()
+                    .slice(0, 32),
+                }
+              : {}),
+          }),
           mode: query ? "query" : isDiff ? "diff" : "full",
           ...(isDiff && baseObservationId !== undefined
             ? { prediffed: true, baseObservationId }
