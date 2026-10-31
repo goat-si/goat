@@ -726,12 +726,15 @@ export const make = Effect.gen(function* () {
           const state = yield* leases
             .controlState(input.threadId, current.controlId)
             .pipe(Effect.option);
-          const terminal =
-            terminalReason(record?.terminal, Option.getOrUndefined(state)) ??
-            terminalReason(
-              undefined,
-              current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
-            );
+          const terminal = mergeTerminal(
+            { reason: terminalReason(record?.terminal, Option.getOrUndefined(state)) },
+            {
+              reason: terminalReason(
+                undefined,
+                current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+              ),
+            },
+          ).reason;
           const failure = terminalFailure(terminal, input.tool, input.args);
           if (failure !== undefined) return yield* Effect.fail(failure);
         }
@@ -795,7 +798,7 @@ export const make = Effect.gen(function* () {
         )
           return yield* Effect.fail(
             terminalFailure(
-              terminalReason(record?.terminal ?? beganEpoch?.reason),
+              mergeTerminal({ reason: record?.terminal }, { reason: beganEpoch?.reason }).reason,
               input.tool,
               input.args,
             ) ?? desktopNotReady("unbound"),

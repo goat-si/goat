@@ -138,29 +138,37 @@ export function makePersonStopFence() {
 export const terminalForInterruption = (
   cause: Interruption,
   terminal: "stopped_by_person" | "screen_locked" | undefined,
-): { readonly terminal?: "stopped_by_person" | "screen_locked" } =>
-  terminal !== undefined
-    ? { terminal }
-    : cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
-      ? { terminal: "stopped_by_person" }
-      : cause._tag === "pause" && cause.reason === "screen_locked"
-        ? { terminal: "screen_locked" }
-        : {};
+): { readonly terminal?: "stopped_by_person" | "screen_locked" } => {
+  const reason = mergeTerminal(
+    { reason: terminal },
+    {
+      reason:
+        cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
+          ? "stopped_by_person"
+          : cause._tag === "pause" && cause.reason === "screen_locked"
+            ? "screen_locked"
+            : undefined,
+    },
+  ).reason;
+  return reason === undefined ? {} : { terminal: reason };
+};
 
 export const latchedInterruption = (
   cause: Interruption,
   terminal: "stopped_by_person" | "screen_locked" | undefined,
-): Interruption =>
-  (terminal === "stopped_by_person" &&
+): Interruption => {
+  terminal = terminalForInterruption(cause, terminal).terminal;
+  return (terminal === "stopped_by_person" &&
     cause._tag === "end" &&
     (cause.reason === "stopped" || cause.reason === "stopped_all")) ||
-  (terminal === "screen_locked" && cause._tag === "pause" && cause.reason === "screen_locked")
+    (terminal === "screen_locked" && cause._tag === "pause" && cause.reason === "screen_locked")
     ? cause
     : terminal === "stopped_by_person"
       ? { _tag: "end", reason: "stopped" }
       : terminal === "screen_locked"
         ? { _tag: "pause", reason: "screen_locked" }
         : cause;
+};
 
 export const forwardPersonStop = Effect.fn("ComputerUseLeaseProxy.forwardPersonStop")(
   function* (input: {

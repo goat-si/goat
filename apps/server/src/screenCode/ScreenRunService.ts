@@ -28,11 +28,7 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
-import {
-  mergeTerminal,
-  terminalFailure,
-  type ComputerUseTerminalReason,
-} from "../cua/ComputerUseTerminal.ts";
+import { terminalFailure, type ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
@@ -45,7 +41,7 @@ import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTarget
 import type { CellWindowsOutcome } from "./DesktopWindows.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
-import { cellResultSafety, cellTerminalError } from "./ScreenActionOutcome.ts";
+import { cellResultSafety, cellTerminalError, latchCellTerminal } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
@@ -500,13 +496,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        if (change.terminal !== undefined) {
-          const reason = mergeTerminal(
-            { reason: cellTerminals.get(id) },
-            { reason: change.terminal },
-          ).reason;
-          if (reason !== undefined) cellTerminals.set(id, reason);
-        }
+        latchCellTerminal(cellTerminals, id, change.terminal);
         bridge.cutCellNow(runId, turnId, cellId, change.terminal ?? change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
@@ -881,13 +871,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         if (cut && cellId) {
-          if (input.terminal !== undefined) {
-            const reason = mergeTerminal(
-              { reason: cellTerminals.get(id) },
-              { reason: input.terminal },
-            ).reason;
-            if (reason !== undefined) cellTerminals.set(id, reason);
-          }
+          latchCellTerminal(cellTerminals, id, input.terminal);
           yield* bridge.cutCell(runId, turnId, cellId, input.terminal ?? input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }

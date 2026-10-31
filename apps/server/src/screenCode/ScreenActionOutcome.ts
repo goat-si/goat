@@ -160,6 +160,15 @@ export const cellTerminalError = (
   };
 };
 
+export const latchCellTerminal = (
+  cells: Map<string, ComputerUseTerminalReason>,
+  id: string,
+  reason: ComputerUseTerminalReason | undefined,
+) => {
+  const merged = mergeTerminal({ reason: cells.get(id) }, { reason }).reason;
+  if (merged !== undefined) cells.set(id, merged);
+};
+
 export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
   result.error === undefined
     ? result
