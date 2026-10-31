@@ -483,12 +483,36 @@ const proxyAdmission =
       return finalize(answer, input);
     });
 
+const cancelledPrimitive = (input: Input) =>
+  Effect.gen(function* () {
+    const h = yield* harness({ primitiveCancelled: () => true });
+    yield* h.push(active());
+    const current = yield* h.driverStarted;
+    yield* h.sendPrimitive({
+      state: "primitive-request",
+      requestId: "cancelled",
+      registrationId: "registration",
+      controlId: CONTROL,
+      connectionGeneration: current.connectionId,
+      runId: "run",
+      turnId: "turn",
+      callId: 1,
+      deadlineMillis: 60000,
+      tool: "list_apps",
+      args: {},
+    });
+    const reply = yield* h.primitiveReply;
+    assert.include(JSON.stringify(reply), '"detail":"expired"');
+    return finalize(JSON.stringify({ id: 1, result: reply.result }), input);
+  });
+
 export const preDispatchSites: ReadonlyArray<{
   readonly name: string;
   readonly undispatched: true;
   readonly implicitReason?: ComputerUseTerminalReason;
   readonly run: (input: Input) => Effect.Effect<ComputerUseTerminalState, never, Scope.Scope>;
 }> = [
+  { name: "ComputerUseLeaseProxy.cancelledPrimitive", undispatched: true, run: cancelledPrimitive },
   {
     name: "ComputerUseLeaseProxy.duplicateId",
     undispatched: true,
