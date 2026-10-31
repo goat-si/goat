@@ -1,7 +1,9 @@
 import { assert } from "@effect/vitest";
 import { ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -76,6 +78,21 @@ const channelEdge = (kind: "queueClosed" | "deadline") => (input: Input) =>
         });
     };
     let closed = false;
+    let requested = false;
+    const trigger = yield* Deferred.make<void>();
+    if (kind === "queueClosed")
+      yield* Deferred.await(trigger).pipe(
+        Effect.andThen(Effect.sync(report)),
+        Effect.andThen(
+          channel.closeStream({ threadId, registrationId: registered.registrationId }),
+        ),
+        Effect.andThen(
+          Effect.sync(() => {
+            closed = true;
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      );
     const request = {
       threadId,
       runId: "run",
@@ -85,12 +102,9 @@ const channelEdge = (kind: "queueClosed" | "deadline") => (input: Input) =>
       tool: "list_apps",
       args: {},
       get authority(): "claimBind" {
-        if (kind === "queueClosed" && !closed) {
-          closed = true;
-          report();
-          Effect.runSync(
-            channel.closeStream({ threadId, registrationId: registered.registrationId }),
-          );
+        if (kind === "queueClosed" && !requested) {
+          requested = true;
+          Deferred.doneUnsafe(trigger, Exit.void);
         }
         return "claimBind";
       },
