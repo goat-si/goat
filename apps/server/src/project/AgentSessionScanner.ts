@@ -164,10 +164,7 @@ export class AgentSessionScanner extends Context.Service<
   AgentSessionScanner,
   {
     readonly scan: ScanCompatibility.ScanAgentSessions;
-    readonly recentThreads: (
-      workspaceRoot: string,
-      completedSources?: ReadonlyArray<AgentSessionImportSource>,
-    ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
+    readonly recentThreads: ScanCompatibility.RecentAgentSessions<AgentSessionRecentThread>;
   }
 >()("goat/project/AgentSessionScanner") {}
 
@@ -1462,6 +1459,7 @@ export const make = Effect.gen(function* () {
   const prepareRecentThreads = Effect.fn("AgentSessionScanner.prepareRecentThreads")(function* (
     workspaceRoot: string,
     completedSources: ReadonlyArray<AgentSessionImportSource>,
+    input: AgentSessionScanInput,
   ) {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
@@ -1477,7 +1475,7 @@ export const make = Effect.gen(function* () {
       readonly candidate: RawCandidate;
       readonly transcript: RawCandidate["transcripts"][number] & { readonly mtimeMs: number };
     }> = [];
-    for (const candidate of candidates) {
+    for (const candidate of ScanCompatibility.filterCandidates(input, candidates)) {
       const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
       const resolved = path.resolve(expanded);
@@ -1615,7 +1613,8 @@ export const make = Effect.gen(function* () {
   const recentThreads: AgentSessionScanner["Service"]["recentThreads"] = (
     workspaceRoot,
     completedSources = [],
-  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources));
+    input = {},
+  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources, input));
 
   return AgentSessionScanner.of({ scan, recentThreads });
 });

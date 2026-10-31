@@ -1380,7 +1380,7 @@ function ImportStep({
       }
       const threadImportResult = await importThreads({
         environmentId,
-        input: { projectId, expectedWorkspaceRoot: candidate.path },
+        input: { projectId, expectedWorkspaceRoot: candidate.path, includePi: true },
       });
       if (
         importGeneration !== importGenerationRef.current ||

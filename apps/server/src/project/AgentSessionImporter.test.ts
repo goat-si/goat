@@ -240,7 +240,7 @@ const makeImporter = Effect.fn(function* (
     ),
   );
   const importer = Context.get(context, AgentSessionImporter.AgentSessionImporter);
-  return { run: importer.importRecentAgentThreads({ projectId }), published };
+  return { run: importer.importRecentAgentThreads({ projectId, includePi: true }), published };
 });
 
 it.effect(
