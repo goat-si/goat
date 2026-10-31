@@ -14,6 +14,7 @@ const isScreenRunError = Schema.is(ScreenRunErrorSchema);
 import {
   mergeTerminal,
   terminalFailure,
+  terminalState,
   type ComputerUseTerminalReason,
 } from "../cua/ComputerUseTerminal.ts";
 
@@ -263,3 +264,6 @@ export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
           result.journal.map((entry) => entry.receipt),
         ),
       };
+
+export const cellFailureBase = (reason: ComputerUseTerminalReason | undefined) =>
+  terminalFailure(terminalState(reason, false), "list_apps", {});

@@ -27,11 +27,7 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
-import {
-  terminalFailure,
-  terminalState,
-  type ComputerUseTerminalReason,
-} from "../cua/ComputerUseTerminal.ts";
+import type { ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
@@ -51,6 +47,7 @@ import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowReco
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import {
   appendCellNotices,
+  cellFailureBase,
   cellResultSafety,
   cellTerminalError,
   completionCellError,
@@ -634,11 +631,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   code: cause.endedBy ?? cause.code,
                   receipts: cause.journal ?? cause.receipts ?? [],
                 };
-                const terminal = terminalFailure(
-                  terminalState(cellTerminals.get(id), false),
-                  "list_apps",
-                  {},
-                );
+                const terminal = cellFailureBase(cellTerminals.get(id));
                 const base = terminal ?? fail(cause.code);
                 return Effect.fail({
                   ...base,
