@@ -6,7 +6,6 @@ import {
   LEASE_END_MESSAGES,
   PAUSE_MESSAGES,
   MAY_HAVE_ACTED,
-  READ_CUT_OFF,
   PAUSE_STATE,
   PAUSE_NEXT,
 } from "./ComputerUseLeaseMessages.ts";
@@ -35,7 +34,7 @@ export const terminalFailure = (
     code: reason,
     effectStarted: safety.possibleCommit,
     nextStep: dispatched
-      ? `${isReadOnlyCall(tool, args) ? READ_CUT_OFF : MAY_HAVE_ACTED} ${reason === "screen_locked" ? `${PAUSE_STATE.screen_locked}. ${PAUSE_NEXT.screen_locked}` : LEASE_END_MESSAGES.stopped}`
+      ? `${isReadOnlyCall(tool, args) ? "This read was interrupted before it answered." : MAY_HAVE_ACTED} ${reason === "screen_locked" ? `${PAUSE_STATE.screen_locked}. ${PAUSE_NEXT.screen_locked}` : LEASE_END_MESSAGES.stopped}`
       : reason === "screen_locked"
         ? PAUSE_MESSAGES.screen_locked
         : LEASE_END_MESSAGES.stopped,
