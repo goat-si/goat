@@ -1,3 +1,4 @@
+import "@goat/client-runtime/assembly-highlighting";
 import {
   getSharedHighlighter,
   type DiffsHighlighter,
