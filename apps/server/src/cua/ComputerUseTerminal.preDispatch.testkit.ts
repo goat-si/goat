@@ -142,7 +142,48 @@ const duplicate = (input: Input) =>
     return replaceWithTerminal(terminalReplyState(answer.result));
   });
 
+const retiredPrimitive = (input: Input) =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    let stopped = false;
+    for (const reason of input.reasons) {
+      if (reason === "stopped_by_person") {
+        yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+        stopped = true;
+      } else {
+        yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+        if (!stopped) yield* h.applied;
+      }
+    }
+    yield* h.push(snapshot("B"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.sendPrimitive({
+      state: "primitive-request",
+      requestId: "request",
+      registrationId: "registration",
+      controlId: "A",
+      connectionGeneration: "old",
+      runId: "run",
+      turnId: "turn",
+      callId: 1,
+      deadlineMillis: 1000,
+      tool: "list_apps",
+      args: {},
+    });
+    const answer = yield* h.primitiveReply;
+    return replaceWithTerminal(terminalReplyState(answer.result, answer.status));
+  });
+
 export const preDispatchSites = [
+  {
+    name: "ComputerUseLeaseProxyThread.retiredPrimitive",
+    undispatched: true,
+    run: retiredPrimitive,
+  },
   { name: "ComputerUseLeaseProxyThread.duplicateId", undispatched: true, run: duplicate },
   {
     name: "ComputerUseLeaseProxyThread.reservedId",
