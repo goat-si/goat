@@ -98,7 +98,7 @@ export const makeProxyBatchScope = (
       return named
         ? {
             refused: refusal(
-              { possibleCommit: false },
+              "none",
               id,
               message.method,
               "outside_manifest",

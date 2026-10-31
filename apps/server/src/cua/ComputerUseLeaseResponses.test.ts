@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import { READ_CUT_OFF, MAY_HAVE_ACTED } from "./ComputerUseLeaseMessages.ts";
+import { replaceWithTerminal } from "./ComputerUseTerminal.ts";
 import { cutOff, offScreenAnswer, refusal } from "./ComputerUseLeaseResponses.ts";
 
 const parsed = (line: string) => JSON.parse(line);
@@ -37,7 +38,14 @@ describe("cut-off and off-screen answers for menu_bar_extras", () => {
 
   it("an off-screen list answer is a read refusal; an off-screen click answer may have acted", () => {
     const list = parsed(
-      offScreenAnswer(1, "tools/call", "menu_bar_extras", "other", { operation: "list" }),
+      offScreenAnswer(
+        1,
+        "tools/call",
+        "menu_bar_extras",
+        "other",
+        { operation: "list" },
+        replaceWithTerminal("none"),
+      ),
     ).result;
     assert.equal(list.structuredContent.detail, "wrong_display");
     assert.deepInclude(list.structuredContent.safety, {
@@ -45,7 +53,14 @@ describe("cut-off and off-screen answers for menu_bar_extras", () => {
       writeStatus: "not_applicable",
     });
     const click = parsed(
-      offScreenAnswer(1, "tools/call", "menu_bar_extras", "other", { operation: "click" }),
+      offScreenAnswer(
+        1,
+        "tools/call",
+        "menu_bar_extras",
+        "other",
+        { operation: "click" },
+        replaceWithTerminal("none"),
+      ),
     ).result;
     assert.equal(click.structuredContent.effect, "unverifiable");
     assert.isTrue(click.structuredContent.safety.possibleCommit);
@@ -109,6 +124,22 @@ it("a terminal refusal preserves an earlier possible input and person Stop", () 
       "tools/call",
       "screen_locked",
       "locked",
+    ),
+  ).result;
+  assert.equal(answer.structuredContent.code, "stopped_by_person");
+  assert.isTrue(answer.structuredContent.safety.possibleCommit);
+  assert.equal(answer.structuredContent.safety.retryClass, "never");
+});
+
+it("an off-screen replacement preserves terminal evidence from its prior answer", () => {
+  const answer = parsed(
+    offScreenAnswer(
+      7,
+      "tools/call",
+      "list_apps",
+      "unknown",
+      undefined,
+      replaceWithTerminal("stopped_by_person", true),
     ),
   ).result;
   assert.equal(answer.structuredContent.code, "stopped_by_person");

@@ -15,7 +15,7 @@ import { terminalReplacement, refusal, type JsonRpcId } from "./ComputerUseLease
 import type { OutstandingCall, ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import {
-  mergeTerminal,
+  replaceWithTerminal,
   terminalErrorState,
   terminalReason,
   terminalReplyState,
@@ -36,7 +36,7 @@ export const finalTerminalLine = (
   line: string,
   status: import("@goat/contracts").ComputerUsePrimitiveReply["status"] | undefined,
   message: Envelope | undefined,
-  terminal: ComputerUseTerminalState,
+  terminal: ComputerUseTerminalState | "none",
 ): {
   line: string;
   status: import("@goat/contracts").ComputerUsePrimitiveReply["status"] | undefined;
@@ -47,8 +47,9 @@ export const finalTerminalLine = (
     already._tag === "Some" ? already.value.result : undefined,
     status,
   );
-  const merged = mergeTerminal(
-    mergeTerminal(terminal, reply),
+  const merged = replaceWithTerminal(
+    reply,
+    terminal,
     terminalErrorState(already._tag === "Some" ? already.value.error : undefined),
   );
   const reason = merged.reason;
@@ -65,7 +66,7 @@ export const finalTerminalLine = (
       message.id,
       tool,
       message.params?.arguments,
-      { ...merged, reason },
+      merged,
       merged.possibleCommit,
     ),
     status: merged.possibleCommit ? "unknown_outcome" : "not_started",
@@ -86,15 +87,15 @@ export const terminalSink = (
         ...context,
         request: message,
         terminalState: () =>
-          mergeTerminal(context?.terminalState?.() ?? {}, {
-            reason: terminalReason(terminal()),
-            possibleCommit:
-              dispatched() &&
+          replaceWithTerminal(
+            context?.terminalState?.() ?? "none",
+            terminalReason(terminal()),
+            dispatched() &&
               !isReadOnlyCall(
                 typeof message.params?.name === "string" ? message.params.name : undefined,
                 message.params?.arguments,
               ),
-          }),
+          ),
       };
       const result = finalTerminalLine(line, status, message, finalContext.terminalState());
       return sink.answer(result.line, result.status, finalContext);
@@ -108,10 +109,10 @@ export function makePersonStopFence() {
   const capturedEpochs = new Map<typeof epoch, number>();
   let lockConfirmed = false;
   const latch = (value: "stopped_by_person" | "screen_locked") => {
-    reason = mergeTerminal({ reason }, { reason: value }).reason;
-    epoch.reason = mergeTerminal({ reason: epoch.reason }, { reason: value }).reason;
+    reason = replaceWithTerminal(reason, value).reason;
+    epoch.reason = replaceWithTerminal(epoch, value).reason;
     for (const entry of capturedEpochs.keys())
-      entry.reason = mergeTerminal({ reason: entry.reason }, { reason: value }).reason;
+      entry.reason = replaceWithTerminal(entry, value).reason;
   };
   const capture = (message?: Envelope, inherited?: ReplySink["terminal"]) => {
     if (inherited !== undefined) return inherited;
@@ -187,15 +188,9 @@ export function makePersonStopFence() {
     },
     refusal: (id: JsonRpcId, method: string | undefined) =>
       reason === "screen_locked"
-        ? refusal(
-            { possibleCommit: false },
-            id,
-            method,
-            "screen_locked",
-            PAUSE_MESSAGES.screen_locked,
-          )
+        ? refusal("none", id, method, "screen_locked", PAUSE_MESSAGES.screen_locked)
         : reason === "stopped_by_person"
-          ? refusal({ possibleCommit: false }, id, method, "stopped", LEASE_END_MESSAGES.stopped)
+          ? refusal("none", id, method, "stopped", LEASE_END_MESSAGES.stopped)
           : undefined,
   };
 }
@@ -204,16 +199,13 @@ export const terminalForInterruption = (
   cause: Interruption,
   terminal: "stopped_by_person" | "screen_locked" | undefined,
 ): { readonly terminal?: "stopped_by_person" | "screen_locked" } => {
-  const reason = mergeTerminal(
-    { reason: terminal },
-    {
-      reason:
-        cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
-          ? "stopped_by_person"
-          : cause._tag === "pause" && cause.reason === "screen_locked"
-            ? "screen_locked"
-            : undefined,
-    },
+  const reason = replaceWithTerminal(
+    terminal,
+    cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")
+      ? "stopped_by_person"
+      : cause._tag === "pause" && cause.reason === "screen_locked"
+        ? "screen_locked"
+        : undefined,
   ).reason;
   return reason === undefined ? {} : { terminal: reason };
 };

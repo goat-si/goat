@@ -67,7 +67,7 @@ const admissionScopeRefusal = (
   const reason = verdict._tag === "refuse" ? verdict.reason : "app_not_approved";
   const app = verdict._tag === "refuse" ? verdict.app : undefined;
   return refusal(
-    { possibleCommit: false },
+    "none",
     id,
     message.method,
     reason,
@@ -97,7 +97,7 @@ export const proxyCallAdmission = (
     const app = decision.status === "refused" ? decision.app : undefined;
     return {
       refused: refusal(
-        { possibleCommit: false },
+        "none",
         id,
         message.method,
         detail,

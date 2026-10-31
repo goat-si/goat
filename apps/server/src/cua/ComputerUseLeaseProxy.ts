@@ -110,7 +110,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let paused: Contracts.ComputerUsePauseReason | undefined;
   let idle = false;
   const personStop = makePersonStopFence();
-  const fresh = { possibleCommit: false };
+  const fresh = "none";
   const deny = refusal.bind(undefined, fresh);
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
@@ -366,14 +366,28 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           if (latest.cancelled) return options.onCancelledRequestSettled?.(key);
           if (verdict === "other") {
             yield* request.sink.answer(
-              offScreenAnswer(request.id, request.method, request.tool, "other", request.args),
+              offScreenAnswer(
+                request.id,
+                request.method,
+                request.tool,
+                "other",
+                request.args,
+                retainedTerminal(request),
+              ),
               "settled",
             );
             return yield* end("wrong_display");
           }
           if (verdict === "unknown")
             return yield* request.sink.answer(
-              offScreenAnswer(request.id, request.method, request.tool, "unknown", request.args),
+              offScreenAnswer(
+                request.id,
+                request.method,
+                request.tool,
+                "unknown",
+                request.args,
+                retainedTerminal(request),
+              ),
               "settled",
             );
           if (verdict === "proof") proven = current;

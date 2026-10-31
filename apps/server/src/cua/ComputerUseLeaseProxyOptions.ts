@@ -37,7 +37,6 @@ import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
 import {
-  mergeTerminal,
   replaceWithTerminal,
   terminalErrorState,
   terminalFailure,
@@ -257,9 +256,10 @@ export const primitiveReplySink = (
       64 * 1024,
     );
     const hops = hopTimes(primitiveHops.get(request), answeredAt);
-    const terminal = mergeTerminal(
-      mergeTerminal(terminalReplyState(rawResult, status), terminalErrorState(envelope?.error)),
-      context?.terminalState?.() ?? {},
+    const terminal = replaceWithTerminal(
+      terminalReplyState(rawResult, status),
+      terminalErrorState(envelope?.error),
+      context?.terminalState?.() ?? "none",
     );
     const failure = terminalFailure(terminal, request.tool, request.args, terminal.possibleCommit);
     return yield* (
@@ -369,15 +369,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
             Effect.suspend(() =>
               dispatchedPrimitives.has(request)
                 ? Effect.void
-                : sink.answer(
-                    refusal(
-                      { possibleCommit: false },
-                      id,
-                      "tools/call",
-                      "expired",
-                      SCREEN_CALL_EXPIRED,
-                    ),
-                  ),
+                : sink.answer(refusal("none", id, "tools/call", "expired", SCREEN_CALL_EXPIRED)),
             ),
           ),
           Effect.forkScoped,

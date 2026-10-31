@@ -31,7 +31,7 @@ import { terminalSink } from "./ComputerUseLeaseProxyPersonStop.ts";
 import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
 import type { LeaseTransportUpdate } from "./ComputerUseLeaseStreamFollower.ts";
 import {
-  mergeTerminal,
+  replaceWithTerminal,
   terminalReason,
   type ComputerUseTerminalReason,
 } from "./ComputerUseTerminal.ts";
@@ -143,7 +143,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     ownAnswers,
     ended,
     endAnswer: (id, method, reason) =>
-      refusal({ possibleCommit: false }, id, method, reason, LEASE_END_MESSAGES[reason]),
+      refusal("none", id, method, reason, LEASE_END_MESSAGES[reason]),
   });
   const answerStopped = Effect.fn("ComputerUseLeaseProxyThread.answerStopped")((
     id: JsonRpcId,
@@ -165,7 +165,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         { id, ...(method === undefined ? {} : { method }) },
         () => latch?.reason,
         () => false,
-      ).answer(refusal({ possibleCommit: false }, id, method, "reconnecting", RECONNECTING));
+      ).answer(refusal("none", id, method, "reconnecting", RECONNECTING));
     const candidate =
       given ??
       terminal ??
@@ -179,7 +179,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
         ? "reconnecting"
         : candidate;
     const answer = refusal(
-      { possibleCommit: false },
+      "none",
       id,
       method,
       reason,
@@ -286,13 +286,13 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
   const latchOwners = (controlId: string, reason: ComputerUseTerminalReason) => {
     for (const owner of owners.values())
       if (owner.context.controlId === controlId)
-        owner.latch.reason = mergeTerminal(owner.latch, { reason }).reason;
+        owner.latch.reason = replaceWithTerminal(owner.latch, reason).reason;
   };
   const latchCurrent = (context: Context, reason: ComputerUseTerminalReason) => {
-    context.terminal.reason = mergeTerminal(context.terminal, { reason }).reason;
+    context.terminal.reason = replaceWithTerminal(context.terminal, reason).reason;
     if (reason === "stopped_by_person")
       for (const latch of context.driverTerminals.values())
-        latch.reason = mergeTerminal(latch, { reason }).reason;
+        latch.reason = replaceWithTerminal(latch, reason).reason;
   };
   // Receipt and routing must change in one synchronous step, before any Effect can yield.
   const stop = (context: Context, reason: ControlStop) => {
@@ -413,7 +413,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             const latch = context.driverTerminals.get(driver.generation);
             if (latch === context.terminal) latchCurrent(context, driver.terminal);
             else if (latch !== undefined)
-              latch.reason = mergeTerminal(latch, { reason: driver.terminal }).reason;
+              latch.reason = replaceWithTerminal(latch, driver.terminal).reason;
           }
           return options.onControlDriverCutoff?.(context.controlId, driver) ?? Effect.void;
         },
@@ -524,7 +524,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
               latchOwners(update.controlId, "stopped_by_person");
               const latch = controlTerminals.get(update.controlId) ?? {};
               if (current?.controlId !== update.controlId)
-                latch.reason = mergeTerminal(latch, { reason: "stopped_by_person" }).reason;
+                latch.reason = replaceWithTerminal(latch, "stopped_by_person").reason;
               controlTerminals.set(update.controlId, latch);
             }
             if (current?.controlId === update.controlId) stop(current, update.reason);
@@ -581,13 +581,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
             () => false,
           );
           yield* sink.answer(
-            refusal(
-              { possibleCommit: false },
-              request.callId,
-              "tools/call",
-              "invalid_target",
-              WAITING,
-            ),
+            refusal("none", request.callId, "tools/call", "invalid_target", WAITING),
             "not_started",
           );
           options.onPrimitiveSettled?.(request.requestId);
@@ -656,7 +650,7 @@ export const runThreadLeaseProxy = Effect.fn("ComputerUseLeaseProxyThread.run")(
     const key = JSON.stringify(id);
     if (isRequest && (owners.has(key) || setup.pending(key)))
       return yield* response.answer(
-        refusal({ possibleCommit: false }, id, message.method, "invalid_target", REQUEST_ID_BUSY),
+        refusal("none", id, message.method, "invalid_target", REQUEST_ID_BUSY),
       );
     if (message?.method === "initialize" || message?.method === "notifications/initialized")
       handshake.push(line);

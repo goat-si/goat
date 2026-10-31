@@ -39,30 +39,40 @@ export type ComputerUseTerminalState = {
   readonly possibleCommit: boolean;
 };
 
+export type ComputerUseTerminalSource =
+  | string
+  | boolean
+  | undefined
+  | {
+      readonly reason?: ComputerUseTerminalReason | undefined;
+      readonly possibleCommit?: boolean | undefined;
+      readonly code?: unknown;
+      readonly effectStarted?: boolean | undefined;
+      readonly safety?: { readonly possibleCommit: boolean } | undefined;
+    };
+
 export const replaceWithTerminal = (
-  replaced:
-    | "none"
-    | string
-    | {
-        readonly reason?: ComputerUseTerminalReason | undefined;
-        readonly possibleCommit?: boolean | undefined;
-      }
-    | undefined,
-  ...sources: readonly (
-    | string
-    | {
-        readonly reason?: ComputerUseTerminalReason | undefined;
-        readonly possibleCommit?: boolean | undefined;
-      }
-    | undefined
-  )[]
+  replaced: ComputerUseTerminalSource,
+  ...sources: readonly ComputerUseTerminalSource[]
 ): ComputerUseTerminalState => {
-  const stateOf = (source: typeof replaced) =>
-    typeof source === "string"
-      ? {
-          reason: source === "stopped_by_person" || source === "screen_locked" ? source : undefined,
-        }
-      : (source ?? {});
+  const stateOf = (source: ComputerUseTerminalSource) => {
+    if (typeof source === "boolean") return { possibleCommit: source };
+    if (typeof source === "string")
+      return {
+        reason: source === "stopped_by_person" || source === "screen_locked" ? source : undefined,
+      };
+    if (source === undefined) return {};
+    const code = source.code;
+    return {
+      reason:
+        source.reason ??
+        (code === "stopped_by_person" || code === "screen_locked" ? code : undefined),
+      possibleCommit:
+        source.possibleCommit === true ||
+        source.effectStarted === true ||
+        source.safety?.possibleCommit === true,
+    };
+  };
   return sources.reduce<ComputerUseTerminalState>(
     (state, source) => mergeTerminal(state, stateOf(source)),
     mergeTerminal(stateOf(replaced), {}),
@@ -70,12 +80,10 @@ export const replaceWithTerminal = (
 };
 
 export const terminalState = (reason: unknown, possibleCommit: boolean): ComputerUseTerminalState =>
-  mergeTerminal(
-    {
-      reason: reason === "stopped_by_person" || reason === "screen_locked" ? reason : undefined,
-      possibleCommit,
-    },
-    {},
+  replaceWithTerminal(
+    "none",
+    reason === "stopped_by_person" || reason === "screen_locked" ? reason : undefined,
+    possibleCommit,
   );
 
 export const terminalFailure = (
@@ -84,9 +92,10 @@ export const terminalFailure = (
   args: unknown,
   dispatched = false,
 ): ScreenRunError | undefined => {
-  const reason = state.reason;
+  const terminal = replaceWithTerminal(state);
+  const reason = terminal.reason;
   if (reason === undefined) return undefined;
-  const mayHaveInput = state.possibleCommit;
+  const mayHaveInput = terminal.possibleCommit;
   dispatched = dispatched || mayHaveInput;
   const read = !mayHaveInput && isReadOnlyCall(tool, args);
   const safety: ActionOutcomeSafety = dispatched
@@ -157,12 +166,10 @@ export const terminalReplyState = (
   const refusal = decodeRefusal(content.refusal);
   const wireReason = terminal(content.code);
   return {
-    ...mergeTerminal(
-      {
-        reason: wireReason,
-        possibleCommit: safety._tag === "Some" && safety.value.possibleCommit === true,
-      },
-      { reason: refusal._tag === "Some" ? terminal(refusal.value.code) : undefined },
+    ...replaceWithTerminal(
+      safety._tag === "Some" && safety.value.possibleCommit === true,
+      wireReason,
+      refusal._tag === "Some" ? terminal(refusal.value.code) : undefined,
     ),
     wireReason,
     terminalSafety: safety._tag === "Some" && safety.value.retryClass === "never",
@@ -178,8 +185,8 @@ const decodeRpcError = Schema.decodeUnknownOption(
 
 export const terminalErrorState = (value: unknown) => {
   const error = decodeRpcError(value);
-  if (error._tag === "None") return mergeTerminal({}, {});
-  return mergeTerminal(
+  if (error._tag === "None") return replaceWithTerminal("none");
+  return replaceWithTerminal(
     terminalReplyState({ isError: true, structuredContent: error.value }),
     terminalReplyState({ isError: true, structuredContent: error.value.data }),
   );
@@ -189,15 +196,11 @@ export const terminalReason = (
   latched: ComputerUseTerminalReason | undefined,
   state?: { readonly _tag: string; readonly reason?: string },
 ): ComputerUseTerminalReason | undefined =>
-  mergeTerminal(
-    { reason: latched },
-    {
-      reason:
-        state?._tag === "paused" && state.reason === "screen_locked"
-          ? "screen_locked"
-          : state?._tag === "ended" &&
-              (state.reason === "stopped" || state.reason === "stopped_all")
-            ? "stopped_by_person"
-            : undefined,
-    },
+  replaceWithTerminal(
+    latched,
+    state?._tag === "paused" && state.reason === "screen_locked"
+      ? "screen_locked"
+      : state?._tag === "ended" && (state.reason === "stopped" || state.reason === "stopped_all")
+        ? "stopped_by_person"
+        : undefined,
   ).reason;

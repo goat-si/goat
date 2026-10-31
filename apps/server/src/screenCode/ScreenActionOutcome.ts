@@ -12,9 +12,8 @@ import { ScreenRunError as ScreenRunErrorSchema } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 const isScreenRunError = Schema.is(ScreenRunErrorSchema);
 import {
-  mergeTerminal,
   terminalFailure,
-  terminalState,
+  replaceWithTerminal,
   type ComputerUseTerminalReason,
 } from "../cua/ComputerUseTerminal.ts";
 
@@ -68,14 +67,7 @@ export const callTerminalError = (
   call: ScreenHostCall,
   dispatched: boolean,
 ) => {
-  const reason =
-    error.code === "stopped_by_person" || error.code === "screen_locked" ? error.code : undefined;
-  const cellReason =
-    cutoff === "stopped_by_person" || cutoff === "screen_locked" ? cutoff : undefined;
-  const merged = mergeTerminal(
-    { reason, possibleCommit: error.effectStarted || error.safety?.possibleCommit },
-    { reason: cellReason },
-  );
+  const merged = replaceWithTerminal(error, cutoff);
   return terminalFailure(
     merged,
     isScreenRead(call.method) ? "list_apps" : call.method,
@@ -189,15 +181,7 @@ export const cellTerminalError = (
   reason: ComputerUseTerminalReason | undefined,
 ): ScreenRunError => {
   const assessed = cellErrorSafety(error, receipts);
-  const incoming =
-    error.code === "stopped_by_person" || error.code === "screen_locked" ? error.code : undefined;
-  const merged = mergeTerminal(
-    { reason, possibleCommit: assessed.safety?.possibleCommit },
-    {
-      reason: incoming,
-      possibleCommit: error.effectStarted || error.safety?.possibleCommit,
-    },
-  );
+  const merged = replaceWithTerminal(error, assessed, reason);
   const terminal = terminalFailure(merged, "list_apps", {}, merged.possibleCommit);
   if (terminal === undefined) return assessed;
   const safety =
@@ -223,7 +207,7 @@ export const latchCellTerminal = (
   id: string,
   reason: ComputerUseTerminalReason | undefined,
 ) => {
-  const merged = mergeTerminal({ reason: cells.get(id) }, { reason }).reason;
+  const merged = replaceWithTerminal(cells.get(id), reason).reason;
   if (merged !== undefined) cells.set(id, merged);
 };
 
@@ -265,5 +249,7 @@ export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
         ),
       };
 
-export const cellFailureBase = (reason: ComputerUseTerminalReason | undefined) =>
-  terminalFailure(terminalState(reason, false), "list_apps", {});
+export const cellFailureBase = (
+  reason: ComputerUseTerminalReason | undefined,
+  cause: { readonly code: string; readonly effectStarted?: boolean | undefined },
+) => terminalFailure(replaceWithTerminal(cause, reason), "list_apps", {});

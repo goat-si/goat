@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
-import { mergeTerminal, terminalErrorState } from "../cua/ComputerUseTerminal.ts";
+import { replaceWithTerminal, terminalErrorState } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -75,10 +75,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   const terminal = (code: string | undefined) =>
     code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
   const rpc = terminalErrorState(reply.error);
-  const merged = mergeTerminal(
-    mergeTerminal({ reason: terminal(nested) }, { reason: terminal(outer) }),
-    rpc,
-  ).reason;
+  const merged = replaceWithTerminal(rpc, terminal(nested), terminal(outer)).reason;
   const driverCode = merged ?? nested ?? outer;
   const said =
     merged !== undefined && merged !== (nested ?? outer)

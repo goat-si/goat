@@ -22,7 +22,7 @@ import {
 } from "./ComputerUseLeaseMessages.ts";
 
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
-import { mergeTerminal, type ComputerUseTerminalState } from "./ComputerUseTerminal.ts";
+import { replaceWithTerminal, type ComputerUseTerminalState } from "./ComputerUseTerminal.ts";
 import type { Stopping } from "./leaseUpdateFences.ts";
 
 export type JsonRpcId = string | number;
@@ -43,7 +43,7 @@ export const reservedIdAnswer = (id: string, prefix: string) =>
   });
 
 export const refusal = (
-  state: ComputerUseTerminalState,
+  replaced: ComputerUseTerminalState | "none",
   id: JsonRpcId,
   method: string | undefined,
   detail: ComputerUseRefusalDetail,
@@ -58,7 +58,7 @@ export const refusal = (
       : detail === "stopped" || detail === "stopped_all"
         ? "stopped_by_person"
         : undefined;
-  const merged = mergeTerminal(state, { reason: incoming });
+  const merged = replaceWithTerminal(replaced, incoming);
   if (merged.reason !== undefined && merged.possibleCommit) {
     const cause: Interruption =
       merged.reason === "screen_locked"
@@ -107,9 +107,12 @@ export const terminalReplacement = (
   id: JsonRpcId,
   tool: string | undefined,
   args: unknown,
-  state: ComputerUseTerminalState & { readonly reason: "stopped_by_person" | "screen_locked" },
+  replaced: ComputerUseTerminalState,
   dispatched: boolean,
 ) => {
+  const state = replaceWithTerminal(replaced);
+  if (state.reason === undefined)
+    throw new Error("A terminal replacement requires a terminal reason.");
   const cause: Interruption =
     state.reason === "screen_locked"
       ? { _tag: "pause", reason: "screen_locked" }
@@ -159,17 +162,18 @@ export const cutOff = (
   tool: string | undefined,
   originalCause: Interruption,
   args: unknown,
-  state: ComputerUseTerminalState,
+  replaced: ComputerUseTerminalState | "none",
 ) => {
-  const reason = mergeTerminal(state, {
-    reason:
-      originalCause._tag === "pause" && originalCause.reason === "screen_locked"
-        ? "screen_locked"
-        : originalCause._tag === "end" &&
-            (originalCause.reason === "stopped" || originalCause.reason === "stopped_all")
-          ? "stopped_by_person"
-          : undefined,
-  }).reason;
+  const state = replaceWithTerminal(replaced);
+  const reason = replaceWithTerminal(
+    state,
+    originalCause._tag === "pause" && originalCause.reason === "screen_locked"
+      ? "screen_locked"
+      : originalCause._tag === "end" &&
+          (originalCause.reason === "stopped" || originalCause.reason === "stopped_all")
+        ? "stopped_by_person"
+        : undefined,
+  ).reason;
   const cause: Interruption =
     reason === "stopped_by_person" &&
     !(
@@ -237,11 +241,14 @@ export const offScreenAnswer = (
   method: string,
   tool: string | undefined,
   verdict: "other" | "unknown",
-  args?: unknown,
-) =>
-  isReadOnlyCall(tool, args)
+  args: unknown,
+  replaced: ComputerUseTerminalState,
+) => {
+  const terminal = replaceWithTerminal(replaced);
+  if (terminal.reason !== undefined) return terminalReplacement(id, tool, args, terminal, true);
+  return isReadOnlyCall(tool, args)
     ? refusal(
-        { possibleCommit: false },
+        replaced,
         id,
         method,
         "wrong_display",
@@ -276,6 +283,7 @@ export const offScreenAnswer = (
           isError: true,
         },
       });
+};
 
 /** Receipt-time restrictions outrank the last applied state when a call has not run. */
 export const unsentCallRefusal = (
@@ -297,44 +305,30 @@ export const unsentCallRefusal = (
     state.finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
   const pausing =
     state.paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
-  if (ending !== undefined)
-    return refusal({ possibleCommit: false }, id, method, ending, LEASE_END_MESSAGES[ending]);
+  if (ending !== undefined) return refusal("none", id, method, ending, LEASE_END_MESSAGES[ending]);
   if (pausing !== undefined)
-    return refusal(
-      { possibleCommit: false },
-      id,
-      method,
-      pausedDetail(pausing),
-      PAUSE_MESSAGES[pausing],
-    );
+    return refusal("none", id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
   if (state.idle || (pending !== undefined && "idle" in pending))
     return refusal(
-      { possibleCommit: false },
+      "none",
       id,
       method,
       "control_idle",
       "This thread's turn has ended. Computer use is idle until its next turn.",
     );
-  if (state.held === true)
-    return refusal({ possibleCommit: false }, id, method, "reconnecting", RECONNECTING);
+  if (state.held === true) return refusal("none", id, method, "reconnecting", RECONNECTING);
   if (pending !== undefined && "narrowed" in pending)
     return refusal(
-      { possibleCommit: false },
+      "none",
       id,
       method,
       "app_not_approved",
       "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
     );
   if (state.foregroundRevoked)
-    return refusal(
-      { possibleCommit: false },
-      id,
-      method,
-      "foreground_not_approved",
-      FOREGROUND_NOT_APPROVED,
-    );
+    return refusal("none", id, method, "foreground_not_approved", FOREGROUND_NOT_APPROVED);
   return refusal(
-    { possibleCommit: false },
+    "none",
     id,
     method,
     interruptionDetail(lastInterruption),
@@ -352,10 +346,10 @@ export const unsentOutcome = (
   notSent: () => string,
 ) =>
   outcome === "shared"
-    ? refusal({ possibleCommit: false }, id, method, "screen_shared", SCREEN_SHARED)
+    ? refusal("none", id, method, "screen_shared", SCREEN_SHARED)
     : outcome === "expired"
       ? refusal(
-          { possibleCommit: false },
+          "none",
           id,
           method,
           "expired",

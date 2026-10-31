@@ -28,7 +28,7 @@ import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.
 import { terminalReplacement } from "./ComputerUseLeaseResponses.ts";
 import {
   terminalFailure,
-  mergeTerminal,
+  replaceWithTerminal,
   terminalReason,
   terminalErrorState,
   terminalReplyState,
@@ -220,7 +220,7 @@ export const make = Effect.gen(function* () {
                 pending.request.callId,
                 pending.request.tool,
                 pending.request.args,
-                { ...terminalState, reason: terminalState.reason },
+                terminalState,
                 pending.sent,
               ),
             ),
@@ -228,7 +228,7 @@ export const make = Effect.gen(function* () {
         }),
   });
   const settle = (pending: Pending, state: ComputerUseTerminalState) => {
-    const merged = mergeTerminal({ reason: pending.terminal }, state);
+    const merged = replaceWithTerminal(state, pending.terminal);
     pending.terminal = merged.reason;
     return Deferred.doneUnsafe(pending.answer, Exit.succeed(terminalReply(pending, merged)));
   };
@@ -245,7 +245,7 @@ export const make = Effect.gen(function* () {
     for (const [id, pending] of control.pending) {
       control.pending.delete(id);
       cancelDelivered(registration, pending);
-      settle(pending, mergeTerminal({ reason: control.terminal }, {}));
+      settle(pending, replaceWithTerminal("none", control.terminal));
     }
   };
   const close = (attachment: Attachment) => {
@@ -258,7 +258,7 @@ export const make = Effect.gen(function* () {
       control.abandoned.clear();
       for (const pending of control.pending.values()) {
         cancelDelivered(registration, pending);
-        settle(pending, mergeTerminal({ reason: control.terminal }, {}));
+        settle(pending, replaceWithTerminal("none", control.terminal));
       }
       control.pending.clear();
     }
@@ -305,8 +305,8 @@ export const make = Effect.gen(function* () {
     return record;
   };
   const latch = (record: Control, reason: ComputerUseTerminalReason) => {
-    record.terminal = mergeTerminal({ reason: record.terminal }, { reason }).reason;
-    record.epoch.reason = mergeTerminal(record.epoch, { reason }).reason;
+    record.terminal = replaceWithTerminal(record.terminal, reason).reason;
+    record.epoch.reason = replaceWithTerminal(record.epoch, reason).reason;
   };
   const latchWaiting = (
     threadId: ThreadId,
@@ -314,7 +314,7 @@ export const make = Effect.gen(function* () {
     reason: ComputerUseTerminalReason,
   ) => {
     for (const epoch of waitingEpochs.get(waitingKey(threadId, controlId))?.keys() ?? [])
-      epoch.reason = mergeTerminal(epoch, { reason }).reason;
+      epoch.reason = replaceWithTerminal(epoch, reason).reason;
   };
   const unsubscribe = leases.onAuthorityChange?.((change) => {
     if (change.terminal === undefined) return;
@@ -398,13 +398,13 @@ export const make = Effect.gen(function* () {
     now: number,
     deadlineMillis: number,
   ) {
-    const terminal = () => mergeTerminal({ reason: record.terminal }, epoch).reason;
+    const terminal = () => replaceWithTerminal(epoch, record.terminal).reason;
     if (
       input.expectedConnectionGeneration !== undefined &&
       input.expectedConnectionGeneration !== binding.connectionId
     )
       return yield* Effect.fail(
-        terminalFailure(mergeTerminal({ reason: terminal() }, {}), input.tool, input.args) ?? {
+        terminalFailure(replaceWithTerminal("none", terminal()), input.tool, input.args) ?? {
           code: "stale_reference" as const,
           effectStarted: false,
           nextStep: "Bind the desktop app again after the driver reconnects.",
@@ -433,14 +433,14 @@ export const make = Effect.gen(function* () {
     if (!offered) {
       record.pending.delete(request.requestId);
       return yield* Effect.fail(
-        terminalFailure(mergeTerminal({ reason: terminal() }, {}), input.tool, input.args) ??
+        terminalFailure(replaceWithTerminal("none", terminal()), input.tool, input.args) ??
           desktopNotReady("unbound"),
       );
     }
     let timedOut = false;
     const deadlineFailure = () =>
       terminalFailure(
-        mergeTerminal({ reason: terminal() }, {}),
+        replaceWithTerminal("none", terminal()),
         input.tool,
         input.args,
         pending.sent,
@@ -469,12 +469,11 @@ export const make = Effect.gen(function* () {
       ),
       Effect.filterOrFail(
         ({ answered, at }) =>
-          mergeTerminal(
-            mergeTerminal({ reason: pending.terminal }, epoch),
-            mergeTerminal(
-              terminalReplyState(answered.result, answered.status),
-              terminalErrorState(answered.error),
-            ),
+          replaceWithTerminal(
+            terminalReplyState(answered.result, answered.status),
+            terminalErrorState(answered.error),
+            pending.terminal,
+            epoch,
           ).reason !== undefined ||
           at <= deadlineMillis ||
           answered.status === "not_started",
@@ -482,9 +481,11 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map(({ answered }) => {
         const reply = terminalReplyState(answered.result, answered.status);
-        const merged = mergeTerminal(
-          mergeTerminal(mergeTerminal({ reason: pending.terminal }, epoch), reply),
+        const merged = replaceWithTerminal(
+          reply,
           terminalErrorState(answered.error),
+          pending.terminal,
+          epoch,
         );
         const reason = merged.reason;
         const result =
@@ -531,7 +532,7 @@ export const make = Effect.gen(function* () {
           for (const [id, pending] of record.pending) {
             record.pending.delete(id);
             cancelDelivered(kept, pending);
-            settle(pending, mergeTerminal({ reason: record.terminal }, {}));
+            settle(pending, replaceWithTerminal("none", record.terminal));
           }
       else if (previous !== undefined) yield* close(previous) ?? Effect.void;
       attachments.set(input.threadId, {
@@ -597,14 +598,13 @@ export const make = Effect.gen(function* () {
         const state = yield* leases
           .controlState(input.threadId, current.controlId)
           .pipe(Effect.option);
-        const terminal = mergeTerminal(
-          { reason: terminalReason(undefined, Option.getOrUndefined(state)) },
-          {
-            reason: terminalReason(
-              undefined,
-              current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
-            ),
-          },
+        const terminal = replaceWithTerminal(
+          "none",
+          terminalReason(undefined, Option.getOrUndefined(state)),
+          terminalReason(
+            undefined,
+            current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+          ),
         ).reason;
         if (terminal !== undefined) {
           latchWaiting(input.threadId, current.controlId, terminal);
@@ -751,7 +751,7 @@ export const make = Effect.gen(function* () {
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
         const previousFailure = terminalFailure(
-          mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
+          replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
           input.tool,
           input.args,
         );
@@ -764,17 +764,16 @@ export const make = Effect.gen(function* () {
           const state = yield* leases
             .controlState(input.threadId, current.controlId)
             .pipe(Effect.option);
-          const terminal = mergeTerminal(
-            { reason: terminalReason(record?.terminal, Option.getOrUndefined(state)) },
-            {
-              reason: terminalReason(
-                undefined,
-                current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
-              ),
-            },
+          const terminal = replaceWithTerminal(
+            "none",
+            terminalReason(record?.terminal, Option.getOrUndefined(state)),
+            terminalReason(
+              undefined,
+              current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+            ),
           ).reason;
           const failure = terminalFailure(
-            mergeTerminal({ reason: terminal }, {}),
+            replaceWithTerminal("none", terminal),
             input.tool,
             input.args,
           );
@@ -783,7 +782,7 @@ export const make = Effect.gen(function* () {
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
           return yield* Effect.fail(
             terminalFailure(
-              mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
+              replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
               input.tool,
               input.args,
             ) ?? desktopNotReady("none"),
@@ -792,7 +791,7 @@ export const make = Effect.gen(function* () {
         if (current.controlId !== began)
           return yield* Effect.fail(
             terminalFailure(
-              mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
+              replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
               input.tool,
               input.args,
             ) ?? desktopNotReady("unbound"),
@@ -812,7 +811,7 @@ export const make = Effect.gen(function* () {
           waiters.set(beganEpoch, (waiters.get(beganEpoch) ?? 0) + 1);
         }
         const capturedFailure = terminalFailure(
-          mergeTerminal({ reason: terminalReason(beganEpoch?.reason) }, {}),
+          replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
           input.tool,
           input.args,
         );
@@ -822,7 +821,7 @@ export const make = Effect.gen(function* () {
           if (deadlineMillis - now < MIN_CALL_MS)
             return yield* Effect.fail(
               terminalFailure(
-                mergeTerminal({ reason: terminalReason(record.terminal) }, {}),
+                replaceWithTerminal("none", terminalReason(record.terminal)),
                 input.tool,
                 input.args,
               ) ?? {
@@ -851,7 +850,7 @@ export const make = Effect.gen(function* () {
         )
           return yield* Effect.fail(
             terminalFailure(
-              mergeTerminal({ reason: record?.terminal }, { reason: beganEpoch?.reason }),
+              replaceWithTerminal(beganEpoch, record?.terminal),
               input.tool,
               input.args,
             ) ?? desktopNotReady("unbound"),
@@ -882,7 +881,7 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
-          const replyState = mergeTerminal(
+          const replyState = replaceWithTerminal(
             terminalReplyState(input.reply.result, input.reply.status),
             terminalErrorState(input.reply.error),
           );
@@ -892,16 +891,13 @@ export const make = Effect.gen(function* () {
             latch(record, replyTerminal);
           }
           if (replyTerminal !== undefined && replyTerminal === record.terminal) {
-            pending.terminal = mergeTerminal(
-              { reason: pending.terminal },
-              { reason: replyTerminal },
-            ).reason;
+            pending.terminal = replaceWithTerminal(pending.terminal, replyState).reason;
             pending.answeredAt = now;
             Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
             return true;
           }
           if (record.terminal !== undefined) {
-            settle(pending, mergeTerminal({ reason: record.terminal }, replyState));
+            settle(pending, replaceWithTerminal(replyState, record.terminal));
             return true;
           }
           pending.answeredAt = now;
@@ -923,7 +919,7 @@ export const make = Effect.gen(function* () {
               if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
                 if (value.registration) cancelDelivered(value.registration, pending);
-                settle(pending, mergeTerminal({ reason: record.terminal }, {}));
+                settle(pending, replaceWithTerminal("none", record.terminal));
               }
           }
       }),

@@ -630,7 +630,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   code: cause.endedBy ?? cause.code,
                   receipts: cause.journal ?? cause.receipts ?? [],
                 };
-                const terminal = cellFailureBase(cellTerminals.get(id));
+                const terminal = cellFailureBase(cellTerminals.get(id), cause);
                 const base = terminal ?? fail(cause.code);
                 return Effect.fail({
                   ...base,

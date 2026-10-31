@@ -1,7 +1,7 @@
 import { authorizeClaimBind, type PendingBrowserBind } from "./ComputerUseClaimBindAuthority.ts";
 import type { ComputerUseLeaseUpdate } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import type { OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
+import { retainedTerminal, type OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 
@@ -230,7 +230,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       if (!binding)
         return {
           refused: refusal(
-            { possibleCommit: false },
+            "none",
             id,
             message.method,
             "outside_manifest",
@@ -253,7 +253,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if (isRecord(untrustedArgs) && untrustedArgs.authority === "claimBind")
       return {
         refused: refusal(
-          { possibleCommit: false },
+          "none",
           id,
           message.method,
           "outside_manifest",
@@ -268,7 +268,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if ("refused" in browser)
       return {
         refused: refusal(
-          { possibleCommit: false },
+          "none",
           id,
           message.method,
           "outside_manifest",
@@ -287,7 +287,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
         return {
           refused: refusal(
-            { possibleCommit: false },
+            "none",
             id,
             message.method,
             "outside_manifest",
@@ -299,7 +299,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
       return {
         refused: refusal(
-          { possibleCommit: false },
+          "none",
           id,
           message.method,
           "outside_manifest",
@@ -358,7 +358,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     outstanding.delete(key);
     yield* request.sink.answer(
       refusal(
-        { possibleCommit: false },
+        retainedTerminal(request),
         request.id,
         request.method,
         "outside_manifest",
@@ -382,7 +382,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
   ) {
     if (selected === undefined || (yield* supported())) return undefined;
     return refusal(
-      { possibleCommit: false },
+      "none",
       id,
       method,
       "outside_manifest",
