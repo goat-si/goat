@@ -57,7 +57,7 @@ it.effect("Escape stays terminal through the desktop host while the stop report 
   }),
 );
 
-import { terminalFailure as round6TerminalFailure } from "../cua/ComputerUseTerminal.ts";
+import { terminalFailure as probeTerminalFailure } from "../cua/ComputerUseTerminal.ts";
 it.effect.each(["stopped_by_person", "screen_locked"] as const)(
   "round6 post-read keeps terminal %s",
   (reason) =>
@@ -73,7 +73,7 @@ it.effect.each(["stopped_by_person", "screen_locked"] as const)(
           request: (request) => {
             if (stopped) {
               refusedReads++;
-              const failure = round6TerminalFailure(reason, request.tool, request.args);
+              const failure = probeTerminalFailure(reason, request.tool, request.args);
               if (failure === undefined) return Effect.die("expected terminal failure");
               return Effect.fail(failure);
             }

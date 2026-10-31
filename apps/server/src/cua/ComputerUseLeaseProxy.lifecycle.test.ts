@@ -685,10 +685,10 @@ it.effect.each(["escape", "lock"] as const)("validation refusal cannot overwrite
   }),
 );
 
-import * as Round6Channel from "./ComputerUsePrimitiveChannel.ts";
-import * as Round6Leases from "./ComputerUseLeases.ts";
-import * as Round6PubSub from "effect/PubSub";
-import { driverError as round6DriverError } from "../screenCode/DesktopDriverReplies.ts";
+import * as ProbeChannel from "./ComputerUsePrimitiveChannel.ts";
+import * as ProbeLeases from "./ComputerUseLeases.ts";
+import * as ProbePubSub from "effect/PubSub";
+import { driverError as probeDriverError } from "../screenCode/DesktopDriverReplies.ts";
 
 it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", (kind) =>
   Effect.gen(function* () {
@@ -720,12 +720,12 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
     yield* h.sendPrimitive(req(1, 60000));
     const reservation = yield* h.nextReservation;
     assert.equal(reservation.action, "reserve");
-    const signals = yield* Round6PubSub.unbounded<void>();
+    const signals = yield* ProbePubSub.unbounded<void>();
     const threadId = ThreadId.make("round6:thread");
     const expiresAt = DateTime.makeUnsafe(60000);
-    const leases = yield* Round6Leases.ComputerUseLeases.pipe(
+    const leases = yield* ProbeLeases.ComputerUseLeases.pipe(
       Effect.provide(
-        Layer.mock(Round6Leases.ComputerUseLeases)({
+        Layer.mock(ProbeLeases.ComputerUseLeases)({
           proxy: undefined,
           onAuthorityChange: () => () => undefined,
           currentControl: () => Effect.succeedSome({ controlId: CONTROL, threadId, expiresAt }),
@@ -737,12 +737,12 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
               apps: undefined,
               wakeAt: 60000,
             }),
-          subscribe: Round6PubSub.subscribe(signals),
+          subscribe: ProbePubSub.subscribe(signals),
         }),
       ),
     );
-    const channel = yield* Round6Channel.make.pipe(
-      Effect.provideService(Round6Leases.ComputerUseLeases, leases),
+    const channel = yield* ProbeChannel.make.pipe(
+      Effect.provideService(ProbeLeases.ComputerUseLeases, leases),
     );
     const authority = {
       threadId,
@@ -793,7 +793,7 @@ it.effect.each(["escape"] as const)("round6 queued deadline keeps terminal %s", 
       reply: answer,
     });
     const observed = yield* Fiber.join(waiting);
-    assert.equal(round6DriverError(observed)?.code, "stopped_by_person");
+    assert.equal(probeDriverError(observed)?.code, "stopped_by_person");
     yield* Deferred.succeed(gate, undefined);
     yield* Deferred.succeed(stopReport, undefined);
     assert.equal(answer.callId, 2);
