@@ -48,6 +48,8 @@ import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom, serverEnvironment } from "~/state/server";
 
+import type { PdfReadingPosition } from "./pdf/usePdfViewState";
+
 const PdfFilePreview = lazy(() => import("./pdf/PdfFilePreview"));
 
 /**
@@ -94,12 +96,16 @@ export function BrowserDocumentFrame(props: {
   readonly threadRef?: ScopedThreadRef | undefined;
   /** Stable resource identity and revision; defaults to src for callers that reload on URL changes. */
   readonly documentKey?: string | undefined;
+  readonly documentId?: string | undefined;
+  readonly pdfViewState?: PdfReadingPosition | undefined;
 }) {
   const key = props.documentKey ?? props.src;
   return props.pdf ? (
     <Suspense fallback={<FileSurfaceLoading />}>
       <PdfFilePreview
-        key={key}
+        key={props.documentId ?? key}
+        revision={key}
+        viewState={props.pdfViewState}
         src={props.src}
         title={props.title}
         onRetry={props.onRetry}

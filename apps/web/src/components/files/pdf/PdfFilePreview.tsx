@@ -20,14 +20,37 @@ import { usePdfDocument } from "./usePdfDocument";
 import { PdfPage } from "./PdfPage";
 import { PdfIconButton, PdfToolbar } from "./PdfToolbar";
 import { isPdfFindShortcut } from "./pdfShortcuts";
+import { initialPdfView, type PdfViewState, type PdfReadingPosition } from "./usePdfViewState";
 import "./pdfViewer.css";
 
-export default function PdfFilePreview(props: {
+interface PdfFilePreviewProps {
   src: string;
   title: string;
   onRetry?: (() => Promise<string | null>) | undefined;
   threadRef?: ScopedThreadRef | undefined;
-}) {
+  revision?: string | undefined;
+  viewState?: PdfReadingPosition | undefined;
+}
+
+export default function PdfFilePreview(props: PdfFilePreviewProps) {
+  const [view, setView] = useState(initialPdfView);
+  const position = props.viewState ?? { view, onViewChange: setView };
+  return (
+    <PdfResource
+      key={props.revision ?? props.src}
+      {...props}
+      initialView={position.view}
+      onViewChange={position.onViewChange}
+    />
+  );
+}
+
+interface PdfViewProps {
+  initialView: PdfViewState;
+  onViewChange: (view: PdfViewState) => void;
+}
+
+function PdfResource(props: PdfFilePreviewProps & PdfViewProps) {
   const [resource, setResource] = useState({ url: props.src, revision: 0 });
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,6 +76,8 @@ export default function PdfFilePreview(props: {
       title={props.title}
       retry={retry}
       threadRef={props.threadRef}
+      initialView={props.initialView}
+      onViewChange={props.onViewChange}
     />
   );
 }
@@ -62,6 +87,8 @@ function PdfSession(props: {
   title: string;
   retry: () => void;
   threadRef: ScopedThreadRef | undefined;
+  initialView: PdfViewState;
+  onViewChange: (view: PdfViewState) => void;
 }) {
   const pdf = usePdfDocument(props.url);
   if (pdf.status === "error")
@@ -75,6 +102,8 @@ function PdfSession(props: {
       title={props.title}
       retry={props.retry}
       threadRef={props.threadRef}
+      initialView={props.initialView}
+      onViewChange={props.onViewChange}
     />
   );
 }
@@ -84,17 +113,20 @@ function PdfDocument(props: {
   title: string;
   retry: () => void;
   threadRef: ScopedThreadRef | undefined;
+  initialView: PdfViewState;
+  onViewChange: (view: PdfViewState) => void;
 }) {
   const scroll = useRef<HTMLDivElement>(null);
   const findInput = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
-  const anchor = useRef({ page: 0, fraction: 0 });
+  const anchor = useRef(props.initialView.anchor);
+  const left = useRef(props.initialView.left);
   const openLink = useOpenLink(props.threadRef);
   const [sizes, setSizes] = useState<PdfSize[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [container, setContainer] = useState({ width: 0, height: 0 });
   const [top, setTop] = useState(0);
-  const [zoom, setZoom] = useState<PdfZoom>("fit-width");
+  const [zoom, setZoom] = useState<PdfZoom>(props.initialView.zoom);
   const [findOpen, setFindOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [texts, setTexts] = useState<string[] | null>(null);
@@ -140,10 +172,11 @@ function PdfDocument(props: {
 
   // Preserve the logical page and its vertical offset across zoom and resize.
   useLayoutEffect(() => {
-    const page = pages[anchor.current.page];
+    const page = pages[Math.min(anchor.current.page, pages.length - 1)];
     if (!scroll.current || !page) return;
     const nextTop = Math.max(0, page.top - 16 + anchor.current.fraction * page.height);
     scroll.current.scrollTop = nextTop;
+    scroll.current.scrollLeft = left.current;
     setTop(nextTop);
   }, [pages]);
 
@@ -152,6 +185,7 @@ function PdfDocument(props: {
     const page = pages[index];
     if (!page || !scroll.current) return;
     anchor.current = { page: index, fraction: 0 };
+    props.onViewChange({ anchor: anchor.current, zoom, left: left.current });
     const nextTop = Math.max(0, page.top - 16);
     scroll.current.scrollTop = nextTop;
     setTop(nextTop);
@@ -202,7 +236,7 @@ function PdfDocument(props: {
       role="region"
       aria-label={`${props.title} PDF viewer`}
       tabIndex={0}
-      className="flex min-h-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      className="flex min-h-0 min-w-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       onKeyDownCapture={(event) => {
         if (isPdfFindShortcut(event)) {
           event.preventDefault();
@@ -236,7 +270,11 @@ function PdfDocument(props: {
         count={pages.length}
         scale={scale}
         navigate={navigate}
-        zoom={(value) => setZoom(typeof value === "number" ? clampScale(value) : value)}
+        zoom={(value) => {
+          const next = typeof value === "number" ? clampScale(value) : value;
+          props.onViewChange({ anchor: anchor.current, zoom: next, left: left.current });
+          setZoom(next);
+        }}
         find={showFind}
         reload={props.retry}
       />
@@ -308,6 +346,8 @@ function PdfDocument(props: {
               page: index,
               fraction: Math.max(0, (nextTop - page.top + 16) / page.height),
             };
+          left.current = event.currentTarget.scrollLeft;
+          props.onViewChange({ anchor: anchor.current, zoom, left: left.current });
           setTop(nextTop);
         }}
       >
