@@ -197,7 +197,7 @@ export const pageRead = (
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
     const tracker = attachNetworkTracker(page);
     const deadline = Date.now() + (input.timeoutMs ?? 10_000);
-    let known: { readonly documentId: number; readonly values: Set<string> } | undefined;
+    let known: { readonly documentId: number; readonly values: string } | undefined;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const navigation = watchNavigation(page);
       const documentId = tracker.state().documentId;
@@ -214,14 +214,11 @@ export const pageRead = (
           throw framesChanged();
         });
         if (before.some((values) => values === undefined)) throw readFailure("pageChanged");
-        // A retry for moved frames reads the same document, and holds it to what a single read
-        // holds: the secrets match the earlier attempt's exactly, or a value seen in between could
-        // sit unmasked in the page's text.
-        const seen = new Set(before.flatMap((values) => values ?? []));
-        if (
-          known?.documentId === documentId &&
-          (known.values.size !== seen.size || [...known.values].some((value) => !seen.has(value)))
-        )
+        // A retry for moved frames reads the same document, held to what one read holds: the
+        // secrets, in frame order, match the earlier attempt's, or a value seen in between could
+        // sit unmasked in the page's text. A frame without secrets adds nothing to the order.
+        const seen = JSON.stringify(before.flatMap((values) => values ?? []));
+        if (known?.documentId === documentId && known.values !== seen)
           throw readFailure("pageChanged");
         known = { documentId, values: seen };
         const cookiesBefore = await tabCookies(page);
@@ -259,9 +256,7 @@ export const pageRead = (
           throw readFailure("pageChanged");
         const cookies = [...cookiesBefore, ...(await tabCookies(page))];
         const secrets = maskSecrets(
-          dottedPattern([
-            ...new Set([...known.values, ...after.flatMap((values) => values ?? [])]),
-          ]),
+          dottedPattern(after.flatMap((values) => values ?? [])),
           cookies,
         );
         const mask = (text: string) => filled(secrets(text));

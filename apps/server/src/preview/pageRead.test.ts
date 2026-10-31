@@ -305,6 +305,24 @@ it("refuses a secret that changed and was echoed while frames moved, even if its
     expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
   }));
 
+it("refuses secrets that swapped places after one was echoed while frames moved", () =>
+  fixture(async (page, read) => {
+    await page.setContent(
+      "<main>Public</main><input id=one type=password><input id=two type=password><script>one.value = 'fictional-swap-a'; two.value = 'fictional-swap-c';</script>",
+    );
+    const { observed } = await observerGate(page);
+    const reading = read();
+    await observed;
+    await page.evaluate(
+      "(() => { one.value = 'fictional-intermediate-secret'; document.querySelector('main').textContent = 'fictional-intermediate-secret'; one.value = 'fictional-swap-c'; two.value = 'fictional-swap-a'; const frame = document.createElement('iframe'); frame.srcdoc = '<p>Ad</p>'; document.body.append(frame); })()",
+    );
+    const outcome = await reading.then(
+      (value) => JSON.stringify(value),
+      (error: unknown) => error,
+    );
+    expect(outcome).toMatchObject({ detail: { reason: "pageChanged" } });
+  }));
+
 it("reports a DOM that has not stayed quiet for settleMs by the deadline", () =>
   fixture(async (page, read) => {
     let started = () => {};

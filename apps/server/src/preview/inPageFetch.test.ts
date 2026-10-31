@@ -403,6 +403,14 @@ describe.skipIf(!chromiumInstalled)("inPageFetch in a browser", () => {
       detail: { fetchFailure: "network" },
       message: expect.stringContaining("ERR_CONNECTION_RESET"),
     });
+    // A readable same-origin probe proves nothing about CORS, even after a bare ERR_FAILED.
+    let failedOnce = 0;
+    await page.route(`http://127.0.0.1:${port}/failed-once`, (route) =>
+      failedOnce++ === 0 ? route.abort("failed") : route.fulfill({ body: "ok" }),
+    );
+    await expect(inPageFetch(page, control, { url: "/failed-once" })).rejects.toMatchObject({
+      detail: { fetchFailure: "network" },
+    });
   });
 
   it("keeps a body that is not text as bytes for a file, and bounds long text", async () => {

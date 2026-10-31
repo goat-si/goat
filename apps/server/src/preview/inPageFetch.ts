@@ -201,8 +201,9 @@ const FETCH_SCRIPT = `async ({ url, format, maxChars, maxBytes, maxSavedBytes, t
     let reachable = false;
     if (!timedOut && !policyBlocked) {
       try {
-        await fetch(url, { mode: "no-cors", credentials: "omit", cache: "no-store", signal: controller.signal });
-        reachable = true;
+        const probe = await fetch(url, { mode: "no-cors", credentials: "omit", cache: "no-store", signal: controller.signal });
+        // Only a cross-origin answer is opaque; a readable one says nothing about CORS.
+        reachable = probe.type === "opaque";
       } catch {}
     }
     return { error: String((error && error.message) || error), timedOut, reachable, policyBlocked };
