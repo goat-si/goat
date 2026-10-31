@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 import { AuthWebSocketTicketResult, type AuthClientPresentationMetadata } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
@@ -81,7 +82,7 @@ export const openHubProxySocket = Effect.fn("HubProxy.openSocket")(function* (
     );
     const socket = new URL(environmentEndpointUrl(base, "/ws"));
     socket.protocol = socket.protocol === "https:" ? "wss:" : "ws:";
-    socket.searchParams.set("wsTicket", ticket.ticket);
+    socket.searchParams.set("wsTicket", Redacted.value(ticket.ticket));
     appendClientConnectionParams(socket, metadata, "direct");
     socketUrl = socket.toString();
   }

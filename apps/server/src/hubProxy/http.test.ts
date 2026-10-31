@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- real key-bound proxy ticket proofs.
 import * as NodeCrypto from "node:crypto";
 import * as DateTime from "effect/DateTime";
@@ -91,7 +92,7 @@ const ticketUrl = Effect.fnUntraced(function* (
   session: Parameters<typeof hub.auth.issueWebSocketTicket>[0],
 ) {
   const ticket = yield* hub.auth.issueWebSocketTicket(session);
-  return `${hub.baseUrl.replace(/^http/u, "ws")}hub/nodes/node-1/ws?wsTicket=${encodeURIComponent(ticket.ticket)}&orchestrationProtocol=1001`;
+  return `${hub.baseUrl.replace(/^http/u, "ws")}hub/nodes/node-1/ws?wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}&orchestrationProtocol=1001`;
 });
 
 it.effect(
@@ -819,16 +820,18 @@ it.effect(
         expect(response.status).toBe(200);
         return yield* decodeTicket(yield* response.json);
       }).pipe(Effect.provide(FetchHttpClient.layer));
-      expect(yield* hub.sessionStore.verifyWebSocketToken(issued.ticket)).toMatchObject({
+      expect(
+        yield* hub.sessionStore.verifyWebSocketToken(Redacted.value(issued.ticket)),
+      ).toMatchObject({
         audience: "rpc",
         proofKeyThumbprint: thumbprint,
       });
       const path = `${hub.baseUrl}hub/nodes/node-1/ws`;
-      const socketUrl = `${path.replace(/^http/u, "ws")}?wsTicket=${encodeURIComponent(issued.ticket)}&orchestrationProtocol=1001`;
+      const socketUrl = `${path.replace(/^http/u, "ws")}?wsTicket=${encodeURIComponent(Redacted.value(issued.ticket))}&orchestrationProtocol=1001`;
       const denied = yield* rawSocket(socketUrl);
       expect(yield* denied.failed).toBe(401);
       const accepted = yield* rawSocket(
-        `${socketUrl}&dpop=${encodeURIComponent(proof("GET", path, issued.ticket))}`,
+        `${socketUrl}&dpop=${encodeURIComponent(proof("GET", path, Redacted.value(issued.ticket)))}`,
       );
       yield* accepted.opened;
     }).pipe(Effect.scoped, Effect.provide(authLayer)),

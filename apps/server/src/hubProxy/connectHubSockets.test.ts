@@ -1,3 +1,4 @@
+import * as Redacted from "effect/Redacted";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- real DPoP proofs for live socket admission.
 import * as NodeCrypto from "node:crypto";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
@@ -138,14 +139,14 @@ it.effect.each([
         const ticket = yield* hub.auth.issueWebSocketTicket(session, { use: "rpc" });
         const url = `${base}${path}`;
         return yield* socket(
-          `${url.replace(/^http/u, "ws")}?orchestrationProtocol=1001&wsTicket=${encodeURIComponent(ticket.ticket)}&dpop=${encodeURIComponent(yield* proof("GET", url, ticket.ticket))}`,
+          `${url.replace(/^http/u, "ws")}?orchestrationProtocol=1001&wsTicket=${encodeURIComponent(Redacted.value(ticket.ticket))}&dpop=${encodeURIComponent(yield* proof("GET", url, Redacted.value(ticket.ticket)))}`,
         );
       });
       const proxy = yield* open(hub.baseUrl, "hub/nodes/node-1/ws", proxySession);
       const rpc = yield* open(rpcOrigin, "ws", hubSession);
       const pairedTicket = yield* hub.auth.issueWebSocketTicket(paired);
       const pairedSocket = yield* socket(
-        `${hub.baseUrl.replace(/^http/u, "ws")}hub/nodes/node-1/ws?orchestrationProtocol=1001&wsTicket=${encodeURIComponent(pairedTicket.ticket)}`,
+        `${hub.baseUrl.replace(/^http/u, "ws")}hub/nodes/node-1/ws?orchestrationProtocol=1001&wsTicket=${encodeURIComponent(Redacted.value(pairedTicket.ticket))}`,
       );
       yield* Queue.take(entering);
       yield* Queue.take(entering);
