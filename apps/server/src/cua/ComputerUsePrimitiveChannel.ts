@@ -29,6 +29,7 @@ import { cutOff, refusal } from "./ComputerUseLeaseResponses.ts";
 import { LEASE_END_MESSAGES, PAUSE_MESSAGES } from "./ComputerUseLeaseMessages.ts";
 import {
   terminalFailure,
+  mergeTerminal,
   terminalReason,
   terminalReplyReason,
   type ComputerUseTerminalReason,
@@ -204,7 +205,7 @@ export const make = Effect.gen(function* () {
     Deferred.doneUnsafe(waiting, Exit.void);
   };
   const settle = (pending: Pending, terminal?: Control["terminal"]) => {
-    if (pending.terminal === undefined && terminal !== undefined) pending.terminal = terminal;
+    pending.terminal = mergeTerminal({ reason: pending.terminal }, { reason: terminal }).reason;
     terminal = terminalReason(pending.terminal);
     return Deferred.doneUnsafe(
       pending.answer,
@@ -312,15 +313,14 @@ export const make = Effect.gen(function* () {
     return record;
   };
   const latch = (record: Control, reason: ComputerUseTerminalReason) => {
-    if (record.epoch.reason !== undefined && record.epoch.reason !== reason) record.epoch = {};
-    record.terminal = reason;
-    record.epoch.reason = reason;
+    record.terminal = mergeTerminal({ reason: record.terminal }, { reason }).reason;
+    record.epoch.reason = mergeTerminal(record.epoch, { reason }).reason;
   };
   const unsubscribe = leases.onAuthorityChange?.((change) => {
     if (change.terminal === undefined) return;
     for (const epoch of waitingEpochs.get(waitingKey(change.threadId, change.controlId))?.keys() ??
       [])
-      epoch.reason = change.terminal;
+      epoch.reason = mergeTerminal(epoch, { reason: change.terminal }).reason;
     const registered = attachments.get(change.threadId)?.registration;
     if (registered !== undefined) latch(control(registered, change.controlId), change.terminal);
     wake();
@@ -829,7 +829,10 @@ export const make = Effect.gen(function* () {
           const replyTerminal = terminalReplyReason(input.reply.result);
           if (replyTerminal !== undefined) latch(record, replyTerminal);
           if (replyTerminal !== undefined && replyTerminal === record.terminal) {
-            pending.terminal = replyTerminal;
+            pending.terminal = mergeTerminal(
+              { reason: pending.terminal },
+              { reason: replyTerminal },
+            ).reason;
             pending.answeredAt = now;
             Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
             return true;

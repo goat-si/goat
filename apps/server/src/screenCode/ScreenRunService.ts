@@ -28,7 +28,11 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
-import { terminalFailure, type ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
+import {
+  mergeTerminal,
+  terminalFailure,
+  type ComputerUseTerminalReason,
+} from "../cua/ComputerUseTerminal.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
@@ -41,7 +45,7 @@ import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTarget
 import type { CellWindowsOutcome } from "./DesktopWindows.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
-import { cellErrorSafety, cellResultSafety } from "./ScreenActionOutcome.ts";
+import { cellResultSafety, cellTerminalError } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
@@ -496,8 +500,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const cellId = activeCells.get(id);
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        if (change.terminal !== undefined && !cellTerminals.has(id))
-          cellTerminals.set(id, change.terminal);
+        if (change.terminal !== undefined) {
+          const reason = mergeTerminal(
+            { reason: cellTerminals.get(id) },
+            { reason: change.terminal },
+          ).reason;
+          if (reason !== undefined) cellTerminals.set(id, reason);
+        }
         bridge.cutCellNow(runId, turnId, cellId, change.terminal ?? change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
@@ -620,7 +629,11 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   (cause.endedBy ?? cause.code) === "stopped",
               ).pipe(
                 Effect.mapError((error) =>
-                  cellErrorSafety(error, cause.journal ?? cause.receipts ?? []),
+                  cellTerminalError(
+                    error,
+                    cause.journal ?? cause.receipts ?? [],
+                    cellTerminals.get(id),
+                  ),
                 ),
               ),
               (cellWindows) => {
@@ -636,9 +649,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                     ? { message: "The screen runtime did not start; nothing ran. Retry the cell." }
                     : {}),
                   cellId,
-                  ...cellErrorSafety(
+                  ...cellTerminalError(
                     { ...base, effectStarted: cause.effectStarted === true },
                     cause.receipts ?? [],
+                    cellTerminals.get(id),
                   ),
                   ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
                   ...(cause.code === "wall_limit"
@@ -657,9 +671,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             Effect.flatMap(
               collectCellWindows(result.status === "deadline" || result.status === "stopped").pipe(
                 Effect.mapError((error) =>
-                  cellErrorSafety(
+                  cellTerminalError(
                     error,
                     result.journal.map((entry) => entry.receipt),
+                    cellTerminals.get(id),
                   ),
                 ),
               ),
@@ -678,7 +693,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
                   const receipts = journal.map((entry) => entry.receipt);
                   failed = { code: classified.error.code, receipts };
                   return Effect.fail({
-                    ...classified.error,
+                    ...cellTerminalError(classified.error, receipts, cellTerminals.get(id)),
                     cellId,
                     receipts: receipts.slice(-16),
                     ...cellWindows,
@@ -866,8 +881,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         if (cut && cellId) {
-          if (input.terminal !== undefined && !cellTerminals.has(id))
-            cellTerminals.set(id, input.terminal);
+          if (input.terminal !== undefined) {
+            const reason = mergeTerminal(
+              { reason: cellTerminals.get(id) },
+              { reason: input.terminal },
+            ).reason;
+            if (reason !== undefined) cellTerminals.set(id, reason);
+          }
           yield* bridge.cutCell(runId, turnId, cellId, input.terminal ?? input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }

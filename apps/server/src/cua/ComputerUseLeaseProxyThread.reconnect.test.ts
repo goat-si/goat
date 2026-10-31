@@ -409,7 +409,10 @@ it.effect.each(["idle", "stop", "narrow"])(
       }
       yield* Deferred.succeed(gate, undefined);
       const answer = yield* h.next;
-      assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+      assert.equal(
+        answer.result?.structuredContent?.code,
+        after === "stop" ? "stopped_by_person" : "screen_locked",
+      );
       assert.include(JSON.stringify(answer), '"retryClass":"never"');
     }),
 );

@@ -13,7 +13,11 @@ import {
 import { cutOff, refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import type { ReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
-import { terminalReason, type ComputerUseTerminalReason } from "./ComputerUseTerminal.ts";
+import {
+  mergeTerminal,
+  terminalReason,
+  type ComputerUseTerminalReason,
+} from "./ComputerUseTerminal.ts";
 
 const decodeTerminal = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -70,8 +74,8 @@ export function makePersonStopFence() {
   let epoch: { reason?: "stopped_by_person" | "screen_locked" } = {};
   let lockConfirmed = false;
   const latch = (value: "stopped_by_person" | "screen_locked") => {
-    reason ??= value;
-    epoch.reason ??= reason;
+    reason = mergeTerminal({ reason }, { reason: value }).reason;
+    epoch.reason = mergeTerminal({ reason: epoch.reason }, { reason: value }).reason;
   };
   return {
     pending: () => reason !== undefined,
@@ -81,7 +85,7 @@ export function makePersonStopFence() {
       return () => captured.reason;
     },
     beginStop: () => {
-      if (reason !== undefined) return false;
+      if (reason === "stopped_by_person") return false;
       latch("stopped_by_person");
       return true;
     },

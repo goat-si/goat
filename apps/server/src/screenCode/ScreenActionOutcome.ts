@@ -6,6 +6,11 @@ import type {
   ScreenRunResult,
 } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
+import {
+  mergeTerminal,
+  terminalFailure,
+  type ComputerUseTerminalReason,
+} from "../cua/ComputerUseTerminal.ts";
 
 const reads = new Set<ScreenHostCall["method"]>([
   "list_apps",
@@ -118,6 +123,40 @@ export const cellErrorSafety = <
       dispatched: true,
     }),
     ...(nextStep === undefined ? {} : { nextStep }),
+  };
+};
+
+export const cellTerminalError = (
+  error: ScreenRunError,
+  receipts: readonly ScreenEffectReceipt[],
+  reason: ComputerUseTerminalReason | undefined,
+): ScreenRunError => {
+  const assessed = cellErrorSafety(error, receipts);
+  const incoming =
+    error.code === "stopped_by_person" || error.code === "screen_locked" ? error.code : undefined;
+  const merged = mergeTerminal(
+    { reason, possibleCommit: assessed.safety?.possibleCommit },
+    {
+      reason: incoming,
+      possibleCommit: error.effectStarted || error.safety?.possibleCommit,
+    },
+  );
+  const terminal = terminalFailure(
+    merged.reason,
+    merged.possibleCommit ? "click" : "list_apps",
+    {},
+    merged.possibleCommit,
+  );
+  if (terminal === undefined) return assessed;
+  return {
+    ...assessed,
+    ...terminal,
+    safety: {
+      ...terminal.safety,
+      ...assessed.safety,
+      possibleCommit: merged.possibleCommit,
+      retryClass: "never",
+    },
   };
 };
 

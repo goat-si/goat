@@ -13,6 +13,27 @@ import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
 
 export type ComputerUseTerminalReason = "stopped_by_person" | "screen_locked";
 
+export const mergeTerminal = (
+  first: {
+    readonly reason?: ComputerUseTerminalReason | undefined;
+    readonly possibleCommit?: boolean | undefined;
+  },
+  second: {
+    readonly reason?: ComputerUseTerminalReason | undefined;
+    readonly possibleCommit?: boolean | undefined;
+  },
+) => {
+  // A person's Stop outranks a lock because it forbids retrying the turn; possible input only accumulates.
+  const reason =
+    first.reason === "stopped_by_person" || second.reason === "stopped_by_person"
+      ? "stopped_by_person"
+      : (first.reason ?? second.reason);
+  return {
+    ...(reason === undefined ? {} : { reason }),
+    possibleCommit: first.possibleCommit === true || second.possibleCommit === true,
+  };
+};
+
 export const terminalFailure = (
   reason: ComputerUseTerminalReason | undefined,
   tool: string,
@@ -61,9 +82,15 @@ export const terminalReason = (
   latched: ComputerUseTerminalReason | undefined,
   state?: { readonly _tag: string; readonly reason?: string },
 ): ComputerUseTerminalReason | undefined =>
-  latched ??
-  (state?._tag === "paused" && state.reason === "screen_locked"
-    ? "screen_locked"
-    : state?._tag === "ended" && (state.reason === "stopped" || state.reason === "stopped_all")
-      ? "stopped_by_person"
-      : undefined);
+  mergeTerminal(
+    { reason: latched },
+    {
+      reason:
+        state?._tag === "paused" && state.reason === "screen_locked"
+          ? "screen_locked"
+          : state?._tag === "ended" &&
+              (state.reason === "stopped" || state.reason === "stopped_all")
+            ? "stopped_by_person"
+            : undefined,
+    },
+  ).reason;

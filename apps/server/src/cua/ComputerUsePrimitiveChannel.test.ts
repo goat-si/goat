@@ -129,6 +129,8 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
   return {
     channel,
     registration,
+    lockAuthority: () =>
+      notify({ kind: "pause", threadId, controlId: liveControlId, terminal: "screen_locked" }),
     stopAuthority: () =>
       notify({ kind: "stop", threadId, controlId: liveControlId, terminal: "stopped_by_person" }),
     replaceControl: Effect.sync(() => {
@@ -159,6 +161,42 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect.each(["lock first", "stop first"])(
+    "person stop dominates a lock for a waiting call: %s",
+    (order) =>
+      Effect.gen(function* () {
+        const reading = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let hold = false;
+        const f = yield* turnFixture({
+          onStateRead: () =>
+            hold
+              ? Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+        });
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+        const pending = yield* f
+          .request()
+          .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+        hold = true;
+        yield* f.channel.closeStream({ threadId, registrationId: f.registration.registrationId });
+        yield* Deferred.await(reading);
+        if (order === "lock first") {
+          f.lockAuthority();
+          f.stopAuthority();
+        } else {
+          f.stopAuthority();
+          f.lockAuthority();
+        }
+        yield* Deferred.succeed(release, undefined);
+        const answer = yield* Fiber.join(pending);
+        assert.equal(answer._tag, "Failure");
+        if (answer._tag === "Failure") {
+          assert.equal(answer.failure.code, "stopped_by_person");
+          assert.equal(answer.failure.safety?.retryClass, "never");
+        }
+      }),
+  );
   it.effect("an unbound waiter sees Stop after its registration closes", () =>
     Effect.gen(function* () {
       const reading = yield* Deferred.make<void>();
