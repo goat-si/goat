@@ -538,6 +538,7 @@ const admissionRefusal = (scope: boolean): Driver =>
     const decision = scope
       ? {
           status: "admitted" as const,
+          reservationId: null,
           permissions: { apps: ["approved"], validUntilMillis: 60_000 },
         }
       : { status: "refused" as const, detail: "screen_shared" as const };
