@@ -616,9 +616,10 @@ export const createDesktopTargetHost = (deps: {
       return yield* launch(call, callArgs(call.args), context);
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(fail("stale_reference"));
-    // Any call here may change the window, so only the input right after a read compares with it.
+    // Any call here may change this process's windows, so only an input right after a read of its
+    // own window compares with it; another binding's input on the process voids that read too.
     const baseline = bound.fullRows;
-    delete bound.fullRows;
+    for (const each of targets.values()) if (each.pid === bound.pid) delete each.fullRows;
     if (call.method === "select_text")
       return yield* selectText(bound, callArgs(call.args), call, context);
     const withInputEvidence = (

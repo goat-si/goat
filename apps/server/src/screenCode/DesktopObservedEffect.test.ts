@@ -188,8 +188,8 @@ interface SidebarCase {
   /** The read before the input; a cut one is no baseline. */
   readonly first?: Record<string, unknown>;
   readonly observeFirst?: boolean;
-  /** Another call between that read and the input: a key press, or a screenshot. */
-  readonly between?: "key" | "screenshot";
+  /** Another call between that read and the input: a key press, one in another window, or a screenshot. */
+  readonly between?: "key" | "otherWindow" | "screenshot";
   /** The input: the sidebar click, or cmd+w, a close only the window list can prove. */
   readonly close?: boolean;
 }
@@ -198,6 +198,12 @@ const sidebarClick = (after: Record<string, unknown>, options: SidebarCase = {})
   Effect.gen(function* () {
     let reads = 0;
     const { host, sent } = fixture({
+      list_windows: {
+        windows: [
+          { pid: 42, window_id: 7, title: "KakaoTalk" },
+          { pid: 42, window_id: 8, title: "Chat" },
+        ],
+      },
       click: { effect: "suspected_noop" },
       press_key: (args: { key?: string }) =>
         args.key === "w" ? { effect: "suspected_noop" } : { effect: "confirmed" },
@@ -224,6 +230,16 @@ const sidebarClick = (after: Record<string, unknown>, options: SidebarCase = {})
       });
     if (options.between === "screenshot")
       yield* host.observe({ ...call("screenshot", {}, ref), deadlineMillis: 1_000_000 }, context);
+    if (options.between === "otherWindow") {
+      const chat = (yield* host.bindApp(
+        call("bind_app", { bundle_id: "org.example.Editor", window_id: 8 }),
+        context,
+      )).value as ScreenTargetRef;
+      yield* settled(host, {
+        ...call("press_key", { key: "Escape" }, chat),
+        deadlineMillis: 1_000_000,
+      });
+    }
     const chats = seen?.elements.find((element) => element.name === "chatrooms");
     const out = yield* settled(host, {
       ...(options.close === true
@@ -288,6 +304,7 @@ it.effect(
           first: { ...sidebarRead("s1", "Friends", ["Kim"]), ...degraded },
         }),
         key: yield* sidebarClick(changed, { between: "key" }),
+        otherWindow: yield* sidebarClick(changed, { between: "otherWindow" }),
         screenshot: yield* sidebarClick(changed, { between: "screenshot" }),
         close: yield* sidebarClick(changed, { close: true }),
       };

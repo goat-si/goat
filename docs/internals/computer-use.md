@@ -67,7 +67,7 @@ provider (Codex, Claude, ...)
   more times, 100 ms apart: the driver's own window watch reports within 120 ms, and a chat window
   can list later. A driver `suspected_noop` stops the cell's later input, so when a whole, uncut
   tree read of the same window under the same driver came right before the input, with no other
-  call or read between and neither read degraded, one more read follows it, and rows that differ confirm it. A close is never
+  call on the process or read of the window between and neither read degraded, one more read follows it, and rows that differ confirm it. A close is never
   confirmed this way: a sheet asking to save also changes the tree. That read retires the agent's
   refs, which the stopped cell could not use anyway (`DesktopTreeEffect.ts`). Without such proof
   an input that opens or closes a window keeps
