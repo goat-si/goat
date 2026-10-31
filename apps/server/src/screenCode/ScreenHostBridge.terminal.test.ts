@@ -37,6 +37,32 @@ const call = (callId: number): ScreenHostCall => ({
   deadlineMillis: 60000,
 });
 
+it.effect.each(["lock first", "stop first"])(
+  "a cell fence keeps person Stop over a lock: %s",
+  (order) =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      bridge.cutCellNow(
+        "r",
+        "t",
+        "c",
+        order === "lock first" ? "screen_locked" : "stopped_by_person",
+      );
+      bridge.cutCellNow(
+        "r",
+        "t",
+        "c",
+        order === "lock first" ? "stopped_by_person" : "screen_locked",
+      );
+      const answer = yield* bridge.handle(call(1), context());
+      expect(answer?.outcome).toBe("error");
+      if (answer?.outcome === "error") {
+        expect(answer.error?.code).toBe("stopped_by_person");
+        expect(answer.error?.safety?.retryClass).toBe("never");
+      }
+    }),
+);
+
 it.effect.each(["stopped_by_person", "screen_locked"] as const)(
   "a terminal %s fence keeps its reason for an in-flight read",
   (reason) =>

@@ -25,7 +25,11 @@ import {
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
-import { terminalFailure, type ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
+import {
+  mergeTerminal,
+  terminalFailure,
+  type ComputerUseTerminalReason,
+} from "../cua/ComputerUseTerminal.ts";
 import { isScreenRead, screenActionSafety, screenFailureSafety } from "./ScreenActionOutcome.ts";
 import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { applyObservedEffect } from "./ScreenObservedEffect.ts";
@@ -834,11 +838,10 @@ export class ScreenHostBridge {
 
   cutCellNow(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
-    if (
-      (reason === "stopped_by_person" || reason === "screen_locked") &&
-      !this.terminalCells.has(id)
-    )
-      this.terminalCells.set(id, reason);
+    if (reason === "stopped_by_person" || reason === "screen_locked") {
+      const merged = mergeTerminal({ reason: this.terminalCells.get(id) }, { reason }).reason;
+      if (merged !== undefined) this.terminalCells.set(id, merged);
+    }
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
