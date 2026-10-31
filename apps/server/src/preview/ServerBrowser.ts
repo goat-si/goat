@@ -1840,11 +1840,13 @@ const make = Effect.gen(function* () {
       );
     if (request.operation === "fillSecret") {
       const gate = secretBlockedGate(tab, request.runId, blockedTabs, operationSignal);
-      return AgentTabState.attributeSecretFill(
-        tab,
-        { agentId: request.agentSessionId ?? "", signal: operationSignal, runSignal },
-        Date.now,
-        () => secretFill.fill(tab, request, deadlineMs, recordAction, gate),
+      return secretFill.fill(tab, request, deadlineMs, recordAction, gate, (run) =>
+        AgentTabState.attributeSecretFill(
+          tab,
+          { agentId: request.agentSessionId ?? "", signal: operationSignal, runSignal },
+          Date.now,
+          run,
+        ),
       );
     }
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
@@ -1869,7 +1871,6 @@ const make = Effect.gen(function* () {
       return statusWithTitle(tab, request.agentSessionId);
     }
     const agentSessionId = request.agentSessionId!;
-
     // A read the caller cannot run under control right now (another agent's tab,
     // or any tab a human drives, its own included) observes instead of queueing.
     if (READ_OPERATIONS.has(request.operation) && !tab.control.agentCanActNow(agentSessionId)) {
@@ -1899,6 +1900,7 @@ const make = Effect.gen(function* () {
           agentId: agentSessionId,
           at: Date.now(),
           generation,
+          authority: tab.control.authority,
           signal: operationSignal,
           runSignal,
         };

@@ -696,6 +696,7 @@ export const make = Effect.gen(function* () {
       readonly blockedFrame: () => boolean;
       readonly signal?: AbortSignal | undefined;
     },
+    around: <A>(run: () => Promise<A>) => Promise<A> = (run) => run(),
   ): Promise<PreviewAutomationFillSecretResult> => {
     const input = Option.getOrUndefined(decodeInput(request.input));
     if (input === undefined) throw refused("Pass a secretRef and at most a CSS selector.");
@@ -708,127 +709,132 @@ export const make = Effect.gen(function* () {
       tab.control.secret(
         request.agentSessionId,
         (fence) =>
-          reserving(tab, async () => {
-            checkBlocked.signal?.throwIfAborted();
-            await checkBlocked(tab.page.url());
-            checkBlocked.signal?.throwIfAborted();
-            fence.assertMayDispatch();
-            const channel = makeActionChannel({
-              cdp: tab.cdp,
-              page: tab.page,
-              signal: checkBlocked.signal
-                ? AbortSignal.any([fence.signal, checkBlocked.signal])
-                : fence.signal,
-              controlGeneration: fence.assertMayDispatch,
-              isFenced: checkBlocked.isFenced,
-              blockedFrame: checkBlocked.blockedFrame,
-            });
-            track(tab);
-            const recording = [...(contextTabs.get(tab.page.context()) ?? [])].some(
-              (each) => each.recording !== null || each.recordingStart !== null,
-            );
-            if (recording)
-              throw refused(
-                "A tab that shares this tab's sign-ins is recording. Stop the recording before filling a password.",
-              );
-            const target = await locate(tab, input.selector, channel);
-            let kept = false;
-            let used = false;
-            try {
-              const destination = await passwordOrigin(target, channel);
-              const identifier = await identifierOf(target, channel);
-              const identifierName =
-                identifier === null ? null : await identifierNameOf(target, channel);
-              fence.hold();
-              await checkBlocked(destination);
+          around(() =>
+            reserving(tab, async () => {
+              checkBlocked.signal?.throwIfAborted();
+              await checkBlocked(tab.page.url());
               checkBlocked.signal?.throwIfAborted();
               fence.assertMayDispatch();
-              assertBefore(deadlineMs);
-              const consumed = await consume({
-                ref: input.secretRef,
-                threadId: request.threadId,
-                origin: destination,
+              const channel = makeActionChannel({
+                cdp: tab.cdp,
+                page: tab.page,
+                signal: checkBlocked.signal
+                  ? AbortSignal.any([fence.signal, checkBlocked.signal])
+                  : fence.signal,
+                controlGeneration: fence.assertMayDispatch,
+                isFenced: checkBlocked.isFenced,
+                blockedFrame: checkBlocked.blockedFrame,
               });
-              if ("error" in consumed) throw refused(consumed.error, consumed.failure);
-              used = true;
-              const value = consumed.value;
-              // Every thread with a tab sharing these sign-ins masks it, answers under way too.
-              const shares = tab.page.context();
-              contextValues.set(
-                shares,
-                (contextValues.get(shares) ?? new Set<string>()).add(value),
+              track(tab);
+              const recording = [...(contextTabs.get(tab.page.context()) ?? [])].some(
+                (each) => each.recording !== null || each.recordingStart !== null,
               );
-              joinContext(request.threadId, shares);
-              for (const each of contextThreads.get(shares) ?? []) addValues(each, [value]);
-              rememberSecret(tab.page, value);
-              // Before typing: a lost reply may still have typed it, and its pixels stay off.
-              const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
-              origins.add(destination);
-              filledOrigins.set(request.threadId, origins);
-              const shared = contextOrigins.get(tab.page.context()) ?? new Set<string>();
-              shared.add(destination);
-              contextOrigins.set(tab.page.context(), shared);
-              markFilled(tab.page);
-              // Watching before the value goes in: its own input handler may submit at once.
-              lastFill.set(tab.page, {
-                ...target,
-                destination,
-                identifierName,
-                identifierAbsent: identifier === null,
-              });
-              watchSignIn(tab, request.threadId);
-              await checkBlocked(destination);
-              checkBlocked.signal?.throwIfAborted();
-              fence.assertMayDispatch();
-              assertBefore(deadlineMs);
-              // Fenced before dispatch: a lost reply may still have typed the value.
-              const entry: Fence = { ...target, value };
-              watch(target.session);
-              const outstanding = fences.get(tab.page) ?? [];
-              outstanding.push(entry);
-              fences.set(tab.page, outstanding);
-              kept = true;
-              const typed = await channel
-                .sendFor(target.session)("Runtime.callFunctionOn", {
-                  objectId: target.objectId,
-                  functionDeclaration: FILL,
-                  arguments: [
-                    { value },
-                    { value: destination },
-                    { value: identifier },
-                    { value: input.expectedAccount ?? null },
-                  ],
-                  returnByValue: true,
-                })
-                .catch(() => {
-                  throw refused(UNCERTAIN);
-                });
-              // Only FILL's explicit early answers prove the value was never set.
-              if (typed.exceptionDetails || typed.result.value !== true) {
-                const early = typed.result.value === false || typed.result.value === "account";
-                if (typed.exceptionDetails || !early) throw refused(UNCERTAIN);
-                fences.set(
-                  tab.page,
-                  (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+              if (recording)
+                throw refused(
+                  "A tab that shares this tab's sign-ins is recording. Stop the recording before filling a password.",
                 );
-                kept = false;
-                throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
+              const target = await locate(tab, input.selector, channel);
+              let kept = false;
+              let used = false;
+              try {
+                const destination = await passwordOrigin(target, channel);
+                const identifier = await identifierOf(target, channel);
+                const identifierName =
+                  identifier === null ? null : await identifierNameOf(target, channel);
+                fence.hold();
+                await checkBlocked(destination);
+                checkBlocked.signal?.throwIfAborted();
+                fence.assertMayDispatch();
+                assertBefore(deadlineMs);
+                const consumed = await consume({
+                  ref: input.secretRef,
+                  threadId: request.threadId,
+                  origin: destination,
+                });
+                if ("error" in consumed) throw refused(consumed.error, consumed.failure);
+                used = true;
+                const value = consumed.value;
+                // Every thread with a tab sharing these sign-ins masks it, answers under way too.
+                const shares = tab.page.context();
+                contextValues.set(
+                  shares,
+                  (contextValues.get(shares) ?? new Set<string>()).add(value),
+                );
+                joinContext(request.threadId, shares);
+                for (const each of contextThreads.get(shares) ?? []) addValues(each, [value]);
+                rememberSecret(tab.page, value);
+                // Before typing: a lost reply may still have typed it, and its pixels stay off.
+                const origins = filledOrigins.get(request.threadId) ?? new Set<string>();
+                origins.add(destination);
+                filledOrigins.set(request.threadId, origins);
+                const shared = contextOrigins.get(tab.page.context()) ?? new Set<string>();
+                shared.add(destination);
+                contextOrigins.set(tab.page.context(), shared);
+                markFilled(tab.page);
+                // Watching before the value goes in: its own input handler may submit at once.
+                lastFill.set(tab.page, {
+                  ...target,
+                  destination,
+                  identifierName,
+                  identifierAbsent: identifier === null,
+                });
+                watchSignIn(tab, request.threadId);
+                await checkBlocked(destination);
+                checkBlocked.signal?.throwIfAborted();
+                fence.assertMayDispatch();
+                assertBefore(deadlineMs);
+                // Fenced before dispatch: a lost reply may still have typed the value.
+                const entry: Fence = { ...target, value };
+                watch(target.session);
+                const outstanding = fences.get(tab.page) ?? [];
+                outstanding.push(entry);
+                fences.set(tab.page, outstanding);
+                kept = true;
+                const typed = await channel
+                  .sendFor(target.session)("Runtime.callFunctionOn", {
+                    objectId: target.objectId,
+                    functionDeclaration: FILL,
+                    arguments: [
+                      { value },
+                      { value: destination },
+                      { value: identifier },
+                      { value: input.expectedAccount ?? null },
+                    ],
+                    returnByValue: true,
+                  })
+                  .catch(() => {
+                    throw refused(UNCERTAIN);
+                  });
+                // Only FILL's explicit early answers prove the value was never set.
+                if (typed.exceptionDetails || typed.result.value !== true) {
+                  const early = typed.result.value === false || typed.result.value === "account";
+                  if (typed.exceptionDetails || !early) throw refused(UNCERTAIN);
+                  fences.set(
+                    tab.page,
+                    (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+                  );
+                  kept = false;
+                  throw refused(typed.result.value === "account" ? ACCOUNT_CHANGED : USED_UP);
+                }
+                return { destination, verified: input.expectedAccount !== undefined };
+              } catch (cause) {
+                if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
+                  throw cause;
+                if (
+                  !used ||
+                  (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED)
+                )
+                  throw cause;
+                throw refused(
+                  cause instanceof BrowserControlInterrupted
+                    ? `${cause.message} ${USED_UP}`
+                    : USED_UP,
+                );
+              } finally {
+                if (!kept && !fence.signal.aborted) await release(target, channel);
               }
-              return { destination, verified: input.expectedAccount !== undefined };
-            } catch (cause) {
-              if (cause instanceof BrowserControlInterrupted && cause.reason === "blocked_url")
-                throw cause;
-              if (!used || (cause instanceof ServerBrowserOperationError && cause.tag === REFUSED))
-                throw cause;
-              throw refused(
-                cause instanceof BrowserControlInterrupted
-                  ? `${cause.message} ${USED_UP}`
-                  : USED_UP,
-              );
-            } finally {
-              if (!kept && !fence.signal.aborted) await release(target, channel);
-            }
-          }),
+            }),
+          ),
         deadlineMs,
       ),
     );

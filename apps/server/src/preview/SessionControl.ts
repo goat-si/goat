@@ -68,7 +68,7 @@ export class SessionControl {
   private watcherPrivate = false;
   private privateHolds = 0;
   /** Counts takeovers, Stops and closing; a secret fill's permit ends at the next one. */
-  private authority = 0;
+  private authorityEpoch = 0;
   /** Counts private periods, so a read that overlapped one is withheld even after it ended. */
   private privateEpoch = 0;
   private agentStopped = false;
@@ -100,6 +100,10 @@ export class SessionControl {
 
   get generation() {
     return this.epoch;
+  }
+
+  get authority() {
+    return this.authorityEpoch;
   }
 
   get isClosed() {
@@ -153,7 +157,7 @@ export class SessionControl {
   requestHandoff(reason: string, requestId = "") {
     if (this.closed || this.agentStopped) return false;
     if (this.requested === null) {
-      this.authority++;
+      this.authorityEpoch++;
       this.epoch++;
       this.requested = reason;
       this.notice = null;
@@ -205,7 +209,7 @@ export class SessionControl {
   stopAgents() {
     if (this.closed || this.agentStopped) return;
     this.agentStopped = true;
-    this.authority++;
+    this.authorityEpoch++;
     this.epoch++;
     this.onGenerationChange();
     this.cut(new BrowserControlInterrupted(STOPPED_MESSAGE, "stopped"));
@@ -335,7 +339,7 @@ export class SessionControl {
   private changeOwner(owner: string | null) {
     this.latestHuman = null;
     this.owner = owner;
-    this.authority++;
+    this.authorityEpoch++;
     this.epoch++;
     this.onGenerationChange();
     const interrupted = new BrowserControlInterrupted(

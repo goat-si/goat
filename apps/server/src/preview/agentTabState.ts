@@ -16,6 +16,7 @@ export interface AgentInput {
   readonly at: number;
   /** The tab's control generation then; a person taking the tab since moves it on. */
   readonly generation: number;
+  readonly authority?: number;
   readonly signal?: AbortSignal;
   readonly runSignal?: AbortSignal | undefined;
 }
@@ -27,7 +28,11 @@ export interface AgentInput {
  */
 export const popupOwner = (
   opener: {
-    readonly control: { readonly agentId: string | null; readonly generation: number };
+    readonly control: {
+      readonly agentId: string | null;
+      readonly generation: number;
+      readonly authority?: number;
+    };
     readonly agentOperating: boolean;
     readonly lastAgentInput?: AgentInput | undefined;
   },
@@ -36,11 +41,19 @@ export const popupOwner = (
   if (opener.control.agentId !== null) return opener.control.agentId;
   const recent = opener.lastAgentInput;
   return recent &&
-    recent.generation === opener.control.generation &&
+    matchesControl(recent, opener.control) &&
     (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
     ? recent.agentId
     : null;
 };
+
+const matchesControl = (
+  input: AgentInput,
+  control: { readonly generation: number; readonly authority?: number },
+) =>
+  input.authority === undefined
+    ? input.generation === control.generation
+    : input.authority === control.authority;
 
 /** Openings remembered per tab; the oldest goes first once a tab opens more windows than this. */
 const OPENINGS_KEPT = 32;
@@ -71,7 +84,7 @@ export class PopupAttribution {
     const recent = this.lastInput;
     const owner = popupOwner({ ...opener, lastAgentInput: recent }, now);
     const input =
-      recent && recent.agentId === owner && recent.generation === opener.control.generation
+      recent && recent.agentId === owner && matchesControl(recent, opener.control)
         ? recent
         : undefined;
     this.openings.set(targetId, {
@@ -203,17 +216,28 @@ export class ClosedPopups {
   }
 }
 
-/**
- * A secret fill runs outside the agent queue and moves the generation as private mode starts and
- * ends, so its input counts for popups only once it succeeds, at the generation it leaves behind.
- */
 export const attributeSecretFill = async <A>(
-  tab: { readonly popups: PopupAttribution; readonly control: { readonly generation: number } },
-  input: Omit<AgentInput, "at" | "generation">,
+  tab: {
+    readonly popups: PopupAttribution;
+    readonly control: { readonly generation: number; readonly authority: number };
+    agentOperating: boolean;
+  },
+  input: Omit<AgentInput, "at" | "generation" | "authority">,
   now: () => number,
   fill: () => Promise<A>,
 ) => {
-  const result = await fill();
-  tab.popups.lastInput = { ...input, at: now(), generation: tab.control.generation };
-  return result;
+  const attribution = {
+    ...input,
+    at: now(),
+    generation: tab.control.generation,
+    authority: tab.control.authority,
+  };
+  tab.popups.lastInput = attribution;
+  tab.agentOperating = true;
+  try {
+    return await fill();
+  } finally {
+    tab.popups.lastInput = { ...attribution, at: now() };
+    tab.agentOperating = false;
+  }
 };
