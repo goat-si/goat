@@ -523,6 +523,7 @@ it.effect("refuses input at the dispatch gate after a blocked visit while the ta
       const hover = vi.fn(async () => {});
       const locator = {
         first: () => locator,
+        count: async () => 1,
         elementHandle: async () => {
           entered.resolve();
           await release.promise;
