@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/30";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/31";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
@@ -82,6 +82,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   logs(o?: { since?: string }): Promise<object> } // since is an inclusive ISO 8601 instant`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }. "gone" is met, and bound "closed", only when the driver proves the window closed.
+// waitFor({gone: true, role?, name?}) is met only when a complete check of the window finds no match; name matches labels and values too. Otherwise { met: false, reason: "still_present" | "incomplete_read" }; on Windows the check is never complete.
 // Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one GOAT-side group; each member is an individual driver call, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
